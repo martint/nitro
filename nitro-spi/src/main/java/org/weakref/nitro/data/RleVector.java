@@ -23,15 +23,27 @@ public final class RleVector
 {
     private final int length;
     private final int[] counts;
+    private final boolean ownsCounts;
     private final Vector values;
     private int[] runEnds;
 
     public RleVector(int[] counts, Vector values)
     {
+        this(counts, values, true);
+    }
+
+    static RleVector wrapCounts(int[] counts, Vector values)
+    {
+        return new RleVector(counts, values, false);
+    }
+
+    private RleVector(int[] counts, Vector values, boolean ownsCounts)
+    {
         checkArgument(counts.length == values.length(), "Run lengths counts (%s) must match the length of the underlying values vector (%s)", counts.length, values.length());
 
         this.values = values;
         this.counts = counts;
+        this.ownsCounts = ownsCounts;
         length = Arrays.stream(counts).sum();
     }
 
@@ -137,7 +149,7 @@ public final class RleVector
     @Override
     public long retainedBytes()
     {
-        return (long) counts.length * Integer.BYTES;
+        return ownsCounts ? (long) counts.length * Integer.BYTES : 0;
     }
 
     @Override

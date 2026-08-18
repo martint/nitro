@@ -28,6 +28,7 @@ import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.MinUtf8StateVector;
 import org.weakref.nitro.data.NativeBufferAdvice;
 import org.weakref.nitro.data.PrimitiveArrayPool;
+import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.SumStateVector;
 import org.weakref.nitro.data.Vector;
@@ -652,6 +653,23 @@ class TestAllocator
 
         I32Vector ownedIds = new I32Vector(ids.clone());
         assertThat(DictionaryVector.wrapOwnedIds(ownedIds, ids.length, values).retainedBytes()).isZero();
+    }
+
+    @Test
+    void testSingleRunRleSharesAllocatorOwnedCountMetadata()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            Allocator.Context context = new Allocator.Context("single-run");
+            I64Vector values = new I64Vector(new long[] {37});
+
+            RleVector first = allocator.allocateSingleRunRle(context, 11, values);
+            RleVector second = allocator.allocateRle(context, new int[] {11}, values);
+
+            assertThat(first.counts()).isSameAs(second.counts());
+            assertThat(first.retainedBytes()).isZero();
+            assertThat(second.retainedBytes()).isZero();
+        }
     }
 
     @Test

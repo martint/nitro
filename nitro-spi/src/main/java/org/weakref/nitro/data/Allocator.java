@@ -45,6 +45,8 @@ public class Allocator
     private final Map<Object, SharedResourceState> sharedResources = new HashMap<>();
     private final Map<Integer, BooleanVector> allFalseBooleanVectors = new HashMap<>();
     private final Object allFalseBooleanOwner = new Object();
+    private int sharedSingleRunCount = -1;
+    private int[] sharedSingleRunCounts;
     private final Set<ContextState> pendingCompatibilityStates = Collections.newSetFromMap(new IdentityHashMap<>());
     private final AllocationResources allocationResources;
     private final AllocationResourcesOwner resourcesOwner;
@@ -171,6 +173,9 @@ public class Allocator
 
     public RleVector allocateRle(Context context, int[] counts, Vector values)
     {
+        if (policy.directSingleRunRle() && counts.length == 1) {
+            return allocateSingleRunRle(context, counts[0], values);
+        }
         RleVector vector = new RleVector(Arrays.copyOf(counts, counts.length), values);
         state(context).trackVector(vector, false);
         return vector;
@@ -181,7 +186,11 @@ public class Allocator
         if (!policy.directSingleRunRle()) {
             return allocateRle(context, new int[] {count}, value);
         }
-        RleVector vector = new RleVector(new int[] {count}, value);
+        if (sharedSingleRunCounts == null || sharedSingleRunCount != count) {
+            sharedSingleRunCount = count;
+            sharedSingleRunCounts = new int[] {count};
+        }
+        RleVector vector = RleVector.wrapCounts(sharedSingleRunCounts, value);
         state(context).trackVector(vector, false);
         return vector;
     }
