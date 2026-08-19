@@ -1,0 +1,410 @@
+=== q06 run 1/5 ===
+Trino version: testversion
+Queued: 70.52us, Analysis: 3.55ms, Planning: 3.58ms, Execution: 70.61ms, Finishing: 159.28us
+Fragment 0 [SINGLE]
+    CPU: 290.68ms, Scheduled: 591.42ms, Blocked 6.90ms (Input: 0.00ns, Output: 0.00ns), Input: 99997497 rows (858.28MB); per task: avg.: 99997497.00 std.dev.: 0.00, Output: 1 row (10B)
+    Peak Memory: 104B, Tasks count: 1; per task: max: 104B
+    Output buffer active time: 63.76ms, buffer utilization distribution (%): {p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+    Task output distribution: {count=1.00, p01=10B, p05=10B, p10=10B, p25=10B, p50=10B, p75=10B, p90=10B, p95=10B, p99=10B, max=10B}
+    Task input distribution: {count=1.00, p01=858.28MB, p05=858.28MB, p10=858.28MB, p25=858.28MB, p50=858.28MB, p75=858.28MB, p90=858.28MB, p95=858.28MB, p99=858.28MB, max=858.28MB}
+    Output layout: [min, max]
+    Output partitioning: SINGLE []
+    Output[columnNames = [_col0, _col1]]
+    │   Layout: [min:date, max:date]
+    │   Estimates: {rows: 1 (10B), cpu: 0, memory: 0B, network: 0B}
+    │   CPU: 0.00ns (0.00%), Scheduled: 0.00ns (0.00%), Blocked: 0.00ns (0.00%), Output: 1 row (10B)
+    │   metrics:
+    │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786920785, bucketWidthSeconds=1, cpuNanosBuckets=[234901], wallNanosBuckets=[239482]}
+    │     'CPU time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+    │     'Input rows distribution' = {count=1, p01=1.00, p05=1.00, p10=1.00, p25=1.00, p50=1.00, p75=1.00, p90=1.00, p95=1.00, p99=1.00, min=1.00, max=1.00}
+    │     'Scheduled time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+    │     'exchangeSerializerInputBytes' = LongCount{total=44}
+    │     'exchangeSerializerOutputBytes' = LongCount{total=35}
+    │   Input avg.: 1.00 rows, Input std.dev.: 0.00%
+    │   _col0 := min
+    │   _col1 := max
+    └─ Aggregate[type = FINAL]
+       │   Layout: [min:date, max:date]
+       │   Estimates: {rows: 1 (10B), cpu: ?, memory: 10B, network: 0B}
+       │   CPU: 0.00ns (0.00%), Scheduled: 0.00ns (0.00%), Blocked: 0.00ns (0.00%), Output: 1 row (10B)
+       │   metrics:
+       │     'Accumulator update CPU time' = {duration=91.67us}
+       │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786920785, bucketWidthSeconds=1, cpuNanosBuckets=[287451], wallNanosBuckets=[291091]}
+       │     'CPU time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+       │     'Group by hash update CPU time' = {duration=0.00ns}
+       │     'Input rows distribution' = {count=1, p01=165.00, p05=165.00, p10=165.00, p25=165.00, p50=165.00, p75=165.00, p90=165.00, p95=165.00, p99=165.00, min=165.00, max=165.00}
+       │     'Input rows processed without partial aggregation enabled' = LongCount{total=0}
+       │     'Scheduled time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+       │     'Time taken to estimate cardinality' = {duration=0.00ns}
+       │   Input avg.: 165.00 rows, Input std.dev.: 0.00%
+       │   min := min(min_2)
+       │   max := max(max_3)
+       └─ LocalExchange[partitioning = SINGLE]
+          │   Layout: [min_2:date, max_3:date]
+          │   Estimates: {rows: ? (?), cpu: 0, memory: 0B, network: 0B}
+          │   CPU: 0.00ns (0.00%), Scheduled: 0.00ns (0.00%), Blocked: 7.00ms (100.00%), Output: 165 rows (1.61kB)
+          │   metrics:
+          │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786920785, bucketWidthSeconds=1, cpuNanosBuckets=[335453], wallNanosBuckets=[357368]}
+          │     'CPU time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+          │     'Input rows distribution' = {count=165, p01=1.00, p05=1.00, p10=1.00, p25=1.00, p50=1.00, p75=1.00, p90=1.00, p95=1.00, p99=1.00, min=1.00, max=1.00}
+          │     'Scheduled time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+          │   Input avg.: 1.00 rows, Input std.dev.: 0.00%
+          └─ Aggregate[type = PARTIAL]
+             │   Layout: [min_2:date, max_3:date]
+             │   CPU: 198.00ms (68.51%), Scheduled: 387.00ms (65.59%), Blocked: 0.00ns (0.00%), Output: 165 rows (1.61kB)
+             │   metrics:
+             │     'Accumulator update CPU time' = {duration=194.86ms}
+             │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786920785, bucketWidthSeconds=1, cpuNanosBuckets=[198075811], wallNanosBuckets=[386871884]}
+             │     'CPU time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+             │     'Group by hash update CPU time' = {duration=0.00ns}
+             │     'Input rows distribution' = {count=165, p01=0.00, p05=11858.00, p10=117804.33, p25=331865.54, p50=607059.43, p75=1000000.00, p90=1000000.00, p95=1000000.00, p99=1000000.00, min=0.00, max=1000000.00}
+             │     'Input rows processed without partial aggregation enabled' = LongCount{total=0}
+             │     'Scheduled time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.01, p95=0.01, p99=0.01, min=0.00, max=0.02}
+             │     'Time taken to estimate cardinality' = {duration=0.00ns}
+             │   Input avg.: 606045.44 rows, Input std.dev.: 55.10%
+             │   min_2 := min(eventdate)
+             │   max_3 := max(eventdate)
+             └─ TableScan[table = hive:clickbench:hits_raw]
+                    Layout: [eventdate:date]
+                    Estimates: {rows: ? (?), cpu: ?, memory: 0B, network: 0B}
+                    CPU: 91.00ms (31.49%), Scheduled: 203.00ms (34.41%), Blocked: 0.00ns (0.00%), Output: 99997497 rows (858.28MB)
+                    connector metrics:
+                      'ParquetReaderCompressionFormat_SNAPPY' = LongCount{total=89224}
+                    metrics:
+                      'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786920785, bucketWidthSeconds=1, cpuNanosBuckets=[91259192], wallNanosBuckets=[203172582]}
+                      'CPU time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+                      'Input rows distribution' = {count=165, p01=0.00, p05=11858.00, p10=117804.33, p25=331865.54, p50=607059.43, p75=1000000.00, p90=1000000.00, p95=1000000.00, p99=1000000.00, min=0.00, max=1000000.00}
+                      'Scheduled time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.01, p99=0.01, min=0.00, max=0.01}
+                    Input avg.: 606045.44 rows, Input std.dev.: 55.10%
+                    eventdate := eventdate:date:REGULAR
+                    Input: 99997497 rows (858.28MB), Physical input: 8.30MB, Physical input time: 2.76ms, Splits: 165, Splits generation wait time: 1.07ms
+
+
+=== q06 run 2/5 ===
+Trino version: testversion
+Queued: 73.03us, Analysis: 3.98ms, Planning: 3.77ms, Execution: 70.59ms, Finishing: 143.93us
+Fragment 0 [SINGLE]
+    CPU: 291.13ms, Scheduled: 601.03ms, Blocked 7.02ms (Input: 0.00ns, Output: 0.00ns), Input: 99997497 rows (858.28MB); per task: avg.: 99997497.00 std.dev.: 0.00, Output: 1 row (10B)
+    Peak Memory: 104B, Tasks count: 1; per task: max: 104B
+    Output buffer active time: 63.28ms, buffer utilization distribution (%): {p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+    Task output distribution: {count=1.00, p01=10B, p05=10B, p10=10B, p25=10B, p50=10B, p75=10B, p90=10B, p95=10B, p99=10B, max=10B}
+    Task input distribution: {count=1.00, p01=858.28MB, p05=858.28MB, p10=858.28MB, p25=858.28MB, p50=858.28MB, p75=858.28MB, p90=858.28MB, p95=858.28MB, p99=858.28MB, max=858.28MB}
+    Output layout: [min, max]
+    Output partitioning: SINGLE []
+    Output[columnNames = [_col0, _col1]]
+    │   Layout: [min:date, max:date]
+    │   Estimates: {rows: 1 (10B), cpu: 0, memory: 0B, network: 0B}
+    │   CPU: 0.00ns (0.00%), Scheduled: 0.00ns (0.00%), Blocked: 0.00ns (0.00%), Output: 1 row (10B)
+    │   metrics:
+    │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786920785, bucketWidthSeconds=1, cpuNanosBuckets=[229742], wallNanosBuckets=[234172]}
+    │     'CPU time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+    │     'Input rows distribution' = {count=1, p01=1.00, p05=1.00, p10=1.00, p25=1.00, p50=1.00, p75=1.00, p90=1.00, p95=1.00, p99=1.00, min=1.00, max=1.00}
+    │     'Scheduled time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+    │     'exchangeSerializerInputBytes' = LongCount{total=44}
+    │     'exchangeSerializerOutputBytes' = LongCount{total=35}
+    │   Input avg.: 1.00 rows, Input std.dev.: 0.00%
+    │   _col0 := min
+    │   _col1 := max
+    └─ Aggregate[type = FINAL]
+       │   Layout: [min:date, max:date]
+       │   Estimates: {rows: 1 (10B), cpu: ?, memory: 10B, network: 0B}
+       │   CPU: 0.00ns (0.00%), Scheduled: 0.00ns (0.00%), Blocked: 0.00ns (0.00%), Output: 1 row (10B)
+       │   metrics:
+       │     'Accumulator update CPU time' = {duration=100.65us}
+       │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786920785, bucketWidthSeconds=1, cpuNanosBuckets=[295430], wallNanosBuckets=[296039]}
+       │     'CPU time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+       │     'Group by hash update CPU time' = {duration=0.00ns}
+       │     'Input rows distribution' = {count=1, p01=165.00, p05=165.00, p10=165.00, p25=165.00, p50=165.00, p75=165.00, p90=165.00, p95=165.00, p99=165.00, min=165.00, max=165.00}
+       │     'Input rows processed without partial aggregation enabled' = LongCount{total=0}
+       │     'Scheduled time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+       │     'Time taken to estimate cardinality' = {duration=0.00ns}
+       │   Input avg.: 165.00 rows, Input std.dev.: 0.00%
+       │   min := min(min_2)
+       │   max := max(max_3)
+       └─ LocalExchange[partitioning = SINGLE]
+          │   Layout: [min_2:date, max_3:date]
+          │   Estimates: {rows: ? (?), cpu: 0, memory: 0B, network: 0B}
+          │   CPU: 0.00ns (0.00%), Scheduled: 0.00ns (0.00%), Blocked: 7.00ms (100.00%), Output: 165 rows (1.61kB)
+          │   metrics:
+          │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786920785, bucketWidthSeconds=1, cpuNanosBuckets=[370937], wallNanosBuckets=[373318]}
+          │     'CPU time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+          │     'Input rows distribution' = {count=165, p01=1.00, p05=1.00, p10=1.00, p25=1.00, p50=1.00, p75=1.00, p90=1.00, p95=1.00, p99=1.00, min=1.00, max=1.00}
+          │     'Scheduled time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+          │   Input avg.: 1.00 rows, Input std.dev.: 0.00%
+          └─ Aggregate[type = PARTIAL]
+             │   Layout: [min_2:date, max_3:date]
+             │   CPU: 199.00ms (68.62%), Scheduled: 369.00ms (61.50%), Blocked: 0.00ns (0.00%), Output: 165 rows (1.61kB)
+             │   metrics:
+             │     'Accumulator update CPU time' = {duration=205.75ms}
+             │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786920785, bucketWidthSeconds=1, cpuNanosBuckets=[198934940], wallNanosBuckets=[368280598]}
+             │     'CPU time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+             │     'Group by hash update CPU time' = {duration=0.00ns}
+             │     'Input rows distribution' = {count=165, p01=0.00, p05=11858.00, p10=117804.33, p25=331455.11, p50=608092.59, p75=991166.98, p90=1000000.00, p95=1000000.00, p99=1000000.00, min=0.00, max=1000000.00}
+             │     'Input rows processed without partial aggregation enabled' = LongCount{total=0}
+             │     'Scheduled time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.01, p95=0.01, p99=0.01, min=0.00, max=0.01}
+             │     'Time taken to estimate cardinality' = {duration=0.00ns}
+             │   Input avg.: 606045.44 rows, Input std.dev.: 55.10%
+             │   min_2 := min(eventdate)
+             │   max_3 := max(eventdate)
+             └─ TableScan[table = hive:clickbench:hits_raw]
+                    Layout: [eventdate:date]
+                    Estimates: {rows: ? (?), cpu: ?, memory: 0B, network: 0B}
+                    CPU: 91.00ms (31.38%), Scheduled: 231.00ms (38.50%), Blocked: 0.00ns (0.00%), Output: 99997497 rows (858.28MB)
+                    connector metrics:
+                      'ParquetReaderCompressionFormat_SNAPPY' = LongCount{total=89224}
+                    metrics:
+                      'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786920785, bucketWidthSeconds=1, cpuNanosBuckets=[90799430], wallNanosBuckets=[231347526]}
+                      'CPU time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+                      'Input rows distribution' = {count=165, p01=0.00, p05=11858.00, p10=117804.33, p25=331455.11, p50=608092.59, p75=991166.98, p90=1000000.00, p95=1000000.00, p99=1000000.00, min=0.00, max=1000000.00}
+                      'Scheduled time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.01, p99=0.01, min=0.00, max=0.01}
+                    Input avg.: 606045.44 rows, Input std.dev.: 55.10%
+                    eventdate := eventdate:date:REGULAR
+                    Input: 99997497 rows (858.28MB), Physical input: 8.30MB, Physical input time: 2.53ms, Splits: 165, Splits generation wait time: 2.14ms
+
+
+=== q06 run 3/5 ===
+Trino version: testversion
+Queued: 79.53us, Analysis: 3.19ms, Planning: 3.53ms, Execution: 76.23ms, Finishing: 155.65us
+Fragment 0 [SINGLE]
+    CPU: 287.96ms, Scheduled: 591.71ms, Blocked 5.77ms (Input: 0.00ns, Output: 0.00ns), Input: 99997497 rows (858.28MB); per task: avg.: 99997497.00 std.dev.: 0.00, Output: 1 row (10B)
+    Peak Memory: 104B, Tasks count: 1; per task: max: 104B
+    Output buffer active time: 70.51ms, buffer utilization distribution (%): {p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+    Task output distribution: {count=1.00, p01=10B, p05=10B, p10=10B, p25=10B, p50=10B, p75=10B, p90=10B, p95=10B, p99=10B, max=10B}
+    Task input distribution: {count=1.00, p01=858.28MB, p05=858.28MB, p10=858.28MB, p25=858.28MB, p50=858.28MB, p75=858.28MB, p90=858.28MB, p95=858.28MB, p99=858.28MB, max=858.28MB}
+    Output layout: [min, max]
+    Output partitioning: SINGLE []
+    Output[columnNames = [_col0, _col1]]
+    │   Layout: [min:date, max:date]
+    │   Estimates: {rows: 1 (10B), cpu: 0, memory: 0B, network: 0B}
+    │   CPU: 0.00ns (0.00%), Scheduled: 0.00ns (0.00%), Blocked: 0.00ns (0.00%), Output: 1 row (10B)
+    │   metrics:
+    │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786920785, bucketWidthSeconds=1, cpuNanosBuckets=[249478], wallNanosBuckets=[249432]}
+    │     'CPU time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+    │     'Input rows distribution' = {count=1, p01=1.00, p05=1.00, p10=1.00, p25=1.00, p50=1.00, p75=1.00, p90=1.00, p95=1.00, p99=1.00, min=1.00, max=1.00}
+    │     'Scheduled time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+    │     'exchangeSerializerInputBytes' = LongCount{total=44}
+    │     'exchangeSerializerOutputBytes' = LongCount{total=35}
+    │   Input avg.: 1.00 rows, Input std.dev.: 0.00%
+    │   _col0 := min
+    │   _col1 := max
+    └─ Aggregate[type = FINAL]
+       │   Layout: [min:date, max:date]
+       │   Estimates: {rows: 1 (10B), cpu: ?, memory: 10B, network: 0B}
+       │   CPU: 0.00ns (0.00%), Scheduled: 0.00ns (0.00%), Blocked: 0.00ns (0.00%), Output: 1 row (10B)
+       │   metrics:
+       │     'Accumulator update CPU time' = {duration=84.46us}
+       │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786920785, bucketWidthSeconds=1, cpuNanosBuckets=[293477], wallNanosBuckets=[294164]}
+       │     'CPU time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+       │     'Group by hash update CPU time' = {duration=0.00ns}
+       │     'Input rows distribution' = {count=1, p01=165.00, p05=165.00, p10=165.00, p25=165.00, p50=165.00, p75=165.00, p90=165.00, p95=165.00, p99=165.00, min=165.00, max=165.00}
+       │     'Input rows processed without partial aggregation enabled' = LongCount{total=0}
+       │     'Scheduled time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+       │     'Time taken to estimate cardinality' = {duration=0.00ns}
+       │   Input avg.: 165.00 rows, Input std.dev.: 0.00%
+       │   min := min(min_2)
+       │   max := max(max_3)
+       └─ LocalExchange[partitioning = SINGLE]
+          │   Layout: [min_2:date, max_3:date]
+          │   Estimates: {rows: ? (?), cpu: 0, memory: 0B, network: 0B}
+          │   CPU: 0.00ns (0.00%), Scheduled: 3.00ms (0.51%), Blocked: 6.00ms (100.00%), Output: 165 rows (1.61kB)
+          │   metrics:
+          │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786920785, bucketWidthSeconds=1, cpuNanosBuckets=[342562], wallNanosBuckets=[3425087]}
+          │     'CPU time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+          │     'Input rows distribution' = {count=165, p01=1.00, p05=1.00, p10=1.00, p25=1.00, p50=1.00, p75=1.00, p90=1.00, p95=1.00, p99=1.00, min=1.00, max=1.00}
+          │     'Scheduled time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+          │   Input avg.: 1.00 rows, Input std.dev.: 0.00%
+          └─ Aggregate[type = PARTIAL]
+             │   Layout: [min_2:date, max_3:date]
+             │   CPU: 198.00ms (68.99%), Scheduled: 367.00ms (62.10%), Blocked: 0.00ns (0.00%), Output: 165 rows (1.61kB)
+             │   metrics:
+             │     'Accumulator update CPU time' = {duration=207.16ms}
+             │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786920785, bucketWidthSeconds=1, cpuNanosBuckets=[198069830], wallNanosBuckets=[366717007]}
+             │     'CPU time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+             │     'Group by hash update CPU time' = {duration=0.00ns}
+             │     'Input rows distribution' = {count=165, p01=0.00, p05=11858.00, p10=117804.33, p25=332096.74, p50=601948.96, p75=990831.09, p90=1000000.00, p95=1000000.00, p99=1000000.00, min=0.00, max=1000000.00}
+             │     'Input rows processed without partial aggregation enabled' = LongCount{total=0}
+             │     'Scheduled time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.01, p95=0.01, p99=0.01, min=0.00, max=0.01}
+             │     'Time taken to estimate cardinality' = {duration=0.00ns}
+             │   Input avg.: 606045.44 rows, Input std.dev.: 55.10%
+             │   min_2 := min(eventdate)
+             │   max_3 := max(eventdate)
+             └─ TableScan[table = hive:clickbench:hits_raw]
+                    Layout: [eventdate:date]
+                    Estimates: {rows: ? (?), cpu: ?, memory: 0B, network: 0B}
+                    CPU: 89.00ms (31.01%), Scheduled: 221.00ms (37.39%), Blocked: 0.00ns (0.00%), Output: 99997497 rows (858.28MB)
+                    connector metrics:
+                      'ParquetReaderCompressionFormat_SNAPPY' = LongCount{total=89224}
+                    metrics:
+                      'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786920785, bucketWidthSeconds=1, cpuNanosBuckets=[88506936], wallNanosBuckets=[220523737]}
+                      'CPU time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+                      'Input rows distribution' = {count=165, p01=0.00, p05=11858.00, p10=117804.33, p25=332096.74, p50=601948.96, p75=990831.09, p90=1000000.00, p95=1000000.00, p99=1000000.00, min=0.00, max=1000000.00}
+                      'Scheduled time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.01, p99=0.01, min=0.00, max=0.01}
+                    Input avg.: 606045.44 rows, Input std.dev.: 55.10%
+                    eventdate := eventdate:date:REGULAR
+                    Input: 99997497 rows (858.28MB), Physical input: 8.30MB, Physical input time: 5.58ms, Splits: 165, Splits generation wait time: 1.25ms
+
+
+=== q06 run 4/5 ===
+Trino version: testversion
+Queued: 73.92us, Analysis: 3.28ms, Planning: 3.76ms, Execution: 71.34ms, Finishing: 158.10us
+Fragment 0 [SINGLE]
+    CPU: 290.17ms, Scheduled: 613.48ms, Blocked 9.01ms (Input: 0.00ns, Output: 0.00ns), Input: 99997497 rows (858.28MB); per task: avg.: 99997497.00 std.dev.: 0.00, Output: 1 row (10B)
+    Peak Memory: 4.66kB, Tasks count: 1; per task: max: 4.66kB
+    Output buffer active time: 65.34ms, buffer utilization distribution (%): {p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+    Task output distribution: {count=1.00, p01=10B, p05=10B, p10=10B, p25=10B, p50=10B, p75=10B, p90=10B, p95=10B, p99=10B, max=10B}
+    Task input distribution: {count=1.00, p01=858.28MB, p05=858.28MB, p10=858.28MB, p25=858.28MB, p50=858.28MB, p75=858.28MB, p90=858.28MB, p95=858.28MB, p99=858.28MB, max=858.28MB}
+    Output layout: [min, max]
+    Output partitioning: SINGLE []
+    Output[columnNames = [_col0, _col1]]
+    │   Layout: [min:date, max:date]
+    │   Estimates: {rows: 1 (10B), cpu: 0, memory: 0B, network: 0B}
+    │   CPU: 0.00ns (0.00%), Scheduled: 0.00ns (0.00%), Blocked: 0.00ns (0.00%), Output: 1 row (10B)
+    │   metrics:
+    │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786920785, bucketWidthSeconds=1, cpuNanosBuckets=[226706], wallNanosBuckets=[226708]}
+    │     'CPU time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+    │     'Input rows distribution' = {count=1, p01=1.00, p05=1.00, p10=1.00, p25=1.00, p50=1.00, p75=1.00, p90=1.00, p95=1.00, p99=1.00, min=1.00, max=1.00}
+    │     'Scheduled time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+    │     'exchangeSerializerInputBytes' = LongCount{total=44}
+    │     'exchangeSerializerOutputBytes' = LongCount{total=35}
+    │   Input avg.: 1.00 rows, Input std.dev.: 0.00%
+    │   _col0 := min
+    │   _col1 := max
+    └─ Aggregate[type = FINAL]
+       │   Layout: [min:date, max:date]
+       │   Estimates: {rows: 1 (10B), cpu: ?, memory: 10B, network: 0B}
+       │   CPU: 0.00ns (0.00%), Scheduled: 0.00ns (0.00%), Blocked: 0.00ns (0.00%), Output: 1 row (10B)
+       │   metrics:
+       │     'Accumulator update CPU time' = {duration=92.07us}
+       │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786920785, bucketWidthSeconds=1, cpuNanosBuckets=[298533], wallNanosBuckets=[299383]}
+       │     'CPU time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+       │     'Group by hash update CPU time' = {duration=0.00ns}
+       │     'Input rows distribution' = {count=1, p01=165.00, p05=165.00, p10=165.00, p25=165.00, p50=165.00, p75=165.00, p90=165.00, p95=165.00, p99=165.00, min=165.00, max=165.00}
+       │     'Input rows processed without partial aggregation enabled' = LongCount{total=0}
+       │     'Scheduled time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+       │     'Time taken to estimate cardinality' = {duration=0.00ns}
+       │   Input avg.: 165.00 rows, Input std.dev.: 0.00%
+       │   min := min(min_2)
+       │   max := max(max_3)
+       └─ LocalExchange[partitioning = SINGLE]
+          │   Layout: [min_2:date, max_3:date]
+          │   Estimates: {rows: ? (?), cpu: 0, memory: 0B, network: 0B}
+          │   CPU: 0.00ns (0.00%), Scheduled: 1.00ms (0.16%), Blocked: 9.00ms (100.00%), Output: 165 rows (1.61kB)
+          │   metrics:
+          │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786920785, bucketWidthSeconds=1, cpuNanosBuckets=[366986], wallNanosBuckets=[683950]}
+          │     'CPU time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+          │     'Input rows distribution' = {count=165, p01=1.00, p05=1.00, p10=1.00, p25=1.00, p50=1.00, p75=1.00, p90=1.00, p95=1.00, p99=1.00, min=1.00, max=1.00}
+          │     'Scheduled time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+          │   Input avg.: 1.00 rows, Input std.dev.: 0.00%
+          └─ Aggregate[type = PARTIAL]
+             │   Layout: [min_2:date, max_3:date]
+             │   CPU: 198.00ms (68.51%), Scheduled: 424.00ms (69.28%), Blocked: 0.00ns (0.00%), Output: 165 rows (1.61kB)
+             │   metrics:
+             │     'Accumulator update CPU time' = {duration=211.06ms}
+             │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786920785, bucketWidthSeconds=1, cpuNanosBuckets=[198243089], wallNanosBuckets=[424570387]}
+             │     'CPU time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+             │     'Group by hash update CPU time' = {duration=0.00ns}
+             │     'Input rows distribution' = {count=165, p01=0.00, p05=11858.00, p10=117804.33, p25=334565.37, p50=601912.23, p75=1000000.00, p90=1000000.00, p95=1000000.00, p99=1000000.00, min=0.00, max=1000000.00}
+             │     'Input rows processed without partial aggregation enabled' = LongCount{total=0}
+             │     'Scheduled time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.01, p95=0.01, p99=0.01, min=0.00, max=0.01}
+             │     'Time taken to estimate cardinality' = {duration=0.00ns}
+             │   Input avg.: 606045.44 rows, Input std.dev.: 55.10%
+             │   min_2 := min(eventdate)
+             │   max_3 := max(eventdate)
+             └─ TableScan[table = hive:clickbench:hits_raw]
+                    Layout: [eventdate:date]
+                    Estimates: {rows: ? (?), cpu: ?, memory: 0B, network: 0B}
+                    CPU: 91.00ms (31.49%), Scheduled: 187.00ms (30.56%), Blocked: 0.00ns (0.00%), Output: 99997497 rows (858.28MB)
+                    connector metrics:
+                      'ParquetReaderCompressionFormat_SNAPPY' = LongCount{total=89224}
+                    metrics:
+                      'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786920785, bucketWidthSeconds=1, cpuNanosBuckets=[90523468], wallNanosBuckets=[187179750]}
+                      'CPU time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+                      'Input rows distribution' = {count=165, p01=0.00, p05=11858.00, p10=117804.33, p25=334565.37, p50=601912.23, p75=1000000.00, p90=1000000.00, p95=1000000.00, p99=1000000.00, min=0.00, max=1000000.00}
+                      'Scheduled time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.01, min=0.00, max=0.01}
+                    Input avg.: 606045.44 rows, Input std.dev.: 55.10%
+                    eventdate := eventdate:date:REGULAR
+                    Input: 99997497 rows (858.28MB), Physical input: 8.30MB, Physical input time: 2.58ms, Splits: 165, Splits generation wait time: 2.04ms
+
+
+=== q06 run 5/5 ===
+Trino version: testversion
+Queued: 72.43us, Analysis: 3.18ms, Planning: 3.87ms, Execution: 73.43ms, Finishing: 218.60us
+Fragment 0 [SINGLE]
+    CPU: 294.24ms, Scheduled: 569.58ms, Blocked 7.29ms (Input: 0.00ns, Output: 0.00ns), Input: 99997497 rows (858.28MB); per task: avg.: 99997497.00 std.dev.: 0.00, Output: 1 row (10B)
+    Peak Memory: 104B, Tasks count: 1; per task: max: 104B
+    Output buffer active time: 66.89ms, buffer utilization distribution (%): {p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+    Task output distribution: {count=1.00, p01=10B, p05=10B, p10=10B, p25=10B, p50=10B, p75=10B, p90=10B, p95=10B, p99=10B, max=10B}
+    Task input distribution: {count=1.00, p01=858.28MB, p05=858.28MB, p10=858.28MB, p25=858.28MB, p50=858.28MB, p75=858.28MB, p90=858.28MB, p95=858.28MB, p99=858.28MB, max=858.28MB}
+    Output layout: [min, max]
+    Output partitioning: SINGLE []
+    Output[columnNames = [_col0, _col1]]
+    │   Layout: [min:date, max:date]
+    │   Estimates: {rows: 1 (10B), cpu: 0, memory: 0B, network: 0B}
+    │   CPU: 0.00ns (0.00%), Scheduled: 0.00ns (0.00%), Blocked: 0.00ns (0.00%), Output: 1 row (10B)
+    │   metrics:
+    │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786920785, bucketWidthSeconds=1, cpuNanosBuckets=[247284], wallNanosBuckets=[247288]}
+    │     'CPU time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+    │     'Input rows distribution' = {count=1, p01=1.00, p05=1.00, p10=1.00, p25=1.00, p50=1.00, p75=1.00, p90=1.00, p95=1.00, p99=1.00, min=1.00, max=1.00}
+    │     'Scheduled time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+    │     'exchangeSerializerInputBytes' = LongCount{total=44}
+    │     'exchangeSerializerOutputBytes' = LongCount{total=35}
+    │   Input avg.: 1.00 rows, Input std.dev.: 0.00%
+    │   _col0 := min
+    │   _col1 := max
+    └─ Aggregate[type = FINAL]
+       │   Layout: [min:date, max:date]
+       │   Estimates: {rows: 1 (10B), cpu: ?, memory: 10B, network: 0B}
+       │   CPU: 0.00ns (0.00%), Scheduled: 0.00ns (0.00%), Blocked: 0.00ns (0.00%), Output: 1 row (10B)
+       │   metrics:
+       │     'Accumulator update CPU time' = {duration=89.89us}
+       │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786920785, bucketWidthSeconds=1, cpuNanosBuckets=[301767], wallNanosBuckets=[302433]}
+       │     'CPU time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+       │     'Group by hash update CPU time' = {duration=0.00ns}
+       │     'Input rows distribution' = {count=1, p01=165.00, p05=165.00, p10=165.00, p25=165.00, p50=165.00, p75=165.00, p90=165.00, p95=165.00, p99=165.00, min=165.00, max=165.00}
+       │     'Input rows processed without partial aggregation enabled' = LongCount{total=0}
+       │     'Scheduled time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+       │     'Time taken to estimate cardinality' = {duration=0.00ns}
+       │   Input avg.: 165.00 rows, Input std.dev.: 0.00%
+       │   min := min(min_2)
+       │   max := max(max_3)
+       └─ LocalExchange[partitioning = SINGLE]
+          │   Layout: [min_2:date, max_3:date]
+          │   Estimates: {rows: ? (?), cpu: 0, memory: 0B, network: 0B}
+          │   CPU: 0.00ns (0.00%), Scheduled: 3.00ms (0.53%), Blocked: 7.00ms (100.00%), Output: 165 rows (1.61kB)
+          │   metrics:
+          │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786920785, bucketWidthSeconds=1, cpuNanosBuckets=[371451], wallNanosBuckets=[3083730]}
+          │     'CPU time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+          │     'Input rows distribution' = {count=165, p01=1.00, p05=1.00, p10=1.00, p25=1.00, p50=1.00, p75=1.00, p90=1.00, p95=1.00, p99=1.00, min=1.00, max=1.00}
+          │     'Scheduled time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+          │   Input avg.: 1.00 rows, Input std.dev.: 0.00%
+          └─ Aggregate[type = PARTIAL]
+             │   Layout: [min_2:date, max_3:date]
+             │   CPU: 199.00ms (67.92%), Scheduled: 356.00ms (62.57%), Blocked: 0.00ns (0.00%), Output: 165 rows (1.61kB)
+             │   metrics:
+             │     'Accumulator update CPU time' = {duration=220.58ms}
+             │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786920785, bucketWidthSeconds=1, cpuNanosBuckets=[198729105], wallNanosBuckets=[355789298]}
+             │     'CPU time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+             │     'Group by hash update CPU time' = {duration=0.00ns}
+             │     'Input rows distribution' = {count=165, p01=0.00, p05=11858.00, p10=117804.33, p25=331819.22, p50=606385.84, p75=991166.98, p90=1000000.00, p95=1000000.00, p99=1000000.00, min=0.00, max=1000000.00}
+             │     'Input rows processed without partial aggregation enabled' = LongCount{total=0}
+             │     'Scheduled time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.01, p99=0.01, min=0.00, max=0.01}
+             │     'Time taken to estimate cardinality' = {duration=0.00ns}
+             │   Input avg.: 606045.44 rows, Input std.dev.: 55.10%
+             │   min_2 := min(eventdate)
+             │   max_3 := max(eventdate)
+             └─ TableScan[table = hive:clickbench:hits_raw]
+                    Layout: [eventdate:date]
+                    Estimates: {rows: ? (?), cpu: ?, memory: 0B, network: 0B}
+                    CPU: 94.00ms (32.08%), Scheduled: 210.00ms (36.91%), Blocked: 0.00ns (0.00%), Output: 99997497 rows (858.28MB)
+                    connector metrics:
+                      'ParquetReaderCompressionFormat_SNAPPY' = LongCount{total=89224}
+                    metrics:
+                      'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786920785, bucketWidthSeconds=1, cpuNanosBuckets=[94042204], wallNanosBuckets=[209591448]}
+                      'CPU time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+                      'Input rows distribution' = {count=165, p01=0.00, p05=11858.00, p10=117804.33, p25=331819.22, p50=606385.84, p75=989923.82, p90=1000000.00, p95=1000000.00, p99=1000000.00, min=0.00, max=1000000.00}
+                      'Scheduled time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.01, min=0.00, max=0.01}
+                    Input avg.: 606045.44 rows, Input std.dev.: 55.10%
+                    eventdate := eventdate:date:REGULAR
+                    Input: 99997497 rows (858.28MB), Physical input: 8.30MB, Physical input time: 4.19ms, Splits: 165, Splits generation wait time: 0.93ms
+
+

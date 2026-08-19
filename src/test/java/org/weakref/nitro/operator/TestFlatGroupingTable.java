@@ -1140,6 +1140,41 @@ class TestFlatGroupingTable
     }
 
     @Test
+    void testSparseCompositeCacheAdmitsSparseDirectRollupDomain()
+    {
+        int size = 128;
+        int[] ids = new int[size];
+        boolean[] nulls = new boolean[size];
+        Arrays.fill(nulls, true);
+        Vector[] values = {
+                new I64Vector(new long[size]),
+                DictionaryVector.wrap(ids, size, utf8(compactTestStrings("category-", 1025))),
+                DictionaryVector.wrap(ids, size, utf8(compactTestStrings("class-", 1025)))};
+        Vector[] nullVectors = {
+                new BooleanVector(new boolean[size]),
+                new BooleanVector(nulls),
+                new BooleanVector(nulls.clone())};
+        FlatGroupingTable table = new FlatGroupingTable(
+                FlatKeyLayout.tryCreate(values, true, arrayPool, codeGeneration, flatKeyTablePolicy),
+                16,
+                true);
+        try {
+            table.beginBatch(values, nullVectors);
+            table.prepareBatchHashes(values, nullVectors, Mask.all(size));
+            for (int position = 0; position < size; position++) {
+                assertThat(table.assignGroup(values, nullVectors, position, position)).isZero();
+            }
+            table.endBatch();
+
+            assertThat(table.recordCount()).isOne();
+            assertThat(table.sparseCompositeSize()).isOne();
+        }
+        finally {
+            table.releaseBuffers();
+        }
+    }
+
+    @Test
     void testWideSparseCompositeCacheRejectsDistinctSample()
     {
         int size = 128;

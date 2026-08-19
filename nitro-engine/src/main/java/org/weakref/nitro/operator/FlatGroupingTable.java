@@ -617,7 +617,7 @@ final class FlatGroupingTable
     {
         long composite = layout.compositeValueId(position);
         if (composite >= 0) {
-            if (!layout.batchDirectCompositeEligible()) {
+            if (!layout.batchDirectCompositeEligible() || sparseCompositeAdmitted) {
                 if (policy.sparseCompositeGroupCache() && sparseCompositeAdmitted) {
                     int cached = sparseCompositeGroup(composite);
                     if (cached >= 0) {
@@ -723,13 +723,13 @@ final class FlatGroupingTable
         // explicitly disabled, preserve the established decoupled hash-precompute path for non-direct layouts;
         // this makes the opt-out a causal cache control instead of silently selecting an inferior inline-hash
         // driver.
-        return layout.batchDirectCompositeEligible() ||
+        return (layout.batchDirectCompositeEligible() && !sparseCompositeAdmitted) ||
                 (policy.sparseCompositeGroupCache() && sparseCompositeAdmitted && layout.batchArrayModeEligible());
     }
 
     private boolean skipBatchHashPrecompute()
     {
-        return layout.batchDirectCompositeEligible() ||
+        return (layout.batchDirectCompositeEligible() && !sparseCompositeAdmitted) ||
                 (policy.sparseCompositeGroupCache() &&
                         sparseCompositeAdmitted &&
                         sparseCompositeGroups != null &&
@@ -771,7 +771,6 @@ final class FlatGroupingTable
         if (!policy.sparseCompositeGroupCache() ||
                 sparseCompositeAdmissionDecided ||
                 positionCount < policy.sparseCompositeAdmissionSampleSize() ||
-                layout.batchDirectCompositeEligible() ||
                 !layout.batchArrayModeEligible()) {
             return false;
         }
@@ -786,12 +785,15 @@ final class FlatGroupingTable
     private void finishSparseCompositeAdmission(long[] samples)
     {
         int distinct = 0;
+        long maximum = -1;
         for (int index = 0; index < policy.sparseCompositeAdmissionSampleSize(); index++) {
             long composite = samples[index];
             if (composite < 0) {
                 distinct = policy.sparseCompositeAdmissionSampleSize();
+                maximum = -1;
                 break;
             }
+            maximum = Math.max(maximum, composite);
             boolean seen = false;
             for (int previous = 0; previous < distinct; previous++) {
                 if (samples[previous] == composite) {
@@ -807,9 +809,20 @@ final class FlatGroupingTable
         // composites have a different break-even point: a locally near-constant prefix is already cheap for the
         // authoritative hash table and can later expand into a large cache, while a broad but bounded first window
         // can amortize its costly full-key hash when the same stable composite ids recur in later batches.
-        sparseCompositeAdmitted = distinct <= policy.sparseCompositeAdmissionMaxDistinct() &&
-                (layout.fieldCount() < policy.sparseCompositeExpensiveMinFields() ||
-                        distinct >= policy.sparseCompositeExpensiveMinDistinct());
+        if (layout.batchDirectCompositeEligible()) {
+            // A direct cache is profitable only when its physical index space is reasonably dense. Rollup nulls
+            // can occupy the last digit of a conservative radix: one logical key can then address millions of
+            // slots, repeatedly allocating a huge mostly-empty array when partial aggregation flushes. Preserve
+            // the exact composite id, but resolve it through the sparse primitive cache when the sampled address
+            // range is disproportionate to the number of values it represents.
+            sparseCompositeAdmitted = maximum >= 0 &&
+                    maximum + 1 > (long) Math.max(1, distinct) * policy.directCompositeSparseMaxAmplification();
+        }
+        else {
+            sparseCompositeAdmitted = distinct <= policy.sparseCompositeAdmissionMaxDistinct() &&
+                    (layout.fieldCount() < policy.sparseCompositeExpensiveMinFields() ||
+                            distinct >= policy.sparseCompositeExpensiveMinDistinct());
+        }
         sparseCompositeAdmissionDecided = true;
         if (policy.debugSparseCompositeGroupCache()) {
             System.err.printf("[sparse-composite-admission] fields=%d samples=%d distinct=%d admitted=%s%n",
@@ -1050,6 +1063,9 @@ final class FlatGroupingTable
             I64Vector result,
             long nextGroupId)
     {
+        if (sparseCompositeAdmitted) {
+            return -1;
+        }
         return layout.assignMixedComposite3Batch(this, values, nulls, mask, result, nextGroupId);
     }
 

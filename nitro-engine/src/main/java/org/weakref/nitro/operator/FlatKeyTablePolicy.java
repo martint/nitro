@@ -350,6 +350,7 @@ public record FlatKeyTablePolicy(Layout layout, Table table, ValueIds valueIds)
             int sparseCompositeAdmissionMaxDistinct,
             int sparseCompositeExpensiveMinFields,
             int sparseCompositeExpensiveMinDistinct,
+            int directCompositeSparseMaxAmplification,
             int hashProbeTileRows,
             boolean identityGroupIds)
     {
@@ -365,6 +366,7 @@ public record FlatKeyTablePolicy(Layout layout, Table table, ValueIds valueIds)
                     sparseCompositeExpensiveMinFields <= 0 ||
                     sparseCompositeExpensiveMinDistinct < 0 ||
                     sparseCompositeExpensiveMinDistinct > sparseCompositeAdmissionSampleSize ||
+                    directCompositeSparseMaxAmplification <= 0 ||
                     hashProbeTileRows <= 0) {
                 throw new IllegalArgumentException("Invalid flat table admission policy");
             }
@@ -372,7 +374,7 @@ public record FlatKeyTablePolicy(Layout layout, Table table, ValueIds valueIds)
 
         public static Table defaults()
         {
-            return new Table(false, false, true, true, true, true, true, 2, 1 << 16, 128, 4, 128, 4, 128, 124, 6, 64, 72, true);
+            return new Table(false, false, true, true, true, true, true, 2, 1 << 16, 128, 4, 128, 4, 128, 124, 6, 64, 64, 72, true);
         }
 
         public static Table fromSystemProperties()
@@ -424,6 +426,9 @@ public record FlatKeyTablePolicy(Layout layout, Table table, ValueIds valueIds)
                     Integer.getInteger(
                             "nitro.flatGrouping.sparseCompositeExpensiveMinDistinct",
                             defaults.sparseCompositeExpensiveMinDistinct()),
+                    Integer.getInteger(
+                            "nitro.flatGrouping.directCompositeSparseMaxAmplification",
+                            defaults.directCompositeSparseMaxAmplification()),
                     Math.max(
                             1,
                             Integer.getInteger(
