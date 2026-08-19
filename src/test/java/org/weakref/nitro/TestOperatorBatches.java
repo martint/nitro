@@ -4375,6 +4375,25 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testNestedLoopJoinKeepsOuterBatchOpenAcrossOutstandingOutputBatches()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        List<Row> innerRows = java.util.stream.LongStream.range(0, 10_001)
+                .mapToObj(value -> row(value))
+                .toList();
+        Operator operator = new NestedLoopJoinOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 1, List.of(row(7L))),
+                new ConstantTableOperator(allocator, 1, innerRows));
+
+        try (Batch first = operator.next(); Batch second = operator.next()) {
+            second.close();
+            I64Vector outerValues = (I64Vector) first.output(0).borrow(Stream.VALUES);
+            assertThat(outerValues.values()[first.borrowMask().position(0)]).isEqualTo(7L);
+        }
+    }
+
+    @Test
     void testNestedLoopJoinOperatorPreservesBinaryPayloadColumn()
     {
         BinaryVector names = new BinaryVector(2, 9);

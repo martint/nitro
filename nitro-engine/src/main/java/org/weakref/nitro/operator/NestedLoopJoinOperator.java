@@ -58,6 +58,7 @@ public class NestedLoopJoinOperator
 
     private Mask currentOuterMask;
     private Batch currentOuterBatch;
+    private OuterBatchLease currentOuterLease;
     private int outerRemaining;
     private Iterator<Integer> outerPositionIterator;
     private int currentOuterPosition;
@@ -377,6 +378,7 @@ public class NestedLoopJoinOperator
     {
         while (outer.hasNext()) {
             currentOuterBatch = outer.next();
+            currentOuterLease = new OuterBatchLease(currentOuterBatch);
             currentOuterMask = currentOuterBatch.borrowMask();
             if (!currentOuterMask.none()) {
                 outerPositionIterator = currentOuterMask.iterator();
@@ -384,6 +386,9 @@ public class NestedLoopJoinOperator
                 currentOuterPositionReady = false;
                 return true;
             }
+            currentOuterLease.release();
+            currentOuterBatch = null;
+            currentOuterLease = null;
         }
         return false;
     }
@@ -412,19 +417,28 @@ public class NestedLoopJoinOperator
                     ? outputBuffer.resultOutputForNestedLoop(physicalOutput, currentOuterBatch, allocator, allocationContext)
                     : resultOutput(physicalOutput);
         }
-        Batch outerBatch = currentOuterBatch;
+        Batch outerBatch = batchMask.none() ? null : currentOuterBatch;
+        Mask outerMask = batchMask.none() ? null : currentOuterMask;
+        OuterBatchLease outerLease = batchMask.none() ? null : currentOuterLease;
+        if (outerLease != null) {
+            outerLease.retain();
+        }
         boolean outerBatchConsumed = outerRemaining == 0;
+        if (outerBatchConsumed && outerLease != null) {
+            outerLease.release();
+        }
         return new Batch(
                 batchMask,
                 _ -> {},
-                takenMask -> takenMask == currentOuterMask ? currentOuterBatch.takeMask() : allocator.transfer(allocationContext, takenMask),
+                takenMask -> outerBatch != null && takenMask == outerMask ? outerBatch.takeMask() : allocator.transfer(allocationContext, takenMask),
                 _ -> {},
                 () -> {
-                    if (outerBatchConsumed && outerBatch != null) {
-                        outerBatch.close();
-                        if (currentOuterBatch == outerBatch) {
-                            currentOuterBatch = null;
-                        }
+                    if (outerLease != null) {
+                        outerLease.release();
+                    }
+                    if (outerBatchConsumed && currentOuterBatch == outerBatch) {
+                        currentOuterBatch = null;
+                        currentOuterLease = null;
                     }
                 },
                 outputs);
@@ -667,5 +681,35 @@ public class NestedLoopJoinOperator
     private static int rowPosition(long rowReference)
     {
         return (int) rowReference;
+    }
+
+    private static final class OuterBatchLease
+    {
+        private final Batch batch;
+        private int references = 1;
+
+        private OuterBatchLease(Batch batch)
+        {
+            this.batch = requireNonNull(batch, "batch is null");
+        }
+
+        private void retain()
+        {
+            if (references <= 0) {
+                throw new IllegalStateException("Outer batch already released");
+            }
+            references++;
+        }
+
+        private void release()
+        {
+            if (references <= 0) {
+                throw new IllegalStateException("Outer batch already released");
+            }
+            references--;
+            if (references == 0) {
+                batch.close();
+            }
+        }
     }
 }
