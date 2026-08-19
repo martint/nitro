@@ -2149,7 +2149,7 @@ public final class Utf8BinaryDispatch
     }
 
     /** Dense boolean-output form of {@link #containsSweep(byte[], int[], int, ContainsNeedle, int[])}. */
-    static void containsSweep(byte[] data, int[] offsets, int rowCount, ContainsNeedle needle, boolean[] matches)
+    public static void containsSweep(byte[] data, int[] offsets, int rowCount, ContainsNeedle needle, boolean[] matches)
     {
         Arrays.fill(matches, 0, rowCount, false);
         int needleLength = needle.length();
