@@ -735,12 +735,12 @@ final class GroupingState
                     keyTypes);
             flatGroupingTable = new FlatGroupingTable(
                     flatGroupingLayout,
-                    Math.max(16, values[0].length()),
+                    initialExpectedSize(values, mask),
                     true,
                     true);
             flatPackedIdentityAdmissionDecided = true;
             if (compositePolicy.debugGroupingShapes()) {
-                System.err.printf("[full-width-pair-packed-identity] rows=%d deferred=true%n", values[0].length());
+                System.err.printf("[full-width-pair-packed-identity] rows=%d deferred=true%n", mask.count());
             }
         }
         reserveAdditionalGroups(mask.count() + 1L);
@@ -892,8 +892,8 @@ final class GroupingState
 
     private boolean assignSharedDictionaryGroups(Vector[] values, Vector[] nulls, Mask mask, I64Vector result)
     {
-        int[] ids = sharedDictionaryIds(values);
-        if (ids == null || !sharedDictionaryNullsCompatible(nulls, ids, ((DictionaryVector) values[0]).length())) {
+        int[] ids = sharedDictionaryIds(values, mask);
+        if (ids == null || !sharedDictionaryNullsCompatible(nulls, ids, mask)) {
             return false;
         }
         Vector[] dictionaryValues = new Vector[values.length];
@@ -907,7 +907,7 @@ final class GroupingState
         OperatorKeySemantics.Key[] probeKeys = sharedDictionaryFlatBacking ? null : new OperatorKeySemantics.Key[values.length];
         long[] output = result.values();
         if (sharedDictionaryFlatBacking) {
-            flatGroupingTable.beginBatch(values, nulls);
+            flatGroupingTable.beginBatch(values, nulls, mask);
         }
         try {
             for (int position : mask) {
@@ -941,11 +941,12 @@ final class GroupingState
         finally {
             if (sharedDictionaryFlatBacking) {
                 flatGroupingTable.endBatch();
+                flatGroupingTable.releasePositionIndexedScratchIfOversized(mask);
             }
         }
     }
 
-    private static int[] sharedDictionaryIds(Vector[] values)
+    private static int[] sharedDictionaryIds(Vector[] values, Mask mask)
     {
         if (values.length < 2 || !(values[0] instanceof DictionaryVector first)) {
             return null;
@@ -955,33 +956,34 @@ final class GroupingState
             if (!(values[index] instanceof DictionaryVector dictionary) || dictionary.length() != first.length()) {
                 return null;
             }
-            if (dictionary.ids() != ids && !sameDictionaryIds(dictionary.ids(), ids, first.length())) {
+            if (dictionary.ids() != ids && !sameDictionaryIds(dictionary.ids(), ids, mask)) {
                 return null;
             }
         }
         return ids;
     }
 
-    private static boolean sharedDictionaryNullsCompatible(Vector[] nulls, int[] ids, int rowCount)
+    private static boolean sharedDictionaryNullsCompatible(Vector[] nulls, int[] ids, Mask mask)
     {
         for (Vector nullVector : nulls) {
             if (VectorAccess.isAllFalseNulls(nullVector)) {
                 continue;
             }
-            if (!(nullVector instanceof DictionaryVector dictionary) || dictionary.length() != rowCount) {
+            if (!(nullVector instanceof DictionaryVector dictionary) || dictionary.length() != mask.size()) {
                 return false;
             }
-            if (dictionary.ids() != ids && !sameDictionaryIds(dictionary.ids(), ids, rowCount)) {
+            if (dictionary.ids() != ids && !sameDictionaryIds(dictionary.ids(), ids, mask)) {
                 return false;
             }
         }
         return true;
     }
 
-    private static boolean sameDictionaryIds(int[] left, int[] right, int length)
+    private static boolean sameDictionaryIds(int[] left, int[] right, Mask mask)
     {
-        for (int index = 0; index < length; index++) {
-            if (left[index] != right[index]) {
+        for (int ordinal = 0; ordinal < mask.count(); ordinal++) {
+            int position = mask.position(ordinal);
+            if (left[position] != right[position]) {
                 return false;
             }
         }
@@ -1122,12 +1124,12 @@ final class GroupingState
                     keyTypes);
             flatGroupingTable = new FlatGroupingTable(
                     flatGroupingLayout,
-                    Math.max(16, values[0].length()),
+                    initialExpectedSize(values, mask),
                     true,
                     true);
             flatPackedIdentityAdmissionDecided = true;
             if (compositePolicy.debugGroupingShapes()) {
-                System.err.printf("[full-width-pair-packed-identity] rows=%d%n", values[0].length());
+                System.err.printf("[full-width-pair-packed-identity] rows=%d%n", mask.count());
             }
             return;
         }
@@ -1139,7 +1141,7 @@ final class GroupingState
                 multiLongArity = values.length;
                 multiLongTable = AdaptiveLongGroupingTable.create(
                         values.length,
-                        Math.max(16, values[0].length()),
+                        initialExpectedSize(values, mask),
                         arrayPool,
                         codeGeneration,
                         adaptiveLongGroupingPolicy);
@@ -1150,13 +1152,13 @@ final class GroupingState
             if (values.length == 2 && compositePolicy.packedIntPair()) {
                 usePackedIntPairGrouping = true;
                 packedIntGroupingArity = 2;
-                initPackedIntPairTable(Math.max(16, values[0].length()));
+                initPackedIntPairTable(initialExpectedSize(values, mask));
                 return;
             }
             if (values.length == 3 && compositePolicy.packedIntTriple()) {
                 usePackedIntPairGrouping = true;
                 packedIntGroupingArity = 3;
-                initPackedIntPairTable(Math.max(16, values[0].length()));
+                initPackedIntPairTable(initialExpectedSize(values, mask));
                 return;
             }
             // Generate (once per arity) a grouping table specialized to this many long keys — the row loop
@@ -1165,7 +1167,7 @@ final class GroupingState
             multiLongArity = values.length;
             multiLongTable = codeGeneration.multiLongGrouping().create(
                     values.length,
-                    Math.max(16, values[0].length()),
+                    initialExpectedSize(values, mask),
                     arrayPool,
                     adaptiveLongGroupingPolicy);
             return;
@@ -1181,21 +1183,21 @@ final class GroupingState
         if (compositePolicy.sharedDictionaryComposite() &&
                 values.length > 1 &&
                 values.length <= compositePolicy.sharedDictionaryMaxFields() &&
-                sharedDictionaryIds(values) != null &&
-                admitsSharedDictionaryGrouping(values, nulls, flatKeyLayout)) {
+                sharedDictionaryIds(values, mask) != null &&
+                admitsSharedDictionaryGrouping(values, nulls, mask, flatKeyLayout)) {
             useSharedDictionaryGrouping = true;
             if (compositePolicy.sharedDictionaryFlatBacking() &&
                     values.length >= compositePolicy.sharedDictionaryFlatBackingMinFields() &&
-                    values[0].length() >= compositePolicy.sharedDictionaryFlatBackingMinRows() &&
+                    mask.count() >= compositePolicy.sharedDictionaryFlatBackingMinRows() &&
                     flatKeyLayout != null) {
                 sharedDictionaryFlatBacking = true;
                 flatGroupingLayout = flatKeyLayout;
                 flatGroupingTable = new FlatGroupingTable(
                         flatKeyLayout,
-                        Math.max(16, values[0].length()),
+                        initialExpectedSize(values, mask),
                         true);
                 if (compositePolicy.debugGroupingShapes()) {
-                    System.err.printf("[shared-dictionary-flat-backing] fields=%d rows=%d%n", values.length, values[0].length());
+                    System.err.printf("[shared-dictionary-flat-backing] fields=%d rows=%d%n", values.length, mask.count());
                 }
             }
             else {
@@ -1211,12 +1213,20 @@ final class GroupingState
             // Composite grouping stores its null combinations in the table and remains insertion-order dense.
             flatGroupingTable = new FlatGroupingTable(
                     flatKeyLayout,
-                    Math.max(16, values[0].length()),
+                    initialExpectedSize(values, mask),
                     values.length > 1);
             return;
         }
 
         initializeObjectKeyGrouping(values);
+    }
+
+    private static int initialExpectedSize(Vector[] values, Mask mask)
+    {
+        // Encoded and join-produced vectors can retain a large addressable domain while exposing only a small
+        // active selection. Grouping state is populated from the active rows, so sizing from Vector.length()
+        // needlessly allocates for filtered-out positions and can trip adaptive partial-aggregation flush limits.
+        return Math.max(16, mask == null ? values[0].length() : mask.count());
     }
 
     private int compactRetainedLongColumns(Vector[] values, Vector[] nulls, Mask mask)
@@ -1338,12 +1348,13 @@ final class GroupingState
      * the batch boundary and retain the shortcut only when there is meaningful value reuse. Hash collisions can
      * only bias this conservative admission toward the correctness-equivalent shared path.
      */
-    private boolean admitsSharedDictionaryGrouping(Vector[] values, Vector[] nulls, FlatKeyLayout layout)
+    private boolean admitsSharedDictionaryGrouping(Vector[] values, Vector[] nulls, Mask mask, FlatKeyLayout layout)
     {
         if (layout == null || compositePolicy.sharedDictionarySampleSize() <= 0) {
             return true;
         }
-        int sampleSize = Math.min(values[0].length(), compositePolicy.sharedDictionarySampleSize());
+        int selectedRows = mask.count();
+        int sampleSize = Math.min(selectedRows, compositePolicy.sharedDictionarySampleSize());
         if (sampleSize == 0) {
             return true;
         }
@@ -1352,8 +1363,9 @@ final class GroupingState
         try {
             layout.beginBatch(values, nulls);
             try {
-                for (int position = 0; position < sampleSize; position++) {
-                    hashes[position] = layout.hash(values, nulls, position);
+                for (int sample = 0; sample < sampleSize; sample++) {
+                    int position = mask.position((int) ((long) sample * selectedRows / sampleSize));
+                    hashes[sample] = layout.hash(values, nulls, position);
                 }
             }
             finally {
@@ -1416,7 +1428,7 @@ final class GroupingState
         if (values.length > 1 && !flatPackedIdentityAdmissionDecided && !mask.none()) {
             decideFlatPackedIdentity(values, nulls, mask);
         }
-        flatGroupingTable.beginBatch(values, nulls);
+        flatGroupingTable.beginBatch(values, nulls, mask);
         try {
             long generatedNextGroupId = flatGroupingTable.assignGeneratedDictionaryBatch(
                     values, nulls, mask, result, nextGroupId);
@@ -1493,6 +1505,7 @@ final class GroupingState
         }
         finally {
             flatGroupingTable.endBatch();
+            flatGroupingTable.releasePositionIndexedScratchIfOversized(mask);
         }
     }
 

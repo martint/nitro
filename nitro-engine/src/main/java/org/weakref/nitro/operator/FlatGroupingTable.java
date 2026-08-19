@@ -184,6 +184,17 @@ final class FlatGroupingTable
      */
     public void beginBatch(Vector[] values, Vector[] nulls)
     {
+        layout.prepareBatchMask(null);
+        layout.beginBatch(values, nulls);
+        batchHashesValid = false;
+        batchNormalizedHashesValid = false;
+        singleDictionaryGroupCacheActive = false;
+        singleDictionaryIds = null;
+    }
+
+    public void beginBatch(Vector[] values, Vector[] nulls, Mask mask)
+    {
+        layout.prepareBatchMask(mask);
         layout.beginBatch(values, nulls);
         batchHashesValid = false;
         batchNormalizedHashesValid = false;
@@ -255,11 +266,12 @@ final class FlatGroupingTable
     {
         prepareSingleDictionaryGroupCache(mask.selectedCount(), mask.all());
         considerSparseCompositeAdmission(mask);
-        if (skipBatchHashPrecompute() || mask.none()) {
+        int size = mask.none() ? 0 : mask.maxPosition() + 1;
+        if (skipBatchHashPrecompute() ||
+                !shouldRetainPositionIndexedScratch(policy, size, mask.selectedCount())) {
             batchHashesValid = false;
             return;
         }
-        int size = mask.maxPosition() + 1;
         if (batchHashes == null || batchHashes.length < size) {
             long[] previous = batchHashes;
             batchHashes = arrayPool.borrowLongs(size);
@@ -485,13 +497,14 @@ final class FlatGroupingTable
     {
         prepareSingleDictionaryGroupCache(positionCount, false);
         considerSparseCompositeAdmission(positions, positionCount);
-        if (skipBatchHashPrecompute() || positionCount == 0) {
-            batchHashesValid = false;
-            return;
-        }
         int size = 0;
         for (int index = 0; index < positionCount; index++) {
             size = Math.max(size, positions[index] + 1);
+        }
+        if (skipBatchHashPrecompute() ||
+                !shouldRetainPositionIndexedScratch(policy, size, positionCount)) {
+            batchHashesValid = false;
+            return;
         }
         if (batchHashes == null || batchHashes.length < size) {
             long[] previous = batchHashes;
@@ -541,6 +554,41 @@ final class FlatGroupingTable
     {
         return selectedPositions >= policy.normalizedScratchMinPositions() &&
                 (long) addressablePositions <= (long) selectedPositions * policy.normalizedScratchMaxAmplification();
+    }
+
+    static boolean shouldRetainPositionIndexedScratch(
+            FlatKeyTablePolicy.Table policy,
+            int addressablePositions,
+            int selectedPositions)
+    {
+        return addressablePositions < policy.positionIndexedScratchMinPositions() ||
+                (long) addressablePositions <=
+                        (long) selectedPositions * policy.positionIndexedScratchMaxAmplification();
+    }
+
+    void releasePositionIndexedScratch()
+    {
+        arrayPool.release(batchHashes);
+        batchHashes = null;
+        batchHashesValid = false;
+        arrayPool.release(batchNormalizedFirst);
+        batchNormalizedFirst = null;
+        arrayPool.release(batchNormalizedSecond);
+        batchNormalizedSecond = null;
+        arrayPool.release(batchNormalizedValid);
+        batchNormalizedValid = null;
+        batchNormalizedHashesValid = false;
+        layout.releasePositionIndexedScratch();
+    }
+
+    void releasePositionIndexedScratchIfOversized(Mask mask)
+    {
+        if (!shouldRetainPositionIndexedScratch(
+                policy,
+                mask.none() ? 0 : mask.maxPosition() + 1,
+                mask.selectedCount())) {
+            releasePositionIndexedScratch();
+        }
     }
 
     private void ensureBatchNormalizedCapacity(int size)

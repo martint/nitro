@@ -460,6 +460,57 @@ class TestGroupedAggregationSession
     }
 
     @Test
+    void testSparseEncodedInputSizesGroupingStateFromSelectedRows()
+    {
+        int addressableRows = 1_000_000;
+        int[] selected = {17, 400_003, 999_991};
+        Schema schema = new Schema(List.of(
+                new Field(binaryType(), false),
+                new Field(binaryType(), false),
+                Schema.unspecified(1).field(0)));
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                GroupedAggregationSession session = new GroupedAggregationSession(
+                        allocator,
+                        schema,
+                        List.of(0, 1, 2),
+                        List.of(0, 1, 2),
+                        PhysicalAggregationProgram.independent(List.of(new CountAll())),
+                        resources.operatorResources(),
+                        null)) {
+            allocator.beginExecution();
+            BinaryVector categories = new BinaryVector(3, 64);
+            BinaryVector classes = new BinaryVector(3, 64);
+            for (int index = 0; index < 3; index++) {
+                categories.setBytes(index, ("category-" + index).getBytes(UTF_8));
+                classes.setBytes(index, ("class-" + index).getBytes(UTF_8));
+            }
+            int[] categoryIds = new int[addressableRows];
+            int[] classIds = new int[addressableRows];
+            long[] groupIds = new long[addressableRows];
+            for (int index = 0; index < selected.length; index++) {
+                categoryIds[selected[index]] = index;
+                classIds[selected[index]] = index;
+                groupIds[selected[index]] = index;
+            }
+            try (Batch input = new Batch(
+                    Mask.sparse(selected, addressableRows),
+                    Output.of(Streams.ofValues(DictionaryVector.wrap(categoryIds, categories))),
+                    Output.of(Streams.ofValues(DictionaryVector.wrap(classIds, classes))),
+                    Output.of(Streams.ofValues(new I64Vector(groupIds))))) {
+                session.addInput(input);
+            }
+
+            // The fixed composite-identity cache is bounded by the encoded key domain. Physical-position scratch
+            // must not add storage proportional to the million-row address space.
+            assertThat(session.retainedBytes()).isLessThan(2 * 1024 * 1024);
+            try (Batch output = session.finish()) {
+                assertThat(output.borrowMask().count()).isEqualTo(selected.length);
+            }
+        }
+    }
+
+    @Test
     void testAdaptiveFlushBoundsAllocatorResidencyAcrossGenerations()
     {
         TestingPartialAggregationControl control = new TestingPartialAggregationControl();

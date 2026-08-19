@@ -770,6 +770,7 @@ public class GroupedAggregationOperator
                         phaseMetrics.recordAccumulation(System.nanoTime() - start);
                     }
                 }
+                releaseOversizedPositionIndexedScratch(mask);
                 return;
             }
         }
@@ -826,6 +827,19 @@ public class GroupedAggregationOperator
         }
         finally {
             phaseMetrics.recordAccumulation(System.nanoTime() - start);
+        }
+        releaseOversizedPositionIndexedScratch(mask);
+    }
+
+    private void releaseOversizedPositionIndexedScratch(Mask mask)
+    {
+        if (reusableGroups != null &&
+                !FlatGroupingTable.shouldRetainPositionIndexedScratch(
+                        operatorResources.flatKeyTablePolicy().table(),
+                        mask.none() ? 0 : mask.maxPosition() + 1,
+                        mask.count())) {
+            allocator.release(allocationContext, reusableGroups);
+            reusableGroups = null;
         }
     }
 

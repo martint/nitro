@@ -191,6 +191,7 @@ class FlatKeyLayout
     private static final VarHandle GROUP_LONG_HANDLE = MethodHandles.byteArrayViewVarHandle(long[].class, LITTLE_ENDIAN);
     private static final VarHandle GROUP_INT_HANDLE = MethodHandles.byteArrayViewVarHandle(int[].class, LITTLE_ENDIAN);
     private boolean batchAccessorsReady;
+    private Mask batchMask;
     private boolean batchNullFreeLongBinary;
     private int batchLongField = -1;
     private int batchBinaryField = -1;
@@ -212,7 +213,8 @@ class FlatKeyLayout
     // Reusable, per-field logical-position -> leaf-position maps for nested dictionaries. Join output commonly
     // wraps an already dictionary-encoded dimension column. Resolving that chain once per batch lets all grouping
     // operations use the concrete leaf and a single id lookup instead of recursively walking the encoding in every
-    // hash/equality/write call. These buffers are high-water retained for the query and returned by releaseBuffers.
+    // hash/equality/write call. Dense batches retain these buffers at a query high-water mark; disproportionally
+    // sparse batches return them to the shared pool at the batch boundary.
     private int[][] composedDictionaryIds;
     private int[][] composedNullDictionaryIds;
     private VectorAccess.BooleanValues[] fieldNullAccess;
@@ -1026,7 +1028,7 @@ class FlatKeyLayout
                 }
             }
         }
-        prepareCompactBinaryPositionIds(values);
+        prepareCompactBinaryPositionIds(values, batchMask);
         prepareBinaryHashAccessors(values);
         batchLongField = -1;
         batchBinaryField = -1;
@@ -1978,12 +1980,14 @@ class FlatKeyLayout
         return batchPositionGlobalId[fieldIndex][position];
     }
 
-    private void prepareCompactBinaryPositionIds(Vector[] values)
+    private void prepareCompactBinaryPositionIds(Vector[] values, Mask mask)
     {
         if (!policy.precomputeCompactBinaryPositionIds() || !compactEmbeddedBinaryRecords || values.length == 0) {
             return;
         }
-        int positions = values[0].length();
+        int positions = mask == null
+                ? values[0].length()
+                : (mask.none() ? 0 : mask.maxPosition() + 1);
         int activeFields = 0;
         for (int index = 0; index < handlers.length; index++) {
             if (batchFieldAllNull[index] || !fieldIdComparable[index] || batchDictionaryIds[index] == null) {
@@ -2008,14 +2012,17 @@ class FlatKeyLayout
                 release(previous);
             }
             int[] entryGlobalIds = batchEntryGlobalId[index];
-            for (int position = 0; position < positions; position++) {
-                int dictionaryId = dictionaryIds[position];
-                int globalId = entryGlobalIds[dictionaryId];
-                positioned[position] = globalId == GLOBAL_ID_NOT_INTERNED
-                        ? globalIdFor(index, dictionaryId)
-                        : globalId;
+            if (mask == null || mask.all()) {
+                for (int position = 0; position < positions; position++) {
+                    prepareCompactBinaryPositionId(index, position, dictionaryIds, entryGlobalIds, positioned);
+                }
+                batchPositionDictionaryMapping[index] = fieldDictionaryMapping[index];
             }
-            batchPositionDictionaryMapping[index] = fieldDictionaryMapping[index];
+            else {
+                for (int position : mask) {
+                    prepareCompactBinaryPositionId(index, position, dictionaryIds, entryGlobalIds, positioned);
+                }
+            }
             activeFields++;
         }
         if (policy.debugCompactBinaryPositionIds() && activeFields > 0 && !debugCompactBinaryPositionIdsPrinted) {
@@ -2023,6 +2030,20 @@ class FlatKeyLayout
             System.err.printf("[compact-binary-position-ids] fields=%d active=%d positions=%d%n",
                     handlers.length, activeFields, positions);
         }
+    }
+
+    private void prepareCompactBinaryPositionId(
+            int fieldIndex,
+            int position,
+            int[] dictionaryIds,
+            int[] entryGlobalIds,
+            int[] positioned)
+    {
+        int dictionaryId = dictionaryIds[position];
+        int globalId = entryGlobalIds[dictionaryId];
+        positioned[position] = globalId == GLOBAL_ID_NOT_INTERNED
+                ? globalIdFor(fieldIndex, dictionaryId)
+                : globalId;
     }
 
     /**
@@ -2482,6 +2503,7 @@ class FlatKeyLayout
      */
     public void endBatch()
     {
+        batchMask = null;
         batchAccessorsReady = false;
         generatedRecordEqualityKernel = null;
         batchNullFreeLongBinary = false;
@@ -2496,6 +2518,46 @@ class FlatKeyLayout
         // shared dictionary identity and intentionally survive across batches.
         for (int index = 0; index < dictionaryHashedIds.length; index++) {
             dictionaryHashedIds[index] = null;
+        }
+        Arrays.fill(batchDictionaryIds, null);
+        Arrays.fill(fieldDictionaryMapping, null);
+        Arrays.fill(fieldBinaryBase, null);
+        Arrays.fill(fieldBinaryIds, null);
+        Arrays.fill(fieldLong, null);
+        Arrays.fill(fieldBinaryHashes, null);
+        Arrays.fill(fieldNullAccess, null);
+    }
+
+    void prepareBatchMask(Mask mask)
+    {
+        batchMask = mask;
+    }
+
+    void releasePositionIndexedScratch()
+    {
+        if (batchPositionGlobalId != null) {
+            for (int[] ids : batchPositionGlobalId) {
+                release(ids);
+            }
+            Arrays.fill(batchPositionGlobalId, null);
+        }
+        if (composedDictionaryIds != null) {
+            for (int[] ids : composedDictionaryIds) {
+                release(ids);
+            }
+            Arrays.fill(composedDictionaryIds, null);
+        }
+        if (composedNullDictionaryIds != null) {
+            for (int[] ids : composedNullDictionaryIds) {
+                release(ids);
+            }
+            Arrays.fill(composedNullDictionaryIds, null);
+        }
+        if (batchPositionDictionaryMapping != null) {
+            Arrays.fill(batchPositionDictionaryMapping, null);
+        }
+        if (fieldBinaryIds != null) {
+            Arrays.fill(fieldBinaryIds, null);
         }
     }
 

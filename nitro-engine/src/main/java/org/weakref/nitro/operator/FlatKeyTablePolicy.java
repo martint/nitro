@@ -342,6 +342,8 @@ public record FlatKeyTablePolicy(Layout layout, Table table, ValueIds valueIds)
             boolean nullFreeSingleBinaryProbeBatch,
             int singleDictionaryGroupCacheMaxCardinalityAmplification,
             int singleDictionaryGroupCacheMaxCardinality,
+            int positionIndexedScratchMinPositions,
+            int positionIndexedScratchMaxAmplification,
             int normalizedScratchMinPositions,
             int normalizedScratchMaxAmplification,
             int sparseCompositeAdmissionSampleSize,
@@ -353,7 +355,9 @@ public record FlatKeyTablePolicy(Layout layout, Table table, ValueIds valueIds)
     {
         public Table
         {
-            if (normalizedScratchMinPositions <= 0 ||
+            if (positionIndexedScratchMinPositions <= 0 ||
+                    positionIndexedScratchMaxAmplification <= 0 ||
+                    normalizedScratchMinPositions <= 0 ||
                     normalizedScratchMaxAmplification <= 0 ||
                     sparseCompositeAdmissionSampleSize <= 0 ||
                     sparseCompositeAdmissionMaxDistinct < 0 ||
@@ -368,7 +372,7 @@ public record FlatKeyTablePolicy(Layout layout, Table table, ValueIds valueIds)
 
         public static Table defaults()
         {
-            return new Table(false, false, true, true, true, true, true, 2, 1 << 16, 128, 4, 128, 124, 6, 64, 72, true);
+            return new Table(false, false, true, true, true, true, true, 2, 1 << 16, 128, 4, 128, 4, 128, 124, 6, 64, 72, true);
         }
 
         public static Table fromSystemProperties()
@@ -396,6 +400,12 @@ public record FlatKeyTablePolicy(Layout layout, Table table, ValueIds valueIds)
                     Integer.getInteger(
                             "nitro.flatGrouping.singleDictionaryGroupCacheMaxCardinality",
                             defaults.singleDictionaryGroupCacheMaxCardinality()),
+                    Integer.getInteger(
+                            "nitro.flatGrouping.positionIndexedScratchMinPositions",
+                            defaults.positionIndexedScratchMinPositions()),
+                    Integer.getInteger(
+                            "nitro.flatGrouping.positionIndexedScratchMaxAmplification",
+                            defaults.positionIndexedScratchMaxAmplification()),
                     Integer.getInteger(
                             "nitro.flatGrouping.normalizedScratchMinPositions",
                             defaults.normalizedScratchMinPositions()),
