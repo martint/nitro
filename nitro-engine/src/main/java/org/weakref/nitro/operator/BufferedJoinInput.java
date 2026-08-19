@@ -594,6 +594,20 @@ final class BufferedJoinInput
             this.retainedBatch = retainedBatch;
             this.positions = positions;
             this.deferred = deferred;
+            if (columns != null) {
+                // Compacted build columns are complete before the batch is published and remain owned by this
+                // buffer until the join closes. Expose that lifetime invariant to encoding-aware consumers so a
+                // downstream join or grouping table can safely retain dictionary-derived state across output
+                // batches. The allocator clears the immutable marker before recycling the storage.
+                for (Streams column : columns) {
+                    if (column == null) {
+                        continue;
+                    }
+                    for (int index = 0; index < column.vectorCount(); index++) {
+                        column.vectorAt(index).freezeContent();
+                    }
+                }
+            }
         }
 
         public static InnerBatch retained(Batch batch, int[] positions)

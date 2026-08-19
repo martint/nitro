@@ -20,6 +20,7 @@ import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
+import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.execution.EngineResources;
 
 import java.util.List;
@@ -28,6 +29,19 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class TestBufferedJoinInputPolicy
 {
+    @Test
+    void testOwnedBuildColumnsArePublishedImmutable()
+    {
+        BinaryVector values = binary("alpha", "beta");
+
+        BufferedJoinInput.InnerBatch batch = new BufferedJoinInput.InnerBatch(
+                new Streams[] {Streams.ofValues(values)},
+                values.length());
+
+        assertThat(batch.columns()[0].values()).isSameAs(values);
+        assertThat(values.contentImmutable()).isTrue();
+    }
+
     @Test
     void testDenseRetainedBinaryBatchesCoalesceByRange()
     {
