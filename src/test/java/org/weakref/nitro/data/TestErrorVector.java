@@ -58,4 +58,25 @@ class TestErrorVector
             assertThat(masked.error(3)).isEqualTo(second);
         }
     }
+
+    @Test
+    void testMaterializesMixedBooleanRepresentationsWithoutLosingDiagnostics()
+    {
+        ErrorValue failure = new ErrorValue("test", 1, "FAILURE", "USER_ERROR", "failure");
+        ErrorVector diagnostic = new ErrorVector(2);
+        diagnostic.setError(1, failure);
+        BooleanVector legacy = new BooleanVector(new boolean[] {true, false});
+
+        try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
+            Allocator.Context context = new Allocator.Context("test");
+            ErrorVector materialized = (ErrorVector) diagnostic.materializeRows(
+                    allocator,
+                    context,
+                    new Vector[] {diagnostic, new DictionaryVector(new int[] {0, 1}, legacy)});
+
+            assertThat(materialized.values()).containsExactly(false, true, true, false);
+            assertThat(materialized.error(1)).isEqualTo(failure);
+            assertThat(materialized.error(2)).isNull();
+        }
+    }
 }

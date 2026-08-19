@@ -27,6 +27,7 @@ public final class ErrorVectors
             case ErrorVector errors -> errors.error(position);
             case DictionaryVector dictionary -> errorAt(dictionary.values(), dictionary.ids()[position]);
             case RleVector rle -> errorAt(rle.values(), rle.runIndex(position));
+            case ConcatenatedBooleanVector concatenated -> concatenatedErrorAt(concatenated, position);
             case null, default -> null;
         };
     }
@@ -37,7 +38,27 @@ public final class ErrorVectors
             case ErrorVector _ -> true;
             case DictionaryVector dictionary -> hasDiagnostics(dictionary.values());
             case RleVector rle -> hasDiagnostics(rle.values());
+            case ConcatenatedBooleanVector concatenated -> {
+                boolean diagnostics = false;
+                for (int index = 0; index < concatenated.segmentCount(); index++) {
+                    diagnostics |= hasDiagnostics(concatenated.segment(index));
+                }
+                yield diagnostics;
+            }
             case null, default -> false;
         };
+    }
+
+    private static ErrorValue concatenatedErrorAt(ConcatenatedBooleanVector concatenated, int position)
+    {
+        int localPosition = position;
+        for (int index = 0; index < concatenated.segmentCount(); index++) {
+            Vector segment = concatenated.segment(index);
+            if (localPosition < segment.length()) {
+                return errorAt(segment, localPosition);
+            }
+            localPosition -= segment.length();
+        }
+        throw new IndexOutOfBoundsException(position);
     }
 }

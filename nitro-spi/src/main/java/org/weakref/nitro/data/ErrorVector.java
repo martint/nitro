@@ -147,13 +147,19 @@ public final class ErrorVector
         ErrorVector result = allocator.allocate(allocationContext, ErrorVector.class, VectorSupport.totalLength(rows), ErrorVector::new);
         int outputStart = 0;
         for (Vector row : rows) {
-            if (!(row instanceof ErrorVector errors)) {
-                throw new IllegalArgumentException("ErrorVector rows must have the same representation");
-            }
-            for (int position = 0; position < errors.length(); position++) {
-                errors.copyPosition(result, position, outputStart++);
+            for (int position = 0; position < row.length(); position++) {
+                boolean failed = booleanValue(row, position);
+                ErrorValue error = ErrorVectors.errorAt(row, position);
+                if (failed && error != null) {
+                    result.setError(outputStart, error);
+                }
+                else {
+                    result.values()[outputStart] = failed;
+                }
+                outputStart++;
             }
         }
+        result.invalidateContentSummary();
         return result;
     }
 
@@ -191,5 +197,16 @@ public final class ErrorVector
     {
         ErrorVector target = existing instanceof ErrorVector errors ? errors : null;
         return allocator.allocateOrGrow(allocationContext, target, ErrorVector.class, size, ErrorVector::new);
+    }
+
+    private static boolean booleanValue(Vector vector, int position)
+    {
+        return switch (vector) {
+            case BooleanVector values -> values.values()[position];
+            case DictionaryVector values -> booleanValue(values.values(), values.ids()[position]);
+            case RleVector values -> booleanValue(values.values(), values.runIndex(position));
+            case ConcatenatedBooleanVector values -> values.value(position);
+            default -> throw new IllegalArgumentException("ErrorVector row is not boolean-backed: " + vector.getClass().getSimpleName());
+        };
     }
 }
