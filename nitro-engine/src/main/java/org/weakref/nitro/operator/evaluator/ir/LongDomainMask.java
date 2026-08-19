@@ -13,7 +13,17 @@
  */
 package org.weakref.nitro.operator.evaluator.ir;
 
-public sealed interface MaskExpression
-        permits AllMask, AndMask, LongDomainMask, NotMask, OrMask, RangeConstrainedAndMask, ReferenceMask
+import org.weakref.nitro.core.source.LongDomain;
+
+import static java.util.Objects.requireNonNull;
+
+/** A registry-lowered exact long domain, evaluated once per physical dictionary entry when encoded. */
+public record LongDomainMask(Reference input, LongDomain domain)
+        implements MaskExpression
 {
+    public LongDomainMask
+    {
+        requireNonNull(input, "input is null");
+        requireNonNull(domain, "domain is null");
+    }
 }

@@ -29,6 +29,7 @@ import org.weakref.nitro.operator.evaluator.ir.Assignment;
 import org.weakref.nitro.operator.evaluator.ir.Call;
 import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
 import org.weakref.nitro.operator.evaluator.ir.Input;
+import org.weakref.nitro.operator.evaluator.ir.LongDomainMask;
 import org.weakref.nitro.operator.evaluator.ir.MaskExpression;
 import org.weakref.nitro.operator.evaluator.ir.MaskExpressionResolver;
 import org.weakref.nitro.operator.evaluator.ir.RangeConstraintLowerer;
@@ -167,7 +168,8 @@ public class FilterOperator
             staticLongRangeCandidates(evaluationPlan, predicateMask, primitiveRegistry).forEach(candidate ->
                     pushdowns.add(new StaticPredicatePushdown(
                             candidate.terms(),
-                            source.pushStaticFilter(candidate.filter()))));
+                            source.pushStaticFilter(candidate.filter()),
+                            null)));
         }
         if (policy.pushStaticLongEquality()) {
             staticLongEqualityDomainCandidates(
@@ -177,11 +179,15 @@ public class FilterOperator
                     resources.dynamicFilterPolicy()).forEach(candidate ->
                     pushdowns.add(new StaticPredicatePushdown(
                             candidate.terms(),
-                            source.pushStaticFilter(candidate.filter()))));
+                            source.pushStaticFilter(candidate.filter()),
+                            new LongDomainMask(
+                                    new Reference(new Input(candidate.filter().column()), Stream.VALUES),
+                                    candidate.filter()))));
             staticLongEqualityCandidates(evaluationPlan, predicateMask, primitiveRegistry).forEach(candidate ->
                     pushdowns.add(new StaticPredicatePushdown(
                             candidate.terms(),
-                            source.pushStaticFilter(candidate.filter()))));
+                            source.pushStaticFilter(candidate.filter()),
+                            null)));
         }
         this.staticPredicatePushdowns = List.copyOf(pushdowns);
         PlanEvaluator.MaskExecutionDiagnostics evaluatorDiagnostics = planEvaluator.maskExecutionDiagnostics();
@@ -424,12 +430,29 @@ public class FilterOperator
                 .flatMap(pushdown -> pushdown.terms().stream())
                 .collect(java.util.stream.Collectors.toUnmodifiableSet());
         MaskExpression residual = removeEnforcedConjuncts(originalPredicateMask, enforcedTerms);
+        residual = replaceResidualDomains(residual);
         effectivePredicateMask = RangeConstraintLowerer.lower(
                 evaluationPlan,
                 primitiveRegistry,
                 residual,
                 policy.fuseConstantRanges());
         return effectivePredicateMask;
+    }
+
+    private MaskExpression replaceResidualDomains(MaskExpression expression)
+    {
+        for (StaticPredicatePushdown pushdown : staticPredicatePushdowns) {
+            if (!pushdown.enforcement().enforced() &&
+                    pushdown.residualReplacement() != null &&
+                    pushdown.terms().contains(expression)) {
+                return pushdown.residualReplacement();
+            }
+        }
+        if (!(expression instanceof org.weakref.nitro.operator.evaluator.ir.AndMask(List<MaskExpression> terms))) {
+            return expression;
+        }
+        return new org.weakref.nitro.operator.evaluator.ir.AndMask(
+                terms.stream().map(this::replaceResidualDomains).toList());
     }
 
     private static MaskExpression removeEnforcedConjuncts(MaskExpression expression, Set<MaskExpression> enforcedTerms)
@@ -455,7 +478,8 @@ public class FilterOperator
 
     private record StaticPredicatePushdown(
             List<MaskExpression> terms,
-            StaticFilterEnforcement enforcement) {}
+            StaticFilterEnforcement enforcement,
+            MaskExpression residualReplacement) {}
 
     @Override
     public void constrain(Mask mask)

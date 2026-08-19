@@ -21,6 +21,7 @@ import org.weakref.nitro.core.function.mask.RangeConstraint;
 import org.weakref.nitro.core.function.mask.SourceMaskOptimization;
 import org.weakref.nitro.core.function.mask.SourceMaskOptimizationProvider;
 import org.weakref.nitro.core.function.projection.ProjectionArgument;
+import org.weakref.nitro.core.source.LongDomain;
 import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.core.type.TypeVectorFactory;
 import org.weakref.nitro.data.Allocator;
@@ -55,6 +56,7 @@ import org.weakref.nitro.operator.evaluator.ir.Construct;
 import org.weakref.nitro.operator.evaluator.ir.Copy;
 import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
 import org.weakref.nitro.operator.evaluator.ir.Literal;
+import org.weakref.nitro.operator.evaluator.ir.LongDomainMask;
 import org.weakref.nitro.operator.evaluator.ir.MaskExpression;
 import org.weakref.nitro.operator.evaluator.ir.MaskExpressionResolver;
 import org.weakref.nitro.operator.evaluator.ir.MemoizationPolicy;
@@ -1477,6 +1479,7 @@ public final class PlanEvaluator
     {
         return switch (expression) {
             case AllMask _ -> null;
+            case LongDomainMask(Reference input, _) -> optionalBooleanStream(input.producer(), Stream.ERRORS, mask);
             case RangeConstrainedAndMask(_, _, _, _, _, AndMask fallback) -> evaluateMaskExpressionErrors(fallback, mask);
             case ReferenceMask(Reference reference) -> {
                 MaskExpression resolved = MaskExpressionResolver.resolve(plan, new ReferenceMask(reference));
@@ -1849,6 +1852,7 @@ public final class PlanEvaluator
     {
         return switch (expression) {
             case AllMask _ -> mask;
+            case LongDomainMask(Reference input, LongDomain domain) -> evaluateTrueLongDomainMask(input, domain, mask);
             case RangeConstrainedAndMask(_, _, _, _, _, AndMask fallback) -> evaluateTrueMask(fallback, mask);
             case ReferenceMask(Reference reference) -> evaluateTrueReferenceMask(reference, mask);
             case NotMask(MaskExpression source) -> evaluateFalseMask(source, mask);
@@ -1861,6 +1865,7 @@ public final class PlanEvaluator
     {
         return switch (expression) {
             case AllMask _ -> emptyMask(mask.size());
+            case LongDomainMask(Reference input, LongDomain domain) -> evaluateLongDomainMask(input, domain, mask).falseMask(allocator, allocationContext, mask);
             case RangeConstrainedAndMask(_, _, _, _, _, AndMask fallback) -> evaluateFalseMask(fallback, mask);
             case ReferenceMask(Reference reference) -> evaluateFalseReferenceMask(reference, mask);
             case NotMask(MaskExpression source) -> evaluateTrueMask(source, mask);
@@ -2289,6 +2294,7 @@ public final class PlanEvaluator
     {
         return switch (expression) {
             case AllMask _ -> new MaskOutcome(mask, emptyMask(mask.size()), emptyMask(mask.size()));
+            case LongDomainMask(Reference input, LongDomain domain) -> evaluateLongDomainMask(input, domain, mask);
             case RangeConstrainedAndMask(_, _, _, _, _, AndMask fallback) -> evaluateMaskOutcome(fallback, mask);
             case ReferenceMask(Reference reference) -> evaluateReferenceMask(reference, mask);
             case NotMask(MaskExpression source) -> {
@@ -2319,6 +2325,134 @@ public final class PlanEvaluator
         Vector errors = optionalBooleanStream(reference.producer(), Stream.ERRORS, mask);
         Vector nulls = optionalBooleanStream(reference.producer(), Stream.NULLS, mask);
         return classifyBooleanMask(values, nulls, errors, mask);
+    }
+
+    private MaskOutcome evaluateLongDomainMask(Reference input, LongDomain domain, Mask mask)
+    {
+        Vector values = evaluate(input, mask).get(input.stream());
+        Vector errors = optionalBooleanStream(input.producer(), Stream.ERRORS, mask);
+        Vector nulls = optionalBooleanStream(input.producer(), Stream.NULLS, mask);
+
+        boolean[] dictionaryMatches = null;
+        int[] dictionaryIds = null;
+        if (values instanceof DictionaryVector dictionary) {
+            Vector dictionaryValues = dictionary.values();
+            if (dictionaryValues instanceof I64Vector longs) {
+                long[] entries = longs.values();
+                dictionaryMatches = new boolean[dictionaryValues.length()];
+                for (int index = 0; index < dictionaryMatches.length; index++) {
+                    dictionaryMatches[index] = domain.test(entries[index]);
+                }
+                dictionaryIds = dictionary.ids();
+            }
+            else if (dictionaryValues instanceof I32Vector integers) {
+                int[] entries = integers.values();
+                dictionaryMatches = new boolean[dictionaryValues.length()];
+                for (int index = 0; index < dictionaryMatches.length; index++) {
+                    dictionaryMatches[index] = domain.test(entries[index]);
+                }
+                dictionaryIds = dictionary.ids();
+            }
+        }
+
+        VectorAccess.LongValues longValues = dictionaryMatches == null ? VectorAccess.longValues(values) : null;
+        int capacity = mask.count();
+        Mask trueMask = allocator.allocateUninitializedSparseMask(allocationContext, capacity, mask.size());
+        Mask nullMask = allocator.allocateUninitializedSparseMask(allocationContext, capacity, mask.size());
+        Mask errorMask = allocator.allocateUninitializedSparseMask(allocationContext, capacity, mask.size());
+        int[] truePositions = trueMask.positionsArrayForOverwrite(capacity);
+        int[] nullPositions = nullMask.positionsArrayForOverwrite(capacity);
+        int[] errorPositions = errorMask.positionsArrayForOverwrite(capacity);
+        int trueCount = 0;
+        int nullCount = 0;
+        int errorCount = 0;
+        for (int position : mask) {
+            if (isError(errors, position)) {
+                errorPositions[errorCount++] = position;
+            }
+            else if (isNull(nulls, position)) {
+                nullPositions[nullCount++] = position;
+            }
+            else if (dictionaryMatches != null ? dictionaryMatches[dictionaryIds[position]] : domain.test(longValues.value(position))) {
+                truePositions[trueCount++] = position;
+            }
+        }
+        trueMask.finishRetain(trueCount);
+        nullMask.finishRetain(nullCount);
+        errorMask.finishRetain(errorCount);
+        return new MaskOutcome(trueMask, nullMask, errorMask);
+    }
+
+    private Mask evaluateTrueLongDomainMask(Reference input, LongDomain domain, Mask mask)
+    {
+        Vector values = evaluate(input, mask).get(input.stream());
+        Vector errors = optionalBooleanStream(input.producer(), Stream.ERRORS, mask);
+        Vector nulls = optionalBooleanStream(input.producer(), Stream.NULLS, mask);
+        int capacity = mask.count();
+        Mask result = allocator.allocateUninitializedSparseMask(allocationContext, capacity, mask.size());
+        int[] positions = result.positionsArrayForOverwrite(capacity);
+        int count = 0;
+
+        if (values instanceof DictionaryVector dictionary) {
+            boolean[] dictionaryMatches = evaluateLongDictionaryDomain(dictionary.values(), domain);
+            if (dictionaryMatches != null) {
+                int[] ids = dictionary.ids();
+                for (int position : mask) {
+                    if (!isError(errors, position) && !isNull(nulls, position) && dictionaryMatches[ids[position]]) {
+                        positions[count++] = position;
+                    }
+                }
+                result.finishRetain(count);
+                return result;
+            }
+        }
+
+        VectorAccess.LongValues longValues = VectorAccess.longValues(values);
+        for (int position : mask) {
+            if (!isError(errors, position) && !isNull(nulls, position) && domain.test(longValues.value(position))) {
+                positions[count++] = position;
+            }
+        }
+        result.finishRetain(count);
+        return result;
+    }
+
+    private boolean evaluateTrueLongDomainMaskInPlace(Reference input, LongDomain domain, Mask mask)
+    {
+        Vector values = evaluate(input, mask).get(input.stream());
+        Vector errors = optionalBooleanStream(input.producer(), Stream.ERRORS, mask);
+        Vector nulls = optionalBooleanStream(input.producer(), Stream.NULLS, mask);
+        if (values instanceof DictionaryVector dictionary &&
+                VectorAccess.isAllFalseNulls(nulls) &&
+                VectorAccess.isAllFalseNulls(errors)) {
+            boolean[] dictionaryMatches = evaluateLongDictionaryDomain(dictionary.values(), domain);
+            if (dictionaryMatches != null) {
+                mask.retainDictionaryComparison(dictionary.ids(), dictionaryMatches);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean[] evaluateLongDictionaryDomain(Vector dictionary, LongDomain domain)
+    {
+        if (dictionary instanceof I64Vector longs) {
+            boolean[] matches = new boolean[dictionary.length()];
+            long[] values = longs.values();
+            for (int index = 0; index < matches.length; index++) {
+                matches[index] = domain.test(values[index]);
+            }
+            return matches;
+        }
+        if (dictionary instanceof I32Vector integers) {
+            boolean[] matches = new boolean[dictionary.length()];
+            int[] values = integers.values();
+            for (int index = 0; index < matches.length; index++) {
+                matches[index] = domain.test(values[index]);
+            }
+            return matches;
+        }
+        return null;
     }
 
     private MaskOutcome classifyBooleanMask(Vector values, Vector nulls, Vector errors, Mask mask)
@@ -3792,6 +3926,7 @@ public final class PlanEvaluator
     {
         return switch (expression) {
             case AllMask _ -> new MaskOutcome(mask, emptyMask(mask.size()), emptyMask(mask.size()));
+            case LongDomainMask(Reference input, LongDomain domain) -> evaluateLongDomainMask(input, domain, mask);
             case RangeConstrainedAndMask(_, _, _, _, _, AndMask fallback) -> evaluateMaskOutcome(fallback, mask);
             case ReferenceMask(Reference reference) -> evaluateReferenceMask(reference, mask);
             case NotMask(MaskExpression source) -> {
@@ -3810,6 +3945,7 @@ public final class PlanEvaluator
     {
         return switch (expression) {
             case AllMask _ -> mask;
+            case LongDomainMask(Reference input, LongDomain domain) -> evaluateTrueLongDomainMask(input, domain, mask);
             case RangeConstrainedAndMask(_, _, _, _, _, AndMask fallback) -> evaluateTrueMask(fallback, mask);
             case ReferenceMask(Reference reference) -> evaluateTrueReferenceMask(reference, mask);
             case NotMask(MaskExpression source) -> evaluateFalseMask(source, mask);
@@ -3822,6 +3958,15 @@ public final class PlanEvaluator
     {
         return switch (expression) {
             case AllMask _ -> mask;
+            case LongDomainMask(Reference input, LongDomain domain) -> {
+                if (!evaluateTrueLongDomainMaskInPlace(input, domain, mask)) {
+                    Mask result = evaluateTrueLongDomainMask(input, domain, mask);
+                    if (result != mask) {
+                        mask.copyFrom(result);
+                    }
+                }
+                yield mask;
+            }
             case RangeConstrainedAndMask(
                     Reference input,
                     Object lowerExclusive,
@@ -3909,6 +4054,13 @@ public final class PlanEvaluator
         return switch (expression) {
             case AllMask _ -> {
                 mask.clear(mask.size());
+                yield true;
+            }
+            case LongDomainMask(Reference input, LongDomain domain) -> {
+                Mask result = evaluateLongDomainMask(input, domain, mask).falseMask(allocator, allocationContext, mask);
+                if (result != mask) {
+                    mask.copyFrom(result);
+                }
                 yield true;
             }
             case ReferenceMask(Reference reference) -> tryEvaluatePrimitiveFalseMaskInPlace(reference, mask);

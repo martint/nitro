@@ -158,7 +158,7 @@ public final class IrNormalizer
     private static MaskExpression normalizeMaskExpression(MaskExpression expression)
     {
         return switch (expression) {
-            case AllMask _, RangeConstrainedAndMask _, ReferenceMask _ -> expression;
+            case AllMask _, LongDomainMask _, RangeConstrainedAndMask _, ReferenceMask _ -> expression;
             case NotMask(MaskExpression source) -> new NotMask(normalizeMaskExpression(source));
             case AndMask(List<MaskExpression> terms) -> normalizeAnd(terms);
             case OrMask(List<MaskExpression> terms) -> normalizeOr(terms);

@@ -1727,6 +1727,9 @@ public final class ClickBenchHitsSupport
     {
         return switch (maskExpression) {
             case AllMask allMask -> allMask;
+            case org.weakref.nitro.operator.evaluator.ir.LongDomainMask domain -> new org.weakref.nitro.operator.evaluator.ir.LongDomainMask(
+                    remapReference(domain.input(), variableOffset),
+                    domain.domain());
             case org.weakref.nitro.operator.evaluator.ir.RangeConstrainedAndMask range -> new org.weakref.nitro.operator.evaluator.ir.RangeConstrainedAndMask(
                     remapReference(range.input(), variableOffset),
                     range.lowerExclusive(),

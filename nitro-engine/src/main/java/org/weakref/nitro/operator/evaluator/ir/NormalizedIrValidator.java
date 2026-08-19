@@ -45,7 +45,7 @@ public final class NormalizedIrValidator
     private static boolean isNormalizedMask(MaskExpression expression)
     {
         return switch (expression) {
-            case AllMask _, RangeConstrainedAndMask _, ReferenceMask _ -> true;
+            case AllMask _, LongDomainMask _, RangeConstrainedAndMask _, ReferenceMask _ -> true;
             case NotMask(MaskExpression source) -> isNormalizedMask(source);
             case AndMask(List<MaskExpression> terms) -> terms.stream().allMatch(NormalizedIrValidator::isNormalizedMask);
             case OrMask(List<MaskExpression> terms) -> terms.stream().allMatch(NormalizedIrValidator::isNormalizedMask);

@@ -2025,6 +2025,9 @@ final class TpchParquetSupport
     {
         return switch (expression) {
             case AllMask _ -> expression;
+            case org.weakref.nitro.operator.evaluator.ir.LongDomainMask domain -> new org.weakref.nitro.operator.evaluator.ir.LongDomainMask(
+                    remap(domain.input(), variableOffset),
+                    domain.domain());
             case org.weakref.nitro.operator.evaluator.ir.RangeConstrainedAndMask range -> new org.weakref.nitro.operator.evaluator.ir.RangeConstrainedAndMask(
                     remap(range.input(), variableOffset),
                     range.lowerExclusive(),

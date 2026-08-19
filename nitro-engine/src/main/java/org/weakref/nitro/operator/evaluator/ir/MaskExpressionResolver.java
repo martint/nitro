@@ -81,7 +81,7 @@ public final class MaskExpressionResolver
     private MaskExpression resolveExpression(MaskExpression expression)
     {
         return switch (expression) {
-            case AllMask _, RangeConstrainedAndMask _ -> expression;
+            case AllMask _, LongDomainMask _, RangeConstrainedAndMask _ -> expression;
             case ReferenceMask(Reference reference) -> reference.stream() == Stream.VALUES ? resolve(reference) : expression;
             case NotMask(MaskExpression source) -> new NotMask(resolveExpression(source));
             case AndMask(List<MaskExpression> terms) -> new AndMask(terms.stream()

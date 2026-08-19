@@ -231,6 +231,13 @@ public final class NitroParquetBatchSource
     private final ScanOutputResolver[] outputResolvers;
     private boolean lazyOutputResolution;
     private boolean deferredFilteredPayload;
+    // Filter columns have already been decoded into the window scratch in order to build the survivor set, but a
+    // downstream consumer may not project them. Publish those columns lazily so an unused filter key is not copied
+    // once more into every public output batch. The window remains pinned until the slice is closed, so the ordinary
+    // output resolver can materialize an exact slice on first demand without extending its ownership lifetime.
+    private boolean lazyFilteredWindowOutputs;
+    private int filteredWindowSliceStart;
+    private int filteredWindowSliceCount;
     private int deferredWindowRows;
     private int[] deferredWindowSurvivors;
     private int[] deferredRawSurvivors = new int[0];
@@ -2001,9 +2008,22 @@ public final class NitroParquetBatchSource
         int start = windowSurvivorCursor;
         int sliceCount = Math.min(currentBatchRows, windowSurvivorCount - start);
         windowSurvivorCursor += sliceCount;
+        lazyFilteredWindowOutputs = true;
+        filteredWindowSliceStart = start;
+        filteredWindowSliceCount = sliceCount;
 
         VectorColumnGeneration[] outputs = new VectorColumnGeneration[columnCount];
         for (int c = 0; c < columnCount; c++) {
+            if (isFilterColumn(c)) {
+                currentValues[c] = null;
+                currentNulls[c] = null;
+                ScanOutputResolver outputResolver = outputResolvers[c];
+                outputs[c] = new VectorColumnGeneration(
+                        nullable[c] ? Set.of(Stream.VALUES, Stream.NULLS) : Set.of(Stream.VALUES),
+                        outputResolver.resolver(),
+                        outputResolver);
+                continue;
+            }
             if (deferredFilteredPayload && !isFilterColumn(c)) {
                 currentValues[c] = null;
                 currentNulls[c] = null;
@@ -2152,7 +2172,10 @@ public final class NitroParquetBatchSource
 
         private Vector resolve(Stream stream)
         {
-            if (deferredFilteredPayload) {
+            if (lazyFilteredWindowOutputs && isFilterColumn(column)) {
+                resolveFilteredWindowColumn(column);
+            }
+            else if (deferredFilteredPayload) {
                 resolveDeferredFilteredColumn(column);
             }
             else if (lazyOutputResolution) {
@@ -2164,6 +2187,38 @@ public final class NitroParquetBatchSource
                 default -> throw new IllegalArgumentException("Output does not expose stream: " + stream);
             };
         }
+    }
+
+    /** Materialize one already-filtered window column only when a downstream operator actually borrows it. */
+    private void resolveFilteredWindowColumn(int column)
+    {
+        if (currentValues[column] != null) {
+            return;
+        }
+        int start = filteredWindowSliceStart;
+        int count = filteredWindowSliceCount;
+        BooleanVector nullVector = nullable[column]
+                ? allocator.allocate(allocationContext, BooleanVector.class, batchPolicy.maxRows(), BooleanVector::new)
+                : null;
+        Vector valueVector;
+        if (readers[column].kind() == ColumnReader.Kind.INT) {
+            valueVector = copyIntOutput(column, windowInt[column], start, count, batchPolicy.maxRows());
+        }
+        else if (readers[column].isDouble()) {
+            valueVector = longBitsToDoubles(windowLong[column], start, count);
+        }
+        else {
+            I64Vector vector = I64Vector.allocate(allocator, allocationContext, batchPolicy.maxRows());
+            System.arraycopy(windowLong[column], start, vector.values(), 0, count);
+            valueVector = vector;
+        }
+        if (nullVector != null) {
+            System.arraycopy(windowNull[column], start, nullVector.values(), 0, count);
+        }
+        currentValues[column] = valueVector;
+        currentNulls[column] = nullVector;
+        recordPublished(column, count);
+        recordCopied(column, count);
     }
 
     private void resolveDeferredFilteredColumn(int column)

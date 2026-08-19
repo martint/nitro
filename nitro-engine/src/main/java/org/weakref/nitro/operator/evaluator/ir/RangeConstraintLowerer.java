@@ -101,7 +101,7 @@ public final class RangeConstraintLowerer
     private MaskExpression lower(MaskExpression expression)
     {
         return switch (expression) {
-            case AllMask _, RangeConstrainedAndMask _, ReferenceMask _ -> expression;
+            case AllMask _, LongDomainMask _, RangeConstrainedAndMask _, ReferenceMask _ -> expression;
             case NotMask(MaskExpression source) -> new NotMask(lower(source));
             case AndMask(List<MaskExpression> terms) -> lowerAnd(terms);
             case OrMask(List<MaskExpression> terms) -> new OrMask(terms.stream().map(this::lower).toList());

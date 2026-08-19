@@ -15,6 +15,7 @@ package org.weakref.nitro.operator.evaluator;
 
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.core.function.EncodedDomainReuse;
+import org.weakref.nitro.core.source.LongDomain;
 import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.core.type.TypeIdentity;
 import org.weakref.nitro.core.type.TypeOperators;
@@ -71,6 +72,7 @@ import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
 import org.weakref.nitro.operator.evaluator.ir.Input;
 import org.weakref.nitro.operator.evaluator.ir.IrNormalizer;
 import org.weakref.nitro.operator.evaluator.ir.Literal;
+import org.weakref.nitro.operator.evaluator.ir.LongDomainMask;
 import org.weakref.nitro.operator.evaluator.ir.MaterializationPolicy;
 import org.weakref.nitro.operator.evaluator.ir.MemoizationPolicy;
 import org.weakref.nitro.operator.evaluator.ir.NotMask;
@@ -676,6 +678,58 @@ public class TestPlanEvaluator
         assertThat(result.count()).isEqualTo(2);
         assertThat(result.position(0)).isEqualTo(0);
         assertThat(result.position(1)).isEqualTo(2);
+    }
+
+    @Test
+    void testLongDomainMaskEvaluatesDictionaryEntriesOnce()
+    {
+        AtomicInteger evaluations = new AtomicInteger();
+        LongDomain domain = new LongDomain()
+        {
+            @Override
+            public boolean test(long value)
+            {
+                evaluations.incrementAndGet();
+                return value == 7 || value == 42;
+            }
+
+            @Override
+            public long contentGeneration()
+            {
+                return 0;
+            }
+
+            @Override
+            public int size()
+            {
+                return 2;
+            }
+
+            @Override
+            public boolean isEmpty()
+            {
+                return false;
+            }
+
+            @Override
+            public double rangeDensity()
+            {
+                return 2.0 / 36;
+            }
+        };
+        Reference input = new Reference(new Input(0), Stream.VALUES);
+        PlanEvaluator evaluator = planEvaluator(
+                new EvaluationPlan(List.of(), List.of()),
+                primitiveRegistry(),
+                inputResolver(Map.of(
+                        input, DictionaryVector.wrap(
+                                new int[] {0, 1, 2, 0, 2},
+                                new I64Vector(new long[] {7, 8, 42})))),
+                new Allocator(EngineResources.createDefault()));
+
+        assertThat(evaluator.evaluate(new LongDomainMask(input, domain), Mask.all(5)))
+                .containsExactly(0, 2, 3, 4);
+        assertThat(evaluations).hasValue(3);
     }
 
     @Test
