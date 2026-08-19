@@ -2260,11 +2260,26 @@ public class HashJoinOperator
                     }
                     throw new IllegalArgumentException("Output does not expose stream: " + stream);
                 },
-                (stream, vector) -> allocator.transfer(allocationContext, vector),
+                (stream, vector) -> takeResultStream(outputIndex, vector),
                 (stream, vector) -> allocator.release(allocationContext, vector),
                 null,
                 null)
                 .withKnownAllFalse(knownAllFalseStreams);
+    }
+
+    private Vector takeResultStream(int outputIndex, Vector vector)
+    {
+        if (outputIndex < outerOutputCount && outerSupportsReborrow && vector instanceof DictionaryVector) {
+            // Borrowers inside a pull chain can safely consume the view while the upstream batch is pinned. A
+            // caller that takes the vector requires independent ownership, so compact the logical rows at that
+            // explicit ownership boundary instead of transferring a wrapper over borrowed upstream storage.
+            int[] positions = new int[vector.length()];
+            Arrays.setAll(positions, index -> index);
+            Vector copy = vector.copy(allocator, allocationContext, positions);
+            allocator.release(allocationContext, vector);
+            return allocator.transfer(allocationContext, copy);
+        }
+        return allocator.transfer(allocationContext, vector);
     }
 
     private boolean canResolveInnerNullStreamDirectly(int outputIndex)
@@ -2442,21 +2457,13 @@ public class HashJoinOperator
             return wrapOuterOutput(sourceOutput);
         }
 
-        // Outer can satisfy a constrained re-borrow: narrow it to the matched rows so a lazy
-        // projected payload computes only the rows the join emits, then flat-copy the matched
-        // positions into a dense vector indexable directly by output position. Materialization stays
-        // lazy: it only runs when an outer stream is borrowed.
+        // Outer can satisfy a constrained re-borrow: narrow it to the matched rows so a lazy projected payload
+        // computes only rows the join emits, then retain that vector through an owned dictionary mapping. A pull
+        // chain cannot advance the outer again until this output batch is consumed, so the backing batch remains
+        // live for the dictionary view. This keeps adjacent Nitro joins encoding-native instead of copying the
+        // same payload at every stage of an execution island.
         constrainOuterIfNecessary();
-        if (currentOutputMask.all()) {
-            return buffers.copyPositions(sourceOutput, null, outputOuterPositions, currentOutputCount, 0, currentOutputCount);
-        }
-
-        Streams result = null;
-        for (int index = 0; index < currentOutputMask.count(); index++) {
-            int outputPosition = currentOutputMask.position(index);
-            result = buffers.copySinglePosition(sourceOutput, result, currentOutputCount, outputPosition, outputOuterPositions[outputPosition]);
-        }
-        return result == null ? buffers.emptyLike(outputSchema(outputIndex)) : result;
+        return wrapOuterOutput(sourceOutput);
     }
 
     private Streams wrapOuterOutput(Output sourceOutput)

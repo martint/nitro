@@ -4827,19 +4827,19 @@ public class TestOperatorBatches
                 0)) {
             try (Batch first = join.next()) {
                 assertThat(first.borrowMask().count()).isEqualTo(10_000);
-                assertThat(((I64Vector) first.output(1).borrow(Stream.VALUES)).values()[9_999]).isEqualTo(20L);
+                assertThat(longValue(first.output(1).borrow(Stream.VALUES), 9_999)).isEqualTo(20L);
             }
 
             try (Batch second = join.next()) {
                 assertThat(second.borrowMask().count()).isEqualTo(501);
-                I64Vector outerPayloads = (I64Vector) second.output(1).borrow(Stream.VALUES);
-                I64Vector innerPayloads = (I64Vector) second.output(3).borrow(Stream.VALUES);
+                Vector outerPayloads = second.output(1).borrow(Stream.VALUES);
+                Vector innerPayloads = second.output(3).borrow(Stream.VALUES);
 
                 for (int index = 0; index < 500; index++) {
-                    assertThat(outerPayloads.values()[index]).isEqualTo(20L);
+                    assertThat(longValue(outerPayloads, index)).isEqualTo(20L);
                 }
-                assertThat(outerPayloads.values()[500]).isEqualTo(30L);
-                assertThat(innerPayloads.values()[500]).isEqualTo(3000L);
+                assertThat(longValue(outerPayloads, 500)).isEqualTo(30L);
+                assertThat(longValue(innerPayloads, 500)).isEqualTo(3000L);
             }
         }
     }

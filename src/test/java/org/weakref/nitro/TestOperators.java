@@ -2646,7 +2646,7 @@ public class TestOperators
 
     private static long readI64(Vector vector, int position)
     {
-        return ((I64Vector) vector).values()[position];
+        return VectorAccess.longValues(vector).value(position);
     }
 
     private static long failValueRead(Vector vector, int position)
@@ -6465,21 +6465,20 @@ public class TestOperators
             assertThat(constrainedMask.get()).isNotNull();
             assertThat(constrainedMask.get()).containsExactly(0, 2);
 
-            assertThat(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values()[0]).isEqualTo(3L);
+            assertThat(readI64(batch.output(0).borrow(Stream.VALUES), 0)).isEqualTo(3L);
             assertThat(payloadBorrows).hasValue(0);
 
-            assertThat(((I64Vector) batch.output(2).borrow(Stream.VALUES)).values()[0]).isEqualTo(3L);
+            assertThat(readI64(batch.output(2).borrow(Stream.VALUES), 0)).isEqualTo(3L);
             assertThat(payloadBorrows).hasValue(0);
 
-            I64Vector projectedPayloads = (I64Vector) batch.output(1).borrow(Stream.VALUES);
-            assertThat(projectedPayloads.values()[0]).isEqualTo(900L);
+            assertThat(readI64(batch.output(1).borrow(Stream.VALUES), 0)).isEqualTo(900L);
             assertThat(payloadBorrows).hasValue(1);
             assertThat(constrainedMask.get()).containsExactly(2);
         }
     }
 
     @Test
-    void testHashJoinMaterializesFullyConsumedIdentityOuterPayload()
+    void testHashJoinRetainsFullyConsumedIdentityOuterPayload()
     {
         AtomicReference<Mask> constrainedMask = new AtomicReference<>();
         I64Vector keys = new I64Vector(new long[] {1L, 2L, 3L});
@@ -6538,9 +6537,12 @@ public class TestOperators
                 0)) {
             try (Batch batch = join.next()) {
                 assertThat(batch.borrowMask()).containsExactly(0, 1, 2);
-                I64Vector output = (I64Vector) batch.output(1).borrow(Stream.VALUES);
-                assertThat(output).isNotSameAs(payload);
-                assertThat(output.values()).containsExactly(10L, 20L, 30L);
+                Vector output = batch.output(1).borrow(Stream.VALUES);
+                assertThat(output).isInstanceOf(DictionaryVector.class);
+                assertThat(((DictionaryVector) output).values()).isSameAs(payload);
+                assertThat(readI64(output, 0)).isEqualTo(10L);
+                assertThat(readI64(output, 1)).isEqualTo(20L);
+                assertThat(readI64(output, 2)).isEqualTo(30L);
                 assertThat(constrainedMask.get()).containsExactly(0, 1, 2);
             }
         }
@@ -6636,14 +6638,13 @@ public class TestOperators
             assertThat(constrainedMask.get()).isNotNull();
             assertThat(constrainedMask.get()).containsExactly(0, 2, 3);
 
-            assertThat(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values()[0]).isEqualTo(3L);
+            assertThat(readI64(batch.output(0).borrow(Stream.VALUES), 0)).isEqualTo(3L);
             assertThat(payloadBorrows).hasValue(0);
 
-            assertThat(((I64Vector) batch.output(1).borrow(Stream.VALUES)).values()[0]).isEqualTo(3L);
+            assertThat(readI64(batch.output(1).borrow(Stream.VALUES), 0)).isEqualTo(3L);
             assertThat(payloadBorrows).hasValue(0);
 
-            I64Vector projectedPayloads = (I64Vector) batch.output(2).borrow(Stream.VALUES);
-            assertThat(projectedPayloads.values()[0]).isEqualTo(900L);
+            assertThat(readI64(batch.output(2).borrow(Stream.VALUES), 0)).isEqualTo(900L);
             assertThat(payloadBorrows).hasValue(1);
             assertThat(constrainedMask.get()).containsExactly(2);
         }
