@@ -666,8 +666,12 @@ final class GroupingState
             if (!initialized) {
                 initializeIfNecessary(values, nulls, mask);
             }
-            if (useLongGrouping && values.length == 1 && values[0] instanceof DictionaryVector dictionary) {
-                assignDictionaryLongGroupsDiscardingResults(dictionary, nulls[0], mask);
+            if (structuralGrouping != null) {
+                return false;
+            }
+            if (values.length == 1 && values[0] instanceof DictionaryVector dictionary) {
+                decideDictionaryFlatSingleIdentity(values, nulls, mask);
+                assignDictionaryGroupsDiscardingResults(dictionary, nulls[0], mask);
                 return true;
             }
             if (!discardMultiLongResults) {
@@ -715,6 +719,7 @@ final class GroupingState
             useFullWidthPairPackedIdentity = admitsFullWidthPairPackedIdentity(values, nulls, mask);
         }
         initializeIfNecessary(values, nulls, mask);
+        decideDictionaryFlatSingleIdentity(values, nulls, mask);
         if (structuralGrouping != null) {
             nextGroupId = structuralGrouping.assignGroups(values, nulls, mask, result, nextGroupId);
             return;
@@ -1434,6 +1439,25 @@ final class GroupingState
         }
         flatGroupingTable.beginBatch(values, nulls, mask);
         try {
+            if (values.length == 1 &&
+                    !flatSingleNullInTable &&
+                    !VectorAccess.isAllFalseNulls(nulls[0])) {
+                Vector nullVector = nulls[0];
+                for (int position : mask) {
+                    if (OperatorVectorSupport.isNull(nullVector, position)) {
+                        result.values()[position] = nullGroup();
+                    }
+                    else {
+                        long newGroupId = nextGroupId;
+                        long groupId = flatGroupingTable.assignGroup(values, nulls, position, newGroupId);
+                        if (groupId == newGroupId) {
+                            nextGroupId++;
+                        }
+                        result.values()[position] = groupId;
+                    }
+                }
+                return;
+            }
             long generatedNextGroupId = flatGroupingTable.assignGeneratedDictionaryBatch(
                     values, nulls, mask, result, nextGroupId);
             if (generatedNextGroupId >= 0) {
@@ -1513,6 +1537,17 @@ final class GroupingState
         }
     }
 
+    private void decideDictionaryFlatSingleIdentity(Vector[] values, Vector[] nulls, Mask mask)
+    {
+        if (useFlatGrouping &&
+                values.length == 1 &&
+                values[0] instanceof DictionaryVector &&
+                !flatSingleIdentityAdmissionDecided &&
+                !mask.none()) {
+            decideFlatSingleIdentity(values, nulls, mask);
+        }
+    }
+
     /** Cold, one-shot admission path kept out of the compiled per-batch assignment kernel. */
     private void decideFlatSingleIdentity(Vector[] values, Vector[] nulls, Mask mask)
     {
@@ -1524,13 +1559,16 @@ final class GroupingState
         // branch.
         boolean largeBatch = nextGroupId == 0 &&
                 mask.count() >= compositePolicy.flatSingleKeyRecordIdentityMinBatchRows();
-        FlatKeyLayout identityLayout = largeBatch
+        boolean dictionaryCardinalityEligible = !(values[0] instanceof DictionaryVector dictionary) ||
+                (long) dictionary.values().length() * 100 >=
+                        (long) mask.count() * compositePolicy.flatSingleKeyRecordIdentityMinDistinctPercent();
+        FlatKeyLayout identityLayout = largeBatch && dictionaryCardinalityEligible
                 ? FlatKeyLayout.tryCreate(values, true, arrayPool, codeGeneration, flatKeyTablePolicy, keyTypes)
                 : null;
-        int sampledDistinct = largeBatch
+        int sampledDistinct = identityLayout != null
                 ? sampledDistinctFlatKeys(identityLayout, values, nulls, mask)
                 : 0;
-        int sampled = largeBatch
+        int sampled = identityLayout != null
                 ? Math.min(mask.count(), compositePolicy.flatSingleKeyRecordIdentitySampleSize())
                 : 0;
         if (sampled > 0 &&
@@ -2771,14 +2809,13 @@ final class GroupingState
      * value has been observed (and NULL is either impossible or already known), the remaining logical rows cannot
      * change grouping state and need not be visited.
      */
-    private void assignDictionaryLongGroupsDiscardingResults(DictionaryVector dictionary, Vector nullVector, Mask mask)
+    private void assignDictionaryGroupsDiscardingResults(DictionaryVector dictionary, Vector nullVector, Mask mask)
     {
         int[] ids = dictionary.ids();
         Vector dictionaryValues = dictionary.values();
-        VectorAccess.LongValues values = VectorAccess.longValues(dictionaryValues);
         int domainSize = dictionaryValues.length();
         ensureDictionaryCacheCapacity(domainSize);
-        int generation = currentDictionaryGeneration(dictionaryValues);
+        int generation = useFlatGrouping ? nextDictionaryGeneration() : currentDictionaryGeneration(dictionaryValues);
         int unresolved = 0;
         for (int dictionaryId = 0; dictionaryId < domainSize; dictionaryId++) {
             if (dictionaryGenerations[dictionaryId] != generation) {
@@ -2786,26 +2823,69 @@ final class GroupingState
             }
         }
 
-        boolean nullResolved = VectorAccess.isAllFalseNulls(nullVector) || nullGroup >= 0;
+        boolean nullResolved = VectorAccess.isAllFalseNulls(nullVector) || (!flatSingleNullInTable && nullGroup >= 0);
         if (unresolved == 0 && nullResolved) {
             return;
         }
         reserveAdditionalGroups(unresolved + (nullResolved ? 0L : 1L));
-        for (int position : mask) {
-            if (OperatorVectorSupport.isNull(nullVector, position)) {
-                nullGroup();
-                nullResolved = true;
-            }
-            else {
-                int dictionaryId = ids[position];
-                if (dictionaryGenerations[dictionaryId] != generation) {
-                    dictionaryGroupsById[dictionaryId] = groupForLongKey(values.value(dictionaryId));
-                    dictionaryGenerations[dictionaryId] = generation;
-                    unresolved--;
+        VectorAccess.LongValues longValues = useLongGrouping ? VectorAccess.longValues(dictionaryValues) : null;
+        Vector[] domainValues = useFlatGrouping ? new Vector[] {dictionary} : null;
+        Vector[] domainNulls = useFlatGrouping ? new Vector[] {nullVector} : null;
+        if (useFlatGrouping) {
+            flatGroupingTable.beginBatch(domainValues, domainNulls);
+        }
+        try {
+            for (int position : mask) {
+                if (OperatorVectorSupport.isNull(nullVector, position)) {
+                    if (useFlatGrouping && flatSingleNullInTable) {
+                        if (!nullResolved) {
+                            long newGroupId = nextGroupId;
+                            if (flatGroupingTable.assignGroup(domainValues, domainNulls, position, newGroupId) == newGroupId) {
+                                nextGroupId++;
+                            }
+                        }
+                    }
+                    else {
+                        nullGroup();
+                    }
+                    nullResolved = true;
+                }
+                else {
+                    int dictionaryId = ids[position];
+                    if (dictionaryGenerations[dictionaryId] != generation) {
+                        long groupId;
+                        if (useLongGrouping) {
+                            groupId = groupForLongKey(longValues.value(dictionaryId));
+                        }
+                        else if (useFlatGrouping) {
+                            long newGroupId = nextGroupId;
+                            groupId = flatGroupingTable.assignGroup(
+                                    domainValues,
+                                    domainNulls,
+                                    position,
+                                    newGroupId);
+                            if (groupId == newGroupId) {
+                                nextGroupId++;
+                            }
+                        }
+                        else {
+                            OperatorKeySemantics.Key key = OperatorKeySemantics.probeKey(
+                                    dictionaryValues, null, dictionaryId, reusableProbeKeys[0]);
+                            groupId = groupForSingleKey(key);
+                        }
+                        dictionaryGroupsById[dictionaryId] = groupId;
+                        dictionaryGenerations[dictionaryId] = generation;
+                        unresolved--;
+                    }
+                }
+                if (unresolved == 0 && nullResolved) {
+                    return;
                 }
             }
-            if (unresolved == 0 && nullResolved) {
-                return;
+        }
+        finally {
+            if (useFlatGrouping) {
+                flatGroupingTable.endBatch();
             }
         }
     }
@@ -3311,6 +3391,9 @@ final class GroupingState
 
     private long groupForSingleKey(OperatorKeySemantics.Key key)
     {
+        if (key == null) {
+            return nullGroup();
+        }
         long group = groups.getLong(key);
         if (group != -1) {
             return group;
@@ -3331,6 +3414,12 @@ final class GroupingState
                 }
             }
             nullGroup = nextGroupId++;
+            if (!useFlatGrouping && !useLongGrouping && !usePackedIntPairGrouping && !useMultiLongGrouping &&
+                    keysByGroupColumns.size() == 1) {
+                // Dictionary grouping routes a top-level SQL null through this compact singleton. Keep the
+                // authoritative object table in sync so a later flat batch resolves the same null to this group.
+                groups.put(null, nullGroup);
+            }
         }
         return nullGroup;
     }

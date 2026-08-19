@@ -16,14 +16,17 @@ package org.weakref.nitro.operator;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.operator.aggregation.PhysicalAggregationProgram;
 
 import java.util.Arrays;
 import java.util.List;
 
+import static java.lang.Math.toIntExact;
 import static java.util.Objects.requireNonNull;
 
 /**
@@ -46,6 +49,7 @@ public final class KeyOnlyGroupingSession
     private final Vector[] values;
     private final Vector[] nulls;
     private final InitialAggregationBatchBuilder outputBuilder;
+    private final DistinctKeySetPolicy distinctKeySetPolicy;
 
     private DistinctKeySet distinctKeySet;
     private int[] distinctPositions = EMPTY_POSITIONS;
@@ -74,6 +78,7 @@ public final class KeyOnlyGroupingSession
                 .toList();
         this.values = new Vector[this.groupByColumns.length];
         this.nulls = new Vector[this.groupByColumns.length];
+        this.distinctKeySetPolicy = operatorResources.distinctKeySetPolicy();
         this.allocationContext = new Allocator.Context(
                 "KeyOnlyGroupingSession",
                 operatorResources.grouping().markDistinctMaskPool());
@@ -111,13 +116,8 @@ public final class KeyOnlyGroupingSession
         if (inputMask.none()) {
             return InputOwnership.CALLER;
         }
-        if (distinctPositions.length < inputMask.selectedCount()) {
-            int[] previous = distinctPositions;
-            distinctPositions = allocator.primitiveArrays().borrowInts(inputMask.selectedCount());
-            allocator.primitiveArrays().release(previous);
-        }
-
         int selectedCount;
+        Mask candidateMask = inputMask;
         try {
             for (int key = 0; key < groupByColumns.length; key++) {
                 Output output = batch.output(groupByColumns[key]);
@@ -133,14 +133,19 @@ public final class KeyOnlyGroupingSession
                         allocationContext,
                         allocator.primitiveArrays(),
                         operatorResources.codeGeneration(),
-                        operatorResources.distinctKeySetPolicy(),
+                        distinctKeySetPolicy,
                         operatorResources.adaptiveLongGroupingPolicy(),
                         operatorResources.flatKeyTablePolicy());
             }
-            distinctKeySet.reserveAdditional(inputMask.selectedCount());
-            selectedCount = distinctKeySet.addBatch(values, nulls, inputMask, distinctPositions);
+            candidateMask = dictionaryDomainCandidates(inputMask);
+            ensureDistinctPositionCapacity(candidateMask.selectedCount());
+            distinctKeySet.reserveAdditional(candidateMask.selectedCount());
+            selectedCount = distinctKeySet.addBatch(values, nulls, candidateMask, distinctPositions);
         }
         finally {
+            if (candidateMask != inputMask) {
+                allocator.release(allocationContext, candidateMask);
+            }
             Arrays.fill(values, null);
             Arrays.fill(nulls, null);
         }
@@ -167,6 +172,62 @@ public final class KeyOnlyGroupingSession
             allocator.release(allocationContext, distinctMask);
         }
         return InputOwnership.CALLER;
+    }
+
+    /**
+     * Reduces a low-cardinality dictionary key to logical representatives before hashing. The representative remains
+     * a position in the original batch, so arbitrary key types, nested dictionaries, output copying, and SQL null
+     * semantics continue through the ordinary distinct machinery. A nullable dictionary entry may contribute both a
+     * null and a non-null representative; no relationship between the values and null encodings is assumed.
+     */
+    private Mask dictionaryDomainCandidates(Mask inputMask)
+    {
+        if (!distinctKeySetPolicy.keyOnlyDictionaryDomain() ||
+                groupByColumns.length != 1 ||
+                !(values[0] instanceof DictionaryVector dictionary)) {
+            return inputMask;
+        }
+
+        int domainSize = dictionary.values().length();
+        boolean singleNullState = VectorAccess.isAllFalseNulls(nulls[0]) || VectorAccess.isAllTrueNulls(nulls[0]);
+        long maximumCandidates = (long) domainSize * (singleNullState ? 1 : 2);
+        if (maximumCandidates * distinctKeySetPolicy.keyOnlyDictionaryDomainMinimumReduction() > inputMask.selectedCount()) {
+            return inputMask;
+        }
+
+        ensureDistinctPositionCapacity(toIntExact(maximumCandidates));
+        byte[] seen = allocator.primitiveArrays().borrowBytes(domainSize);
+        Arrays.fill(seen, 0, domainSize, (byte) 0);
+        VectorAccess.BooleanValues nullValues = singleNullState ? null : VectorAccess.booleanValues(nulls[0]);
+        int[] ids = dictionary.ids();
+        int candidateCount = 0;
+        try {
+            for (int position : inputMask) {
+                int id = ids[position];
+                byte state = nullValues != null && nullValues.value(position) ? (byte) 2 : (byte) 1;
+                if ((seen[id] & state) == 0) {
+                    seen[id] |= state;
+                    distinctPositions[candidateCount++] = position;
+                    if (candidateCount == maximumCandidates) {
+                        break;
+                    }
+                }
+            }
+            return allocator.allocateSparseMask(allocationContext, distinctPositions, candidateCount, inputMask.size());
+        }
+        finally {
+            allocator.primitiveArrays().release(seen);
+        }
+    }
+
+    private void ensureDistinctPositionCapacity(int capacity)
+    {
+        if (distinctPositions.length >= capacity) {
+            return;
+        }
+        int[] previous = distinctPositions;
+        distinctPositions = allocator.primitiveArrays().borrowInts(capacity);
+        allocator.primitiveArrays().release(previous);
     }
 
     @Override

@@ -2046,6 +2046,34 @@ class TestFlatGroupingTable
     }
 
     @Test
+    void testSingleFlatDictionaryCanGroupWithoutMaterializingLogicalGroupIds()
+    {
+        GroupingState state = new GroupingState(arrayPool, codeGeneration, groupingResources, adaptiveLongGroupingPolicy, flatKeyTablePolicy);
+        int[] ids = new int[1_000];
+        boolean[] nulls = new boolean[ids.length];
+        for (int position = 0; position < ids.length; position++) {
+            ids[position] = position % 3;
+        }
+        nulls[3] = true;
+
+        assertThat(state.assignGroupsDiscardingResults(
+                new Vector[] {DictionaryVector.wrap(ids, new F64Vector(new double[] {1.5, 2.5, 3.5}))},
+                new Vector[] {new BooleanVector(nulls)},
+                Mask.all(ids.length)))
+                .isTrue();
+        assertThat(state.groupCount()).isEqualTo(4);
+
+        I64Vector groups = new I64Vector(4);
+        state.assignGroups(
+                new Vector[] {new F64Vector(new double[] {3.5, 1.5, 4.5, 0})},
+                new Vector[] {new BooleanVector(new boolean[] {false, false, false, true})},
+                Mask.all(4),
+                groups);
+        assertThat(groups.values()).containsExactly(2, 0, 4, 3);
+        state.releaseBuffers();
+    }
+
+    @Test
     void testDictionaryValueIdsObserveInPlaceBinaryRefillGeneration()
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());

@@ -17,6 +17,7 @@ import org.junit.jupiter.api.Test;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
@@ -123,6 +124,39 @@ class TestKeyOnlyGroupingSession
                 assertThat(closed).isFalse();
             }
             assertThat(closed).isTrue();
+        }
+    }
+
+    @Test
+    void testDictionaryDomainGroupingPreservesNullAndValueRepresentatives()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                KeyOnlyGroupingSession session = new KeyOnlyGroupingSession(
+                        allocator,
+                        Schema.unspecified(1),
+                        List.of(0),
+                        List.of(0),
+                        resources.operatorResources())) {
+            allocator.beginExecution();
+            int[] ids = new int[64];
+            boolean[] nulls = new boolean[64];
+            for (int position = 0; position < ids.length; position++) {
+                ids[position] = position & 1;
+            }
+            // The same dictionary entry is a value in one row and SQL null in another. Both are groups.
+            nulls[5] = true;
+            try (Batch input = new Batch(
+                    Mask.all(ids.length),
+                    Output.of(Streams.ofValuesAndNulls(
+                            DictionaryVector.wrap(ids, new I64Vector(new long[] {11, 22})),
+                            new BooleanVector(nulls))))) {
+                session.addInput(input);
+            }
+            try (Batch output = session.getOutput()) {
+                assertThat(selectedValues(output)).containsExactly(11L, 22L, 22L);
+                assertThat(selectedNulls(output)).containsExactly(false, false, true);
+            }
         }
     }
 

@@ -507,7 +507,9 @@ class TestDistinctKeySet
                 taggedHash,
                 defaults.longPairNullFreeBatch(),
                 defaults.adaptiveCompactLongPairStartBatch(),
-                defaults.inlineSmallGroupedLong());
+                defaults.inlineSmallGroupedLong(),
+                defaults.keyOnlyDictionaryDomain(),
+                defaults.keyOnlyDictionaryDomainMinimumReduction());
     }
 
     private static DictionaryVector nestedLongDictionary(int[] outerIds, int[] innerIds, long[] values)

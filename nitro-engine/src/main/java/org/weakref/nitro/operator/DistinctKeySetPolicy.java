@@ -41,7 +41,9 @@ public record DistinctKeySetPolicy(
         boolean taggedLongPairHash,
         boolean longPairNullFreeBatch,
         int adaptiveCompactLongPairStartBatch,
-        boolean inlineSmallGroupedLong)
+        boolean inlineSmallGroupedLong,
+        boolean keyOnlyDictionaryDomain,
+        int keyOnlyDictionaryDomainMinimumReduction)
 {
     public DistinctKeySetPolicy
     {
@@ -57,6 +59,9 @@ public record DistinctKeySetPolicy(
         }
         if (pagedLongBitmapMinKeys <= 0 || pagedLongBitmapMaxBitsPerKey <= 0) {
             throw new IllegalArgumentException("Paged-long bitmap admission values must be positive");
+        }
+        if (keyOnlyDictionaryDomainMinimumReduction <= 0) {
+            throw new IllegalArgumentException("keyOnlyDictionaryDomainMinimumReduction must be positive");
         }
     }
 
@@ -82,7 +87,9 @@ public record DistinctKeySetPolicy(
                 true,
                 true,
                 4,
-                true);
+                true,
+                true,
+                4);
     }
 
     public static DistinctKeySetPolicy fromSystemProperties()
@@ -107,7 +114,9 @@ public record DistinctKeySetPolicy(
                 booleanProperty("nitro.distinct.taggedLongPairHash", true),
                 booleanProperty("nitro.distinct.longPairNullFreeBatch", true),
                 Integer.getInteger("nitro.distinct.adaptiveCompactLongPairStartBatch", 4),
-                booleanProperty("nitro.distinct.inlineSmallGroupedLong", true));
+                booleanProperty("nitro.distinct.inlineSmallGroupedLong", true),
+                booleanProperty("nitro.distinct.keyOnlyDictionaryDomain", true),
+                Integer.getInteger("nitro.distinct.keyOnlyDictionaryDomainMinimumReduction", 4));
     }
 
     private static boolean booleanProperty(String name, boolean defaultValue)
