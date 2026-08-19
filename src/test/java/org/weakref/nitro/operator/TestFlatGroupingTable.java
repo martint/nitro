@@ -47,6 +47,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class TestFlatGroupingTable
 {
+    private static final int DEFAULT_VALUE_ID_CEILING = 65_536;
     private static final LongFlatKeyStorage INTEGER_FLAT_KEY_STORAGE = new LongFlatKeyStorage()
     {
         @Override
@@ -129,6 +130,40 @@ class TestFlatGroupingTable
         finally {
             table.releaseBuffers();
             allocator.release(context);
+        }
+    }
+
+    @Test
+    void testNullableDictionaryProbeMatchesIdOnlyRecordAfterValueIdOverflow()
+    {
+        String[] dictionaryValues = new String[DEFAULT_VALUE_ID_CEILING + 1];
+        int[] dictionaryIds = new int[dictionaryValues.length];
+        for (int index = 0; index < dictionaryValues.length; index++) {
+            dictionaryValues[index] = "overflow-value-" + index;
+            dictionaryIds[index] = index;
+        }
+        Vector[] initial = {DictionaryVector.wrap(dictionaryIds, dictionaryIds.length, utf8(dictionaryValues))};
+        Vector[] initialNulls = {new BooleanVector(new boolean[dictionaryIds.length])};
+        FlatKeyLayout layout = FlatKeyLayout.tryCreate(
+                initial,
+                true,
+                arrayPool,
+                codeGeneration,
+                flatKeyTablePolicy);
+        FlatGroupingTable table = new FlatGroupingTable(layout, 4, true);
+        try {
+            table.beginBatch(initial, initialNulls);
+            assertThat(table.assignGroup(initial, initialNulls, 0, 0)).isZero();
+            table.endBatch();
+
+            Vector[] repeated = {DictionaryVector.wrap(new int[] {0, 0}, 2, utf8(dictionaryValues[0]))};
+            Vector[] mixedNulls = {new BooleanVector(new boolean[] {false, true})};
+            table.beginBatch(repeated, mixedNulls);
+            assertThat(table.assignGroup(repeated, mixedNulls, 0, 1)).isZero();
+            table.endBatch();
+        }
+        finally {
+            table.releaseBuffers();
         }
     }
 

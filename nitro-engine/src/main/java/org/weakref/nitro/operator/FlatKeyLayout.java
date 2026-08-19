@@ -3305,7 +3305,17 @@ class FlatKeyLayout
                 }
                 // probe value overflowed the interner: fall through to the value comparison.
             }
-            return singleHandler.identicalFlatToInput(fixedChunk, fixedOffset + singleFixedOffset, variableWidthArena, values[singleInputChannel], position);
+            // A record admitted before the value-id interner overflowed may be ID-only even when the current probe
+            // cannot obtain an id. The representation-aware comparator falls back to the interner's stored bytes;
+            // the raw handler would misinterpret the ID-only marker as a flat variable-width pointer.
+            return identicalField(
+                    0,
+                    fixedChunk,
+                    fixedOffset + singleFixedOffset,
+                    variableWidthArena,
+                    values[singleInputChannel],
+                    position,
+                    recordIndex);
         }
         for (int index : comparisonOrder) {
             boolean inputNull = inputFieldNull(index, nulls, position);
