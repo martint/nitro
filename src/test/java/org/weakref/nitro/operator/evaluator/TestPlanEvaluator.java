@@ -82,6 +82,7 @@ import org.weakref.nitro.operator.evaluator.ir.StreamPlan;
 import org.weakref.nitro.operator.evaluator.ir.StructField;
 import org.weakref.nitro.operator.evaluator.ir.Variable;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -518,6 +519,49 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testConditionalCallsEvaluateOnlySelectedDictionaryDomains()
+    {
+        AtomicReference<List<Integer>> trueDomains = new AtomicReference<>();
+        AtomicReference<List<Integer>> falseDomains = new AtomicReference<>();
+        PrimitiveRegistry primitiveRegistry = new PrimitiveRegistry();
+        primitiveRegistry.register("true_domain", recordSelectedDomains(trueDomains, 10));
+        primitiveRegistry.register("false_domain", recordSelectedDomains(falseDomains, 100));
+
+        Reference input = new Reference(new Input(1), Stream.VALUES);
+        Variable trueBranch = new Variable(0);
+        Variable falseBranch = new Variable(1);
+        Variable result = new Variable(2);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(trueBranch, new Call("true_domain", List.of(input)), AllMask.ALL),
+                        new Assignment(falseBranch, new Call("false_domain", List.of(input)), AllMask.ALL),
+                        new Assignment(
+                                result,
+                                new org.weakref.nitro.operator.evaluator.ir.Merge(
+                                        new ReferenceMask(new Reference(new Input(0), Stream.VALUES)),
+                                        new Reference(trueBranch, Stream.VALUES),
+                                        new Reference(falseBranch, Stream.VALUES)),
+                                AllMask.ALL)),
+                List.of(new Reference(result, Stream.VALUES)));
+
+        int[] ids = {0, 1, 2, 0, 2, 1};
+        PlanEvaluator evaluator = planEvaluator(
+                plan,
+                primitiveRegistry,
+                inputResolver(Map.of(
+                        new Reference(new Input(0), Stream.VALUES),
+                        DictionaryVector.wrap(ids, new BooleanVector(new boolean[] {true, false, true})),
+                        input,
+                        DictionaryVector.wrap(ids, new I64Vector(new long[] {1, 8, 3})))),
+                new Allocator(EngineResources.createDefault()));
+
+        assertThat(readLongs(evaluator.evaluate(new Reference(result, Stream.VALUES), Mask.all(ids.length)).values()))
+                .containsExactly(10, 800, 30, 10, 30, 800);
+        assertThat(trueDomains.get()).containsExactly(0, 2);
+        assertThat(falseDomains.get()).containsExactly(1);
+    }
+
+    @Test
     void testConditionalMergesCompactAndWideIntegerRepresentations()
     {
         Variable result = new Variable(0);
@@ -931,7 +975,9 @@ public class TestPlanEvaluator
         Streams result = evaluator.evaluate(
                 new Reference(contains, Stream.VALUES),
                 Mask.sparse(new int[] {1, 4}, 5));
-        assertThat(((BooleanVector) result.get(Stream.VALUES)).values()).containsExactly(false, false, false, false, true);
+        assertThat(result.get(Stream.VALUES)).isInstanceOf(DictionaryVector.class);
+        // Position 2 is outside the requested mask but shares physical dictionary id 2 with selected position 4.
+        assertThat(readBooleans(result.get(Stream.VALUES))).containsExactly(false, false, true, false, true);
     }
 
     @Test
@@ -4692,6 +4738,23 @@ public class TestPlanEvaluator
             long[] values = new long[mask.maxPosition() + 1];
             for (int position : mask) {
                 values[position] = value;
+            }
+            return Streams.ofValues(new I64Vector(values));
+        };
+    }
+
+    private static PrimitiveFunction recordSelectedDomains(AtomicReference<List<Integer>> selectedDomains, long multiplier)
+    {
+        return (inputs, mask, _, _, _) -> {
+            List<Integer> selected = new ArrayList<>();
+            for (int domain : mask) {
+                selected.add(domain);
+            }
+            selectedDomains.set(List.copyOf(selected));
+            VectorAccess.LongValues input = VectorAccess.longValues(inputs.getFirst().values());
+            long[] values = new long[mask.size()];
+            for (int domain : mask) {
+                values[domain] = input.value(domain) * multiplier;
             }
             return Streams.ofValues(new I64Vector(values));
         };

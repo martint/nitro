@@ -58,6 +58,7 @@ import org.weakref.nitro.data.Row;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.StructVector;
+import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.execution.EngineResources;
 import org.weakref.nitro.function.scalar.PrimitiveExecutionContext;
 import org.weakref.nitro.function.scalar.PrimitiveFunction;
@@ -1439,11 +1440,11 @@ public class TestParquetOperator
                         EngineResources.from(allocator).operatorResources().filter()))) {
             Batch batch = operator.next();
             assertThat(batch.borrowMask()).containsExactly(0, 2, 3);
-            I64Vector values = (I64Vector) batch.output(0).borrow(Stream.VALUES);
+            VectorAccess.LongValues values = VectorAccess.longValues(batch.output(0).borrow(Stream.VALUES));
             BooleanVector nulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
-            assertThat(values.values()[0]).isEqualTo(100);
-            assertThat(values.values()[2]).isEqualTo(100);
-            assertThat(values.values()[3]).isEqualTo(400);
+            assertThat(values.value(0)).isEqualTo(100);
+            assertThat(values.value(2)).isEqualTo(100);
+            assertThat(values.value(3)).isEqualTo(400);
             assertThat(nulls.values()[0]).isFalse();
             assertThat(nulls.values()[2]).isTrue();
             assertThat(nulls.values()[3]).isFalse();

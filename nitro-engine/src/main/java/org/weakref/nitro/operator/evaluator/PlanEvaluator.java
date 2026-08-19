@@ -589,9 +589,9 @@ public final class PlanEvaluator
         }
         // Both peels require a dictionary-encoded input to do anything, so skip the machinery entirely on the common
         // flat-input case with one cheap instanceof scan (rather than building and discarding a peeling per call).
-        if (mask.all() && hasDictionaryValues(inputs)) {
-            Streams peeledResult = tryEvaluateDictionaryPeeledCall(call, function, inputs, requestedStreams);
-            if (peeledResult == null) {
+        if (hasDictionaryValues(inputs)) {
+            Streams peeledResult = tryEvaluateDictionaryPeeledCall(call, function, inputs, requestedStreams, mask);
+            if (peeledResult == null && mask.all()) {
                 peeledResult = tryEvaluatePropagatingNullsPeeledCall(function, inputs, requestedStreams);
             }
             if (peeledResult != null) {
@@ -653,13 +653,18 @@ public final class PlanEvaluator
         return false;
     }
 
-    private Streams tryEvaluateDictionaryPeeledCall(Call call, PrimitiveFunction function, List<Streams> inputs, Set<Stream> requestedStreams)
+    private Streams tryEvaluateDictionaryPeeledCall(
+            Call call,
+            PrimitiveFunction function,
+            List<Streams> inputs,
+            Set<Stream> requestedStreams,
+            Mask mask)
     {
         if (!function.deterministic()) {
             return null;
         }
 
-        DictionaryPeeling peeling = tryBuildDictionaryPeeling(inputs);
+        DictionaryPeeling peeling = tryBuildDictionaryPeeling(inputs, mask);
         if (peeling == null) {
             return null;
         }
@@ -923,16 +928,18 @@ public final class PlanEvaluator
         return result.build();
     }
 
-    private DictionaryPeeling tryBuildDictionaryPeeling(List<Streams> inputs)
+    private DictionaryPeeling tryBuildDictionaryPeeling(List<Streams> inputs, Mask mask)
     {
         int[] sharedIds = null;
         int rowCount = -1;
+        DictionaryVector mapping = null;
         for (Streams inputStreams : inputs) {
             Vector values = inputStreams.getOrNull(Stream.VALUES);
             if (values instanceof DictionaryVector dictionary) {
                 if (sharedIds == null) {
                     sharedIds = dictionary.ids();
                     rowCount = dictionary.length();
+                    mapping = dictionary;
                 }
                 else if (dictionary.length() != rowCount || !sameDictionaryIds(sharedIds, dictionary.ids(), rowCount)) {
                     return null;
@@ -947,7 +954,7 @@ public final class PlanEvaluator
         if (dictionaryPeelTooSparse(rowCount, baseLength)) {
             return null;
         }
-        Mask baseMask = allocator.allocateAllMask(allocationContext, baseLength);
+        Mask baseMask = dictionaryDomainMask(mapping, baseLength, mask);
 
         List<Streams> peeledInputs = new ArrayList<>(inputs.size());
         for (Streams inputStreams : inputs) {
@@ -959,6 +966,53 @@ public final class PlanEvaluator
             peeledInputs.add(peeled);
         }
         return new DictionaryPeeling(sharedIds, rowCount, baseMask, List.copyOf(peeledInputs));
+    }
+
+    /**
+     * Translates a logical branch mask onto the shared dictionary domain. A function invoked conditionally can then
+     * execute once per selected physical value without touching a value that belongs exclusively to the other
+     * branch. The result is wrapped in the original id mapping, so downstream operators retain the encoding.
+     */
+    private Mask dictionaryDomainMask(DictionaryVector mapping, int baseLength, Mask logicalMask)
+    {
+        int[] ids = mapping.ids();
+        int rowCount = mapping.length();
+        checkArgument(logicalMask.size() == rowCount, "Logical mask size %s does not match dictionary length %s", logicalMask.size(), rowCount);
+        if (logicalMask.all()) {
+            return allocator.allocateAllMask(allocationContext, baseLength);
+        }
+        if (logicalMask.none()) {
+            return allocator.allocateSparseMask(allocationContext, new int[0], baseLength);
+        }
+
+        Mask.DictionaryDomainSelection domainSelection = logicalMask.dictionaryDomainSelection(mapping);
+        if (domainSelection != null && domainSelection.domainSize() == baseLength) {
+            long selectedBits = domainSelection.selectedDomainBits();
+            int[] positions = new int[Long.bitCount(selectedBits)];
+            for (int domain = 0, index = 0; domain < baseLength; domain++) {
+                if (((selectedBits >>> domain) & 1L) != 0) {
+                    positions[index++] = domain;
+                }
+            }
+            return allocator.allocateSparseMask(allocationContext, positions, positions.length, baseLength);
+        }
+
+        boolean[] selected = new boolean[baseLength];
+        int selectedCount = 0;
+        for (int position : logicalMask) {
+            int domain = ids[position];
+            if (!selected[domain]) {
+                selected[domain] = true;
+                selectedCount++;
+            }
+        }
+        int[] positions = new int[selectedCount];
+        for (int domain = 0, index = 0; domain < baseLength; domain++) {
+            if (selected[domain]) {
+                positions[index++] = domain;
+            }
+        }
+        return allocator.allocateSparseMask(allocationContext, positions, selectedCount, baseLength);
     }
 
     private boolean dictionaryPeelTooSparse(int rowCount, int baseLength)
@@ -1212,21 +1266,18 @@ public final class PlanEvaluator
             return null;
         }
 
-        for (Stream stream : requestedStreams) {
-            Reference trueReference = remapReference(merge.whenTrue(), stream);
-            Reference falseReference = remapReference(merge.whenFalse(), stream);
-            if (!safeToEvaluateEncodedMergeBranch(trueReference, mask) ||
-                    !safeToEvaluateEncodedMergeBranch(falseReference, mask)) {
-                return null;
-            }
-        }
-
+        Mask trueMask = encodedMergeBranchMask(condition, (byte) 1);
+        Mask falseMask = encodedMergeBranchMask(condition, (byte) 2);
         Map<Stream, Vector> mergedDomains = new HashMap<>();
         for (Stream stream : requestedStreams) {
             Reference trueReference = remapReference(merge.whenTrue(), stream);
             Reference falseReference = remapReference(merge.whenFalse(), stream);
-            Vector trueVector = evaluateMergeBranchVector(stream, trueReference, mask);
-            Vector falseVector = evaluateMergeBranchVector(stream, falseReference, mask);
+            Vector trueVector = tryEvaluateMergeBranchVector(
+                    trueReference,
+                    safeToEvaluateEncodedMergeBranch(trueReference, mask) ? mask : trueMask);
+            Vector falseVector = tryEvaluateMergeBranchVector(
+                    falseReference,
+                    safeToEvaluateEncodedMergeBranch(falseReference, mask) ? mask : falseMask);
             if (stream == Stream.VALUES && (trueVector == null || falseVector == null)) {
                 releaseMergedDomains(mergedDomains.values());
                 return null;
@@ -1243,6 +1294,26 @@ public final class PlanEvaluator
             result.put(entry.getKey(), wrapBorrowedDictionary(condition.mapping().ids(), mask.size(), entry.getValue()));
         }
         return result.build();
+    }
+
+    private Vector tryEvaluateMergeBranchVector(Reference reference, Mask branchMask)
+    {
+        if (reference == null) {
+            return null;
+        }
+        Streams streams = evaluate(reference, branchMask);
+        return streams.getOrNull(reference.stream());
+    }
+
+    private Mask encodedMergeBranchMask(EncodedMergeCondition condition, byte branch)
+    {
+        boolean[] selected = new boolean[condition.choices().length];
+        for (int domain = 0; domain < selected.length; domain++) {
+            selected[domain] = condition.choices()[domain] == branch;
+        }
+        Mask mask = allocator.allocateAllMask(allocationContext, condition.mapping().length());
+        mask.retainDictionaryComparison(condition.mapping().ids(), selected);
+        return mask;
     }
 
     private EncodedMergeCondition encodedMergeCondition(MaskExpression expression, Mask mask, boolean inverted)
