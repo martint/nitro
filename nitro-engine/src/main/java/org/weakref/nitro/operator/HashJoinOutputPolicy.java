@@ -33,6 +33,9 @@ public record HashJoinOutputPolicy(
         int adaptiveComposeMaxRows,
         int adaptiveComposeDepth,
         boolean cacheComposedOuterDictionaryIds,
+        boolean adaptiveOuterMaterialization,
+        int outerMaterializationSampleSize,
+        int outerMaterializationMinimumReuse,
         boolean directDenseSingleMatchRangeOutput,
         boolean rleRunIndexHint,
         boolean poolBuildDictionaryIds,
@@ -43,6 +46,9 @@ public record HashJoinOutputPolicy(
 {
     public HashJoinOutputPolicy
     {
+        if (outerMaterializationSampleSize < 1 || outerMaterializationMinimumReuse < 1) {
+            throw new IllegalArgumentException("Invalid outer materialization policy");
+        }
         if (unifyMultiRunBinaryMinOutputRowsPerBuildRow < 1) {
             throw new IllegalArgumentException("unifyMultiRunBinaryMinOutputRowsPerBuildRow must be positive");
         }
@@ -69,6 +75,9 @@ public record HashJoinOutputPolicy(
                 1024,
                 4,
                 true,
+                true,
+                128,
+                2,
                 false,
                 true,
                 true,
@@ -101,6 +110,9 @@ public record HashJoinOutputPolicy(
                 Integer.getInteger("nitro.hash.join.adaptiveComposeMaxRows", defaults.adaptiveComposeMaxRows()),
                 Integer.getInteger("nitro.hash.join.adaptiveComposeDepth", defaults.adaptiveComposeDepth()),
                 booleanProperty("nitro.hash.join.cacheComposedOuterDictionaryIds", defaults.cacheComposedOuterDictionaryIds()),
+                booleanProperty("nitro.hash.join.adaptiveOuterMaterialization", defaults.adaptiveOuterMaterialization()),
+                Integer.getInteger("nitro.hash.join.outerMaterializationSampleSize", defaults.outerMaterializationSampleSize()),
+                Integer.getInteger("nitro.hash.join.outerMaterializationMinimumReuse", defaults.outerMaterializationMinimumReuse()),
                 booleanProperty("nitro.join.directDenseSingleMatchRangeOutput", defaults.directDenseSingleMatchRangeOutput()),
                 booleanProperty("nitro.join.rleRunIndexHint", defaults.rleRunIndexHint()),
                 booleanProperty("nitro.hash.join.poolBuildDictionaryIds", defaults.poolBuildDictionaryIds()),

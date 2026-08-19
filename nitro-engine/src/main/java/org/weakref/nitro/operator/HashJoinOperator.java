@@ -2460,10 +2460,83 @@ public class HashJoinOperator
         // Outer can satisfy a constrained re-borrow: narrow it to the matched rows so a lazy projected payload
         // computes only rows the join emits, then retain that vector through an owned dictionary mapping. A pull
         // chain cannot advance the outer again until this output batch is consumed, so the backing batch remains
-        // live for the dictionary view. This keeps adjacent Nitro joins encoding-native instead of copying the
-        // same payload at every stage of an execution island.
+        // live for the dictionary view. The physical-reuse admission below keeps a useful encoding, but compacts a
+        // one-to-one or high-cardinality mapping once so every downstream access remains contiguous.
         constrainOuterIfNecessary();
+        if (shouldMaterializeOuter(sourceOutput)) {
+            if (currentOutputMask.all()) {
+                return buffers.copyPositions(sourceOutput, null, outputOuterPositions, currentOutputCount, 0, currentOutputCount);
+            }
+
+            Streams result = null;
+            for (int index = 0; index < currentOutputMask.count(); index++) {
+                int outputPosition = currentOutputMask.position(index);
+                result = buffers.copySinglePosition(sourceOutput, result, currentOutputCount, outputPosition, outputOuterPositions[outputPosition]);
+            }
+            return result == null ? buffers.emptyLike(outputSchema(outputIndex)) : result;
+        }
         return wrapOuterOutput(sourceOutput);
+    }
+
+    private boolean shouldMaterializeOuter(Output sourceOutput)
+    {
+        if (!outputPolicy.adaptiveOuterMaterialization() || !sourceOutput.hasValues() || currentOutputCount < 2) {
+            return false;
+        }
+        Vector values = sourceOutput.borrow(Stream.VALUES);
+        if (!(values instanceof DictionaryVector || values instanceof org.weakref.nitro.data.RleVector)) {
+            // A single-match join maps each admitted probe row exactly once. Wrapping a flat input in that case
+            // carries no repeated physical domain into the next operator; it only replaces a contiguous load with
+            // an indexed load. Pay the one-time compacting copy so downstream operators retain direct access.
+            return singleMatchProbe;
+        }
+
+        int sampleSize = Math.min(currentOutputCount, outputPolicy.outerMaterializationSampleSize());
+        int[] physicalPositions = outerMaterializationPositions(sampleSize);
+        int distinct = 0;
+        for (int sample = 0; sample < sampleSize; sample++) {
+            int outputPosition = (int) ((long) sample * currentOutputCount / sampleSize);
+            int physicalPosition = encodedPosition(values, outputOuterPositions[outputPosition]);
+            boolean seen = false;
+            for (int previous = 0; previous < distinct; previous++) {
+                if (physicalPositions[previous] == physicalPosition) {
+                    seen = true;
+                    break;
+                }
+            }
+            if (!seen) {
+                physicalPositions[distinct++] = physicalPosition;
+            }
+        }
+        return (long) distinct * outputPolicy.outerMaterializationMinimumReuse() > sampleSize;
+    }
+
+    private int[] outerMaterializationPositions(int size)
+    {
+        if (joinScratch.outerMaterializationPositions == null || joinScratch.outerMaterializationPositions.length < size) {
+            joinScratch.outerMaterializationPositions = new int[size];
+            accountJoinScratch();
+        }
+        return joinScratch.outerMaterializationPositions;
+    }
+
+    private static int encodedPosition(Vector vector, int position)
+    {
+        Vector level = vector;
+        int physicalPosition = position;
+        while (true) {
+            if (level instanceof DictionaryVector dictionary) {
+                physicalPosition = dictionary.ids()[physicalPosition];
+                level = dictionary.values();
+                continue;
+            }
+            if (level instanceof org.weakref.nitro.data.RleVector rle) {
+                physicalPosition = rle.runIndex(physicalPosition);
+                level = rle.values();
+                continue;
+            }
+            return physicalPosition;
+        }
     }
 
     private Streams wrapOuterOutput(Output sourceOutput)
@@ -4139,6 +4212,7 @@ public class HashJoinOperator
         private int[] outputInnerSourcePositions;
         private int[] outputInnerUniqueSourcePositions;
         private int[] retainedInnerMaskPositionsScratch;
+        private int[] outerMaterializationPositions;
 
         private JoinScratch(int capacity)
         {
@@ -4169,6 +4243,9 @@ public class HashJoinOperator
             }
             if (retainedInnerMaskPositionsScratch != null) {
                 bytes += (long) retainedInnerMaskPositionsScratch.length * Integer.BYTES;
+            }
+            if (outerMaterializationPositions != null) {
+                bytes += (long) outerMaterializationPositions.length * Integer.BYTES;
             }
             return bytes;
         }

@@ -6478,7 +6478,7 @@ public class TestOperators
     }
 
     @Test
-    void testHashJoinRetainsFullyConsumedIdentityOuterPayload()
+    void testHashJoinMaterializesFullyConsumedUniqueOuterPayload()
     {
         AtomicReference<Mask> constrainedMask = new AtomicReference<>();
         I64Vector keys = new I64Vector(new long[] {1L, 2L, 3L});
@@ -6538,13 +6538,77 @@ public class TestOperators
             try (Batch batch = join.next()) {
                 assertThat(batch.borrowMask()).containsExactly(0, 1, 2);
                 Vector output = batch.output(1).borrow(Stream.VALUES);
-                assertThat(output).isInstanceOf(DictionaryVector.class);
-                assertThat(((DictionaryVector) output).values()).isSameAs(payload);
+                assertThat(output).isInstanceOf(I64Vector.class);
+                assertThat(output).isNotSameAs(payload);
                 assertThat(readI64(output, 0)).isEqualTo(10L);
                 assertThat(readI64(output, 1)).isEqualTo(20L);
                 assertThat(readI64(output, 2)).isEqualTo(30L);
                 assertThat(constrainedMask.get()).containsExactly(0, 1, 2);
             }
+        }
+    }
+
+    @Test
+    void testHashJoinRetainsReusedEncodedOuterPayload()
+    {
+        I64Vector keys = new I64Vector(new long[] {1L, 2L, 3L});
+        DictionaryVector payload = DictionaryVector.wrap(
+                new int[] {0, 0, 0},
+                new I64Vector(new long[] {10L}));
+        Operator outer = new Operator()
+        {
+            private boolean done;
+
+            @Override
+            public int outputCount()
+            {
+                return 2;
+            }
+
+            @Override
+            public boolean hasNext()
+            {
+                return !done;
+            }
+
+            @Override
+            public Batch next()
+            {
+                done = true;
+                return new Batch(
+                        Mask.all(3),
+                        ignored -> {},
+                        Function.identity(),
+                        new Output(Set.of(Stream.VALUES), ignored -> keys),
+                        new Output(Set.of(Stream.VALUES), ignored -> payload));
+            }
+
+            @Override
+            public void constrain(Mask mask) {}
+
+            @Override
+            public boolean supportsConstrainedReborrow()
+            {
+                return true;
+            }
+
+            @Override
+            public void close() {}
+        };
+
+        try (Operator join = new HashJoinOperator(
+                allocator,
+                outer,
+                0,
+                new ConstantTableOperator(allocator, 1, List.of(row(1L), row(2L), row(3L))),
+                0);
+                Batch batch = join.next()) {
+            Vector output = batch.output(1).borrow(Stream.VALUES);
+            assertThat(output).isInstanceOf(DictionaryVector.class);
+            assertThat(((DictionaryVector) output).values()).isSameAs(payload);
+            assertThat(readI64(output, 0)).isEqualTo(10L);
+            assertThat(readI64(output, 1)).isEqualTo(10L);
+            assertThat(readI64(output, 2)).isEqualTo(10L);
         }
     }
 
