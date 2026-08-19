@@ -16,6 +16,7 @@ package org.weakref.nitro.operator;
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.core.execution.MemoryReservation;
 import org.weakref.nitro.core.type.Field;
+import org.weakref.nitro.core.type.LongFlatKeyStorage;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.core.type.TypeIdentity;
@@ -236,6 +237,97 @@ class TestGroupedAggregationSession
             try (Batch second = session.getOutput()) {
                 assertThat(selectedBinaryValues(second, 0)).containsExactly("b", "b");
                 assertThat(selectedBinaryValues(second, 1)).containsExactly("x", "y");
+            }
+        }
+    }
+
+    @Test
+    void testStreamsSharedDictionaryGroupsWithCompactLongTypeWithoutFlatBacking()
+    {
+        TypeBinding compactLongType = new TypeBinding()
+        {
+            @Override
+            public TypeIdentity identity()
+            {
+                return new TypeIdentity("testing:compact-long");
+            }
+
+            @Override
+            public Class<?> carrierType()
+            {
+                return long.class;
+            }
+
+            @Override
+            public TypeOperators operators()
+            {
+                return TypeOperators.UNSPECIFIED;
+            }
+
+            @Override
+            public Set<Class<? extends Vector>> supportedVectorTypes()
+            {
+                return Set.of(I64Vector.class, DictionaryVector.class);
+            }
+
+            @Override
+            public Optional<LongFlatKeyStorage> longFlatKeyStorage()
+            {
+                return Optional.of(new LongFlatKeyStorage()
+                {
+                    @Override
+                    public int fixedSize()
+                    {
+                        return Integer.BYTES;
+                    }
+
+                    @Override
+                    public void write(byte[] target, int offset, long value)
+                    {
+                        throw new AssertionError("Object grouping must not use flat storage");
+                    }
+
+                    @Override
+                    public long read(byte[] source, int offset)
+                    {
+                        throw new AssertionError("Object grouping must not use flat storage");
+                    }
+                });
+            }
+        };
+        Schema schema = new Schema(List.of(
+                new Field(binaryType(), false),
+                new Field(compactLongType, false)));
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                GroupedAggregationSession session = new GroupedAggregationSession(
+                        allocator,
+                        schema,
+                        List.of(0, 1),
+                        List.of(0, 1),
+                        PhysicalAggregationProgram.independent(List.of(new CountAll())),
+                        resources.operatorResources(),
+                        null,
+                        1)) {
+            allocator.beginExecution();
+            BinaryVector labels = new BinaryVector(2, 2);
+            labels.setBytes(0, "a".getBytes(UTF_8));
+            labels.setBytes(1, "b".getBytes(UTF_8));
+            int[] ids = {0, 1, 0, 1};
+            try (Batch input = new Batch(
+                    Mask.all(ids.length),
+                    Output.of(Streams.ofValues(DictionaryVector.wrap(ids, labels))),
+                    Output.of(Streams.ofValues(DictionaryVector.wrap(ids, new I64Vector(new long[] {10, 20})))))) {
+                session.addInput(input);
+            }
+
+            try (Batch first = session.finish()) {
+                assertThat(selectedBinaryValues(first, 0)).containsExactly("a");
+                assertThat(selectedLongValues(first, 1)).containsExactly(10);
+            }
+            try (Batch second = session.getOutput()) {
+                assertThat(selectedBinaryValues(second, 0)).containsExactly("b");
+                assertThat(selectedLongValues(second, 1)).containsExactly(20);
             }
         }
     }

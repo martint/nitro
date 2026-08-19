@@ -1409,6 +1409,10 @@ final class GroupingState
     {
         reusableProbeKeys = new OperatorKeySemantics.Key[values.length];
         for (int index = 0; index < values.length; index++) {
+            // Compact long handlers describe the physical bytes stored in a flat table. Object grouping stores
+            // logical keys instead, so its output must use the vector's semantic handler rather than a flat
+            // storage codec that cannot materialize fallback keys.
+            keyHandlers[index] = FlatTypeHandlers.forVector(values[index]);
             reusableProbeKeys[index] = OperatorKeySemantics.reusableProbeKey(values[index]);
             keysByGroupColumns.add(new ArrayList<>());
         }
