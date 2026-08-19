@@ -220,12 +220,28 @@ final class JoinBufferSupport
         return copyPositions(input, existing, sourcePositions, sourceStart, sourceCount, outputStart, size, true, positionCache);
     }
 
+    /**
+     * Materialize an encoded input into a physically flat output.  This is used only after a caller has already
+     * decided that the input's physical values have too little reuse to justify retaining its encoding.  Re-running
+     * dictionary-preservation admission here would both contradict that decision and allocate a full remap before
+     * discovering that the high-cardinality dictionary is not compactable.
+     */
+    Streams copyPositionsFlat(Output input, int[] sourcePositions, int sourceCount, int size)
+    {
+        return copyPositions(input, null, sourcePositions, 0, sourceCount, 0, size, false, null, false);
+    }
+
     private Streams copyPositions(Output input, Streams existing, int[] sourcePositions, int sourceStart, int sourceCount, int outputStart, int size, boolean assumeClearOutputRange)
     {
         return copyPositions(input, existing, sourcePositions, sourceStart, sourceCount, outputStart, size, assumeClearOutputRange, null);
     }
 
     private Streams copyPositions(Output input, Streams existing, int[] sourcePositions, int sourceStart, int sourceCount, int outputStart, int size, boolean assumeClearOutputRange, PositionMappingCache sharedPositionCache)
+    {
+        return copyPositions(input, existing, sourcePositions, sourceStart, sourceCount, outputStart, size, assumeClearOutputRange, sharedPositionCache, true);
+    }
+
+    private Streams copyPositions(Output input, Streams existing, int[] sourcePositions, int sourceStart, int sourceCount, int outputStart, int size, boolean assumeClearOutputRange, PositionMappingCache sharedPositionCache, boolean preserveDictionaryEncoding)
     {
         if (sourceCount == 1) {
             return copySinglePosition(input, existing, size, outputStart, sourcePositions[sourceStart], assumeClearOutputRange);
@@ -234,7 +250,7 @@ final class JoinBufferSupport
         PositionMappingCache positionCache = positionCache(input, sharedPositionCache);
         if (input.isValuesOnly()) {
             Vector existingValues = existing != null ? existing.getOrNull(Stream.VALUES) : null;
-            Vector copied = copyVectorPositions(existingValues, input.borrow(Stream.VALUES), sourcePositions, sourceStart, sourceCount, outputStart, size, false, positionCache);
+            Vector copied = copyVectorPositions(existingValues, input.borrow(Stream.VALUES), sourcePositions, sourceStart, sourceCount, outputStart, size, false, positionCache, preserveDictionaryEncoding);
             if (existing != null && copied == existingValues) {
                 return existing;
             }
@@ -249,7 +265,7 @@ final class JoinBufferSupport
             boolean changed = false;
             if (input.hasValues()) {
                 Vector existingVector = existing.getOrNull(Stream.VALUES);
-                Vector copied = copyVectorPositions(existingVector, input.borrow(Stream.VALUES), sourcePositions, sourceStart, sourceCount, outputStart, size, false, positionCache);
+                Vector copied = copyVectorPositions(existingVector, input.borrow(Stream.VALUES), sourcePositions, sourceStart, sourceCount, outputStart, size, false, positionCache, preserveDictionaryEncoding);
                 if (copied != existingVector) {
                     updated = ensureBuilder(updated, existing);
                     updated.put(Stream.VALUES, copied);
@@ -258,7 +274,7 @@ final class JoinBufferSupport
             }
             if (hasConcreteStream(input, Stream.NULLS)) {
                 Vector existingVector = existing.getOrNull(Stream.NULLS);
-                Vector copied = copyVectorPositions(existingVector, input.borrow(Stream.NULLS), sourcePositions, sourceStart, sourceCount, outputStart, size, assumeClearOutputRange, positionCache);
+                Vector copied = copyVectorPositions(existingVector, input.borrow(Stream.NULLS), sourcePositions, sourceStart, sourceCount, outputStart, size, assumeClearOutputRange, positionCache, preserveDictionaryEncoding);
                 if (copied != existingVector) {
                     updated = ensureBuilder(updated, existing);
                     updated.put(Stream.NULLS, copied);
@@ -267,7 +283,7 @@ final class JoinBufferSupport
             }
             if (hasConcreteStream(input, Stream.ERRORS)) {
                 Vector existingVector = existing.getOrNull(Stream.ERRORS);
-                Vector copied = copyVectorPositions(existingVector, input.borrow(Stream.ERRORS), sourcePositions, sourceStart, sourceCount, outputStart, size, assumeClearOutputRange, positionCache);
+                Vector copied = copyVectorPositions(existingVector, input.borrow(Stream.ERRORS), sourcePositions, sourceStart, sourceCount, outputStart, size, assumeClearOutputRange, positionCache, preserveDictionaryEncoding);
                 if (copied != existingVector) {
                     updated = ensureBuilder(updated, existing);
                     updated.put(Stream.ERRORS, copied);
@@ -279,13 +295,13 @@ final class JoinBufferSupport
 
         Streams.Builder result = Streams.builder();
         if (input.hasValues()) {
-            result.put(Stream.VALUES, copyVectorPositions(null, input.borrow(Stream.VALUES), sourcePositions, sourceStart, sourceCount, outputStart, size, false, positionCache));
+            result.put(Stream.VALUES, copyVectorPositions(null, input.borrow(Stream.VALUES), sourcePositions, sourceStart, sourceCount, outputStart, size, false, positionCache, preserveDictionaryEncoding));
         }
         if (hasConcreteStream(input, Stream.NULLS)) {
-            result.put(Stream.NULLS, copyVectorPositions(null, input.borrow(Stream.NULLS), sourcePositions, sourceStart, sourceCount, outputStart, size, assumeClearOutputRange, positionCache));
+            result.put(Stream.NULLS, copyVectorPositions(null, input.borrow(Stream.NULLS), sourcePositions, sourceStart, sourceCount, outputStart, size, assumeClearOutputRange, positionCache, preserveDictionaryEncoding));
         }
         if (hasConcreteStream(input, Stream.ERRORS)) {
-            result.put(Stream.ERRORS, copyVectorPositions(null, input.borrow(Stream.ERRORS), sourcePositions, sourceStart, sourceCount, outputStart, size, assumeClearOutputRange, positionCache));
+            result.put(Stream.ERRORS, copyVectorPositions(null, input.borrow(Stream.ERRORS), sourcePositions, sourceStart, sourceCount, outputStart, size, assumeClearOutputRange, positionCache, preserveDictionaryEncoding));
         }
         return result.build();
     }
@@ -665,6 +681,11 @@ final class JoinBufferSupport
 
     private Vector copyVectorPositions(Vector existing, Vector source, int[] sourcePositions, int sourceStart, int sourceCount, int outputStart, int size, boolean assumeClearOutputRange, PositionMappingCache positionCache)
     {
+        return copyVectorPositions(existing, source, sourcePositions, sourceStart, sourceCount, outputStart, size, assumeClearOutputRange, positionCache, true);
+    }
+
+    private Vector copyVectorPositions(Vector existing, Vector source, int[] sourcePositions, int sourceStart, int sourceCount, int outputStart, int size, boolean assumeClearOutputRange, PositionMappingCache positionCache, boolean preserveDictionaryEncoding)
+    {
         Vector compactFalse = compactAllFalseCopy(
                 existing,
                 source,
@@ -676,7 +697,7 @@ final class JoinBufferSupport
         if (compactFalse != null) {
             return compactFalse;
         }
-        if (source instanceof DictionaryVector dictionaryValues) {
+        if (preserveDictionaryEncoding && source instanceof DictionaryVector dictionaryValues) {
             Vector fused = copyDictionaryPositions(existing, dictionaryValues, sourcePositions, sourceStart, sourceCount, outputStart, size, assumeClearOutputRange);
             if (fused != null) {
                 return fused;
@@ -685,10 +706,10 @@ final class JoinBufferSupport
         existing = compatibleExisting(existing, source);
         switch (source) {
             case DictionaryVector dictionaryValues -> {
-                return copyVectorPositions(existing, dictionaryValues.values(), dictionaryPositions(positionCache, dictionaryValues.ids(), sourcePositions, sourceStart, sourceCount), 0, sourceCount, outputStart, size, assumeClearOutputRange, positionCache);
+                return copyVectorPositions(existing, dictionaryValues.values(), dictionaryPositions(positionCache, dictionaryValues.ids(), sourcePositions, sourceStart, sourceCount), 0, sourceCount, outputStart, size, assumeClearOutputRange, positionCache, preserveDictionaryEncoding);
             }
             case RleVector rleValues -> {
-                return copyVectorPositions(existing, rleValues.values(), rlePositions(positionCache, rleValues, sourcePositions, sourceStart, sourceCount), 0, sourceCount, outputStart, size, assumeClearOutputRange, positionCache);
+                return copyVectorPositions(existing, rleValues.values(), rlePositions(positionCache, rleValues, sourcePositions, sourceStart, sourceCount), 0, sourceCount, outputStart, size, assumeClearOutputRange, positionCache, preserveDictionaryEncoding);
             }
             case I64Vector longValues -> {
                 return copyLongPositions(longValues, existing, sourcePositions, sourceStart, sourceCount, outputStart, size);

@@ -6613,6 +6613,72 @@ public class TestOperators
     }
 
     @Test
+    void testHashJoinFlattensLowReuseEncodedBinaryPayloadWithoutRebuildingDictionary()
+    {
+        I64Vector keys = new I64Vector(new long[] {1L, 2L, 3L});
+        BinaryVector binary = new BinaryVector(3, 14);
+        binary.setBytes(0, "alpha".getBytes(UTF_8));
+        binary.setBytes(1, "beta".getBytes(UTF_8));
+        binary.setBytes(2, "gamma".getBytes(UTF_8));
+        DictionaryVector payload = DictionaryVector.wrap(new int[] {0, 1, 2}, binary);
+        Operator outer = new Operator()
+        {
+            private boolean done;
+
+            @Override
+            public int outputCount()
+            {
+                return 2;
+            }
+
+            @Override
+            public boolean hasNext()
+            {
+                return !done;
+            }
+
+            @Override
+            public Batch next()
+            {
+                done = true;
+                return new Batch(
+                        Mask.all(3),
+                        ignored -> {},
+                        Function.identity(),
+                        new Output(Set.of(Stream.VALUES), ignored -> keys),
+                        new Output(Set.of(Stream.VALUES), ignored -> payload));
+            }
+
+            @Override
+            public void constrain(Mask mask) {}
+
+            @Override
+            public boolean supportsConstrainedReborrow()
+            {
+                return true;
+            }
+
+            @Override
+            public void close() {}
+        };
+
+        try (Operator join = new HashJoinOperator(
+                allocator,
+                outer,
+                0,
+                new ConstantTableOperator(allocator, 1, List.of(row(1L), row(2L), row(3L))),
+                0);
+                Batch batch = join.next()) {
+            Vector result = batch.output(1).borrow(Stream.VALUES);
+            assertThat(result).isInstanceOf(BinaryVector.class);
+            BinaryVector output = (BinaryVector) result;
+            assertThat(new String(output.data(), output.offsets()[0], output.offsets()[1] - output.offsets()[0], UTF_8)).isEqualTo("alpha");
+            assertThat(new String(output.data(), output.offsets()[1], output.offsets()[2] - output.offsets()[1], UTF_8)).isEqualTo("beta");
+            assertThat(new String(output.data(), output.offsets()[2], output.offsets()[3] - output.offsets()[2], UTF_8)).isEqualTo("gamma");
+        }
+    }
+
+    @Test
     void testHashJoinLateMaterializesProjectedInnerPayloads()
     {
         AtomicInteger payloadBorrows = new AtomicInteger();

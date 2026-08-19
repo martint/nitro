@@ -2465,7 +2465,7 @@ public class HashJoinOperator
         constrainOuterIfNecessary();
         if (shouldMaterializeOuter(sourceOutput)) {
             if (currentOutputMask.all()) {
-                return buffers.copyPositions(sourceOutput, null, outputOuterPositions, currentOutputCount, 0, currentOutputCount);
+                return buffers.copyPositionsFlat(sourceOutput, outputOuterPositions, currentOutputCount, currentOutputCount);
             }
 
             Streams result = null;
