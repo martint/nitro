@@ -670,6 +670,18 @@ public class GroupedAggregationOperator
             return streams;
         }
         if (output < groupedResults.length) {
+            if (groupByColumns != null) {
+                return inlineGroupingState.copyGroupedValuePositions(
+                        groupedKeyIndexes[output],
+                        existing,
+                        new int[] {sourcePosition},
+                        0,
+                        1,
+                        outputPosition,
+                        size,
+                        allocator,
+                        allocationContext);
+            }
             throw new IllegalStateException("Grouped key output %s does not support dense position copying".formatted(output));
         }
         return null;

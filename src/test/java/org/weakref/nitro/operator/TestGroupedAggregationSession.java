@@ -300,6 +300,10 @@ class TestGroupedAggregationSession
                 BinaryVector values = (BinaryVector) copied.values();
                 assertThat(new String(values.data(), values.startOffset(0), values.length(0), UTF_8)).isEqualTo("delta");
                 assertThat(new String(values.data(), values.startOffset(1), values.length(1), UTF_8)).isEqualTo("beta");
+
+                Streams single = result.output(0).copySinglePosition(null, 2, 0, 1);
+                BinaryVector singleValue = (BinaryVector) single.values();
+                assertThat(new String(singleValue.data(), singleValue.startOffset(0), singleValue.length(0), UTF_8)).isEqualTo("gamma");
             }
         }
     }
