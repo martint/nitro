@@ -2182,6 +2182,87 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testMergePreservesSharedDictionaryDomain()
+    {
+        Variable result = new Variable(0);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(
+                        result,
+                        new org.weakref.nitro.operator.evaluator.ir.Merge(
+                                new ReferenceMask(new Reference(new Input(0), Stream.VALUES)),
+                                new Reference(new Input(1), Stream.VALUES),
+                                new Reference(new Input(2), Stream.VALUES)),
+                        AllMask.ALL)),
+                List.of(new Reference(result, Stream.VALUES)));
+
+        int[] ids = {0, 1, 0, 2, 1, 2};
+        DictionaryVector condition = DictionaryVector.wrap(ids, new BooleanVector(new boolean[] {true, false, true}));
+        DictionaryVector trueValues = DictionaryVector.wrap(ids, new I64Vector(new long[] {10, 20, 30}));
+        RleVector falseValues = new RleVector(new int[] {ids.length}, new I64Vector(new long[] {99}));
+        PlanEvaluator evaluator = planEvaluator(
+                plan,
+                new PrimitiveRegistry(),
+                inputResolver(Map.of(
+                        new Reference(new Input(0), Stream.VALUES), condition,
+                        new Reference(new Input(1), Stream.VALUES), trueValues,
+                        new Reference(new Input(2), Stream.VALUES), falseValues)),
+                new Allocator(EngineResources.createDefault()));
+
+        var resultVector = evaluator.evaluate(new Reference(result, Stream.VALUES), Mask.all(ids.length)).values();
+        assertThat(resultVector).isInstanceOf(DictionaryVector.class);
+        DictionaryVector dictionary = (DictionaryVector) resultVector;
+        assertThat(dictionary.ids()).isSameAs(ids);
+        assertThat(readLongs(dictionary)).containsExactly(10, 99, 10, 30, 99, 30);
+    }
+
+    @Test
+    void testNestedDictionaryMergeTreatsNullStreamAsConditionValues()
+    {
+        Variable nullable = new Variable(0);
+        Variable result = new Variable(1);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(
+                                nullable,
+                                new org.weakref.nitro.operator.evaluator.ir.Merge(
+                                        new ReferenceMask(new Reference(new Input(0), Stream.VALUES)),
+                                        new Reference(new Input(1), Stream.VALUES),
+                                        new Reference(new Input(2), Stream.VALUES)),
+                                AllMask.ALL),
+                        new Assignment(
+                                result,
+                                new org.weakref.nitro.operator.evaluator.ir.Merge(
+                                        new NotMask(new ReferenceMask(new Reference(nullable, Stream.NULLS))),
+                                        new Reference(nullable, Stream.VALUES),
+                                        new Reference(new Input(3), Stream.VALUES)),
+                                AllMask.ALL)),
+                List.of(new Reference(result, Stream.VALUES)));
+
+        int[] ids = {0, 1, 0, 2, 3, 1};
+        PlanEvaluator evaluator = planEvaluator(
+                plan,
+                new PrimitiveRegistry(),
+                inputResolver(Map.of(
+                        new Reference(new Input(0), Stream.VALUES),
+                        DictionaryVector.wrap(ids, new BooleanVector(new boolean[] {true, false, false, false})),
+                        new Reference(new Input(1), Stream.VALUES),
+                        new RleVector(new int[] {ids.length}, new I64Vector(new long[] {0})),
+                        new Reference(new Input(1), Stream.NULLS),
+                        new RleVector(new int[] {ids.length}, new BooleanVector(new boolean[] {true})),
+                        new Reference(new Input(2), Stream.VALUES),
+                        DictionaryVector.wrap(ids, new I64Vector(new long[] {0, 1, 2, 3})),
+                        new Reference(new Input(3), Stream.VALUES),
+                        DictionaryVector.wrap(ids, new I64Vector(new long[] {0, 5, 6, 7})))),
+                new Allocator(EngineResources.createDefault()));
+
+        var resultVector = evaluator.evaluate(new Reference(result, Stream.VALUES), Mask.all(ids.length)).values();
+        assertThat(resultVector).isInstanceOf(DictionaryVector.class);
+        DictionaryVector dictionary = (DictionaryVector) resultVector;
+        assertThat(dictionary.ids()).isSameAs(ids);
+        assertThat(readLongs(dictionary)).containsExactly(0, 1, 0, 2, 3, 1);
+    }
+
+    @Test
     void testEvaluatesCompositeMaskExpressions()
     {
         PrimitiveRegistry primitiveRegistry = builtinPrimitiveRegistry();

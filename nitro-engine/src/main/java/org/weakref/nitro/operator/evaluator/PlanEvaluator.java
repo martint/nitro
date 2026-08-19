@@ -1028,6 +1028,8 @@ public final class PlanEvaluator
 
     private record DictionaryIdsMetadata(int length, int baseLength) {}
 
+    private record EncodedMergeCondition(DictionaryVector mapping, byte[] choices) {}
+
     private Streams wrapDictionaryPeeledStreams(int[] sharedIds, int rowCount, Streams streams)
     {
         return wrapDictionaryPeeledStreams(sharedIds, rowCount, streams, false);
@@ -1162,6 +1164,13 @@ public final class PlanEvaluator
 
     private Streams evaluateMerge(Set<Stream> requestedStreams, Merge merge, Mask mask, Streams output)
     {
+        if (output == null && mask.all()) {
+            Streams encoded = tryEvaluateDictionaryDomainMerge(requestedStreams, merge, mask);
+            if (encoded != null) {
+                return completeRequestedStreams(requestedStreams, encoded, mask);
+            }
+        }
+
         MaskOutcome conditionOutcome = evaluateMaskOutcome(merge.condition(), mask);
         Mask trueMask = conditionOutcome.trueMask();
         Mask falseMask = allocator.differenceMask(allocationContext, mask, trueMask);
@@ -1187,6 +1196,210 @@ public final class PlanEvaluator
             }
         }
         return completeRequestedStreams(requestedStreams, result.build(), mask);
+    }
+
+    /**
+     * Evaluates a conditional directly over one shared physical dictionary domain. This is the encoded equivalent
+     * of branch masks: the condition selects true/false entries in the physical domain, and each logical row keeps
+     * referring to the selected result through the original id mapping. Calls that have not already been evaluated
+     * remain conditional; only inputs, literals, copies, nested merges, and fully memoized branch results are safe to
+     * inspect without executing an unselected function.
+     */
+    private Streams tryEvaluateDictionaryDomainMerge(Set<Stream> requestedStreams, Merge merge, Mask mask)
+    {
+        EncodedMergeCondition condition = encodedMergeCondition(merge.condition(), mask, false);
+        if (condition == null) {
+            return null;
+        }
+
+        for (Stream stream : requestedStreams) {
+            Reference trueReference = remapReference(merge.whenTrue(), stream);
+            Reference falseReference = remapReference(merge.whenFalse(), stream);
+            if (!safeToEvaluateEncodedMergeBranch(trueReference, mask) ||
+                    !safeToEvaluateEncodedMergeBranch(falseReference, mask)) {
+                return null;
+            }
+        }
+
+        Map<Stream, Vector> mergedDomains = new HashMap<>();
+        for (Stream stream : requestedStreams) {
+            Reference trueReference = remapReference(merge.whenTrue(), stream);
+            Reference falseReference = remapReference(merge.whenFalse(), stream);
+            Vector trueVector = evaluateMergeBranchVector(stream, trueReference, mask);
+            Vector falseVector = evaluateMergeBranchVector(stream, falseReference, mask);
+            if (stream == Stream.VALUES && (trueVector == null || falseVector == null)) {
+                releaseMergedDomains(mergedDomains.values());
+                return null;
+            }
+            Vector domain = mergeDictionaryDomains(stream, condition, trueVector, falseVector);
+            if (domain == null) {
+                releaseMergedDomains(mergedDomains.values());
+                return null;
+            }
+            mergedDomains.put(stream, domain);
+        }
+        Streams.Builder result = Streams.builder();
+        for (Map.Entry<Stream, Vector> entry : mergedDomains.entrySet()) {
+            result.put(entry.getKey(), wrapBorrowedDictionary(condition.mapping().ids(), mask.size(), entry.getValue()));
+        }
+        return result.build();
+    }
+
+    private EncodedMergeCondition encodedMergeCondition(MaskExpression expression, Mask mask, boolean inverted)
+    {
+        if (expression instanceof NotMask(MaskExpression source)) {
+            return encodedMergeCondition(source, mask, !inverted);
+        }
+        if (!(expression instanceof ReferenceMask(Reference reference))) {
+            return null;
+        }
+
+        MaskExpression resolved = MaskExpressionResolver.resolve(plan, expression);
+        if (!resolved.equals(expression)) {
+            return encodedMergeCondition(resolved, mask, inverted);
+        }
+        if (reference.producer() instanceof Variable variable) {
+            if (sourceMaskOptimizations.containsKey(variable)) {
+                return null;
+            }
+            Assignment assignment = assignments.get(variable);
+            if (assignment != null && assignment.operation() instanceof Call call &&
+                    !primitiveRegistry.contains(call.name())) {
+                return null;
+            }
+        }
+
+        Streams streams = evaluate(reference, mask);
+        if (!(streams.getOrNull(reference.stream()) instanceof DictionaryVector dictionary) ||
+                dictionary.length() != mask.size()) {
+            return null;
+        }
+        // NULLS and ERRORS are companions only to a semantic VALUES reference. A ReferenceMask over a physical
+        // NULLS/ERRORS stream treats that stream itself as the boolean value; it is not its own null/error companion.
+        Vector nulls = reference.stream() == Stream.VALUES ? streams.getOrNull(Stream.NULLS) : null;
+        Vector errors = reference.stream() == Stream.VALUES ? streams.getOrNull(Stream.ERRORS) : null;
+        if (!encodedDomainBooleanCompatible(nulls, dictionary) ||
+                !encodedDomainBooleanCompatible(errors, dictionary)) {
+            return null;
+        }
+
+        int domainSize = dictionary.values().length();
+        byte[] choices = new byte[domainSize];
+        for (int domain = 0; domain < domainSize; domain++) {
+            if (readEncodedDomainBoolean(errors, dictionary, domain)) {
+                return null;
+            }
+            boolean selected = !readEncodedDomainBoolean(nulls, dictionary, domain) &&
+                    readBoolean(dictionary.values(), domain);
+            choices[domain] = (byte) ((inverted ? !selected : selected) ? 1 : 2);
+        }
+        return new EncodedMergeCondition(dictionary, choices);
+    }
+
+    private boolean safeToEvaluateEncodedMergeBranch(Reference reference, Mask mask)
+    {
+        if (reference == null || reference.producer() instanceof org.weakref.nitro.operator.evaluator.ir.Input) {
+            return true;
+        }
+        Mask existingMask = memoizedMasks.get(reference);
+        if (existingMask != null && existingMask.containsAll(mask)) {
+            return true;
+        }
+        if (!(reference.producer() instanceof Variable variable)) {
+            return false;
+        }
+        Assignment assignment = assignments.get(variable);
+        if (assignment == null) {
+            return false;
+        }
+        return switch (assignment.operation()) {
+            case Literal _ -> true;
+            case Copy(Reference source) -> safeToEvaluateEncodedMergeBranch(remapReference(source, reference.stream()), mask);
+            case Merge _ -> true;
+            default -> false;
+        };
+    }
+
+    private Vector mergeDictionaryDomains(
+            Stream stream,
+            EncodedMergeCondition condition,
+            Vector trueVector,
+            Vector falseVector)
+    {
+        DictionaryVector mapping = condition.mapping();
+        int rowCount = mapping.length();
+        if (!encodedMergeBranchCompatible(trueVector, mapping, rowCount) ||
+                !encodedMergeBranchCompatible(falseVector, mapping, rowCount)) {
+            return null;
+        }
+
+        byte[] choices = condition.choices();
+        int trueCount = 0;
+        int falseCount = 0;
+        for (byte choice : choices) {
+            trueCount += choice == 1 ? 1 : 0;
+            falseCount += choice == 2 ? 1 : 0;
+        }
+        int[] truePositions = new int[trueCount];
+        int[] falsePositions = new int[falseCount];
+        for (int domain = 0, trueIndex = 0, falseIndex = 0; domain < choices.length; domain++) {
+            if (choices[domain] == 1) {
+                truePositions[trueIndex++] = domain;
+            }
+            else if (choices[domain] == 2) {
+                falsePositions[falseIndex++] = domain;
+            }
+        }
+
+        Mask trueDomain = allocator.allocateSparseMask(allocationContext, truePositions, trueCount, choices.length);
+        Mask falseDomain = allocator.allocateSparseMask(allocationContext, falsePositions, falseCount, choices.length);
+        try {
+            boolean trueFirst = trueVector instanceof DictionaryVector;
+            Vector target = null;
+            if (trueFirst) {
+                target = copyDictionaryMergeDomain(stream, trueVector, trueDomain, choices.length, target);
+                target = copyDictionaryMergeDomain(stream, falseVector, falseDomain, choices.length, target);
+            }
+            else {
+                target = copyDictionaryMergeDomain(stream, falseVector, falseDomain, choices.length, target);
+                target = copyDictionaryMergeDomain(stream, trueVector, trueDomain, choices.length, target);
+            }
+            return target;
+        }
+        finally {
+            allocator.release(allocationContext, trueDomain);
+            allocator.release(allocationContext, falseDomain);
+        }
+    }
+
+    private static boolean encodedDomainBooleanCompatible(Vector vector, DictionaryVector mapping)
+    {
+        if (vector == null || VectorAccess.isAllFalseNulls(vector)) {
+            return true;
+        }
+        if (vector instanceof DictionaryVector dictionary) {
+            return dictionary.length() == mapping.length() && dictionary.ids() == mapping.ids();
+        }
+        return vector instanceof RleVector rle && rle.length() == mapping.length() && rle.counts().length == 1;
+    }
+
+    private static boolean readEncodedDomainBoolean(Vector vector, DictionaryVector mapping, int domain)
+    {
+        if (vector == null || VectorAccess.isAllFalseNulls(vector)) {
+            return false;
+        }
+        return switch (vector) {
+            case DictionaryVector dictionary -> readBoolean(dictionary.values(), domain);
+            case RleVector rle -> readBoolean(rle.values(), 0);
+            default -> throw new IllegalArgumentException("Unsupported encoded boolean domain: " + vector.getClass().getName());
+        };
+    }
+
+    private void releaseMergedDomains(Iterable<Vector> domains)
+    {
+        for (Vector domain : domains) {
+            allocator.release(allocationContext, domain);
+        }
     }
 
     private Vector evaluateMaskExpressionErrors(MaskExpression expression, Mask mask)
@@ -1294,6 +1507,14 @@ public final class PlanEvaluator
         boolean singleBranch = trueMask.none() || falseMask.none();
         Vector target = existing;
 
+        if (!singleBranch && existing == null && mask.all() &&
+                trueMask.count() + falseMask.count() == mask.count()) {
+            Vector encoded = tryMergeDictionaryBranches(stream, trueReference, falseReference, trueMask, falseMask, mask.size());
+            if (encoded != null) {
+                return encoded;
+            }
+        }
+
         if (!trueMask.none()) {
             target = mergeBranchInto(stream, trueReference, trueMask, mask, target, singleBranch && falseMask.none());
         }
@@ -1301,6 +1522,150 @@ public final class PlanEvaluator
             target = mergeBranchInto(stream, falseReference, falseMask, mask, target, singleBranch && trueMask.none());
         }
         return target;
+    }
+
+    /**
+     * Preserves a shared logical-to-physical dictionary mapping across a conditional merge when the condition is
+     * constant for every occurrence of a dictionary entry. Branches are still evaluated only under their branch
+     * masks; this method merely merges their already-produced physical domains instead of copying logical rows.
+     */
+    private Vector tryMergeDictionaryBranches(
+            Stream stream,
+            Reference trueReference,
+            Reference falseReference,
+            Mask trueMask,
+            Mask falseMask,
+            int rowCount)
+    {
+        Vector trueVector = evaluateMergeBranchVector(stream, trueReference, trueMask);
+        if (stream == Stream.VALUES && trueVector == null) {
+            return null;
+        }
+        Vector falseVector = evaluateMergeBranchVector(stream, falseReference, falseMask);
+        if (stream == Stream.VALUES && falseVector == null) {
+            return null;
+        }
+
+        DictionaryVector mapping = trueVector instanceof DictionaryVector dictionary
+                ? dictionary
+                : falseVector instanceof DictionaryVector dictionary ? dictionary : null;
+        if (mapping == null || mapping.length() != rowCount ||
+                !encodedMergeBranchCompatible(trueVector, mapping, rowCount) ||
+                !encodedMergeBranchCompatible(falseVector, mapping, rowCount)) {
+            return null;
+        }
+
+        int[] ids = mapping.ids();
+        int domainSize = dictionaryBaseLength(ids, rowCount);
+        byte[] choices = new byte[domainSize];
+        if (!recordDictionaryBranchChoices(ids, trueMask, choices, (byte) 1) ||
+                !recordDictionaryBranchChoices(ids, falseMask, choices, (byte) 2)) {
+            return null;
+        }
+
+        int trueCount = 0;
+        int falseCount = 0;
+        for (byte choice : choices) {
+            if (choice == 1) {
+                trueCount++;
+            }
+            else if (choice == 2) {
+                falseCount++;
+            }
+        }
+        int[] truePositions = new int[trueCount];
+        int[] falsePositions = new int[falseCount];
+        for (int domain = 0, trueIndex = 0, falseIndex = 0; domain < choices.length; domain++) {
+            if (choices[domain] == 1) {
+                truePositions[trueIndex++] = domain;
+            }
+            else if (choices[domain] == 2) {
+                falsePositions[falseIndex++] = domain;
+            }
+        }
+
+        Mask trueDomain = allocator.allocateSparseMask(allocationContext, truePositions, trueCount, domainSize);
+        Mask falseDomain = allocator.allocateSparseMask(allocationContext, falsePositions, falseCount, domainSize);
+        try {
+            // Start with a dictionary-backed branch so the result representation is known before an absent optional
+            // boolean stream has to contribute its implicit false values.
+            boolean trueFirst = trueVector instanceof DictionaryVector;
+            Vector target = null;
+            if (trueFirst) {
+                target = copyDictionaryMergeDomain(stream, trueVector, trueDomain, domainSize, target);
+                target = copyDictionaryMergeDomain(stream, falseVector, falseDomain, domainSize, target);
+            }
+            else {
+                target = copyDictionaryMergeDomain(stream, falseVector, falseDomain, domainSize, target);
+                target = copyDictionaryMergeDomain(stream, trueVector, trueDomain, domainSize, target);
+            }
+            return target == null ? null : wrapBorrowedDictionary(ids, rowCount, target);
+        }
+        finally {
+            allocator.release(allocationContext, trueDomain);
+            allocator.release(allocationContext, falseDomain);
+        }
+    }
+
+    private Vector evaluateMergeBranchVector(Stream stream, Reference reference, Mask branchMask)
+    {
+        if (reference == null) {
+            return null;
+        }
+        Streams streams = evaluate(reference, branchMask);
+        if (!streams.has(reference.stream())) {
+            checkArgument(stream != Stream.VALUES, "VALUES stream not produced for active merge branch: %s", reference);
+            return null;
+        }
+        return streams.get(reference.stream());
+    }
+
+    private static boolean encodedMergeBranchCompatible(Vector vector, DictionaryVector mapping, int rowCount)
+    {
+        if (vector == null) {
+            return true;
+        }
+        if (vector instanceof DictionaryVector dictionary) {
+            return dictionary.length() == rowCount && dictionary.ids() == mapping.ids();
+        }
+        if (vector instanceof RleVector rle) {
+            return rle.length() == rowCount && rle.counts().length == 1;
+        }
+        return vector instanceof BooleanVector booleans && booleans.length() == rowCount &&
+                (booleans.isAllFalse() || booleans.isAllTrue());
+    }
+
+    private static boolean recordDictionaryBranchChoices(int[] ids, Mask mask, byte[] choices, byte branch)
+    {
+        for (int position : mask) {
+            int domain = ids[position];
+            byte previous = choices[domain];
+            if (previous != 0 && previous != branch) {
+                return false;
+            }
+            choices[domain] = branch;
+        }
+        return true;
+    }
+
+    private Vector copyDictionaryMergeDomain(Stream stream, Vector source, Mask domainMask, int domainSize, Vector target)
+    {
+        if (domainMask.none()) {
+            return target;
+        }
+        if (source == null) {
+            checkArgument(stream != Stream.VALUES, "VALUES stream cannot be absent for active merge branch");
+            return fillFalseBoolean(target, domainMask, domainSize);
+        }
+
+        Vector domainSource = switch (source) {
+            case DictionaryVector dictionary -> dictionary.values();
+            case RleVector rle -> new RleVector(new int[] {domainSize}, rle.values());
+            case BooleanVector booleans when booleans.isAllFalse() || booleans.isAllTrue() ->
+                    new RleVector(new int[] {domainSize}, new BooleanVector(new boolean[] {booleans.isAllTrue()}));
+            default -> throw new IllegalArgumentException("Unsupported encoded merge branch: " + source.getClass().getName());
+        };
+        return copyVector(domainSource, target, domainMask);
     }
 
     private Vector mergeBranchInto(Stream stream, Reference source, Mask branchMask, Mask fullMask, Vector target, boolean allowForward)

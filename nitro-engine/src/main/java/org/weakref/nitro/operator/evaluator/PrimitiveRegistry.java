@@ -75,6 +75,11 @@ public final class PrimitiveRegistry
         return function;
     }
 
+    public boolean contains(String name)
+    {
+        return functions.containsKey(name);
+    }
+
     public <T extends FunctionCapability> Optional<T> capability(Call call, Class<T> capabilityType)
     {
         return Optional.ofNullable(capabilityOrNull(call, capabilityType));
