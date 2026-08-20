@@ -1913,10 +1913,12 @@ public class Mask
     /**
      * Returns this mask's backing position array for an allocator-controlled direct-fill operation. Callers may only
      * overwrite the active prefix established by the allocating operation and must not retain the array after release.
+     * The previous selection is deliberately not materialized: a pooled mask may retain a compact dictionary-domain
+     * selection whose borrowed mapping ended with the previous lease, and every caller of this method replaces that
+     * selection before exposing the mask again.
      */
     public int[] positionsArrayForOverwrite(int requiredCapacity)
     {
-        materializeSelectedPositions();
         ensureCapacity(requiredCapacity);
         return positions;
     }

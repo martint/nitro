@@ -357,6 +357,28 @@ public class TestBatchRuntime
     }
 
     @Test
+    void testReusedMaskOverwriteDiscardsReleasedDictionarySelection()
+    {
+        try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
+            Allocator.Context context = new Allocator.Context("DictionaryMaskReuse");
+            int[] ids = {0, 1, 0, 1};
+
+            Mask dictionaryMask = allocator.allocateAllMask(context, ids.length);
+            dictionaryMask.retainDictionaryComparison(ids, new boolean[] {true, false});
+            assertThat(dictionaryMask.selectedCount()).isEqualTo(2);
+            allocator.release(context, dictionaryMask);
+
+            // The previous lease borrowed this mapping. It may be reused independently after release, and a direct
+            // fill must not inspect it while overwriting the pooled mask with a new selection.
+            Arrays.fill(ids, 1);
+            Mask sparse = allocator.allocateSparseMask(context, new int[] {1, 3}, ids.length);
+
+            assertThat(sparse).isSameAs(dictionaryMask);
+            assertThat(positions(sparse)).containsExactly(1, 3);
+        }
+    }
+
+    @Test
     void testAllocatorReleasesOnlyUnreferencedEncodedChildren()
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());
