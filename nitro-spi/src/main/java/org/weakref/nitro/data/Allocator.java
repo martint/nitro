@@ -22,6 +22,7 @@ import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TreeMap;
@@ -145,6 +146,22 @@ public class Allocator
     {
         state(context).trackVector(requireNonNull(vector, "vector is null"), false);
         return vector;
+    }
+
+    /**
+     * Replaces an owned vector with a larger logical wrapper that shares all of the previous vector's storage.
+     *
+     * <p>Chunked state vectors use this when growth preserves old chunks and allocates only the retained-size
+     * delta. Unlike discard followed by adopt, this records only that physical delta as newly allocated while
+     * transferring ownership to the replacement wrapper.
+     */
+    public <T extends Vector> T replaceSharedGrowth(Context context, T previous, T replacement)
+    {
+        requireNonNull(context, "context is null");
+        requireNonNull(previous, "previous is null");
+        requireNonNull(replacement, "replacement is null");
+        state(context).replaceSharedGrowth(previous, replacement);
+        return replacement;
     }
 
     public DictionaryVector allocateDictionary(Context context, int[] ids, Vector values)
@@ -1164,6 +1181,21 @@ public class Allocator
         return peak;
     }
 
+    /**
+     * Returns the sum of allocation-scope high-water marks grouped by stable context name.
+     *
+     * <p>Scopes with the same name may peak at different times, so these values attribute allocator pressure but do
+     * not necessarily sum to the allocator-wide concurrent peak.
+     */
+    public Map<String, Long> peakBytesByContext()
+    {
+        Map<String, Long> result = new TreeMap<>();
+        for (Map.Entry<Context, ContextState> entry : states.entrySet()) {
+            result.merge(entry.getKey().name(), entry.getValue().stats().peak(), Math::addExact);
+        }
+        return Map.copyOf(result);
+    }
+
     public void release(Context context)
     {
         state(context).release();
@@ -1898,6 +1930,35 @@ public class Allocator
             }
         }
 
+        public void replaceSharedGrowth(Vector previous, Vector replacement)
+        {
+            if (previous == replacement) {
+                return;
+            }
+            if (!inUseVectors.contains(previous)) {
+                throw new IllegalArgumentException("previous vector is not owned by allocation context");
+            }
+            if (!Objects.equals(previous.poolFamily(), replacement.poolFamily())) {
+                throw new IllegalArgumentException("shared growth must preserve vector pool family");
+            }
+            long previousBytes = previous.retainedBytes();
+            long replacementBytes = replacement.retainedBytes();
+            if (replacementBytes < previousBytes) {
+                throw new IllegalArgumentException("shared growth replacement is smaller than previous vector");
+            }
+            long delta = replacementBytes - previousBytes;
+            allocator.reserveResident(delta);
+            inUseVectors.remove(previous);
+            inUseVectors.add(replacement);
+            stats.replaceSharedGrowth(previousBytes, replacementBytes);
+            if (delta > 0) {
+                allocatedVectorBytesByType.merge(replacement.getClass().getSimpleName(), delta, Math::addExact);
+            }
+            if (replacement instanceof DynamicRetainedBytesVector dynamicRetainedBytesVector) {
+                dynamicRetainedBytesVector.bindRetainedBytesAccounting(allocator, context);
+            }
+        }
+
         public void releaseVector(Vector vector)
         {
             if (!untrackVector(vector)) {
@@ -2461,6 +2522,14 @@ public class Allocator
         public void releaseBytes(long bytes)
         {
             current -= bytes;
+        }
+
+        public void replaceSharedGrowth(long previousBytes, long replacementBytes)
+        {
+            long delta = replacementBytes - previousBytes;
+            total += delta;
+            current += delta;
+            peak = Math.max(peak, current);
         }
 
         public void release()

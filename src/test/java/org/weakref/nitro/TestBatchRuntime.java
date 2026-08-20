@@ -817,7 +817,22 @@ public class TestBatchRuntime
         assertThat(grown.third(7)).isEqualTo(17);
         assertThat(grown.isNull(7)).isFalse();
         assertThat(grown.isNull(4_096)).isTrue();
-        assertThat(grown.retainedBytes() - state.retainedBytes()).isEqualTo(4_096L * 25);
+        assertThat(grown.retainedBytes() - state.retainedBytes()).isEqualTo(4_096L * 17);
+    }
+
+    @Test
+    void testNullableLongTripleStateVectorAdmitsOverflowByChunk()
+    {
+        NullableLongTripleStateVector state = new NullableLongTripleStateVector(8_192);
+        long compactBytes = state.retainedBytes();
+
+        state.set(7, 11, 13, 0, false);
+        assertThat(state.retainedBytes()).isEqualTo(compactBytes);
+
+        state.set(4_100, 17, 19, 23, false);
+        assertThat(state.third(4_100)).isEqualTo(23);
+        assertThat(state.third(7)).isZero();
+        assertThat(state.retainedBytes()).isEqualTo(compactBytes + 4_096L * Long.BYTES);
     }
 
     @Test

@@ -50,6 +50,7 @@ public class GroupedAggregationOperator
         implements Operator
 {
     private final Allocator.Context allocationContext;
+    private final Allocator.Context groupingAllocationContext;
     private final Allocator allocator;
     private final OperatorResources operatorResources;
     private final AggregationExecutionContext aggregationExecutionContext;
@@ -129,7 +130,11 @@ public class GroupedAggregationOperator
 
     long retainedBytes()
     {
-        return allocator.scopeCurrentBytes(allocationContext);
+        long retainedBytes = allocator.scopeCurrentBytes(allocationContext);
+        if (groupingAllocationContext != allocationContext) {
+            retainedBytes += allocator.scopeCurrentBytes(groupingAllocationContext);
+        }
+        return retainedBytes;
     }
 
     public GroupedAggregationOperator(Allocator allocator, int groupColumn, List<Accumulator> aggregations, Operator source)
@@ -258,6 +263,7 @@ public class GroupedAggregationOperator
                 operatorResources,
                 groupingResources,
                 allocationContext,
+                allocationContext,
                 new MutableAggregationPhaseMetrics());
     }
 
@@ -274,6 +280,31 @@ public class GroupedAggregationOperator
     {
         this(
                 allocator,
+                groupByColumns,
+                groupedColumns,
+                program,
+                source,
+                operatorResources,
+                groupingResources,
+                allocationContext,
+                allocationContext,
+                phaseMetrics);
+    }
+
+    GroupedAggregationOperator(
+            Allocator allocator,
+            List<Integer> groupByColumns,
+            List<Integer> groupedColumns,
+            PhysicalAggregationProgram program,
+            Operator source,
+            OperatorResources operatorResources,
+            GroupingStateResources groupingResources,
+            Allocator.Context groupingAllocationContext,
+            Allocator.Context allocationContext,
+            MutableAggregationPhaseMetrics phaseMetrics)
+    {
+        this(
+                allocator,
                 -1,
                 groupedColumns,
                 program,
@@ -283,6 +314,7 @@ public class GroupedAggregationOperator
                 groupingTypes(source.outputSchema(), groupByColumns),
                 requireNonNull(operatorResources, "operatorResources is null"),
                 requireNonNull(groupingResources, "groupingResources is null"),
+                requireNonNull(groupingAllocationContext, "groupingAllocationContext is null"),
                 requireNonNull(allocationContext, "allocationContext is null"),
                 requireNonNull(phaseMetrics, "phaseMetrics is null"));
     }
@@ -337,11 +369,43 @@ public class GroupedAggregationOperator
             Allocator.Context allocationContext,
             MutableAggregationPhaseMetrics phaseMetrics)
     {
+        this(
+                allocator,
+                groupColumn,
+                groupedColumns,
+                program,
+                source,
+                groupByColumns,
+                groupedKeyIndexes,
+                inlineGroupingTypes,
+                operatorResources,
+                groupingResources,
+                allocationContext,
+                allocationContext,
+                phaseMetrics);
+    }
+
+    private GroupedAggregationOperator(
+            Allocator allocator,
+            int groupColumn,
+            List<Integer> groupedColumns,
+            PhysicalAggregationProgram program,
+            Operator source,
+            int[] groupByColumns,
+            int[] groupedKeyIndexes,
+            List<TypeBinding> inlineGroupingTypes,
+            OperatorResources operatorResources,
+            GroupingStateResources groupingResources,
+            Allocator.Context groupingAllocationContext,
+            Allocator.Context allocationContext,
+            MutableAggregationPhaseMetrics phaseMetrics)
+    {
         if (!groupedColumns.isEmpty() && groupByColumns == null && !(source instanceof GroupedKeySource)) {
             throw new IllegalArgumentException("Source must implement GroupedKeySource when grouped outputs are requested");
         }
         this.allocator = allocator;
         this.allocationContext = requireNonNull(allocationContext, "allocationContext is null");
+        this.groupingAllocationContext = requireNonNull(groupingAllocationContext, "groupingAllocationContext is null");
         this.operatorResources = requireNonNull(operatorResources, "operatorResources is null");
         AggregationOperatorPolicy policy = operatorResources.aggregation().policy();
         this.fuseGroupLimit = policy.fuseGroupLimit();
@@ -404,7 +468,7 @@ public class GroupedAggregationOperator
                         operatorResources.flatKeyTablePolicy(),
                         inlineGroupingTypes,
                         allocator,
-                        allocationContext);
+                        groupingAllocationContext);
         this.inlineGroupValues = groupByColumns == null ? null : new Vector[groupByColumns.length];
         this.inlineGroupNulls = groupByColumns == null ? null : new Vector[groupByColumns.length];
 
@@ -1870,6 +1934,9 @@ public class GroupedAggregationOperator
             Arrays.fill(inlineGroupNulls, null);
         }
         allocator.release(allocationContext);
+        if (groupingAllocationContext != allocationContext) {
+            allocator.release(groupingAllocationContext);
+        }
     }
 
     private static int[] toArray(List<Integer> values)

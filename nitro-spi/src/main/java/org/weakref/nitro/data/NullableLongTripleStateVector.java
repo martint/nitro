@@ -20,12 +20,14 @@ import java.util.Arrays;
  *
  * <p>The representation is deliberately free of aggregate semantics. Registry-provided
  * implementations can use the three lanes for fixed-width state without making the engine aware
- * of a function or logical type. Growth allocates only new chunks and retains existing chunks, so
- * implementations can request their exact logical group count without geometric headroom or
- * whole-state copies.
+ * of a function or logical type. The first two lanes are resident for every admitted chunk. The
+ * third lane is admitted independently when a non-zero value first needs it, which keeps sparse
+ * overflow or auxiliary state from paying a full-width resident cost. Growth allocates only new
+ * chunks and retains existing chunks, so implementations can request their exact logical group
+ * count without geometric headroom or whole-state copies.
  */
 public final class NullableLongTripleStateVector
-        implements FlatVector
+        implements FlatVector, DynamicRetainedBytesVector
 {
     private static final int CHUNK_SHIFT = 12;
     private static final int CHUNK_SIZE = 1 << CHUNK_SHIFT;
@@ -33,31 +35,37 @@ public final class NullableLongTripleStateVector
 
     private final int length;
     private final long[][] valueChunks;
+    private final long[][] overflowChunks;
     private final boolean[][] nullChunks;
-    private final long retainedBytes;
+    private long retainedBytes;
+    private Allocator retainedBytesAllocator;
+    private Allocator.Context retainedBytesContext;
 
     public NullableLongTripleStateVector(int length)
     {
         this.length = length;
         int chunkCount = chunkCount(length);
         valueChunks = new long[chunkCount][];
+        overflowChunks = new long[chunkCount][];
         nullChunks = new boolean[chunkCount][];
         for (int chunk = 0; chunk < chunkCount; chunk++) {
-            valueChunks[chunk] = new long[CHUNK_SIZE * 3];
+            valueChunks[chunk] = new long[CHUNK_SIZE * 2];
             nullChunks[chunk] = new boolean[CHUNK_SIZE];
             Arrays.fill(nullChunks[chunk], true);
         }
-        retainedBytes = (long) chunkCount * CHUNK_SIZE * ((3L * Long.BYTES) + Byte.BYTES);
+        retainedBytes = (long) chunkCount * CHUNK_SIZE * ((2L * Long.BYTES) + Byte.BYTES);
     }
 
     private NullableLongTripleStateVector(
             int length,
             long[][] valueChunks,
+            long[][] overflowChunks,
             boolean[][] nullChunks,
             long retainedBytes)
     {
         this.length = length;
         this.valueChunks = valueChunks;
+        this.overflowChunks = overflowChunks;
         this.nullChunks = nullChunks;
         this.retainedBytes = retainedBytes;
     }
@@ -69,19 +77,22 @@ public final class NullableLongTripleStateVector
             return new NullableLongTripleStateVector(
                     length,
                     previous.valueChunks,
+                    previous.overflowChunks,
                     previous.nullChunks,
                     previous.retainedBytes);
         }
 
         long[][] valueChunks = Arrays.copyOf(previous.valueChunks, requiredChunks);
+        long[][] overflowChunks = Arrays.copyOf(previous.overflowChunks, requiredChunks);
         boolean[][] nullChunks = Arrays.copyOf(previous.nullChunks, requiredChunks);
         for (int chunk = previous.valueChunks.length; chunk < requiredChunks; chunk++) {
-            valueChunks[chunk] = new long[CHUNK_SIZE * 3];
+            valueChunks[chunk] = new long[CHUNK_SIZE * 2];
             nullChunks[chunk] = new boolean[CHUNK_SIZE];
             Arrays.fill(nullChunks[chunk], true);
         }
-        long retainedBytes = (long) requiredChunks * CHUNK_SIZE * ((3L * Long.BYTES) + Byte.BYTES);
-        return new NullableLongTripleStateVector(length, valueChunks, nullChunks, retainedBytes);
+        long retainedBytes = previous.retainedBytes +
+                (long) (requiredChunks - previous.valueChunks.length) * CHUNK_SIZE * ((2L * Long.BYTES) + Byte.BYTES);
+        return new NullableLongTripleStateVector(length, valueChunks, overflowChunks, nullChunks, retainedBytes);
     }
 
     @Override
@@ -97,11 +108,22 @@ public final class NullableLongTripleStateVector
     }
 
     @Override
+    public void bindRetainedBytesAccounting(Allocator allocator, Allocator.Context context)
+    {
+        retainedBytesAllocator = allocator;
+        retainedBytesContext = context;
+    }
+
+    @Override
     public Vector copy(Allocator allocator, Allocator.Context allocationContext)
     {
         NullableLongTripleStateVector copy = new NullableLongTripleStateVector(length);
         for (int chunk = 0; chunk < valueChunks.length; chunk++) {
-            System.arraycopy(valueChunks[chunk], 0, copy.valueChunks[chunk], 0, CHUNK_SIZE * 3);
+            System.arraycopy(valueChunks[chunk], 0, copy.valueChunks[chunk], 0, CHUNK_SIZE * 2);
+            if (overflowChunks[chunk] != null) {
+                copy.overflowChunks[chunk] = Arrays.copyOf(overflowChunks[chunk], CHUNK_SIZE);
+                copy.retainedBytes += (long) CHUNK_SIZE * Long.BYTES;
+            }
             System.arraycopy(nullChunks[chunk], 0, copy.nullChunks[chunk], 0, CHUNK_SIZE);
         }
         return allocator.adopt(allocationContext, copy);
@@ -150,7 +172,10 @@ public final class NullableLongTripleStateVector
             int chunk = position >> CHUNK_SHIFT;
             int chunkOffset = position & CHUNK_MASK;
             int count = Math.min(end - position, CHUNK_SIZE - chunkOffset);
-            Arrays.fill(valueChunks[chunk], chunkOffset * 3, (chunkOffset + count) * 3, 0);
+            Arrays.fill(valueChunks[chunk], chunkOffset * 2, (chunkOffset + count) * 2, 0);
+            if (overflowChunks[chunk] != null) {
+                Arrays.fill(overflowChunks[chunk], chunkOffset, chunkOffset + count, 0);
+            }
             Arrays.fill(nullChunks[chunk], chunkOffset, chunkOffset + count, true);
             position += count;
         }
@@ -168,7 +193,8 @@ public final class NullableLongTripleStateVector
 
     public long third(int index)
     {
-        return valueChunk(index)[valueOffset(index) + 2];
+        long[] overflow = overflowChunks[index >> CHUNK_SHIFT];
+        return overflow == null ? 0 : overflow[index & CHUNK_MASK];
     }
 
     public boolean isNull(int index)
@@ -182,7 +208,13 @@ public final class NullableLongTripleStateVector
         int offset = valueOffset(index);
         values[offset] = first;
         values[offset + 1] = second;
-        values[offset + 2] = third;
+        int chunk = index >> CHUNK_SHIFT;
+        if (third != 0) {
+            ensureOverflowChunkByIndex(chunk)[index & CHUNK_MASK] = third;
+        }
+        else if (overflowChunks[chunk] != null) {
+            overflowChunks[chunk][index & CHUNK_MASK] = 0;
+        }
         nullChunk(index)[index & CHUNK_MASK] = isNull;
     }
 
@@ -195,7 +227,7 @@ public final class NullableLongTripleStateVector
     /** Returns the first-lane offset for {@code index} within {@link #valueChunk(int)}. */
     public int valueOffset(int index)
     {
-        return (index & CHUNK_MASK) * 3;
+        return (index & CHUNK_MASK) * 2;
     }
 
     /** Returns the physical null chunk containing {@code index}. */
@@ -228,6 +260,29 @@ public final class NullableLongTripleStateVector
     public long[] valueChunkByIndex(int chunk)
     {
         return valueChunks[chunk];
+    }
+
+    /** Returns the optional third-lane chunk, or {@code null} while every value in the chunk is zero. */
+    public long[] overflowChunkByIndex(int chunk)
+    {
+        return overflowChunks[chunk];
+    }
+
+    /** Admits storage for the third lane of one chunk when its first non-zero value is produced. */
+    public long[] ensureOverflowChunkByIndex(int chunk)
+    {
+        long[] overflow = overflowChunks[chunk];
+        if (overflow != null) {
+            return overflow;
+        }
+        long previousRetainedBytes = retainedBytes;
+        overflow = new long[CHUNK_SIZE];
+        overflowChunks[chunk] = overflow;
+        retainedBytes += (long) CHUNK_SIZE * Long.BYTES;
+        if (retainedBytesAllocator != null) {
+            retainedBytesAllocator.retainedBytesChanged(retainedBytesContext, this, previousRetainedBytes);
+        }
+        return overflow;
     }
 
     public boolean[] nullChunkByIndex(int chunk)

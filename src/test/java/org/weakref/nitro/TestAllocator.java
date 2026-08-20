@@ -239,6 +239,24 @@ class TestAllocator
     }
 
     @Test
+    void testReportsPeakBytesByContextName()
+    {
+        try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
+            Allocator.Context first = new Allocator.Context("first");
+            Allocator.Context firstSibling = new Allocator.Context("first");
+            Allocator.Context second = new Allocator.Context("second");
+            I64Vector firstVector = allocator.allocate(first, I64Vector.class, 8, I64Vector::new);
+            I32Vector siblingVector = allocator.allocate(firstSibling, I32Vector.class, 4, I32Vector::new);
+            I64Vector secondVector = allocator.allocate(second, I64Vector.class, 2, I64Vector::new);
+            allocator.release(first, firstVector);
+
+            assertThat(allocator.peakBytesByContext()).isEqualTo(Map.of(
+                    "first", Math.addExact(firstVector.retainedBytes(), siblingVector.retainedBytes()),
+                    "second", secondVector.retainedBytes()));
+        }
+    }
+
+    @Test
     void testReportsAllocatedVectorBytesByTypeWithoutCountingPoolReuse()
     {
         try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
@@ -253,6 +271,37 @@ class TestAllocator
             assertThat(allocator.allocatedVectorBytesByType()).isEqualTo(Map.of(
                     "I32Vector", secondVector.retainedBytes(),
                     "I64Vector", firstVector.retainedBytes()));
+        }
+    }
+
+    @Test
+    void testSharedChunkGrowthCountsOnlyNewStorage()
+    {
+        TestingMemoryReservation memory = new TestingMemoryReservation();
+        Allocator.Context context = new Allocator.Context("shared-growth");
+        try (Allocator allocator = new Allocator(EngineResources.createDefault(), memory)) {
+            CountStateVector state = allocator.allocate(
+                    context,
+                    CountStateVector.class,
+                    4_096,
+                    CountStateVector::new);
+            state.increment(7, 11);
+            long initialBytes = state.retainedBytes();
+
+            CountStateVector grown = allocator.replaceSharedGrowth(
+                    context,
+                    state,
+                    CountStateVector.grow(state, 4_097));
+            long growthBytes = grown.retainedBytes() - initialBytes;
+
+            assertThat(grown.value(7)).isEqualTo(11);
+            assertThat(allocator.allocatedBytes()).isEqualTo(initialBytes + growthBytes);
+            assertThat(allocator.allocatedVectorBytesByType()).isEqualTo(Map.of(
+                    "CountStateVector", initialBytes + growthBytes));
+            assertThat(allocator.residentBytes()).isEqualTo(grown.retainedBytes());
+            assertThat(memory.reservedBytes()).isEqualTo(grown.retainedBytes());
+            allocator.discard(context, grown);
+            assertThat(memory.reservedBytes()).isZero();
         }
     }
 
