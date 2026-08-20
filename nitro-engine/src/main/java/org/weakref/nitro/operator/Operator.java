@@ -16,6 +16,9 @@ package org.weakref.nitro.operator;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Mask;
 
+import java.util.Optional;
+import java.util.Set;
+
 /**
  * Pull-based batch operator.
  * <p>
@@ -67,6 +70,16 @@ public interface Operator
      * already discarded.
      */
     void constrain(Mask mask);
+
+    /// Maps demanded outputs of this operator to the leaf-source outputs needed to produce them.
+    ///
+    /// This is a pre-poll physical contract. Operators which cannot describe the mapping return empty, causing the
+    /// source to retain its conservative all-output default. Pass-through and expression operators may override it
+    /// so a source can avoid materializing values used only by predicates it has accepted for exact enforcement.
+    default Optional<Set<Integer>> sourceOutputDemand(Set<Integer> demandedOutputs)
+    {
+        return Optional.empty();
+    }
 
     /**
      * Returns whether batches from this operator may outlive calls that advance the operator.

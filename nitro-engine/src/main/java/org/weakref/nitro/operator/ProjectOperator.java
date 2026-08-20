@@ -35,6 +35,7 @@ import org.weakref.nitro.operator.evaluator.PlanEvaluator;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
 import org.weakref.nitro.operator.evaluator.ir.Input;
+import org.weakref.nitro.operator.evaluator.ir.InputDependencies;
 import org.weakref.nitro.operator.evaluator.ir.Producer;
 import org.weakref.nitro.operator.evaluator.ir.Reference;
 
@@ -282,6 +283,20 @@ public class ProjectOperator
         if (currentBatchState != null) {
             currentBatchState.constrain(mask);
         }
+    }
+
+    @Override
+    public java.util.Optional<Set<Integer>> sourceOutputDemand(Set<Integer> demandedOutputs)
+    {
+        requireNonNull(demandedOutputs, "demandedOutputs is null");
+        java.util.ArrayList<Reference> demandedReferences = new java.util.ArrayList<>(demandedOutputs.size());
+        for (int output : demandedOutputs) {
+            if (output < 0 || output >= outputReferences.size()) {
+                throw new IllegalArgumentException("demanded output is outside projection schema: " + output);
+            }
+            demandedReferences.add(outputReferences.get(output));
+        }
+        return source.sourceOutputDemand(InputDependencies.inputs(evaluationPlan, demandedReferences));
     }
 
     @Override

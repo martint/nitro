@@ -3954,6 +3954,57 @@ public class TestOperators
     }
 
     @Test
+    void testProjectionAndFilterDeriveSourceOutputDemandAfterEnforcement()
+    {
+        assertThat(filterProjectSourceDemand(true)).containsExactly(1);
+        assertThat(filterProjectSourceDemand(false)).containsExactlyInAnyOrder(0, 1);
+    }
+
+    private Set<Integer> filterProjectSourceDemand(boolean enforceFilter)
+    {
+        PrimitiveRegistry primitiveRegistry = primitiveRegistry();
+        Variable literal = new Variable(0);
+        Variable predicate = new Variable(1);
+        EvaluationPlan filterPlan = new EvaluationPlan(List.of(
+                new Assignment(literal, new Literal(2L), AllMask.ALL),
+                new Assignment(predicate, new Call("eq", List.of(
+                        new Reference(new Input(0), Stream.VALUES),
+                        new Reference(literal, Stream.VALUES))), AllMask.ALL)), List.of());
+        ConstantTableOperator source = new ConstantTableOperator(allocator, 2, List.of())
+        {
+            @Override
+            public StaticFilterEnforcement pushStaticFilter(org.weakref.nitro.operator.DynamicFilter filter)
+            {
+                if (!enforceFilter) {
+                    return StaticFilterEnforcement.residual();
+                }
+                StaticFilterEnforcement enforcement = StaticFilterEnforcement.pending();
+                enforcement.complete(RuntimeFilterAcceptance.ENFORCED);
+                return enforcement;
+            }
+
+            @Override
+            public Optional<Set<Integer>> sourceOutputDemand(Set<Integer> demandedOutputs)
+            {
+                return Optional.of(Set.copyOf(demandedOutputs));
+            }
+        };
+        FilterOperator filter = new FilterOperator(
+                source,
+                filterPlan,
+                primitiveRegistry,
+                new Reference(predicate, Stream.VALUES),
+                allocator,
+                EngineResources.from(allocator).operatorResources().filter());
+        EvaluationPlan projectionPlan = new EvaluationPlan(
+                List.of(),
+                List.of(new Reference(new Input(1), Stream.VALUES)));
+        try (ProjectOperator project = new ProjectOperator(allocator, projectionPlan, primitiveRegistry, filter)) {
+            return project.sourceOutputDemand(Set.of(0)).orElseThrow();
+        }
+    }
+
+    @Test
     void testFilterOperatorUsesPlannedMaskExpressionForPredicateReference()
     {
         PrimitiveRegistry primitiveRegistry = primitiveRegistry();

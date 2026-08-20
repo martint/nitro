@@ -27,6 +27,7 @@ import org.weakref.nitro.operator.StaticFilterEnforcement;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 
 import static java.util.Objects.requireNonNull;
@@ -182,6 +183,18 @@ public final class BatchFeedOperator
     }
 
     @Override
+    public Optional<Set<Integer>> sourceOutputDemand(Set<Integer> demandedOutputs)
+    {
+        requireNonNull(demandedOutputs, "demandedOutputs is null");
+        for (int output : demandedOutputs) {
+            if (output < 0 || output >= schema.size()) {
+                throw new IllegalArgumentException("demanded output is outside source schema: " + output);
+            }
+        }
+        return Optional.of(Set.copyOf(demandedOutputs));
+    }
+
+    @Override
     public boolean supportsStableBatchBorrow()
     {
         return capabilities.contains(SourceCapability.STABLE_BATCH_BORROW);
@@ -257,25 +270,20 @@ public final class BatchFeedOperator
         return List.copyOf(acceptances);
     }
 
-    /// Declares that no source value stream can be borrowed when every static predicate was transferred to the
-    /// source and the downstream pipeline has no outputs. This is deliberately negotiated after filter acceptance:
-    /// a residual predicate still needs its input stream even when the final row layout is empty.
-    public void omitEnforcedFilterOnlyOutputs(BatchSource source, List<RuntimeFilterAcceptance> acceptances)
+    /// Applies the leaf-output demand derived by the complete operator pipeline after static-filter acceptance.
+    public void applySourceOutputDemand(BatchSource source, Optional<Set<Integer>> demandedOutputs)
     {
         checkOpen();
         requireNonNull(source, "source is null");
-        requireNonNull(acceptances, "acceptances is null");
-        if (schema.size() == 0 || dynamicFilters.isEmpty() || acceptances.size() != dynamicFilters.size()) {
+        requireNonNull(demandedOutputs, "demandedOutputs is null");
+        if (demandedOutputs.isEmpty()) {
             return;
         }
-        for (int index = 0; index < dynamicFilters.size(); index++) {
-            if (dynamicFilters.get(index).enforcement() == null ||
-                    acceptances.get(index) != RuntimeFilterAcceptance.ENFORCED) {
-                return;
-            }
-        }
+        Set<Integer> outputs = demandedOutputs.orElseThrow();
         source.protocol(SourceOutputDemandProtocol.OUTPUT_DEMAND)
-                .ifPresent(demand -> demand.retainOutputs(Set.of()));
+                .ifPresent(demand -> demand.retainOutputs(outputs.stream()
+                        .map(source::column)
+                        .collect(java.util.stream.Collectors.toUnmodifiableSet())));
     }
 
     private record PushedFilter(DynamicFilter filter, StaticFilterEnforcement enforcement) {}

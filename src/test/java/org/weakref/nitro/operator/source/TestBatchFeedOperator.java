@@ -341,8 +341,8 @@ class TestBatchFeedOperator
 
         try (BatchFeedOperator feed = new BatchFeedOperator(SCHEMA, ingress)) {
             feed.pushStaticFilter(DynamicFilter.fromRange(0, 20, 22));
-            List<RuntimeFilterAcceptance> acceptances = feed.applyDynamicFilters(source);
-            feed.omitEnforcedFilterOnlyOutputs(source, acceptances);
+            feed.applyDynamicFilters(source);
+            feed.applySourceOutputDemand(source, feed.sourceOutputDemand(Set.of()));
             assertThat(retainedOutputs.get()).isEmpty();
         }
     }

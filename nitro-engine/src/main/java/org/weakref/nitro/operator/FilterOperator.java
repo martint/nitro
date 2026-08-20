@@ -29,6 +29,7 @@ import org.weakref.nitro.operator.evaluator.ir.Assignment;
 import org.weakref.nitro.operator.evaluator.ir.Call;
 import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
 import org.weakref.nitro.operator.evaluator.ir.Input;
+import org.weakref.nitro.operator.evaluator.ir.InputDependencies;
 import org.weakref.nitro.operator.evaluator.ir.LongDomainMask;
 import org.weakref.nitro.operator.evaluator.ir.MaskExpression;
 import org.weakref.nitro.operator.evaluator.ir.MaskExpressionResolver;
@@ -488,6 +489,15 @@ public class FilterOperator
         if (currentBatchState != null) {
             currentBatchState.constrain(mask);
         }
+    }
+
+    @Override
+    public Optional<Set<Integer>> sourceOutputDemand(Set<Integer> demandedOutputs)
+    {
+        requireNonNull(demandedOutputs, "demandedOutputs is null");
+        java.util.HashSet<Integer> required = new java.util.HashSet<>(demandedOutputs);
+        required.addAll(InputDependencies.inputs(evaluationPlan, effectivePredicateMask()));
+        return source.sourceOutputDemand(Set.copyOf(required));
     }
 
     @Override
