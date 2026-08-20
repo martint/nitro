@@ -27,6 +27,7 @@ import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.MinUtf8StateVector;
+import org.weakref.nitro.data.NullableLongTripleStateVector;
 import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
@@ -779,6 +780,22 @@ public class TestBatchRuntime
 
         state.increment(0, 1);
         assertThat(grown.sum(0)).isEqualTo(11);
+    }
+
+    @Test
+    void testNullableLongTripleStateVectorGrowPreservesChunks()
+    {
+        NullableLongTripleStateVector state = new NullableLongTripleStateVector(4_096);
+        state.set(7, 11, 13, 17, false);
+
+        NullableLongTripleStateVector grown = NullableLongTripleStateVector.grow(state, 4_097);
+
+        assertThat(grown.first(7)).isEqualTo(11);
+        assertThat(grown.second(7)).isEqualTo(13);
+        assertThat(grown.third(7)).isEqualTo(17);
+        assertThat(grown.isNull(7)).isFalse();
+        assertThat(grown.isNull(4_096)).isTrue();
+        assertThat(grown.retainedBytes() - state.retainedBytes()).isEqualTo(4_096L * 25);
     }
 
     @Test
