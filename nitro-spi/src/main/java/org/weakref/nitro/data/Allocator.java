@@ -457,6 +457,22 @@ public class Allocator
         return result;
     }
 
+    /** Returns the logical complement while preserving compact encoded-domain mask state. */
+    public Mask complementMask(Context context, Mask source)
+    {
+        ContextState state = state(context);
+        Mask result = state.borrowMask(source.capacity());
+        boolean reused = result != null;
+        if (!reused) {
+            result = source.complement(policy.maskFiltering());
+        }
+        else {
+            result.copyComplementFrom(source);
+        }
+        state.trackMask(result, reused);
+        return result;
+    }
+
     public Mask constantComparisonMask(Context context, Mask source, long[] values, long literal, Mask.ComparisonOperator operator, boolean[] nulls)
     {
         ContextState state = state(context);
@@ -1764,16 +1780,7 @@ public class Allocator
 
     private static void copyMask(Mask target, Mask source)
     {
-        if (source.all()) {
-            target.selectAll(source.size());
-            return;
-        }
-
-        int[] positions = target.positionsArrayForOverwrite(source.selectedCount());
-        for (int index = 0; index < source.selectedCount(); index++) {
-            positions[index] = source.position(index);
-        }
-        target.setSelection(source.size(), source.selectedCount(), false);
+        target.copyFrom(source);
     }
 
     private static long maskBytes(Mask mask)

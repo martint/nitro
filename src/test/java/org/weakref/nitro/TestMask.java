@@ -191,6 +191,26 @@ class TestMask
         assertThat(mask).containsExactly(1, 2, 5, 6);
     }
 
+    @Test
+    void compactDictionaryDomainSurvivesCopyAndComplement()
+    {
+        int[] ids = {3, 1, 2, 0, 3, 2, 1};
+        DictionaryVector dictionary = DictionaryVector.wrap(ids, ids.length, new I64Vector(new long[] {10, 20, 30, 40}));
+        Mask selected = Mask.all(ids.length);
+        selected.retainDictionaryComparison(ids, new boolean[] {false, true, false, true});
+
+        Mask copy = Mask.none(ids.length);
+        copy.copyFrom(selected);
+        Mask complement = selected.complement();
+
+        assertThat(copy.dictionaryDomainSelection(dictionary)).isNotNull();
+        assertThat(copy.dictionaryDomainSelection(dictionary).selectedDomainBits()).isEqualTo(0b1010);
+        assertThat(copy).containsExactly(0, 1, 4, 6);
+        assertThat(complement.dictionaryDomainSelection(dictionary)).isNotNull();
+        assertThat(complement.dictionaryDomainSelection(dictionary).selectedDomainBits()).isEqualTo(0b0101);
+        assertThat(complement).containsExactly(2, 3, 5);
+    }
+
     private static void assertPrimitivePositions(Mask mask, int... expected)
     {
         int[] actual = new int[mask.selectedCount()];

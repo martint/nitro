@@ -46,6 +46,27 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class TestAllocator
 {
     @Test
+    void testComplementMaskPreservesCompactDictionaryDomainAcrossPoolReuse()
+    {
+        try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
+            Allocator.Context context = new Allocator.Context("dictionary-complement");
+            int[] ids = {3, 1, 2, 0, 3, 2, 1};
+            DictionaryVector dictionary = DictionaryVector.wrap(ids, ids.length, new I64Vector(new long[] {10, 20, 30, 40}));
+            Mask selected = allocator.allocateAllMask(context, ids.length);
+            selected.retainDictionaryComparison(ids, new boolean[] {false, true, false, true});
+
+            Mask first = allocator.complementMask(context, selected);
+            assertThat(first.dictionaryDomainSelection(dictionary)).isNotNull();
+            assertThat(first).containsExactly(2, 3, 5);
+            allocator.release(context, first);
+
+            Mask reused = allocator.complementMask(context, selected);
+            assertThat(reused.dictionaryDomainSelection(dictionary)).isNotNull();
+            assertThat(reused).containsExactly(2, 3, 5);
+        }
+    }
+
+    @Test
     void testLateVectorReleaseAfterAllocatorCloseIsSatisfied()
     {
         try (EngineResources resources = EngineResources.createDefault()) {

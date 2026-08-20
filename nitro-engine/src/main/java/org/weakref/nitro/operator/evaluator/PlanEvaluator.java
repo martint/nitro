@@ -1269,7 +1269,10 @@ public final class PlanEvaluator
         }
 
         Mask trueMask = encodedMergeBranchMask(condition, (byte) 1);
-        Mask falseMask = encodedMergeBranchMask(condition, (byte) 2);
+        // The encoded condition is exhaustive: every domain entry selects exactly one branch. Preserve the first
+        // mask's compact domain histogram and derive the second in O(domain cardinality), rather than rescanning the
+        // full logical dictionary mapping for both branches.
+        Mask falseMask = allocator.complementMask(allocationContext, trueMask);
         Map<Stream, Vector> mergedDomains = new HashMap<>();
         for (Stream stream : requestedStreams) {
             Reference trueReference = remapReference(merge.whenTrue(), stream);

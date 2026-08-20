@@ -322,6 +322,13 @@ public class Mask
 
     public void copyFrom(Mask other)
     {
+        if (other.dictionaryDomainSelection != null) {
+            copyDictionaryDomainFrom(
+                    other,
+                    other.dictionaryDomainSelection.selectedDomainBits(),
+                    other.selectedCount);
+            return;
+        }
         other.materializeSelectedPositions();
         size = other.size;
         selectedCount = other.selectedCount;
@@ -1694,7 +1701,7 @@ public class Mask
         return complement(filteringPolicy);
     }
 
-    private Mask complement(AllocatorPolicy.MaskFiltering resultPolicy)
+    Mask complement(AllocatorPolicy.MaskFiltering resultPolicy)
     {
         if (allSelected) {
             return none(size, resultPolicy);
@@ -1702,12 +1709,74 @@ public class Mask
         if (none()) {
             return all(size, resultPolicy);
         }
+        if (dictionaryDomainSelection != null) {
+            Mask result = none(size, resultPolicy);
+            long domainBits = dictionaryDomainSelection.domainSize() == Long.SIZE
+                    ? -1L
+                    : (1L << dictionaryDomainSelection.domainSize()) - 1;
+            result.copyDictionaryDomainFrom(
+                    this,
+                    ~dictionaryDomainSelection.selectedDomainBits() & domainBits,
+                    size - selectedCount);
+            return result;
+        }
         materializeSelectedPositions();
         if (excludedPositions) {
             return create(size, positions, positionCount, resultPolicy);
         }
 
         return allExcept(positions, selectedCount, size, resultPolicy);
+    }
+
+    /** Copies the complement of {@code source} without expanding a compact dictionary-domain selection. */
+    void copyComplementFrom(Mask source)
+    {
+        if (source.all()) {
+            clear(source.size);
+            return;
+        }
+        if (source.none()) {
+            selectAll(source.size);
+            return;
+        }
+        if (source.dictionaryDomainSelection != null) {
+            long domainBits = source.dictionaryDomainSelection.domainSize() == Long.SIZE
+                    ? -1L
+                    : (1L << source.dictionaryDomainSelection.domainSize()) - 1;
+            copyDictionaryDomainFrom(
+                    source,
+                    ~source.dictionaryDomainSelection.selectedDomainBits() & domainBits,
+                    source.size - source.selectedCount);
+            return;
+        }
+
+        source.materializeSelectedPositions();
+        size = source.size;
+        selectedCount = source.size - source.selectedCount;
+        allSelected = false;
+        dictionaryDomainSelection = null;
+        positionCount = source.positionCount;
+        excludedPositions = !source.excludedPositions;
+        ensureCapacity(positionCount);
+        System.arraycopy(source.positions, 0, positions, 0, positionCount);
+    }
+
+    private void copyDictionaryDomainFrom(Mask source, long selectedDomainBits, int selectedCount)
+    {
+        DictionaryDomainSelection sourceSelection = source.dictionaryDomainSelection;
+        checkArgument(sourceSelection != null, "Source has no dictionary-domain selection");
+        size = source.size;
+        this.selectedCount = selectedCount;
+        allSelected = false;
+        positionCount = 0;
+        excludedPositions = false;
+        ensureCapacity(sourceSelection.domainSize());
+        System.arraycopy(source.positions, 0, positions, 0, sourceSelection.domainSize());
+        dictionaryDomainSelection = new DictionaryDomainSelection(
+                sourceSelection.ids(),
+                sourceSelection.length(),
+                sourceSelection.domainSize(),
+                selectedDomainBits);
     }
 
     public Mask or(Mask other)
