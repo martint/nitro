@@ -88,6 +88,20 @@ public record PhysicalAggregationProgram(List<PhysicalAggregationUnit> units, Li
     }
 
     /**
+     * Returns an equivalent program whose intermediate results may use registry-provider physical streams.
+     * Logical output types remain unchanged for planning and for any later explicit boundary adaptation.
+     */
+    public PhysicalAggregationProgram physicalIntermediateOutput()
+    {
+        return new PhysicalAggregationProgram(
+                units.stream()
+                        .map(PhysicalAggregationUnit::physicalIntermediateOutput)
+                        .toList(),
+                outputs,
+                outputSchema);
+    }
+
+    /**
      * Whether any update reads an input value, conservatively treating units without generated
      * update metadata as value-reading.
      */

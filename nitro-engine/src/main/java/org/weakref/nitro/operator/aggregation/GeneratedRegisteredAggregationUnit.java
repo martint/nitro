@@ -43,6 +43,21 @@ public final class GeneratedRegisteredAggregationUnit
     }
 
     @Override
+    public PhysicalAggregationUnit physicalIntermediateOutput()
+    {
+        if (outputMode() != OutputMode.INTERMEDIATE) {
+            return this;
+        }
+        return new GeneratedRegisteredAggregationUnit(
+                implementation().physicalIntermediateOutput(),
+                inputMode(),
+                outputMode(),
+                inputColumns(),
+                filterColumn(),
+                update);
+    }
+
+    @Override
     public List<GroupedAggregationUpdate> generatedGroupedUpdates()
     {
         return List.of(update);

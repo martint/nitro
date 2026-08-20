@@ -28,6 +28,12 @@ import org.weakref.nitro.data.Vector;
  */
 public interface PhysicalAggregationUnit
 {
+    /** Returns an equivalent unit whose intermediate outputs may use provider-owned physical streams. */
+    default PhysicalAggregationUnit physicalIntermediateOutput()
+    {
+        return this;
+    }
+
     int outputCount();
 
     default int stateCapacity(int requiredGroups, int defaultCapacity)

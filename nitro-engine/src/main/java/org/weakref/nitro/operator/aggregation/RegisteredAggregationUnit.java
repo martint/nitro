@@ -46,6 +46,45 @@ public class RegisteredAggregationUnit
         this(implementation, inputMode, outputMode, inputColumns, -1);
     }
 
+    @Override
+    public PhysicalAggregationUnit physicalIntermediateOutput()
+    {
+        if (outputMode != OutputMode.INTERMEDIATE) {
+            return this;
+        }
+        return new RegisteredAggregationUnit(
+                implementation.physicalIntermediateOutput(),
+                inputMode,
+                outputMode,
+                inputColumns,
+                filterInputColumn);
+    }
+
+    protected final AggregationImplementation implementation()
+    {
+        return implementation;
+    }
+
+    protected final InputMode inputMode()
+    {
+        return inputMode;
+    }
+
+    protected final OutputMode outputMode()
+    {
+        return outputMode;
+    }
+
+    protected final int[] inputColumns()
+    {
+        return inputColumns.clone();
+    }
+
+    protected final int filterColumn()
+    {
+        return filterInputColumn;
+    }
+
     public RegisteredAggregationUnit(
             AggregationImplementation implementation,
             InputMode inputMode,

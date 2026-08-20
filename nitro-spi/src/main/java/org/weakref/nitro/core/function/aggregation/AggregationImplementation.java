@@ -28,6 +28,18 @@ import org.weakref.nitro.data.Vector;
 public interface AggregationImplementation
 {
     /**
+     * Returns an implementation that may use a provider-owned physical intermediate representation.
+     *
+     * <p>The representation is only valid while execution remains inside Nitro. A composition adapter must retain
+     * the ordinary implementation whenever an intermediate result can cross a portable or host boundary. The
+     * engine does not inspect or infer the representation.
+     */
+    default AggregationImplementation physicalIntermediateOutput()
+    {
+        return this;
+    }
+
+    /**
      * Selects the logical state capacity for a required group count.
      *
      * <p>The default preserves the engine's amortized-growth capacity. Implementations backed by

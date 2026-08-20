@@ -46,6 +46,15 @@ public final class DistinctPhysicalAggregationUnit
     }
 
     @Override
+    public PhysicalAggregationUnit physicalIntermediateOutput()
+    {
+        PhysicalAggregationUnit physicalDelegate = delegate.physicalIntermediateOutput();
+        return physicalDelegate == delegate
+                ? this
+                : new DistinctPhysicalAggregationUnit(physicalDelegate, distinctInputColumns);
+    }
+
+    @Override
     public int stateCapacity(int requiredGroups, int defaultCapacity)
     {
         return delegate.stateCapacity(requiredGroups, defaultCapacity);

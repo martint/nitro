@@ -91,6 +91,13 @@ class TestRegisteredAggregationUnit
         assertThat(rawIntermediate.copyResultRange(0, 3, 2, 7, state, null, 1, 4, null, null))
                 .isSameAs(implementation.copiedIntermediateRange);
 
+        RegisteredAggregationUnit physicalIntermediate =
+                (RegisteredAggregationUnit) rawIntermediate.physicalIntermediateOutput();
+        assertThat(physicalIntermediate).isNotSameAs(rawIntermediate);
+        assertThat(physicalIntermediate.implementation()).isNotSameAs(implementation);
+        assertThat(physicalIntermediate.result(0, 0, state, Streams.empty(), null, null))
+                .isNotSameAs(implementation.intermediate);
+
         implementation.reset();
         RegisteredAggregationUnit intermediateFinal = new RegisteredAggregationUnit(
                 implementation,
@@ -129,11 +136,24 @@ class TestRegisteredAggregationUnit
         distinct.accumulateDistinctSelected(new Object(), 0, Mask.all(1), inputs);
         assertThat(implementation.raw).isTrue();
         assertThat(((I64Vector) implementation.firstInput).values()).containsExactly(7);
+
+        DistinctPhysicalAggregationUnit physicalDistinct =
+                (DistinctPhysicalAggregationUnit) new DistinctPhysicalAggregationUnit(
+                        new RegisteredAggregationUnit(
+                                implementation,
+                                RAW,
+                                RegisteredAggregationUnit.OutputMode.INTERMEDIATE,
+                                new int[] {7, 2}),
+                        new int[] {2, 7})
+                        .physicalIntermediateOutput();
+        assertThat(physicalDistinct).isNotSameAs(distinct);
+        assertThat(physicalDistinct.distinctInputColumns()).containsExactly(2, 7);
     }
 
     private static final class TrackingImplementation
             implements AggregationImplementation
     {
+        private final boolean physicalIntermediate;
         private final Streams intermediate = Streams.ofValues(new I64Vector(1));
         private final Streams result = Streams.ofValues(new I64Vector(1));
         private final Streams copiedIntermediate = Streams.ofValues(new I64Vector(2));
@@ -144,6 +164,22 @@ class TestRegisteredAggregationUnit
         private boolean intermediateInput;
         private Vector firstInput;
         private Vector secondInput;
+
+        private TrackingImplementation()
+        {
+            this(false);
+        }
+
+        private TrackingImplementation(boolean physicalIntermediate)
+        {
+            this.physicalIntermediate = physicalIntermediate;
+        }
+
+        @Override
+        public AggregationImplementation physicalIntermediateOutput()
+        {
+            return physicalIntermediate ? this : new TrackingImplementation(true);
+        }
 
         @Override
         public int stateCapacity(int requiredGroups, int defaultCapacity)
