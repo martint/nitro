@@ -1175,6 +1175,55 @@ class TestFlatGroupingTable
     }
 
     @Test
+    void testEncodedDictionaryDomainBatchIsArityGeneralNullAwareAndLogicallyExact()
+    {
+        int[] firstIds = {0, 1, 2, 0, 1, 2, 0, 1};
+        int[] secondIds = {0, 0, 0, 1, 1, 1, 0, 1};
+        int[] thirdIds = {0, 0, 0, 1, 1, 1, 0, 1};
+        Vector[] values = {
+                DictionaryVector.wrap(firstIds, firstIds.length, utf8("x", "x", "y")),
+                DictionaryVector.wrap(secondIds, secondIds.length, new I64Vector(new long[] {10, 20})),
+                DictionaryVector.wrap(thirdIds, thirdIds.length, utf8("p", "q"))};
+        Vector[] nulls = {
+                new BooleanVector(new boolean[] {false, false, false, false, false, false, false, true}),
+                null,
+                null};
+        Mask mask = Mask.sparse(new int[] {0, 1, 2, 3, 5, 7}, firstIds.length);
+        FlatGroupingTable table = new FlatGroupingTable(
+                FlatKeyLayout.tryCreate(values, true, arrayPool, codeGeneration, flatKeyTablePolicy),
+                16,
+                true);
+        try {
+            I64Vector groups = new I64Vector(firstIds.length);
+            table.beginBatch(values, nulls, mask);
+            assertThat(table.assignEncodedDictionaryDomainBatch(values, nulls, mask, groups, 0)).isEqualTo(5);
+            assertThat(table.encodedDictionaryDomainBatchActive()).isTrue();
+            table.endBatch();
+
+            assertThat(groups.values()[0]).isZero();
+            // Distinct physical dictionary ids containing equal bytes must still share one logical group.
+            assertThat(groups.values()[1]).isZero();
+            assertThat(groups.values()[2]).isEqualTo(1);
+            assertThat(groups.values()[3]).isEqualTo(2);
+            assertThat(groups.values()[5]).isEqualTo(3);
+            assertThat(groups.values()[7]).isEqualTo(4);
+            assertThat(table.recordCount()).isEqualTo(5);
+
+            I64Vector denseGroups = new I64Vector(firstIds.length);
+            table.beginBatch(values, nulls, Mask.all(firstIds.length));
+            assertThat(table.assignEncodedDictionaryDomainBatch(values, nulls, Mask.all(firstIds.length), denseGroups, 5))
+                    .isEqualTo(5);
+            table.endBatch();
+
+            assertThat(denseGroups.values()).containsExactly(0, 0, 1, 2, 2, 3, 0, 4);
+            assertThat(table.recordCount()).isEqualTo(5);
+        }
+        finally {
+            table.releaseBuffers();
+        }
+    }
+
+    @Test
     void testSparseCompositeCacheAdmitsSparseDirectRollupDomain()
     {
         int size = 128;

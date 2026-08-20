@@ -337,11 +337,14 @@ public record FlatKeyTablePolicy(Layout layout, Table table, ValueIds valueIds)
             boolean debugSparseCompositeGroupCache,
             boolean poolSizedRecordChunks,
             boolean singleDictionaryGroupCache,
+            boolean encodedDictionaryDomainGroupCache,
             boolean sparseCompositeGroupCache,
             boolean generatedDictionaryHashProbeBatch,
             boolean nullFreeSingleBinaryProbeBatch,
             int singleDictionaryGroupCacheMaxCardinalityAmplification,
             int singleDictionaryGroupCacheMaxCardinality,
+            int encodedDictionaryDomainMaxCardinalityAmplification,
+            int encodedDictionaryDomainMaxCardinality,
             int positionIndexedScratchMinPositions,
             int positionIndexedScratchMaxAmplification,
             int normalizedScratchMinPositions,
@@ -357,6 +360,8 @@ public record FlatKeyTablePolicy(Layout layout, Table table, ValueIds valueIds)
         public Table
         {
             if (positionIndexedScratchMinPositions <= 0 ||
+                    encodedDictionaryDomainMaxCardinalityAmplification <= 0 ||
+                    encodedDictionaryDomainMaxCardinality <= 0 ||
                     positionIndexedScratchMaxAmplification <= 0 ||
                     normalizedScratchMinPositions <= 0 ||
                     normalizedScratchMaxAmplification <= 0 ||
@@ -374,7 +379,7 @@ public record FlatKeyTablePolicy(Layout layout, Table table, ValueIds valueIds)
 
         public static Table defaults()
         {
-            return new Table(false, false, true, true, true, true, true, 2, 1 << 16, 128, 4, 128, 4, 128, 124, 6, 64, 64, 72, true);
+            return new Table(false, false, true, true, true, true, true, true, 2, 1 << 16, 4, 1 << 16, 128, 4, 128, 4, 128, 124, 6, 64, 64, 72, true);
         }
 
         public static Table fromSystemProperties()
@@ -387,6 +392,9 @@ public record FlatKeyTablePolicy(Layout layout, Table table, ValueIds valueIds)
                     booleanProperty(
                             "nitro.flatGrouping.singleDictionaryGroupCache",
                             defaults.singleDictionaryGroupCache()),
+                    booleanProperty(
+                            "nitro.flatGrouping.encodedDictionaryDomainGroupCache",
+                            defaults.encodedDictionaryDomainGroupCache()),
                     booleanProperty(
                             "nitro.flatGrouping.sparseCompositeGroupCache",
                             defaults.sparseCompositeGroupCache()),
@@ -402,6 +410,12 @@ public record FlatKeyTablePolicy(Layout layout, Table table, ValueIds valueIds)
                     Integer.getInteger(
                             "nitro.flatGrouping.singleDictionaryGroupCacheMaxCardinality",
                             defaults.singleDictionaryGroupCacheMaxCardinality()),
+                    Integer.getInteger(
+                            "nitro.flatGrouping.encodedDictionaryDomainMaxCardinalityAmplification",
+                            defaults.encodedDictionaryDomainMaxCardinalityAmplification()),
+                    Integer.getInteger(
+                            "nitro.flatGrouping.encodedDictionaryDomainMaxCardinality",
+                            defaults.encodedDictionaryDomainMaxCardinality()),
                     Integer.getInteger(
                             "nitro.flatGrouping.positionIndexedScratchMinPositions",
                             defaults.positionIndexedScratchMinPositions()),

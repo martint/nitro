@@ -82,6 +82,8 @@ final class FlatGroupingTable
     private int sparseCompositeMaxFill;
     private boolean sparseCompositeAdmissionDecided;
     private boolean sparseCompositeAdmitted;
+    private long[] encodedDictionaryDomainGroups;
+    private boolean encodedDictionaryDomainBatchActive;
     private boolean debugSparseCompositePrinted;
 
     // Reusable per-batch hash buffer for the decoupled hash-then-probe driver (see prepareBatchHashes). Sized to
@@ -190,6 +192,7 @@ final class FlatGroupingTable
         batchNormalizedHashesValid = false;
         singleDictionaryGroupCacheActive = false;
         singleDictionaryIds = null;
+        encodedDictionaryDomainBatchActive = false;
     }
 
     public void beginBatch(Vector[] values, Vector[] nulls, Mask mask)
@@ -200,6 +203,7 @@ final class FlatGroupingTable
         batchNormalizedHashesValid = false;
         singleDictionaryGroupCacheActive = false;
         singleDictionaryIds = null;
+        encodedDictionaryDomainBatchActive = false;
     }
 
     public void endBatch()
@@ -209,6 +213,84 @@ final class FlatGroupingTable
         batchNormalizedHashesValid = false;
         singleDictionaryGroupCacheActive = false;
         singleDictionaryIds = null;
+        encodedDictionaryDomainBatchActive = false;
+    }
+
+    long assignEncodedDictionaryDomainBatch(
+            Vector[] values,
+            Vector[] nulls,
+            Mask mask,
+            I64Vector result,
+            long nextGroupId)
+    {
+        if (!policy.encodedDictionaryDomainGroupCache() || mask.none()) {
+            return -1;
+        }
+        int domainSize = layout.encodedDictionaryDomainSize(policy.encodedDictionaryDomainMaxCardinality());
+        if (domainSize < 0 ||
+                domainSize > (long) mask.selectedCount() * policy.encodedDictionaryDomainMaxCardinalityAmplification()) {
+            return -1;
+        }
+        if (encodedDictionaryDomainGroups == null || encodedDictionaryDomainGroups.length < domainSize) {
+            long[] previous = encodedDictionaryDomainGroups;
+            encodedDictionaryDomainGroups = arrayPool.borrowLongs(domainSize);
+            arrayPool.release(previous);
+        }
+        Arrays.fill(encodedDictionaryDomainGroups, 0, domainSize, -1);
+        encodedDictionaryDomainBatchActive = true;
+
+        int[] positions = mask.selectedPositions();
+        int count = mask.selectedCount();
+        long[] output = result.values();
+        // Separate dense and selected-position drivers. Besides removing a branch from every row, retaining the
+        // complete batch loops at this boundary prevents C2 from folding this driver into assignFlatGroups' already
+        // large compilation graph. That boundary is material: crossing its escape-analysis budget turns otherwise
+        // scalar-replaced accumulator accessors into one allocation per input row.
+        if (positions == null) {
+            for (int position = 0; position < count; position++) {
+                int domainId = layout.encodedDictionaryDomainId(position);
+                long cached = encodedDictionaryDomainGroups[domainId];
+                long groupId;
+                if (cached >= 0) {
+                    groupId = cached;
+                }
+                else {
+                    long newGroupId = nextGroupId;
+                    groupId = assignGroup(values, nulls, position, newGroupId);
+                    if (groupId == newGroupId) {
+                        nextGroupId++;
+                    }
+                    encodedDictionaryDomainGroups[domainId] = groupId;
+                }
+                output[position] = groupId;
+            }
+        }
+        else {
+            for (int index = 0; index < count; index++) {
+                int position = positions[index];
+                int domainId = layout.encodedDictionaryDomainId(position);
+                long cached = encodedDictionaryDomainGroups[domainId];
+                long groupId;
+                if (cached >= 0) {
+                    groupId = cached;
+                }
+                else {
+                    long newGroupId = nextGroupId;
+                    groupId = assignGroup(values, nulls, position, newGroupId);
+                    if (groupId == newGroupId) {
+                        nextGroupId++;
+                    }
+                    encodedDictionaryDomainGroups[domainId] = groupId;
+                }
+                output[position] = groupId;
+            }
+        }
+        return nextGroupId;
+    }
+
+    boolean encodedDictionaryDomainBatchActive()
+    {
+        return encodedDictionaryDomainBatchActive;
     }
 
     private void prepareSingleDictionaryGroupCache(int selectedRows, boolean completePhysicalBatch)
@@ -2079,6 +2161,7 @@ final class FlatGroupingTable
         bytes += intArrayBytes(compositeCache);
         bytes += longArrayBytes(sparseCompositeKeys);
         bytes += intArrayBytes(sparseCompositeGroups);
+        bytes += longArrayBytes(encodedDictionaryDomainGroups);
         bytes += longArrayBytes(batchHashes);
         bytes += longArrayBytes(batchNormalizedFirst);
         bytes += longArrayBytes(batchNormalizedSecond);
@@ -2119,6 +2202,8 @@ final class FlatGroupingTable
         sparseCompositeKeys = null;
         arrayPool.release(sparseCompositeGroups);
         sparseCompositeGroups = null;
+        arrayPool.release(encodedDictionaryDomainGroups);
+        encodedDictionaryDomainGroups = null;
         arrayPool.release(batchHashes);
         batchHashes = null;
         arrayPool.release(batchNormalizedFirst);
@@ -2181,6 +2266,8 @@ final class FlatGroupingTable
         sparseCompositeKeys = null;
         arrayPool.release(sparseCompositeGroups);
         sparseCompositeGroups = null;
+        arrayPool.release(encodedDictionaryDomainGroups);
+        encodedDictionaryDomainGroups = null;
         arrayPool.release(batchHashes);
         batchHashes = null;
         arrayPool.release(batchNormalizedFirst);

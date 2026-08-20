@@ -2640,6 +2640,50 @@ class FlatKeyLayout
     }
 
     /**
+     * Returns the cardinality of this batch's physical dictionary-tuple domain, or {@code -1} when any field is
+     * not dictionary-backed or the Cartesian domain is too large. Physical tuples are deliberately batch-local:
+     * the authoritative grouping table still establishes logical equality, while repeated rows in the same
+     * encoded domain can reuse that answer without resolving query-global value ids again.
+     */
+    int encodedDictionaryDomainSize(int maximumCardinality)
+    {
+        if (dictionaryHashedIds == null || dictionaryHashedValues == null) {
+            return -1;
+        }
+        long cardinality = 1;
+        for (int field = 0; field < handlers.length; field++) {
+            if (dictionaryHashedIds[field] == null || dictionaryHashedValues[field] == null) {
+                return -1;
+            }
+            int radix = dictionaryHashedValues[field].length() + (batchFieldNullFree[field] ? 0 : 1);
+            if (radix <= 0) {
+                return -1;
+            }
+            cardinality *= radix;
+            if (cardinality > maximumCardinality) {
+                return -1;
+            }
+        }
+        return (int) cardinality;
+    }
+
+    int encodedDictionaryDomainId(int position)
+    {
+        int domainId = 0;
+        int multiplier = 1;
+        for (int field = 0; field < handlers.length; field++) {
+            int baseCardinality = dictionaryHashedValues[field].length();
+            int radix = baseCardinality + (batchFieldNullFree[field] ? 0 : 1);
+            int digit = !batchFieldNullFree[field] && inputFieldNull(field, null, position)
+                    ? baseCardinality
+                    : dictionaryHashedIds[field][position];
+            domainId += digit * multiplier;
+            multiplier *= radix;
+        }
+        return domainId;
+    }
+
+    /**
      * Hashes a dense physical batch when each key field either exposes dictionary-id/exact-entry-hash arrays or a
      * resolved integer accessor prepared by {@link #beginBatch}. The latter preserves the oversized-dictionary cost
      * guard: only referenced rows are read, rather than eagerly hashing a large join-output base. The generated loop

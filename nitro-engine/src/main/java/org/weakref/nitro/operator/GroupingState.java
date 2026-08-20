@@ -1439,11 +1439,20 @@ final class GroupingState
         }
         flatGroupingTable.beginBatch(values, nulls, mask);
         try {
+            long encodedDomainNextGroupId = flatGroupingTable.assignEncodedDictionaryDomainBatch(
+                    values, nulls, mask, result, nextGroupId);
+            if (encodedDomainNextGroupId >= 0) {
+                nextGroupId = encodedDomainNextGroupId;
+                return;
+            }
             if (values.length == 1 &&
                     !flatSingleNullInTable &&
                     !VectorAccess.isAllFalseNulls(nulls[0])) {
                 Vector nullVector = nulls[0];
-                for (int position : mask) {
+                int[] positions = mask.selectedPositions();
+                int count = mask.count();
+                for (int index = 0; index < count; index++) {
+                    int position = positions == null ? index : positions[index];
                     if (OperatorVectorSupport.isNull(nullVector, position)) {
                         result.values()[position] = nullGroup();
                     }
@@ -1490,7 +1499,10 @@ final class GroupingState
                 return;
             }
             if (flatGroupingTable.singleDictionaryGroupCacheActive()) {
-                for (int position : mask) {
+                int[] positions = mask.selectedPositions();
+                int count = mask.count();
+                for (int index = 0; index < count; index++) {
+                    int position = positions == null ? index : positions[index];
                     long newGroupId = nextGroupId;
                     long groupId = flatGroupingTable.assignGroupCached(values, nulls, position, newGroupId);
                     if (groupId == newGroupId) {
@@ -1502,7 +1514,10 @@ final class GroupingState
             }
             if (values.length == 1 && !flatSingleNullInTable) {
                 Vector nullVector = nulls[0];
-                for (int position : mask) {
+                int[] positions = mask.selectedPositions();
+                int count = mask.count();
+                for (int index = 0; index < count; index++) {
+                    int position = positions == null ? index : positions[index];
                     if (OperatorVectorSupport.isNull(nullVector, position)) {
                         result.values()[position] = nullGroup();
                     }
@@ -1520,7 +1535,10 @@ final class GroupingState
 
             boolean hashedOnly = compositePolicy.earlyRejectMixedComposite() &&
                     !flatGroupingTable.batchArrayModeEligible();
-            for (int position : mask) {
+            int[] positions = mask.selectedPositions();
+            int count = mask.count();
+            for (int index = 0; index < count; index++) {
+                int position = positions == null ? index : positions[index];
                 long newGroupId = nextGroupId;
                 long groupId = hashedOnly
                         ? flatGroupingTable.assignGroupHashed(values, nulls, position, newGroupId)
