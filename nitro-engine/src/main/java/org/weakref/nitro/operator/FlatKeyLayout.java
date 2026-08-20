@@ -1575,9 +1575,10 @@ class FlatKeyLayout
      */
     boolean hasTrackedSentinel(Vector[] values)
     {
-        return batchNullFreeSingleBinary || (singleField &&
-                fieldKinds[0] == FlatTypeHandler.Kind.BINARY &&
-                values[singleInputChannel] instanceof BinaryVector);
+        // Sentinel ownership is query-lifetime state in DistinctKeySet, so recognition cannot depend on the
+        // current batch's physical encoding. A later nullable, dictionary, or RLE batch must not insert the same
+        // empty value into the authoritative table after an earlier batch retained it outside the table.
+        return singleField && fieldKinds[0] == FlatTypeHandler.Kind.BINARY;
     }
 
     /**
@@ -1632,7 +1633,7 @@ class FlatKeyLayout
         if (!hasTrackedSentinel(values)) {
             return false;
         }
-        return ((BinaryVector) values[singleInputChannel]).length(position) == 0;
+        return OperatorVectorSupport.binaryLength(values[singleInputChannel], position) == 0;
     }
 
     long compositeValueId(int position)

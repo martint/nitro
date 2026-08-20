@@ -427,7 +427,7 @@ class TestDistinctKeySet
         try {
             Mask filtered = Mask.sparse(nonEmptyPositions, ids.length);
             assertThat(layout.admitFrequentDictionarySentinel(values, filtered)).isFalse();
-            assertThat(layout.hasTrackedSentinel(values)).isFalse();
+            assertThat(layout.hasTrackedSentinel(values)).isTrue();
         }
         finally {
             layout.endBatch();
@@ -463,6 +463,43 @@ class TestDistinctKeySet
                     Mask.all(second.length()),
                     positions);
             assertThat(Arrays.copyOf(positions, distinct)).containsExactly(1);
+        }
+        finally {
+            keys.releaseBuffers();
+        }
+    }
+
+    @Test
+    void testEmptyBinarySentinelSurvivesNullableDictionaryTransition()
+    {
+        int[] firstIds = new int[128];
+        for (int position = 0; position < firstIds.length; position++) {
+            firstIds[position] = position % 2;
+        }
+        DictionaryVector first = dictionary(new String[] {"", "value"}, firstIds);
+        DistinctKeySet keys = DistinctKeySet.create(
+                new Vector[] {first},
+                arrayPool,
+                codeGeneration,
+                DistinctKeySetPolicy.defaults(),
+                adaptiveLongGroupingPolicy,
+                flatKeyTablePolicy);
+        try {
+            int[] positions = new int[first.length()];
+            assertThat(keys.addBatch(
+                    new Vector[] {first},
+                    new Vector[] {new BooleanVector(new boolean[first.length()])},
+                    Mask.all(first.length()),
+                    positions)).isEqualTo(2);
+
+            DictionaryVector nullable = dictionary(
+                    new String[] {"value", ""},
+                    new int[] {1, 0});
+            assertThat(keys.addBatch(
+                    new Vector[] {nullable},
+                    new Vector[] {new BooleanVector(new boolean[] {false, true})},
+                    Mask.all(nullable.length()),
+                    positions)).isZero();
         }
         finally {
             keys.releaseBuffers();
