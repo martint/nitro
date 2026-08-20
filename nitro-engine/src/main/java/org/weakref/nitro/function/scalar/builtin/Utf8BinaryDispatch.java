@@ -352,8 +352,23 @@ public final class Utf8BinaryDispatch
         Vector left = inputs.get(0).values();
         Vector right = inputs.get(1).values();
         requireUtf8Traits(functionName, left, right);
-        VectorAccess.BooleanValues leftNulls = VectorAccess.booleanValues(inputs.get(0).getOrNull(Stream.NULLS));
-        VectorAccess.BooleanValues rightNulls = VectorAccess.booleanValues(inputs.get(1).getOrNull(Stream.NULLS));
+        Vector leftNullVector = inputs.get(0).getOrNull(Stream.NULLS);
+        Vector rightNullVector = inputs.get(1).getOrNull(Stream.NULLS);
+        VectorAccess.BooleanValues leftNulls = VectorAccess.booleanValues(leftNullVector);
+        VectorAccess.BooleanValues rightNulls = VectorAccess.booleanValues(rightNullVector);
+
+        if (left instanceof RleVector leftRle && leftRle.counts().length == 1 &&
+                leftRle.values() instanceof BinaryVector leftValue &&
+                right instanceof RleVector rightRle && rightRle.counts().length == 1 &&
+                rightRle.values() instanceof BinaryVector rightValue &&
+                VectorAccess.isAllFalseNulls(leftNullVector) &&
+                VectorAccess.isAllFalseNulls(rightNullVector)) {
+            boolean matches = evaluate(functionName, operation, leftValue, 0, rightValue, 0, null, null, 0);
+            if (matches != selectMatches) {
+                mask.clear(mask.size());
+            }
+            return true;
+        }
 
         if (left instanceof DictionaryVector dictionary &&
                 dictionary.values() instanceof BinaryVector dictionaryValues &&
@@ -364,6 +379,10 @@ public final class Utf8BinaryDispatch
                 matches[entry] = evaluate(functionName, operation, dictionaryValues, entry, literal, 0, null, null, 0);
             }
             int[] ids = dictionary.ids();
+            if (VectorAccess.isAllFalseNulls(leftNullVector) && VectorAccess.isAllFalseNulls(rightNullVector)) {
+                mask.retainDictionaryComparison(ids, matches, null, selectMatches);
+                return true;
+            }
             mask.retainIf(position ->
                     !isNull(leftNulls, position) &&
                     !isNull(rightNulls, position) &&
@@ -379,6 +398,10 @@ public final class Utf8BinaryDispatch
                 matches[entry] = evaluate(functionName, operation, literal, 0, dictionaryValues, entry, null, null, 0);
             }
             int[] ids = dictionary.ids();
+            if (VectorAccess.isAllFalseNulls(leftNullVector) && VectorAccess.isAllFalseNulls(rightNullVector)) {
+                mask.retainDictionaryComparison(ids, matches, null, selectMatches);
+                return true;
+            }
             mask.retainIf(position ->
                     !isNull(leftNulls, position) &&
                     !isNull(rightNulls, position) &&

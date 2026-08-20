@@ -140,6 +140,46 @@ class TestBoundLikeUtf8
     }
 
     @Test
+    void testSingleRunRleDirectMaskPreservesOrClearsExistingSelection()
+    {
+        BoundLikeUtf8 function = new BoundLikeUtf8("%google%");
+        Streams matching = Streams.ofValues(new RleVector(new int[] {5}, utf8("google")));
+        Streams notMatching = Streams.ofValues(new RleVector(new int[] {5}, utf8("other")));
+        Mask preserved = Mask.sparse(new int[] {1, 3}, 5);
+        Mask cleared = Mask.sparse(new int[] {1, 3}, 5);
+
+        try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
+            PrimitiveExecutionContext context = new PrimitiveExecutionContext(allocator);
+            assertThat(function.tryEvaluateTrueMaskInPlace(List.of(matching), preserved, context)).isTrue();
+            assertThat(function.tryEvaluateTrueMaskInPlace(List.of(notMatching), cleared, context)).isTrue();
+        }
+
+        assertThat(preserved.selectedCount()).isEqualTo(2);
+        assertThat(preserved.position(0)).isEqualTo(1);
+        assertThat(preserved.position(1)).isEqualTo(3);
+        assertThat(cleared.selectedCount()).isZero();
+    }
+
+    @Test
+    void testSingleRunRleDirectMaskFallsBackForPositionNulls()
+    {
+        BoundLikeUtf8 function = new BoundLikeUtf8("%google%");
+        Streams input = Streams.ofValues(new RleVector(new int[] {5}, utf8("google")))
+                .with(Stream.NULLS, new BooleanVector(new boolean[] {false, true, false, false, true}));
+        Mask mask = Mask.all(5);
+
+        try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
+            assertThat(function.tryEvaluateTrueMaskInPlace(
+                    List.of(input), mask, new PrimitiveExecutionContext(allocator))).isTrue();
+        }
+
+        assertThat(mask.selectedCount()).isEqualTo(3);
+        assertThat(mask.position(0)).isZero();
+        assertThat(mask.position(1)).isEqualTo(2);
+        assertThat(mask.position(2)).isEqualTo(3);
+    }
+
+    @Test
     void testFlatDirectMaskDeclinesToPreserveVectorizedSweep()
     {
         BoundLikeUtf8 function = new BoundLikeUtf8("%google%");

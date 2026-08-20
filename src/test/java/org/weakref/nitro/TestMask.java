@@ -173,6 +173,24 @@ class TestMask
         assertThat(mask.dictionaryDomainSelection(dictionary)).isNull();
     }
 
+    @Test
+    void compactDictionaryComparisonComposesAlignedDomainsWithoutMaterializingPositions()
+    {
+        int[] ids = {3, 1, 2, 0, 3, 2, 1};
+        DictionaryVector dictionary = DictionaryVector.wrap(ids, ids.length, new I64Vector(new long[] {10, 20, 30, 40}));
+        Mask mask = Mask.all(ids.length);
+
+        mask.retainDictionaryComparison(ids, new boolean[] {true, true, true, false}, null, true);
+        mask.retainDictionaryComparison(ids, new boolean[] {false, true, true, true}, null, true);
+
+        Mask.DictionaryDomainSelection selection = mask.dictionaryDomainSelection(dictionary);
+        assertThat(selection).isNotNull();
+        assertThat(selection.selectedDomainBits()).isEqualTo(0b0110);
+        assertThat(mask.count()).isEqualTo(4);
+        assertThat(mask.maxPosition()).isEqualTo(6);
+        assertThat(mask).containsExactly(1, 2, 5, 6);
+    }
+
     private static void assertPrimitivePositions(Mask mask, int... expected)
     {
         int[] actual = new int[mask.selectedCount()];

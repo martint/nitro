@@ -1048,9 +1048,15 @@ public class Mask
         if (none()) {
             return;
         }
-        if (allSelected && keep.length <= Long.SIZE) {
-            retainDictionaryDomain(ids, dictionaryKeepBits(keep), keep.length);
-            return;
+        if (keep.length <= Long.SIZE) {
+            long keepBits = dictionaryKeepBits(keep);
+            if (tryRetainExistingDictionaryDomain(ids, keepBits, keep.length)) {
+                return;
+            }
+            if (allSelected) {
+                retainDictionaryDomain(ids, keepBits, keep.length);
+                return;
+            }
         }
         int[] buffer = positionsArray(allSelected ? size : selectedCount);
         boolean dense = allSelected;
@@ -1097,11 +1103,17 @@ public class Mask
         if (none()) {
             return;
         }
-        if (allSelected && nulls == null && keep.length <= Long.SIZE) {
+        if (nulls == null && keep.length <= Long.SIZE) {
             long keepBits = dictionaryKeepBits(keep);
             long domainBits = keep.length == Long.SIZE ? -1L : (1L << keep.length) - 1;
-            retainDictionaryDomain(ids, wanted ? keepBits : ~keepBits & domainBits, keep.length);
-            return;
+            long selectedBits = wanted ? keepBits : ~keepBits & domainBits;
+            if (tryRetainExistingDictionaryDomain(ids, selectedBits, keep.length)) {
+                return;
+            }
+            if (allSelected) {
+                retainDictionaryDomain(ids, selectedBits, keep.length);
+                return;
+            }
         }
         int[] buffer = positionsArray(allSelected ? size : selectedCount);
         boolean dense = allSelected;
@@ -1182,9 +1194,16 @@ public class Mask
     private void retainDictionaryDomain(int[] ids, long selectedDomainBits, int domainSize)
     {
         checkArgument(ids.length >= size, "Dictionary ids are too short for mask domain");
+        // A compact dictionary selection does not otherwise use the position buffer. Keep the per-domain
+        // histogram there so subsequent aligned predicates can compose in O(domain size) without a side
+        // allocation. Materialization may overwrite it only after the compact selection is no longer needed.
+        ensureCapacity(domainSize);
+        Arrays.fill(positions, 0, domainSize, 0);
         int count = 0;
         for (int position = 0; position < size; position++) {
-            count += (int) ((selectedDomainBits >>> ids[position]) & 1L);
+            int dictionaryId = ids[position];
+            positions[dictionaryId]++;
+            count += (int) ((selectedDomainBits >>> dictionaryId) & 1L);
         }
         if (count == size) {
             selectAll(size);
@@ -1199,6 +1218,35 @@ public class Mask
         positionCount = 0;
         excludedPositions = false;
         dictionaryDomainSelection = new DictionaryDomainSelection(ids, size, domainSize, selectedDomainBits);
+    }
+
+    private boolean tryRetainExistingDictionaryDomain(int[] ids, long selectedDomainBits, int domainSize)
+    {
+        DictionaryDomainSelection selection = dictionaryDomainSelection;
+        if (selection == null ||
+                selection.ids() != ids ||
+                selection.length() != size ||
+                selection.domainSize() != domainSize) {
+            return false;
+        }
+
+        long combinedBits = selection.selectedDomainBits() & selectedDomainBits;
+        if (combinedBits == selection.selectedDomainBits()) {
+            return true;
+        }
+        int count = 0;
+        for (int dictionaryId = 0; dictionaryId < domainSize; dictionaryId++) {
+            if (((combinedBits >>> dictionaryId) & 1L) != 0) {
+                count += positions[dictionaryId];
+            }
+        }
+        if (count == 0) {
+            clear(size);
+            return true;
+        }
+        selectedCount = count;
+        dictionaryDomainSelection = new DictionaryDomainSelection(ids, size, domainSize, combinedBits);
+        return true;
     }
 
     /**

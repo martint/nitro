@@ -207,8 +207,10 @@ public final class BoundLikeUtf8
         }
         Streams input = inputs.getFirst();
         Vector values = input.values();
-        VectorAccess.BooleanValues nulls = VectorAccess.booleanValues(input.getOrNull(Stream.NULLS));
-        VectorAccess.BooleanValues errors = VectorAccess.booleanValues(input.getOrNull(Stream.ERRORS));
+        Vector nullVector = input.getOrNull(Stream.NULLS);
+        Vector errorVector = input.getOrNull(Stream.ERRORS);
+        VectorAccess.BooleanValues nulls = VectorAccess.booleanValues(nullVector);
+        VectorAccess.BooleanValues errors = VectorAccess.booleanValues(errorVector);
 
         switch (values) {
             case DictionaryVector dictionary when dictionary.values() instanceof BinaryVector entries -> {
@@ -217,6 +219,10 @@ public final class BoundLikeUtf8
                     entryMatches[entry] = matches(entries, entry);
                 }
                 int[] ids = dictionary.ids();
+                if (VectorAccess.isAllFalseNulls(nullVector) && VectorAccess.isAllFalseNulls(errorVector)) {
+                    mask.retainDictionaryComparison(ids, entryMatches, null, selectMatches);
+                    return true;
+                }
                 mask.retainIf(position ->
                         !nulls.value(position) &&
                         !errors.value(position) &&
@@ -224,6 +230,14 @@ public final class BoundLikeUtf8
                 return true;
             }
             case RleVector rle when rle.values() instanceof BinaryVector entries -> {
+                if (rle.counts().length == 1 &&
+                        VectorAccess.isAllFalseNulls(nullVector) &&
+                        VectorAccess.isAllFalseNulls(errorVector)) {
+                    if (matches(entries, 0) != selectMatches) {
+                        mask.clear(mask.size());
+                    }
+                    return true;
+                }
                 mask.retainIf(position ->
                         !nulls.value(position) &&
                         !errors.value(position) &&
