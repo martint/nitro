@@ -1717,6 +1717,69 @@ public class TestParquetOperator
     }
 
     @Test
+    void testSelectionOnlyDictionaryFilterMatchesMaterializedValues()
+            throws IOException
+    {
+        List<ParquetRow> rows = new ArrayList<>();
+        for (int position = 0; position < 24_000; position++) {
+            Long value = position % 7 == 0 ? null : (long) (position & 7);
+            rows.add(new ParquetRow(position & 7, true, value));
+        }
+        java.nio.file.Path file = writeParquetFile("selection-only-dictionary-filter.parquet", true, rows);
+        assertDictionaryEncoding(file, "maybe");
+
+        try (ParquetFile parquetFile = ParquetFile.open(file);
+                ColumnReader materialized = columnReader(List.of(parquetFile), "maybe");
+                ColumnReader selectionOnly = columnReader(List.of(parquetFile), "maybe")) {
+            int[] materializedSurvivors = new int[24_000];
+            int[] selectionOnlySurvivors = new int[24_000];
+            long[] values = new long[24_000];
+            java.util.function.LongPredicate predicate = value -> (value & 1) != 0;
+
+            int materializedCount = materialized.filterDictLongs(
+                    predicate, 24_000, materializedSurvivors, values, null);
+            int selectionOnlyCount = selectionOnly.filterDictLongs(
+                    predicate, 24_000, selectionOnlySurvivors, null, null);
+
+            assertThat(selectionOnlyCount).isEqualTo(materializedCount);
+            assertThat(Arrays.copyOf(selectionOnlySurvivors, selectionOnlyCount))
+                    .containsExactly(Arrays.copyOf(materializedSurvivors, materializedCount));
+            for (int position = 0; position < materializedCount; position++) {
+                assertThat(predicate.test(values[position])).isTrue();
+            }
+        }
+    }
+
+    @Test
+    void testSelectionOnlyIntDictionaryFilterMatchesMaterializedValues()
+            throws IOException
+    {
+        List<Integer> rows = java.util.stream.IntStream.range(0, 24_000)
+                .map(position -> position & 7)
+                .boxed()
+                .toList();
+        java.nio.file.Path file = writeInt32ParquetFile("selection-only-int-dictionary-filter.parquet", rows);
+
+        try (ParquetFile parquetFile = ParquetFile.open(file);
+                ColumnReader materialized = columnReader(List.of(parquetFile), "value");
+                ColumnReader selectionOnly = columnReader(List.of(parquetFile), "value")) {
+            int[] materializedSurvivors = new int[24_000];
+            int[] selectionOnlySurvivors = new int[24_000];
+            int[] values = new int[24_000];
+            java.util.function.LongPredicate predicate = value -> (value & 1) == 0;
+
+            int materializedCount = materialized.filterDictInts(
+                    predicate, 24_000, materializedSurvivors, values, null);
+            int selectionOnlyCount = selectionOnly.filterDictInts(
+                    predicate, 24_000, selectionOnlySurvivors, null, null);
+
+            assertThat(selectionOnlyCount).isEqualTo(materializedCount);
+            assertThat(Arrays.copyOf(selectionOnlySurvivors, selectionOnlyCount))
+                    .containsExactly(Arrays.copyOf(materializedSurvivors, materializedCount));
+        }
+    }
+
+    @Test
     void testVersionedPredicateReusesDictionaryAcceptanceUntilGenerationChanges()
             throws IOException
     {

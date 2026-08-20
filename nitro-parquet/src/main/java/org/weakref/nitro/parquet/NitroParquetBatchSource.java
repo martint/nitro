@@ -26,6 +26,8 @@ import org.weakref.nitro.core.source.SourceCapability;
 import org.weakref.nitro.core.source.SourceColumnHandle;
 import org.weakref.nitro.core.source.SourceMetrics;
 import org.weakref.nitro.core.source.SourceMetricsProtocol;
+import org.weakref.nitro.core.source.SourceOutputDemand;
+import org.weakref.nitro.core.source.SourceOutputDemandProtocol;
 import org.weakref.nitro.core.source.SourcePoll;
 import org.weakref.nitro.core.source.SourceProtocol;
 import org.weakref.nitro.core.type.Schema;
@@ -152,6 +154,7 @@ public final class NitroParquetBatchSource
     private final List<String> columnNames;
     private final Schema outputSchema;
     private final SourceColumnHandle[] sourceColumns;
+    private final boolean[] outputRequired;
     private final ParquetFile[] files;
     private final ParquetMappedFileCache.Lease[] mappedFileLeases;
     private final ColumnReader[] readers;
@@ -447,6 +450,8 @@ public final class NitroParquetBatchSource
         int columnCount = columns.size();
         this.readers = new ColumnReader[columnCount];
         this.nullReaders = new ColumnReader[columnCount];
+        this.outputRequired = new boolean[columnCount];
+        java.util.Arrays.fill(outputRequired, true);
         this.nullable = new boolean[columnCount];
         this.intOutputAsLong = new boolean[columnCount];
         this.currentValues = new Vector[columnCount];
@@ -669,6 +674,10 @@ public final class NitroParquetBatchSource
     @Override
     public <T> Optional<T> protocol(SourceProtocol<T> protocol)
     {
+        if (protocol == SourceOutputDemandProtocol.OUTPUT_DEMAND) {
+            SourceOutputDemand demand = this::retainOutputs;
+            return Optional.of(protocol.valueType().cast(demand));
+        }
         if (protocol == SourceMetricsProtocol.METRICS) {
             SourceMetrics metrics = new SourceMetrics()
             {
@@ -693,6 +702,23 @@ public final class NitroParquetBatchSource
             return Optional.of(protocol.valueType().cast(metrics));
         }
         return Optional.empty();
+    }
+
+    private void retainOutputs(Set<SourceColumnHandle> outputs)
+    {
+        checkOpen();
+        if (nextRow != 0 || currentBatch != null) {
+            throw new IllegalStateException("output demand must be declared before polling");
+        }
+        requireNonNull(outputs, "outputs is null");
+        java.util.Arrays.fill(outputRequired, false);
+        for (SourceColumnHandle output : outputs) {
+            int column = columnIndex(requireNonNull(output, "output is null"));
+            if (column < 0) {
+                throw new IllegalArgumentException("output belongs to another source");
+            }
+            outputRequired[column] = true;
+        }
     }
 
     private long consumedPageBytes()
@@ -1604,18 +1630,22 @@ public final class NitroParquetBatchSource
             LongDomain filter = filtersByColumn[column];
             int kept;
             if (survivors == null) {
-                ensureColumnScratch(column, count);
+                if (outputRequired[column]) {
+                    ensureColumnScratch(column, count);
+                }
                 // Lead filter: predicate-over-dictionary. Read ids + test a per-chunk acceptById[] WITHOUT
                 // materializing the column; only survivors get a value. Output is dense, aligned to the survivors
                 // (readPositions records that), so the later gather two-pointers it to the final survivor set.
-                boolean[] cn = nullable[column] ? colNull[column] : null;
+                boolean[] cn = outputRequired[column] && nullable[column] ? colNull[column] : null;
                 java.util.function.LongPredicate predicate = filter;
                 VersionedLongPredicate predicateVersion = filterVersionsByColumn[column];
                 if (readers[column].kind() == ColumnReader.Kind.LONG) {
-                    kept = readers[column].filterDictLongs(predicate, predicateVersion, count, nextSurvivors, colLong[column], cn);
+                    kept = readers[column].filterDictLongs(predicate, predicateVersion, count, nextSurvivors,
+                            outputRequired[column] ? colLong[column] : null, cn);
                 }
                 else {
-                    kept = readers[column].filterDictInts(predicate, predicateVersion, count, nextSurvivors, colInt[column], cn);
+                    kept = readers[column].filterDictInts(predicate, predicateVersion, count, nextSurvivors,
+                            outputRequired[column] ? colInt[column] : null, cn);
                 }
                 if (diagnostics.sourceWork()) {
                     debugDictionaryExamined[column] += count;
@@ -1828,7 +1858,7 @@ public final class NitroParquetBatchSource
         // Gather the FILTER columns (read at a wider survivor superset) down to the final survivors. Payload columns
         // were already read straight into the window buffer above.
         for (int c = 0; c < columnCount; c++) {
-            if (!isFilterColumn(c)) {
+            if (!isFilterColumn(c) || !outputRequired[c]) {
                 continue;
             }
             if (readPositions[c] == survivors) {
@@ -1870,7 +1900,7 @@ public final class NitroParquetBatchSource
     {
         for (int i = 0; i <= applied; i++) {
             int column = order[i];
-            if (readPositions[column] != inputSurvivors) {
+            if (!outputRequired[column] || readPositions[column] != inputSurvivors) {
                 continue;
             }
             if (readers[column].kind() == ColumnReader.Kind.LONG) {
@@ -1978,7 +2008,7 @@ public final class NitroParquetBatchSource
     {
         for (int i = 0; i <= applied; i++) {
             int column = order[i];
-            if (readPositions[column] != inputSurvivors) {
+            if (!outputRequired[column] || readPositions[column] != inputSurvivors) {
                 continue;
             }
             if (readers[column].kind() == ColumnReader.Kind.LONG) {
@@ -2180,6 +2210,9 @@ public final class NitroParquetBatchSource
 
         private Vector resolve(Stream stream)
         {
+            if (!outputRequired[column]) {
+                throw new IllegalStateException("source output was declared unused: " + column);
+            }
             if (lazyFilteredWindowOutputs && isFilterColumn(column)) {
                 resolveFilteredWindowColumn(column);
             }

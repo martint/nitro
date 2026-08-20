@@ -17,6 +17,7 @@ import org.weakref.nitro.core.batch.SourceBatch;
 import org.weakref.nitro.core.source.BatchSource;
 import org.weakref.nitro.core.source.RuntimeFilterAcceptance;
 import org.weakref.nitro.core.source.SourceCapability;
+import org.weakref.nitro.core.source.SourceOutputDemandProtocol;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.operator.Batch;
@@ -254,6 +255,27 @@ public final class BatchFeedOperator
             }
         }
         return List.copyOf(acceptances);
+    }
+
+    /// Declares that no source value stream can be borrowed when every static predicate was transferred to the
+    /// source and the downstream pipeline has no outputs. This is deliberately negotiated after filter acceptance:
+    /// a residual predicate still needs its input stream even when the final row layout is empty.
+    public void omitEnforcedFilterOnlyOutputs(BatchSource source, List<RuntimeFilterAcceptance> acceptances)
+    {
+        checkOpen();
+        requireNonNull(source, "source is null");
+        requireNonNull(acceptances, "acceptances is null");
+        if (schema.size() == 0 || dynamicFilters.isEmpty() || acceptances.size() != dynamicFilters.size()) {
+            return;
+        }
+        for (int index = 0; index < dynamicFilters.size(); index++) {
+            if (dynamicFilters.get(index).enforcement() == null ||
+                    acceptances.get(index) != RuntimeFilterAcceptance.ENFORCED) {
+                return;
+            }
+        }
+        source.protocol(SourceOutputDemandProtocol.OUTPUT_DEMAND)
+                .ifPresent(demand -> demand.retainOutputs(Set.of()));
     }
 
     private record PushedFilter(DynamicFilter filter, StaticFilterEnforcement enforcement) {}

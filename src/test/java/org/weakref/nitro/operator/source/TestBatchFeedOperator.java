@@ -23,7 +23,10 @@ import org.weakref.nitro.core.source.RuntimeFilter;
 import org.weakref.nitro.core.source.RuntimeFilterAcceptance;
 import org.weakref.nitro.core.source.SourceCapability;
 import org.weakref.nitro.core.source.SourceColumnHandle;
+import org.weakref.nitro.core.source.SourceOutputDemand;
+import org.weakref.nitro.core.source.SourceOutputDemandProtocol;
 import org.weakref.nitro.core.source.SourcePoll;
+import org.weakref.nitro.core.source.SourceProtocol;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.data.Allocator;
@@ -36,6 +39,7 @@ import org.weakref.nitro.operator.Output;
 import org.weakref.nitro.operator.StaticFilterEnforcement;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -199,6 +203,7 @@ class TestBatchFeedOperator
     void testAppliesRetainedDynamicFiltersThroughIngress()
     {
         AtomicReference<RuntimeFilter> applied = new AtomicReference<>();
+        AtomicReference<Set<SourceColumnHandle>> retainedOutputs = new AtomicReference<>();
         SourceColumnHandle column = () -> SCHEMA.field(0).type();
         SourceOperatorIngress ingress = new SourceOperatorIngress()
         {
@@ -279,6 +284,16 @@ class TestBatchFeedOperator
             }
 
             @Override
+            public <T> Optional<T> protocol(SourceProtocol<T> protocol)
+            {
+                if (protocol == SourceOutputDemandProtocol.OUTPUT_DEMAND) {
+                    SourceOutputDemand demand = retainedOutputs::set;
+                    return Optional.of(protocol.valueType().cast(demand));
+                }
+                return Optional.empty();
+            }
+
+            @Override
             public boolean supportsRuntimeFilter(SourceColumnHandle sourceColumn)
             {
                 return sourceColumn == column;
@@ -322,6 +337,13 @@ class TestBatchFeedOperator
                     RuntimeFilterAcceptance.ENFORCED);
             assertThat(applied.get().residualRequired()).isFalse();
             assertThat(enforcement.enforced()).isTrue();
+        }
+
+        try (BatchFeedOperator feed = new BatchFeedOperator(SCHEMA, ingress)) {
+            feed.pushStaticFilter(DynamicFilter.fromRange(0, 20, 22));
+            List<RuntimeFilterAcceptance> acceptances = feed.applyDynamicFilters(source);
+            feed.omitEnforcedFilterOnlyOutputs(source, acceptances);
+            assertThat(retainedOutputs.get()).isEmpty();
         }
     }
 

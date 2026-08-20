@@ -1342,6 +1342,9 @@ public final class ColumnReader
 
     public int filterDictLongs(java.util.function.LongPredicate predicate, VersionedLongPredicate predicateVersion, int count, int[] survivorsOut, long[] valuesOut, boolean[] nullsOut)
     {
+        if (valuesOut == null) {
+            return filterDictLongPositions(predicate, predicateVersion, count, survivorsOut, nullsOut);
+        }
         int sc = 0;
         int windowPos = 0;
         filterScan = true;
@@ -1567,6 +1570,143 @@ public final class ColumnReader
         return sc;
     }
 
+    /** Selection-only counterpart used when an enforced source predicate's value stream has no consumer. */
+    private int filterDictLongPositions(
+            java.util.function.LongPredicate predicate,
+            VersionedLongPredicate predicateVersion,
+            int count,
+            int[] survivorsOut,
+            boolean[] nullsOut)
+    {
+        int sc = 0;
+        int windowPos = 0;
+        filterScan = true;
+        prepareDictionaryPredicate(predicateVersion);
+        try {
+            while (windowPos < count) {
+                if (pageCursor >= pageValueCount && !decodeNextDataPage()) {
+                    throw new IllegalStateException("Ran out of Parquet values (filter)");
+                }
+                int pageRows = Math.min(pageValueCount - pageCursor, count - windowPos);
+                if (pageFilterDict) {
+                    int pageSurvivorsBefore = sc;
+                    boolean[] accept = acceptByIdLong(predicate);
+                    boolean branchlessCompaction = shouldUseBranchlessCompaction();
+                    if (shouldSkipRejectedDictionaryPage(pageRows)) {
+                        skipRejectedDictionaryPage(pageRows);
+                        observeDictionaryFilterRows(pageRows, pageSurvivorsBefore, sc);
+                        pageCursor += pageRows;
+                        windowPos += pageRows;
+                        continue;
+                    }
+                    if (pageFilterNullableFused) {
+                        int[] ids = filterTile();
+                        int base = 0;
+                        while (base < pageRows) {
+                            int tileRows = Math.min(FILTER_TILE, pageRows - base);
+                            ensureRunDefCapacity(tileRows);
+                            int nonNullCount = defRle.readRunCountingOnes(runDef, tileRows);
+                            if (nonNullCount > 0) {
+                                rle.read(ids, 0, nonNullCount);
+                            }
+                            int idIndex = 0;
+                            int positionBase = windowPos + base;
+                            for (int i = 0; i < tileRows; i++) {
+                                if (runDef[i] == 0) {
+                                    continue;
+                                }
+                                int id = ids[idIndex++];
+                                if (branchlessCompaction) {
+                                    survivorsOut[sc] = positionBase + i;
+                                    sc += accept[id] ? 1 : 0;
+                                }
+                                else if (accept[id]) {
+                                    survivorsOut[sc++] = positionBase + i;
+                                }
+                            }
+                            base += tileRows;
+                        }
+                    }
+                    else if (pageFilterNullable) {
+                        for (int i = 0; i < pageRows; i++) {
+                            int pp = pageCursor + i;
+                            if (pageIdIndex[pp + 1] != pageIdIndex[pp] && accept[idBuffer[pageIdIndex[pp]]]) {
+                                survivorsOut[sc++] = windowPos + i;
+                            }
+                        }
+                    }
+                    else if (pageFilterFused) {
+                        int[] tile = filterTile();
+                        int base = 0;
+                        while (base < pageRows) {
+                            int run = rle.nextRun(pageRows - base);
+                            if (run > 0) {
+                                if (accept[rle.currentRleValue()]) {
+                                    int position = windowPos + base;
+                                    for (int i = 0; i < run; i++) {
+                                        survivorsOut[sc++] = position + i;
+                                    }
+                                }
+                                base += run;
+                            }
+                            else {
+                                int packed = -run;
+                                int offset = 0;
+                                while (offset < packed) {
+                                    int tileRows = Math.min(FILTER_TILE, packed - offset);
+                                    rle.read(tile, 0, tileRows);
+                                    int positionBase = windowPos + base + offset;
+                                    for (int i = 0; i < tileRows; i++) {
+                                        int id = tile[i];
+                                        if (branchlessCompaction) {
+                                            survivorsOut[sc] = positionBase + i;
+                                            sc += accept[id] ? 1 : 0;
+                                        }
+                                        else if (accept[id]) {
+                                            survivorsOut[sc++] = positionBase + i;
+                                        }
+                                    }
+                                    offset += tileRows;
+                                }
+                                base += packed;
+                            }
+                        }
+                    }
+                    else {
+                        for (int i = 0; i < pageRows; i++) {
+                            int id = idBuffer[pageCursor + i];
+                            if (branchlessCompaction) {
+                                survivorsOut[sc] = windowPos + i;
+                                sc += accept[id] ? 1 : 0;
+                            }
+                            else if (accept[id]) {
+                                survivorsOut[sc++] = windowPos + i;
+                            }
+                        }
+                    }
+                    observeDictionaryFilterRows(pageRows, pageSurvivorsBefore, sc);
+                }
+                else {
+                    for (int i = 0; i < pageRows; i++) {
+                        int pp = pageCursor + i;
+                        if ((!optional || !pageNulls[pp]) && predicate.test(pageLongs[pp])) {
+                            survivorsOut[sc++] = windowPos + i;
+                        }
+                    }
+                }
+                pageCursor += pageRows;
+                windowPos += pageRows;
+            }
+        }
+        finally {
+            filterScan = false;
+        }
+        if (nullsOut != null) {
+            Arrays.fill(nullsOut, 0, sc, false);
+        }
+        return sc;
+    }
+
     private boolean shouldUseDirectNullableDictionaryFilter()
     {
         ParquetDictionaryFilterPolicy.NullableFilter nullableFilter = dictionaryFilterPolicy.nullableFilter();
@@ -1588,6 +1728,9 @@ public final class ColumnReader
 
     public int filterDictInts(java.util.function.LongPredicate predicate, VersionedLongPredicate predicateVersion, int count, int[] survivorsOut, int[] valuesOut, boolean[] nullsOut)
     {
+        if (valuesOut == null) {
+            return filterDictIntPositions(predicate, predicateVersion, count, survivorsOut, nullsOut);
+        }
         int sc = 0;
         int windowPos = 0;
         filterScan = true;
@@ -1775,6 +1918,143 @@ public final class ColumnReader
                             valuesOut[sc] = v;
                             survivorsOut[sc] = windowPos + i;
                             sc++;
+                        }
+                    }
+                }
+                pageCursor += pageRows;
+                windowPos += pageRows;
+            }
+        }
+        finally {
+            filterScan = false;
+        }
+        if (nullsOut != null) {
+            Arrays.fill(nullsOut, 0, sc, false);
+        }
+        return sc;
+    }
+
+    /** Selection-only INT counterpart of {@link #filterDictLongPositions}. */
+    private int filterDictIntPositions(
+            java.util.function.LongPredicate predicate,
+            VersionedLongPredicate predicateVersion,
+            int count,
+            int[] survivorsOut,
+            boolean[] nullsOut)
+    {
+        int sc = 0;
+        int windowPos = 0;
+        filterScan = true;
+        prepareDictionaryPredicate(predicateVersion);
+        try {
+            while (windowPos < count) {
+                if (pageCursor >= pageValueCount && !decodeNextDataPage()) {
+                    throw new IllegalStateException("Ran out of Parquet values (filter)");
+                }
+                int pageRows = Math.min(pageValueCount - pageCursor, count - windowPos);
+                if (pageFilterDict) {
+                    int pageSurvivorsBefore = sc;
+                    boolean[] accept = acceptByIdInt(predicate);
+                    boolean branchlessCompaction = shouldUseBranchlessCompaction();
+                    if (shouldSkipRejectedDictionaryPage(pageRows)) {
+                        skipRejectedDictionaryPage(pageRows);
+                        observeDictionaryFilterRows(pageRows, pageSurvivorsBefore, sc);
+                        pageCursor += pageRows;
+                        windowPos += pageRows;
+                        continue;
+                    }
+                    if (pageFilterNullableFused) {
+                        int[] ids = filterTile();
+                        int base = 0;
+                        while (base < pageRows) {
+                            int tileRows = Math.min(FILTER_TILE, pageRows - base);
+                            ensureRunDefCapacity(tileRows);
+                            int nonNullCount = defRle.readRunCountingOnes(runDef, tileRows);
+                            if (nonNullCount > 0) {
+                                rle.read(ids, 0, nonNullCount);
+                            }
+                            int idIndex = 0;
+                            int positionBase = windowPos + base;
+                            for (int i = 0; i < tileRows; i++) {
+                                if (runDef[i] == 0) {
+                                    continue;
+                                }
+                                int id = ids[idIndex++];
+                                if (branchlessCompaction) {
+                                    survivorsOut[sc] = positionBase + i;
+                                    sc += accept[id] ? 1 : 0;
+                                }
+                                else if (accept[id]) {
+                                    survivorsOut[sc++] = positionBase + i;
+                                }
+                            }
+                            base += tileRows;
+                        }
+                    }
+                    else if (pageFilterNullable) {
+                        for (int i = 0; i < pageRows; i++) {
+                            int pp = pageCursor + i;
+                            if (pageIdIndex[pp + 1] != pageIdIndex[pp] && accept[idBuffer[pageIdIndex[pp]]]) {
+                                survivorsOut[sc++] = windowPos + i;
+                            }
+                        }
+                    }
+                    else if (pageFilterFused) {
+                        int[] tile = filterTile();
+                        int base = 0;
+                        while (base < pageRows) {
+                            int run = rle.nextRun(pageRows - base);
+                            if (run > 0) {
+                                if (accept[rle.currentRleValue()]) {
+                                    int position = windowPos + base;
+                                    for (int i = 0; i < run; i++) {
+                                        survivorsOut[sc++] = position + i;
+                                    }
+                                }
+                                base += run;
+                            }
+                            else {
+                                int packed = -run;
+                                int offset = 0;
+                                while (offset < packed) {
+                                    int tileRows = Math.min(FILTER_TILE, packed - offset);
+                                    rle.read(tile, 0, tileRows);
+                                    int positionBase = windowPos + base + offset;
+                                    for (int i = 0; i < tileRows; i++) {
+                                        int id = tile[i];
+                                        if (branchlessCompaction) {
+                                            survivorsOut[sc] = positionBase + i;
+                                            sc += accept[id] ? 1 : 0;
+                                        }
+                                        else if (accept[id]) {
+                                            survivorsOut[sc++] = positionBase + i;
+                                        }
+                                    }
+                                    offset += tileRows;
+                                }
+                                base += packed;
+                            }
+                        }
+                    }
+                    else {
+                        for (int i = 0; i < pageRows; i++) {
+                            int id = idBuffer[pageCursor + i];
+                            if (branchlessCompaction) {
+                                survivorsOut[sc] = windowPos + i;
+                                sc += accept[id] ? 1 : 0;
+                            }
+                            else if (accept[id]) {
+                                survivorsOut[sc++] = windowPos + i;
+                            }
+                        }
+                    }
+                    observeDictionaryFilterRows(pageRows, pageSurvivorsBefore, sc);
+                }
+                else {
+                    for (int i = 0; i < pageRows; i++) {
+                        int pp = pageCursor + i;
+                        if ((!optional || !pageNulls[pp]) && predicate.test(pageInts[pp])) {
+                            survivorsOut[sc++] = windowPos + i;
                         }
                     }
                 }
