@@ -1416,7 +1416,15 @@ public final class NitroParquetBatchSource
     /** Reinterpret {@code count} raw long bits (read through the long path for a DOUBLE column) into a double vector. */
     private org.weakref.nitro.data.F64Vector longBitsToDoubles(long[] bits, int offset, int count)
     {
-        org.weakref.nitro.data.F64Vector vector = org.weakref.nitro.data.F64Vector.allocate(allocator, allocationContext, count);
+        return longBitsToDoubles(bits, offset, count, count);
+    }
+
+    private org.weakref.nitro.data.F64Vector longBitsToDoubles(long[] bits, int offset, int count, int capacity)
+    {
+        if (capacity < count) {
+            throw new IllegalArgumentException("capacity is smaller than count");
+        }
+        org.weakref.nitro.data.F64Vector vector = org.weakref.nitro.data.F64Vector.allocate(allocator, allocationContext, capacity);
         double[] values = vector.values();
         for (int i = 0; i < count; i++) {
             values[i] = Double.longBitsToDouble(bits[offset + i]);
@@ -2046,7 +2054,7 @@ public final class NitroParquetBatchSource
                 valueVector = copyIntOutput(c, windowInt[c], start, sliceCount, batchPolicy.maxRows());
             }
             else if (readers[c].isDouble()) {
-                valueVector = longBitsToDoubles(windowLong[c], start, sliceCount);
+                valueVector = longBitsToDoubles(windowLong[c], start, sliceCount, batchPolicy.maxRows());
             }
             else {
                 I64Vector vector = I64Vector.allocate(allocator, allocationContext, batchPolicy.maxRows());
