@@ -160,6 +160,73 @@ class TestKeyOnlyGroupingSession
         }
     }
 
+    @Test
+    void testAdaptiveFlushStartsANewDistinctCohort()
+    {
+        TestingPartialAggregationControl control = new TestingPartialAggregationControl(true);
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                KeyOnlyGroupingSession session = new KeyOnlyGroupingSession(
+                        allocator,
+                        Schema.unspecified(1),
+                        List.of(0),
+                        List.of(0),
+                        resources.operatorResources(),
+                        control)) {
+            allocator.beginExecution();
+            try (Batch input = batch(new long[] {1, 1, 2}, new boolean[3])) {
+                session.addInput(input, 30);
+            }
+            try (Batch output = session.getOutput()) {
+                assertThat(selectedValues(output)).containsExactly(1L, 2L);
+            }
+
+            session.flush();
+            assertThat(control.aggregatedFlushes).isEqualTo(1);
+            assertThat(control.aggregatedInputBytes).isEqualTo(30);
+            assertThat(control.aggregatedInputRows).isEqualTo(3);
+            assertThat(control.aggregatedOutputRows).isEqualTo(2);
+
+            try (Batch input = batch(new long[] {1, 3}, new boolean[2])) {
+                session.addInput(input, 20);
+            }
+            try (Batch output = session.getOutput()) {
+                assertThat(selectedValues(output)).containsExactly(1L, 3L);
+            }
+            try (Batch terminal = session.finish()) {
+                assertThat(terminal.borrowMask().none()).isTrue();
+            }
+            assertThat(control.aggregatedFlushes).isEqualTo(2);
+            assertThat(control.aggregatedInputRows).isEqualTo(5);
+            assertThat(control.aggregatedOutputRows).isEqualTo(4);
+        }
+    }
+
+    @Test
+    void testAdaptiveBypassPreservesEveryInputPosition()
+    {
+        TestingPartialAggregationControl control = new TestingPartialAggregationControl(false);
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                KeyOnlyGroupingSession session = new KeyOnlyGroupingSession(
+                        allocator,
+                        Schema.unspecified(1),
+                        List.of(0),
+                        List.of(0),
+                        resources.operatorResources(),
+                        control)) {
+            allocator.beginExecution();
+            try (Batch input = batch(new long[] {7, 7, 8}, new boolean[3])) {
+                session.addInput(input, 30);
+            }
+            try (Batch output = session.getOutput()) {
+                assertThat(selectedValues(output)).containsExactly(7L, 7L, 8L);
+            }
+            assertThat(control.passthroughFlushes).isEqualTo(1);
+            assertThat(control.passthroughInputRows).isEqualTo(3);
+        }
+    }
+
     private static Batch batch(long[] values, boolean[] nulls)
     {
         return new Batch(
@@ -185,5 +252,44 @@ class TestKeyOnlyGroupingSession
             selected.add(nulls[position]);
         }
         return selected;
+    }
+
+    private static final class TestingPartialAggregationControl
+            implements PartialAggregationControl
+    {
+        private final boolean aggregationEnabled;
+        private long aggregatedFlushes;
+        private long aggregatedInputBytes;
+        private long aggregatedInputRows;
+        private long aggregatedOutputRows;
+        private long passthroughFlushes;
+        private long passthroughInputRows;
+
+        private TestingPartialAggregationControl(boolean aggregationEnabled)
+        {
+            this.aggregationEnabled = aggregationEnabled;
+        }
+
+        @Override
+        public boolean aggregationEnabled()
+        {
+            return aggregationEnabled;
+        }
+
+        @Override
+        public void onAggregatedFlush(long inputBytes, long inputRows, long outputRows)
+        {
+            aggregatedFlushes++;
+            aggregatedInputBytes += inputBytes;
+            aggregatedInputRows += inputRows;
+            aggregatedOutputRows += outputRows;
+        }
+
+        @Override
+        public void onPassthroughFlush(long inputBytes, long inputRows)
+        {
+            passthroughFlushes++;
+            passthroughInputRows += inputRows;
+        }
     }
 }

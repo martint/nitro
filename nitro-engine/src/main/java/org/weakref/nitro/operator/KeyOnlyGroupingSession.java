@@ -45,15 +45,21 @@ public final class KeyOnlyGroupingSession
     private final Allocator.Context allocationContext;
     private final OperatorResources operatorResources;
     private final int[] groupByColumns;
+    private final List<Integer> groupByColumnList;
     private final List<TypeBinding> keyTypes;
     private final Vector[] values;
     private final Vector[] nulls;
     private final InitialAggregationBatchBuilder outputBuilder;
     private final DistinctKeySetPolicy distinctKeySetPolicy;
+    private final PartialAggregationControl partialAggregationControl;
+    private final MutableAggregationPhaseMetrics phaseMetrics = new MutableAggregationPhaseMetrics();
 
     private DistinctKeySet distinctKeySet;
     private int[] distinctPositions = EMPTY_POSITIONS;
     private Batch pendingOutput;
+    private long aggregatedInputBytes;
+    private long aggregatedInputRows;
+    private long aggregatedOutputRows;
     private boolean finished;
     private boolean closed;
 
@@ -64,10 +70,22 @@ public final class KeyOnlyGroupingSession
             List<Integer> groupedColumns,
             OperatorResources operatorResources)
     {
+        this(allocator, inputSchema, groupByColumns, groupedColumns, operatorResources, null);
+    }
+
+    public KeyOnlyGroupingSession(
+            Allocator allocator,
+            Schema inputSchema,
+            List<Integer> groupByColumns,
+            List<Integer> groupedColumns,
+            OperatorResources operatorResources,
+            PartialAggregationControl partialAggregationControl)
+    {
         this.allocator = requireNonNull(allocator, "allocator is null");
         requireNonNull(inputSchema, "inputSchema is null");
         this.operatorResources = requireNonNull(operatorResources, "operatorResources is null");
-        this.groupByColumns = requireNonNull(groupByColumns, "groupByColumns is null").stream()
+        this.groupByColumnList = List.copyOf(requireNonNull(groupByColumns, "groupByColumns is null"));
+        this.groupByColumns = this.groupByColumnList.stream()
                 .mapToInt(Integer::intValue)
                 .toArray();
         if (this.groupByColumns.length == 0) {
@@ -79,6 +97,7 @@ public final class KeyOnlyGroupingSession
         this.values = new Vector[this.groupByColumns.length];
         this.nulls = new Vector[this.groupByColumns.length];
         this.distinctKeySetPolicy = operatorResources.distinctKeySetPolicy();
+        this.partialAggregationControl = partialAggregationControl;
         this.allocationContext = new Allocator.Context(
                 "KeyOnlyGroupingSession",
                 operatorResources.grouping().markDistinctMaskPool());
@@ -99,22 +118,55 @@ public final class KeyOnlyGroupingSession
     @Override
     public void addInput(Batch batch)
     {
-        addInput(batch, false);
+        addInput(batch, 0, false);
+    }
+
+    @Override
+    public void addInput(Batch batch, long inputBytes)
+    {
+        addInput(batch, inputBytes, false);
     }
 
     @Override
     public InputOwnership addInputWithOwnership(Batch batch, long inputBytes)
     {
-        return addInput(batch, true);
+        return addInput(batch, inputBytes, true);
     }
 
-    private InputOwnership addInput(Batch batch, boolean mayRetainInput)
+    private InputOwnership addInput(Batch batch, long inputBytes, boolean mayRetainInput)
     {
         checkAcceptingInput();
         requireNonNull(batch, "batch is null");
+        if (inputBytes < 0) {
+            throw new IllegalArgumentException("inputBytes is negative");
+        }
         Mask inputMask = batch.borrowMask();
         if (inputMask.none()) {
             return InputOwnership.CALLER;
+        }
+        if (partialAggregationControl != null) {
+            boolean aggregationEnabled = partialAggregationControl.aggregationEnabled();
+            int sampleSize = partialAggregationControl.inputCardinalitySampleSize();
+            if (sampleSize > 0) {
+                PartialAggregationInputStatistics inputStatistics = GroupingCardinalitySampler.sample(
+                        batch,
+                        groupByColumnList,
+                        sampleSize,
+                        allocator.primitiveArrays(),
+                        false);
+                if (inputStatistics.sampledRows() > 0) {
+                    aggregationEnabled = partialAggregationControl.aggregationEnabled(inputStatistics);
+                }
+            }
+            if (!aggregationEnabled) {
+                pendingOutput = mayRetainInput ? outputBuilder.buildRetaining(batch) : null;
+                InputOwnership ownership = pendingOutput == null ? InputOwnership.CALLER : InputOwnership.SESSION;
+                if (pendingOutput == null) {
+                    pendingOutput = outputBuilder.build(batch, inputMask);
+                }
+                partialAggregationControl.onPassthroughFlush(inputBytes, inputMask.count());
+                return ownership;
+            }
         }
         int selectedCount;
         Mask candidateMask = inputMask;
@@ -140,7 +192,13 @@ public final class KeyOnlyGroupingSession
             candidateMask = dictionaryDomainCandidates(inputMask);
             ensureDistinctPositionCapacity(candidateMask.selectedCount());
             distinctKeySet.reserveAdditional(candidateMask.selectedCount());
-            selectedCount = distinctKeySet.addBatch(values, nulls, candidateMask, distinctPositions);
+            long start = System.nanoTime();
+            try {
+                selectedCount = distinctKeySet.addBatch(values, nulls, candidateMask, distinctPositions);
+            }
+            finally {
+                phaseMetrics.recordGrouping(System.nanoTime() - start);
+            }
         }
         finally {
             if (candidateMask != inputMask) {
@@ -148,6 +206,11 @@ public final class KeyOnlyGroupingSession
             }
             Arrays.fill(values, null);
             Arrays.fill(nulls, null);
+        }
+        if (partialAggregationControl != null) {
+            aggregatedInputBytes = Math.addExact(aggregatedInputBytes, inputBytes);
+            aggregatedInputRows = Math.addExact(aggregatedInputRows, inputMask.count());
+            aggregatedOutputRows = Math.addExact(aggregatedOutputRows, selectedCount);
         }
         if (selectedCount == 0) {
             return InputOwnership.CALLER;
@@ -255,6 +318,22 @@ public final class KeyOnlyGroupingSession
     }
 
     @Override
+    public AggregationPhaseMetrics phaseMetrics()
+    {
+        return phaseMetrics.snapshot();
+    }
+
+    @Override
+    public void flush()
+    {
+        checkAcceptingInput();
+        if (partialAggregationControl == null) {
+            throw new UnsupportedOperationException("key-only grouping session is not adaptive");
+        }
+        finishAggregatedCohort();
+    }
+
+    @Override
     public Batch finish()
     {
         checkOpen();
@@ -265,6 +344,7 @@ public final class KeyOnlyGroupingSession
             throw new IllegalStateException("key-only grouping session has pending output");
         }
         finished = true;
+        finishAggregatedCohort();
         return outputBuilder.empty();
     }
 
@@ -306,5 +386,24 @@ public final class KeyOnlyGroupingSession
         if (closed) {
             throw new IllegalStateException("key-only grouping session is closed");
         }
+    }
+
+    private void finishAggregatedCohort()
+    {
+        if (partialAggregationControl == null || aggregatedInputRows == 0) {
+            return;
+        }
+        partialAggregationControl.onAggregatedFlush(
+                aggregatedInputBytes,
+                aggregatedInputRows,
+                aggregatedOutputRows);
+        aggregatedInputBytes = 0;
+        aggregatedInputRows = 0;
+        aggregatedOutputRows = 0;
+        if (distinctKeySet != null) {
+            distinctKeySet.releaseBuffers();
+            distinctKeySet = null;
+        }
+        allocator.releasePooledMemory(allocationContext);
     }
 }
