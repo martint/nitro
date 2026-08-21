@@ -100,6 +100,7 @@ public record FlatKeyTablePolicy(Layout layout, Table table, ValueIds valueIds)
             int normalizedIntKeyDiscriminatorSampleSize,
             int normalizedIntKeyDiscriminatorMinDistinctPercent,
             int normalizedIntKeyFallbackMinPercent,
+            int normalizedIntKeyMaxInternedBinaryFields,
             int discriminatingFieldHashMinFields,
             int discriminatingFieldHashSampleSize,
             int discriminatingFieldHashMinDistinctPercent,
@@ -119,7 +120,8 @@ public record FlatKeyTablePolicy(Layout layout, Table table, ValueIds valueIds)
                     normalizedIntKeyDiscriminatorMinDistinctPercent < 0 ||
                     normalizedIntKeyDiscriminatorMinDistinctPercent > 100 ||
                     normalizedIntKeyFallbackMinPercent < 0 ||
-                    normalizedIntKeyFallbackMinPercent > 100) {
+                    normalizedIntKeyFallbackMinPercent > 100 ||
+                    normalizedIntKeyMaxInternedBinaryFields < 0) {
                 throw new IllegalArgumentException("Invalid flat layout admission policy");
             }
         }
@@ -185,6 +187,7 @@ public record FlatKeyTablePolicy(Layout layout, Table table, ValueIds valueIds)
                     32,
                     90,
                     90,
+                    1,
                     4,
                     128,
                     90,
@@ -319,6 +322,9 @@ public record FlatKeyTablePolicy(Layout layout, Table table, ValueIds valueIds)
                     Integer.getInteger(
                             "nitro.group.normalizedIntKeyFallbackMinPercent",
                             defaults.normalizedIntKeyFallbackMinPercent()),
+                    Integer.getInteger(
+                            "nitro.group.normalizedIntKeyMaxInternedBinaryFields",
+                            defaults.normalizedIntKeyMaxInternedBinaryFields()),
                     Integer.getInteger(
                             "nitro.group.discriminatingFieldHashMinFields",
                             defaults.discriminatingFieldHashMinFields()),

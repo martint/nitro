@@ -3108,6 +3108,58 @@ class TestFlatGroupingTable
     }
 
     @Test
+    void testNormalizedIntKeyRejectsMultipleBinaryFieldsThatRequireInterning()
+    {
+        int positions = 128;
+        String[] first = new String[positions];
+        String[] second = new String[positions];
+        long[] third = new long[positions];
+        for (int position = 0; position < positions; position++) {
+            first[position] = "first-" + (position % 8);
+            second[position] = "second-" + (position % 16);
+            third[position] = position % 32;
+        }
+        Vector[] values = {utf8(first), utf8(second), new I64Vector(third)};
+        FlatKeyLayout layout = FlatKeyLayout.tryCreate(values, true, arrayPool, codeGeneration, flatKeyTablePolicy);
+        try {
+            layout.beginBatch(values, new Vector[] {null, null, null});
+            assertThat(layout.supportsNormalizedIntKeyShape()).isTrue();
+            assertThat(layout.batchSupportsNormalizedIntKey()).isFalse();
+            layout.endBatch();
+        }
+        finally {
+            layout.releaseBuffers();
+        }
+    }
+
+    @Test
+    void testNormalizedIntKeyAdmitsMultipleBinaryFieldsWithStableDictionaryIds()
+    {
+        int positions = 128;
+        int[] firstIds = new int[positions];
+        int[] secondIds = new int[positions];
+        long[] third = new long[positions];
+        for (int position = 0; position < positions; position++) {
+            firstIds[position] = position % 2;
+            secondIds[position] = position % 3;
+            third[position] = position % 32;
+        }
+        Vector[] values = {
+                DictionaryVector.wrapNested(firstIds, positions, utf8("first-a", "first-b")),
+                DictionaryVector.wrapNested(secondIds, positions, utf8("second-a", "second-b", "second-c")),
+                new I64Vector(third)};
+        FlatKeyLayout layout = FlatKeyLayout.tryCreate(values, true, arrayPool, codeGeneration, flatKeyTablePolicy);
+        try {
+            layout.beginBatch(values, new Vector[] {null, null, null});
+            assertThat(layout.batchSupportsNormalizedIntKey()).isTrue();
+            layout.endBatch();
+        }
+        finally {
+            layout.releaseBuffers();
+        }
+    }
+
+    @Test
     void testCompactNormalizedIntKeyRejectsHighCardinalityIntegerDiscriminator()
     {
         int positions = 128;

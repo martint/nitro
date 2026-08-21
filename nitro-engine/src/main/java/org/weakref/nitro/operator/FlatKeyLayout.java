@@ -1318,8 +1318,18 @@ class FlatKeyLayout
         int length = values[inputChannels[0]].length();
         int sampleSize = Math.min(length, normalizedIntKeySamples.length);
         boolean hasBinaryField = false;
+        int internedBinaryFields = 0;
         for (FlatTypeHandler.Kind kind : fieldKinds) {
             hasBinaryField |= kind == FlatTypeHandler.Kind.BINARY;
+        }
+        for (int field = 0; field < fieldKinds.length; field++) {
+            if (fieldKinds[field] == FlatTypeHandler.Kind.BINARY && !fieldIdComparable[field]) {
+                internedBinaryFields++;
+            }
+        }
+        if (internedBinaryFields > policy.normalizedIntKeyMaxInternedBinaryFields()) {
+            batchNormalizedIntKeyCostRejected = true;
+            return false;
         }
         boolean domainEligible = true;
         for (int index = 0; index < fieldKinds.length; index++) {
