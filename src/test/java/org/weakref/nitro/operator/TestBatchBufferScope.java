@@ -33,6 +33,28 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class TestBatchBufferScope
 {
     @Test
+    void transfersWholeBatchOwnershipWithoutCopyingBuffers()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        BatchBufferScope scope = new BatchBufferScope(allocator, "transfer");
+        I64Vector vector = allocator.allocate(scope.context(), I64Vector.class, 8, I64Vector::new);
+        Batch original = scope.batch(
+                allocator.allocateAllMask(scope.context(), 8),
+                new Output(Set.of(Stream.VALUES), _ -> vector, scope));
+
+        Batch transferred = original.transferOwnership();
+        original.close();
+
+        assertThatThrownBy(original::borrowMask).isInstanceOf(IllegalStateException.class);
+        assertThat(transferred.borrowMask().count()).isEqualTo(8);
+        assertThat(transferred.output(0).borrow(Stream.VALUES)).isSameAs(vector);
+
+        transferred.close();
+        I64Vector reused = allocator.allocate(scope.context(), I64Vector.class, 8, I64Vector::new);
+        assertThat(reused).isSameAs(vector);
+    }
+
+    @Test
     void returnsUntakenBuffersForNextGeneration()
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());

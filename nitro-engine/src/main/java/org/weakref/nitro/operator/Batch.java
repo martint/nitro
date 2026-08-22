@@ -169,6 +169,34 @@ public final class Batch
                 requireNonNull(lifecycle, "lifecycle is null"));
     }
 
+    private Batch(Batch source)
+    {
+        mask = source.mask;
+        ownedMask = source.ownedMask;
+        outputs = source.outputs;
+        outputDelegate = source.outputDelegate;
+        maskTakeResolver = source.maskTakeResolver;
+        maskReleaseResolver = source.maskReleaseResolver;
+        constrainer = source.constrainer;
+        closeAction = source.closeAction;
+        lifecycle = source.lifecycle;
+        bufferScope = source.bufferScope;
+        maskTaken = source.maskTaken;
+    }
+
+    /**
+     * Moves this batch's complete ownership contract to a new facade without resolving or copying any streams.
+     * The old facade is closed immediately, so a producer may safely close it after publishing while the returned
+     * facade remains responsible for the mask, outputs, buffer scope, and close action.
+     */
+    public Batch transferOwnership()
+    {
+        checkOpen();
+        Batch transferred = new Batch(this);
+        closed = true;
+        return transferred;
+    }
+
     public Mask borrowMask()
     {
         checkOpen();
