@@ -22,7 +22,6 @@ import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
-import org.weakref.nitro.data.Vector;
 
 import java.util.Arrays;
 
@@ -106,11 +105,17 @@ public final class RegisteredAggregationWindowFunction
         }
         else {
             activePosition[0] = inputPosition;
-            implementation.addRawInput(
-                    state,
-                    0,
-                    Mask.sparse(activePosition, inputSize(sourceColumns, inputPosition)),
-                    boundInput);
+            Mask activeMask = allocator.allocateSparseMask(
+                    allocationContext,
+                    activePosition,
+                    1,
+                    inputSize(sourceColumns, inputPosition));
+            try {
+                implementation.addRawInput(state, 0, activeMask, boundInput);
+            }
+            finally {
+                allocator.release(allocationContext, activeMask);
+            }
         }
         if (frame == Frame.RUNNING_ROWS) {
             Streams direct = implementation.copyResultPosition(
@@ -172,8 +177,8 @@ public final class RegisteredAggregationWindowFunction
     private static int inputSize(Streams[] sourceColumns, int inputPosition)
     {
         for (Streams column : sourceColumns) {
-            for (Stream stream : column.streams()) {
-                return column.get(stream).length();
+            if (column.vectorCount() > 0) {
+                return column.vectorAt(0).length();
             }
         }
         return inputPosition + 1;
@@ -187,20 +192,13 @@ public final class RegisteredAggregationWindowFunction
             int outputPosition,
             int outputSize)
     {
-        Streams.Builder output = Streams.builder();
-        for (Stream stream : source.streams()) {
-            Vector existing = target.getOrNull(stream);
-            output.put(
-                    stream,
-                    source.get(stream).copySinglePositionInto(
-                            allocator,
-                            allocationContext,
-                            existing,
-                            0,
-                            outputPosition,
-                            outputSize));
-        }
-        return output.build();
+        return allocator.copySinglePositionInto(
+                allocationContext,
+                source,
+                target,
+                0,
+                outputPosition,
+                outputSize);
     }
 
     private static Streams copyResultRange(
@@ -212,21 +210,14 @@ public final class RegisteredAggregationWindowFunction
             int outputEnd,
             int outputSize)
     {
-        Streams.Builder output = Streams.builder();
-        for (Stream stream : source.streams()) {
-            Vector existing = target.getOrNull(stream);
-            output.put(
-                    stream,
-                    source.get(stream).copySinglePositionRangeInto(
-                            allocator,
-                            allocationContext,
-                            existing,
-                            0,
-                            outputStart,
-                            outputEnd,
-                            outputSize));
-        }
-        return output.build();
+        return allocator.copySinglePositionRangeInto(
+                allocationContext,
+                source,
+                target,
+                0,
+                outputStart,
+                outputEnd,
+                outputSize);
     }
 
     public enum Frame

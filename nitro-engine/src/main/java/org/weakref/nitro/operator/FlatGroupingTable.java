@@ -1387,7 +1387,7 @@ final class FlatGroupingTable
                 output == null ? null : output.getOrNull(Stream.NULLS),
                 size);
         outputNulls.values()[outputPosition] = nullValue;
-        return Streams.ofValuesAndNulls(outputValues, outputNulls);
+        return allocator.reuseValuesAndNulls(output, outputValues, outputNulls);
     }
 
     public Streams copyGroupedValuePositions(

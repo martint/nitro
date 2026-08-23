@@ -136,6 +136,16 @@ public final class ErrorVector
     }
 
     @Override
+    public Vector copySinglePositionRangeInto(Allocator allocator, Allocator.Context allocationContext, Vector existing, int sourcePosition, int outputStart, int outputEnd, int size)
+    {
+        ErrorVector target = writable(allocator, allocationContext, existing, size);
+        for (int outputPosition = outputStart; outputPosition < outputEnd; outputPosition++) {
+            copyPosition(target, sourcePosition, outputPosition);
+        }
+        return target;
+    }
+
+    @Override
     public Vector emptyLike(Allocator allocator, Allocator.Context allocationContext)
     {
         return allocator.allocate(allocationContext, ErrorVector.class, 0, ErrorVector::new);

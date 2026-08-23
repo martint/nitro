@@ -224,12 +224,7 @@ public class EnforceSingleRowOperator
 
     private Streams copySinglePosition(Streams source, Streams existing, int sourcePosition, int outputSize)
     {
-        Streams.Builder builder = Streams.builder();
-        for (Stream stream : source.streams()) {
-            Vector copied = source.get(stream).copySinglePositionInto(allocator, allocationContext, existing.getOrNull(stream), sourcePosition, 0, outputSize);
-            builder.put(stream, copied);
-        }
-        return builder.build();
+        return allocator.copySinglePositionInto(allocationContext, source, existing, sourcePosition, 0, outputSize);
     }
 
     private static Streams borrowedStreams(Output output)

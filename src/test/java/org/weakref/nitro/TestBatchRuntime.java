@@ -23,6 +23,8 @@ import org.weakref.nitro.data.CountStateVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.DistinctCountStateVector;
 import org.weakref.nitro.data.DoubleStateVector;
+import org.weakref.nitro.data.ErrorValue;
+import org.weakref.nitro.data.ErrorVector;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
@@ -99,6 +101,37 @@ public class TestBatchRuntime
             assertThat(grown).isNotSameAs(existing);
             assertThat(grown.values()).isSameAs(grownValues);
             assertThat(grown.get(Stream.NULLS)).isSameAs(nulls);
+        }
+    }
+
+    @Test
+    void testStreamPositionCopiesReuseTransportTupleAfterCapacityIsEstablished()
+    {
+        ErrorValue failure = new ErrorValue("test", 17, "FAILURE", "USER_ERROR", "failure");
+        ErrorVector errors = new ErrorVector(2);
+        errors.setError(0, failure);
+        Streams source = Streams.ofValuesAndNulls(
+                new I64Vector(new long[] {11, 22}),
+                new BooleanVector(new boolean[] {false, true}))
+                .with(Stream.ERRORS, errors);
+
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            Allocator.Context context = new Allocator.Context("StreamPositionCopy");
+            Streams output = allocator.copySinglePositionInto(context, source, null, 0, 0, 4);
+            Streams reused = allocator.copySinglePositionInto(context, source, output, 1, 1, 4);
+
+            assertThat(reused).isSameAs(output);
+            assertThat(((I64Vector) reused.values()).values()).startsWith(11, 22);
+            assertThat(((BooleanVector) reused.get(Stream.NULLS)).values()).startsWith(false, true);
+            assertThat(((ErrorVector) reused.get(Stream.ERRORS)).error(0)).isEqualTo(failure);
+
+            Streams range = allocator.copySinglePositionRangeInto(context, source, reused, 0, 2, 4, 4);
+            assertThat(range).isSameAs(reused);
+            assertThat(((I64Vector) range.values()).values()).containsExactly(11, 22, 11, 11);
+            assertThat(((BooleanVector) range.get(Stream.NULLS)).values()).containsExactly(false, true, false, false);
+            assertThat(((ErrorVector) range.get(Stream.ERRORS)).error(2)).isEqualTo(failure);
+            assertThat(((ErrorVector) range.get(Stream.ERRORS)).error(3)).isEqualTo(failure);
         }
     }
 

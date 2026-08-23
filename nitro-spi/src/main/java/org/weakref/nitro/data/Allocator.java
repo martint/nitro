@@ -222,6 +222,79 @@ public class Allocator
         return reuseOrCreateStreams(existing, values, nulls, null);
     }
 
+    /**
+     * Copies one position from every physical stream into caller-owned output storage.
+     *
+     * The immutable {@link Streams} transport tuple is reused after its backing vectors reach capacity, so a
+     * row-at-a-time materializer does not allocate stream iterators, builders, or tuples in steady state.
+     */
+    public Streams copySinglePositionInto(
+            Context context,
+            Streams source,
+            Streams existing,
+            int sourcePosition,
+            int outputPosition,
+            int size)
+    {
+        requireNonNull(source, "source is null");
+        Vector values = copySinglePositionStream(context, source, existing, Stream.VALUES, sourcePosition, outputPosition, size);
+        Vector nulls = copySinglePositionStream(context, source, existing, Stream.NULLS, sourcePosition, outputPosition, size);
+        Vector errors = copySinglePositionStream(context, source, existing, Stream.ERRORS, sourcePosition, outputPosition, size);
+        return reuseOrCreateStreams(existing, values, nulls, errors);
+    }
+
+    /** Copies one source position across an output range while preserving transport-tuple reuse. */
+    public Streams copySinglePositionRangeInto(
+            Context context,
+            Streams source,
+            Streams existing,
+            int sourcePosition,
+            int outputStart,
+            int outputEnd,
+            int size)
+    {
+        requireNonNull(source, "source is null");
+        Vector values = copySinglePositionRangeStream(context, source, existing, Stream.VALUES, sourcePosition, outputStart, outputEnd, size);
+        Vector nulls = copySinglePositionRangeStream(context, source, existing, Stream.NULLS, sourcePosition, outputStart, outputEnd, size);
+        Vector errors = copySinglePositionRangeStream(context, source, existing, Stream.ERRORS, sourcePosition, outputStart, outputEnd, size);
+        return reuseOrCreateStreams(existing, values, nulls, errors);
+    }
+
+    private Vector copySinglePositionStream(
+            Context context,
+            Streams source,
+            Streams existing,
+            Stream stream,
+            int sourcePosition,
+            int outputPosition,
+            int size)
+    {
+        Vector sourceVector = source.getOrNull(stream);
+        if (sourceVector == null) {
+            return null;
+        }
+        Vector existingVector = existing == null ? null : existing.getOrNull(stream);
+        return sourceVector.copySinglePositionInto(this, context, existingVector, sourcePosition, outputPosition, size);
+    }
+
+    private Vector copySinglePositionRangeStream(
+            Context context,
+            Streams source,
+            Streams existing,
+            Stream stream,
+            int sourcePosition,
+            int outputStart,
+            int outputEnd,
+            int size)
+    {
+        Vector sourceVector = source.getOrNull(stream);
+        if (sourceVector == null) {
+            return null;
+        }
+        Vector existingVector = existing == null ? null : existing.getOrNull(stream);
+        return sourceVector.copySinglePositionRangeInto(this, context, existingVector, sourcePosition, outputStart, outputEnd, size);
+    }
+
     public void copyBooleanValues(Vector input, Mask mask, boolean[] output)
     {
         VectorAccess.copyBooleanValues(input, mask, output, policy.booleanCopies().directDense());

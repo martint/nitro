@@ -3099,7 +3099,7 @@ final class GroupingState
         }
         values.values()[outputPosition] = value;
         nulls.values()[outputPosition] = nullValue;
-        return Streams.ofValuesAndNulls(values, nulls);
+        return allocator.reuseValuesAndNulls(output, values, nulls);
     }
 
     boolean supportsGroupedValuePositionComparison(int groupedColumnIndex)
@@ -3703,7 +3703,7 @@ final class GroupingState
                 outputNulls.values()[groupId] =
                         OperatorVectorSupport.isNull(representative.nulls[groupedColumnIndex], representative.position);
             }
-            return Streams.ofValuesAndNulls(outputValues, outputNulls);
+            return allocator.reuseValuesAndNulls(output, outputValues, outputNulls);
         }
 
         private Streams copyGroupedValuePosition(
@@ -3730,7 +3730,7 @@ final class GroupingState
                     size);
             outputNulls.values()[outputPosition] =
                     OperatorVectorSupport.isNull(representative.nulls[groupedColumnIndex], representative.position);
-            return Streams.ofValuesAndNulls(outputValues, outputNulls);
+            return allocator.reuseValuesAndNulls(output, outputValues, outputNulls);
         }
 
         private Vector[] copyVectors(Vector[] vectors, int[] positions)

@@ -1832,7 +1832,10 @@ public class GroupedAggregationOperator
                     return streams;
                 }
             }
-            for (int outputPosition : mask) {
+            int selectedCount = mask.selectedCount();
+            int[] selectedPositions = mask.selectedPositions();
+            for (int index = 0; index < selectedCount; index++) {
+                int outputPosition = selectedPositions == null ? index : selectedPositions[index];
                 Streams copied = copyDenseOutputPosition(
                         output,
                         streams,
@@ -1886,20 +1889,13 @@ public class GroupedAggregationOperator
                 result[aggregationOutput] = source;
             }
 
-            Streams.Builder copied = Streams.builder();
-            for (Stream stream : source.streams()) {
-                Vector existingVector = existing == null ? null : existing.getOrNull(stream);
-                copied.put(
-                        stream,
-                        source.get(stream).copySinglePositionInto(
-                                allocator,
-                                allocationContext,
-                                existingVector,
-                                sourcePosition,
-                                outputPosition,
-                                size));
-            }
-            return copied.build();
+            return allocator.copySinglePositionInto(
+                    allocationContext,
+                    source,
+                    existing,
+                    sourcePosition,
+                    outputPosition,
+                    size);
         }
     }
 
