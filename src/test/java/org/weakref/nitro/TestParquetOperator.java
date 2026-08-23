@@ -233,6 +233,14 @@ public class TestParquetOperator
         assertThat(policy.useBulkDecode(sequence(0, 1, 60), 60, 100)).isTrue();
     }
 
+    @Test
+    void testDefaultNarrowFilterWindowDoesNotWidenScratch()
+    {
+        ParquetFilterWindowPolicy policy = ParquetFilterWindowPolicy.defaults();
+
+        assertThat(policy.adaptiveNarrow().rows()).isEqualTo(policy.rows());
+    }
+
     private static int[] sequence(int start, int stride, int count)
     {
         int[] values = new int[count];
