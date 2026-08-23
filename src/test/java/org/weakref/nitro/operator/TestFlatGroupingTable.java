@@ -2681,6 +2681,33 @@ class TestFlatGroupingTable
     }
 
     @Test
+    void testDictionaryRecordIdentityStoresTopLevelNullInTable()
+    {
+        int size = 1 << 12;
+        String[] distinctValues = new String[size];
+        int[] ids = new int[size];
+        for (int position = 0; position < size; position++) {
+            distinctValues[position] = "key-" + position;
+            ids[position] = position;
+        }
+        DictionaryVector dictionary = DictionaryVector.wrap(ids, utf8(distinctValues));
+        BooleanVector nulls = new BooleanVector(size);
+        nulls.values()[25] = true;
+
+        GroupingState grouping = new GroupingState(arrayPool, codeGeneration, groupingResources, adaptiveLongGroupingPolicy, flatKeyTablePolicy);
+        I64Vector groups = new I64Vector(size);
+        grouping.assignGroups(new Vector[] {dictionary}, new Vector[] {nulls}, Mask.all(size), groups);
+
+        assertThat(grouping.usesFlatSingleRecordIdentity()).isTrue();
+        assertThat(grouping.groupCount()).isEqualTo(size);
+        assertThat(groups.values()[24]).isEqualTo(24);
+        assertThat(groups.values()[25]).isEqualTo(25);
+        assertThat(groups.values()[26]).isEqualTo(26);
+        assertThat(groups.values()[size - 1]).isEqualTo(size - 1L);
+        grouping.releaseBuffers();
+    }
+
+    @Test
     void testRecordIdentityAdmissionDoesNotReplacePopulatedDictionaryTable()
     {
         GroupingState grouping = new GroupingState(arrayPool, codeGeneration, groupingResources, adaptiveLongGroupingPolicy, flatKeyTablePolicy);

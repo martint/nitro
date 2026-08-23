@@ -773,7 +773,10 @@ final class GroupingState
             assignMultiLongGroups(values, nulls, mask, result);
             return;
         }
-        if (useFlatGrouping && values.length == 1 && values[0] instanceof DictionaryVector dictionary) {
+        // The physical-domain shortcut keeps a single-key SQL NULL outside the ordinary flat table. Record-identity
+        // admission instead stores NULL as a normal record so logical group ids remain identical to record indexes;
+        // use the general encoded batch path in that mode rather than introducing an external-id hole.
+        if (useFlatGrouping && values.length == 1 && !flatSingleNullInTable && values[0] instanceof DictionaryVector dictionary) {
             assignFlatDictionaryGroups(dictionary, nulls[0], mask, result);
             return;
         }
