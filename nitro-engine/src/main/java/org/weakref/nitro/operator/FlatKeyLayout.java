@@ -204,6 +204,7 @@ class FlatKeyLayout
     private boolean debugGeneratedDictionaryHashBatchRejectedPrinted;
     private DictionaryRecordEqualityKernel generatedRecordEqualityKernel;
     private VectorAccess.LongValues[] fieldLong;
+    private VectorAccess.BooleanValues[] fieldBoolean;
     private DictionaryHashBatchKernel.BinaryHashes[] fieldBinaryHashes;
     private BinaryVector[] fieldBinaryBase;
     private int[][] fieldBinaryIds;
@@ -805,6 +806,7 @@ class FlatKeyLayout
             batchPositionDictionaryMapping = new DictionaryVector[handlers.length];
             fieldLazyIntern = new boolean[handlers.length];
             fieldLong = new VectorAccess.LongValues[handlers.length];
+            fieldBoolean = new VectorAccess.BooleanValues[handlers.length];
             fieldBinaryHashes = new DictionaryHashBatchKernel.BinaryHashes[handlers.length];
             fieldBinaryBase = new BinaryVector[handlers.length];
             fieldBinaryIds = new int[handlers.length][];
@@ -859,6 +861,7 @@ class FlatKeyLayout
             // Resolve this field's typed value/null accessors once for the batch (layer-2 monomorphization).
             Vector fieldValue = channel < values.length ? values[channel] : null;
             fieldLong[index] = fieldKinds[index] == FlatTypeHandler.Kind.LONG && fieldValue != null ? VectorAccess.longValues(fieldValue) : null;
+            fieldBoolean[index] = fieldKinds[index] == FlatTypeHandler.Kind.BOOLEAN && fieldValue != null ? VectorAccess.booleanValues(fieldValue) : null;
             fieldBinaryBase[index] = null;
             fieldBinaryIds[index] = null;
             fieldBinaryConstantHash[index] = 0;
@@ -2535,6 +2538,7 @@ class FlatKeyLayout
         Arrays.fill(fieldBinaryBase, null);
         Arrays.fill(fieldBinaryIds, null);
         Arrays.fill(fieldLong, null);
+        Arrays.fill(fieldBoolean, null);
         Arrays.fill(fieldBinaryHashes, null);
         Arrays.fill(fieldNullAccess, null);
     }
@@ -2712,6 +2716,7 @@ class FlatKeyLayout
                 dictionaryHashedIds,
                 dictionaryEntryHashes,
                 fieldLong,
+                fieldBoolean,
                 fieldBinaryHashes,
                 fieldNullAccess,
                 output);
@@ -2735,6 +2740,7 @@ class FlatKeyLayout
                 dictionaryHashedIds,
                 dictionaryEntryHashes,
                 fieldLong,
+                fieldBoolean,
                 fieldBinaryHashes,
                 fieldNullAccess,
                 table,
@@ -2782,6 +2788,14 @@ class FlatKeyLayout
                     fieldKinds[field] == FlatTypeHandler.Kind.BINARY &&
                     fieldBinaryHashes[field] != null) {
                 shape |= (long) DictionaryHashBatchKernelGenerator.BINARY_ACCESSOR_HASH <<
+                        (DictionaryHashBatchKernelGenerator.HASH_MODE_SHIFT + field * 2);
+                accessorHashedFields++;
+                continue;
+            }
+            if (handlers.length >= hybridMinimumFields &&
+                    fieldKinds[field] == FlatTypeHandler.Kind.BOOLEAN &&
+                    fieldBoolean[field] != null) {
+                shape |= (long) DictionaryHashBatchKernelGenerator.BOOLEAN_ACCESSOR_HASH <<
                         (DictionaryHashBatchKernelGenerator.HASH_MODE_SHIFT + field * 2);
                 accessorHashedFields++;
                 continue;
@@ -2842,7 +2856,7 @@ class FlatKeyLayout
         return switch (fieldKinds[fieldIndex]) {
             case LONG -> Long.hashCode(fieldLong[fieldIndex].value(position));
             case BINARY -> binaryFieldHash(fieldIndex, value, position);
-            case BOOLEAN -> FlatTypeHandlers.BOOLEAN.hashInput(value, position);
+            case BOOLEAN -> Boolean.hashCode(fieldBoolean[fieldIndex].value(position));
             case DOUBLE -> FlatTypeHandlers.DOUBLE.hashInput(value, position);
         };
     }
@@ -2892,7 +2906,7 @@ class FlatKeyLayout
         switch (fieldKinds[fieldIndex]) {
             case LONG -> handlers[fieldIndex].writeLong(fixedChunk, fixedOffset, fieldLong[fieldIndex].value(position));
             case BINARY -> writeBinaryField(fieldIndex, value, position, fixedChunk, fixedOffset, arena, recordIndex);
-            case BOOLEAN -> FlatTypeHandlers.BOOLEAN.writeFlat(value, position, fixedChunk, fixedOffset, arena);
+            case BOOLEAN -> fixedChunk[fixedOffset] = (byte) (fieldBoolean[fieldIndex].value(position) ? 1 : 0);
             case DOUBLE -> FlatTypeHandlers.DOUBLE.writeFlat(value, position, fixedChunk, fixedOffset, arena);
         }
     }
@@ -2975,7 +2989,7 @@ class FlatKeyLayout
         return switch (fieldKinds[fieldIndex]) {
             case LONG -> handlers[fieldIndex].readLong(fixedChunk, fixedOffset) == fieldLong[fieldIndex].value(position);
             case BINARY -> identicalBinaryField(fieldIndex, fixedChunk, fixedOffset, arena, value, position, recordIndex);
-            case BOOLEAN -> FlatTypeHandlers.BOOLEAN.identicalFlatToInput(fixedChunk, fixedOffset, arena, value, position);
+            case BOOLEAN -> (fixedChunk[fixedOffset] != 0) == fieldBoolean[fieldIndex].value(position);
             case DOUBLE -> FlatTypeHandlers.DOUBLE.identicalFlatToInput(fixedChunk, fixedOffset, arena, value, position);
         };
     }
@@ -3633,6 +3647,7 @@ class FlatKeyLayout
         bytes += booleanArrayBytes(compactLongDomainRejected);
         bytes += referenceArrayBytes(fieldKinds);
         bytes += referenceArrayBytes(fieldLong);
+        bytes += referenceArrayBytes(fieldBoolean);
         bytes += referenceArrayBytes(fieldBinaryHashes);
         bytes += referenceArrayBytes(fieldBinaryBase);
         bytes += nestedIntArrayBytes(fieldBinaryIds);
@@ -3703,6 +3718,7 @@ class FlatKeyLayout
             Arrays.fill(fieldBinaryBase, null);
             Arrays.fill(fieldBinaryIds, null);
             Arrays.fill(fieldLong, null);
+            Arrays.fill(fieldBoolean, null);
             Arrays.fill(fieldBinaryHashes, null);
             Arrays.fill(fieldNullAccess, null);
         }

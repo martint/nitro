@@ -35,6 +35,7 @@ final class DictionaryHashBatchKernelGenerator
     static final int MIXED = 2;
     static final int LONG_ACCESSOR_HASH = 1;
     static final int BINARY_ACCESSOR_HASH = 2;
+    static final int BOOLEAN_ACCESSOR_HASH = 3;
 
     // Four low bits retain the field count, followed by two null-shape bits for each of up to 15 fields.
     // Keep hash modes in the upper half of the word so wide SQL grouping keys do not overlap the two regions.
@@ -56,10 +57,10 @@ final class DictionaryHashBatchKernelGenerator
     private static final ClassDesc CD_BINARY_HASHES_ARRAY = CD_BINARY_HASHES.arrayType();
     private static final ClassDesc CD_VECTOR_ARRAY = CD_VECTOR.arrayType();
     private static final MethodTypeDesc HASH_TYPE = MethodTypeDesc.of(
-            CD_void, CD_int, CD_INT_ARRAY_ARRAY, CD_LONG_ARRAY_ARRAY, CD_LONG_VALUES_ARRAY, CD_BINARY_HASHES_ARRAY, CD_BOOLEAN_VALUES_ARRAY, CD_LONG_ARRAY);
+            CD_void, CD_int, CD_INT_ARRAY_ARRAY, CD_LONG_ARRAY_ARRAY, CD_LONG_VALUES_ARRAY, CD_BOOLEAN_VALUES_ARRAY, CD_BINARY_HASHES_ARRAY, CD_BOOLEAN_VALUES_ARRAY, CD_LONG_ARRAY);
     private static final MethodTypeDesc ASSIGN_TYPE = MethodTypeDesc.of(
             CD_long,
-            CD_int, CD_INT_ARRAY_ARRAY, CD_LONG_ARRAY_ARRAY, CD_LONG_VALUES_ARRAY, CD_BINARY_HASHES_ARRAY, CD_BOOLEAN_VALUES_ARRAY,
+            CD_int, CD_INT_ARRAY_ARRAY, CD_LONG_ARRAY_ARRAY, CD_LONG_VALUES_ARRAY, CD_BOOLEAN_VALUES_ARRAY, CD_BINARY_HASHES_ARRAY, CD_BOOLEAN_VALUES_ARRAY,
             CD_TABLE, CD_VECTOR_ARRAY, CD_VECTOR_ARRAY, CD_long, CD_LONG_ARRAY);
     private static final MethodTypeDesc BOOLEAN_VALUE_TYPE = MethodTypeDesc.of(CD_boolean, CD_int);
     private static final MethodTypeDesc LONG_VALUE_TYPE = MethodTypeDesc.of(CD_long, CD_int);
@@ -72,22 +73,23 @@ final class DictionaryHashBatchKernelGenerator
     private static final int DICTIONARY_IDS = 2;
     private static final int ENTRY_HASHES = 3;
     private static final int LONG_VALUES = 4;
-    private static final int BINARY_HASHES = 5;
-    private static final int NULLS = 6;
-    private static final int OUTPUT = 7;
-    private static final int POSITION = 8;
-    private static final int RESULT = 9;
+    private static final int BOOLEAN_VALUES = 5;
+    private static final int BINARY_HASHES = 6;
+    private static final int NULLS = 7;
+    private static final int OUTPUT = 8;
+    private static final int POSITION = 9;
+    private static final int RESULT = 10;
 
-    private static final int ASSIGN_TABLE = 7;
-    private static final int ASSIGN_VALUES = 8;
-    private static final int ASSIGN_NULLS = 9;
-    private static final int ASSIGN_NEXT_GROUP_ID = 10;
-    private static final int ASSIGN_OUTPUT = 12;
-    private static final int ASSIGN_POSITION = 13;
-    private static final int ASSIGN_HASH = 14;
-    private static final int ASSIGN_GROUP_ID = 16;
-    private static final int ASSIGN_TILE_END = 18;
-    private static final int ASSIGN_TILE_START = 19;
+    private static final int ASSIGN_TABLE = 8;
+    private static final int ASSIGN_VALUES = 9;
+    private static final int ASSIGN_NULLS = 10;
+    private static final int ASSIGN_NEXT_GROUP_ID = 11;
+    private static final int ASSIGN_OUTPUT = 13;
+    private static final int ASSIGN_POSITION = 14;
+    private static final int ASSIGN_HASH = 15;
+    private static final int ASSIGN_GROUP_ID = 17;
+    private static final int ASSIGN_TILE_END = 19;
+    private static final int ASSIGN_TILE_START = 20;
 
     private final ConcurrentHashMap<KernelShape, DictionaryHashBatchKernel> kernels = new ConcurrentHashMap<>();
     private boolean closed;
@@ -229,6 +231,22 @@ final class DictionaryHashBatchKernelGenerator
             code.aaload();
             code.iload(position);
             code.invokeinterface(CD_BINARY_HASHES, "hash", BINARY_HASH_TYPE);
+            return;
+        }
+        if (hashMode == BOOLEAN_ACCESSOR_HASH) {
+            code.aload(BOOLEAN_VALUES);
+            code.loadConstant(field);
+            code.aaload();
+            code.iload(position);
+            code.invokeinterface(CD_BOOLEAN_VALUES, "value", BOOLEAN_VALUE_TYPE);
+            Label falseValue = code.newLabel();
+            Label done = code.newLabel();
+            code.ifeq(falseValue);
+            code.loadConstant((long) Boolean.hashCode(true));
+            code.goto_(done);
+            code.labelBinding(falseValue);
+            code.loadConstant((long) Boolean.hashCode(false));
+            code.labelBinding(done);
             return;
         }
         emitDictionaryHash(code, field, position);

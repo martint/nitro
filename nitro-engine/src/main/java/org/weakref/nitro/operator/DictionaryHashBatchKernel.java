@@ -29,6 +29,7 @@ interface DictionaryHashBatchKernel
             int[][] dictionaryIds,
             long[][] entryHashes,
             VectorAccess.LongValues[] longValues,
+            VectorAccess.BooleanValues[] booleanValues,
             BinaryHashes[] binaryHashes,
             VectorAccess.BooleanValues[] nulls,
             long[] output);
@@ -38,6 +39,7 @@ interface DictionaryHashBatchKernel
             int[][] dictionaryIds,
             long[][] entryHashes,
             VectorAccess.LongValues[] longValues,
+            VectorAccess.BooleanValues[] booleanValues,
             BinaryHashes[] binaryHashes,
             VectorAccess.BooleanValues[] nulls,
             FlatGroupingTable table,

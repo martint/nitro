@@ -21,6 +21,7 @@ import org.weakref.nitro.core.function.aggregation.GroupedStateUpdate;
 import org.weakref.nitro.core.function.aggregation.LongStateUpdate;
 import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Stream;
+import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.jit.FusedProjectionCompiler;
 import org.weakref.nitro.jit.ProjectionCodeGenerationPolicy;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
@@ -41,6 +42,33 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class TestOperatorCodeGenerationResources
 {
+    @Test
+    void testGeneratedPhysicalHashSupportsBooleanAccessors()
+    {
+        long shape = 1L |
+                (long) DictionaryHashBatchKernelGenerator.MIXED << 4 |
+                (long) DictionaryHashBatchKernelGenerator.BOOLEAN_ACCESSOR_HASH <<
+                        DictionaryHashBatchKernelGenerator.HASH_MODE_SHIFT;
+        long[] hashes = new long[3];
+        try (OperatorCodeGenerationResources resources = new OperatorCodeGenerationResources()) {
+            DictionaryHashBatchKernel kernel = resources.dictionaryHash().create(shape, 32);
+            kernel.hash(
+                    3,
+                    new int[1][],
+                    new long[1][],
+                    new VectorAccess.LongValues[1],
+                    new VectorAccess.BooleanValues[] {position -> position != 1},
+                    new DictionaryHashBatchKernel.BinaryHashes[1],
+                    new VectorAccess.BooleanValues[] {position -> position == 2},
+                    hashes);
+        }
+
+        assertThat(hashes).containsExactly(
+                31L + Boolean.hashCode(true),
+                31L + Boolean.hashCode(false),
+                32L);
+    }
+
     @Test
     void testProjectionCompilerIsOwnerScoped()
     {
