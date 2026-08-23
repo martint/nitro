@@ -1821,7 +1821,7 @@ public class TestParquetOperator
     {
         List<ParquetRow> rows = new ArrayList<>();
         for (int position = 0; position < 24_000; position++) {
-            Long value = position % 7 == 0 ? null : (long) (position & 7);
+            Long value = position < 1_024 && position % 7 == 0 ? null : (long) (position & 7);
             rows.add(new ParquetRow(position & 7, true, value));
         }
         java.nio.file.Path file = writeParquetFile("selection-only-dictionary-filter.parquet", true, rows);
@@ -1858,6 +1858,36 @@ public class TestParquetOperator
                 .boxed()
                 .toList();
         java.nio.file.Path file = writeInt32ParquetFile("selection-only-int-dictionary-filter.parquet", rows);
+
+        try (ParquetFile parquetFile = ParquetFile.open(file);
+                ColumnReader materialized = columnReader(List.of(parquetFile), "value");
+                ColumnReader selectionOnly = columnReader(List.of(parquetFile), "value")) {
+            int[] materializedSurvivors = new int[24_000];
+            int[] selectionOnlySurvivors = new int[24_000];
+            int[] values = new int[24_000];
+            java.util.function.LongPredicate predicate = value -> (value & 1) == 0;
+
+            int materializedCount = materialized.filterDictInts(
+                    predicate, 24_000, materializedSurvivors, values, null);
+            int selectionOnlyCount = selectionOnly.filterDictInts(
+                    predicate, 24_000, selectionOnlySurvivors, null, null);
+
+            assertThat(selectionOnlyCount).isEqualTo(materializedCount);
+            assertThat(Arrays.copyOf(selectionOnlySurvivors, selectionOnlyCount))
+                    .containsExactly(Arrays.copyOf(materializedSurvivors, materializedCount));
+        }
+    }
+
+    @Test
+    void testSelectionOnlyNullableIntDictionaryFilterMatchesMaterializedValues()
+            throws IOException
+    {
+        List<Integer> rows = new ArrayList<>();
+        for (int position = 0; position < 24_000; position++) {
+            rows.add(position < 1_024 && position % 7 == 0 ? null : position & 7);
+        }
+        java.nio.file.Path file = writeNullableInt32ParquetFile("selection-only-nullable-int-dictionary-filter.parquet", rows);
+        assertDictionaryEncoding(file, "value");
 
         try (ParquetFile parquetFile = ParquetFile.open(file);
                 ColumnReader materialized = columnReader(List.of(parquetFile), "value");
@@ -4160,6 +4190,30 @@ public class TestParquetOperator
                 .build()) {
             for (int value : values) {
                 writer.write(groups.newGroup().append("value", value));
+            }
+        }
+        return file;
+    }
+
+    private java.nio.file.Path writeNullableInt32ParquetFile(String name, List<Integer> values)
+            throws IOException
+    {
+        java.nio.file.Path file = tempDirectory.resolve(name);
+        MessageType schema = Types.buildMessage()
+                .optional(INT32).named("value")
+                .named("nitro_nullable_int32_test");
+
+        SimpleGroupFactory groups = new SimpleGroupFactory(schema);
+        try (ParquetWriter<Group> writer = ExampleParquetWriter.builder(new LocalOutputFile(file))
+                .withType(schema)
+                .withDictionaryEncoding(true)
+                .build()) {
+            for (Integer value : values) {
+                Group group = groups.newGroup();
+                if (value != null) {
+                    group.append("value", value);
+                }
+                writer.write(group);
             }
         }
         return file;

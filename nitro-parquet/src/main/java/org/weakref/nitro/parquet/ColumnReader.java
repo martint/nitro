@@ -1611,17 +1611,31 @@ public final class ColumnReader
                             }
                             int idIndex = 0;
                             int positionBase = windowPos + base;
-                            for (int i = 0; i < tileRows; i++) {
-                                if (runDef[i] == 0) {
-                                    continue;
+                            if (nonNullCount == tileRows) {
+                                for (int i = 0; i < tileRows; i++) {
+                                    int id = ids[i];
+                                    if (branchlessCompaction) {
+                                        survivorsOut[sc] = positionBase + i;
+                                        sc += accept[id] ? 1 : 0;
+                                    }
+                                    else if (accept[id]) {
+                                        survivorsOut[sc++] = positionBase + i;
+                                    }
                                 }
-                                int id = ids[idIndex++];
-                                if (branchlessCompaction) {
-                                    survivorsOut[sc] = positionBase + i;
-                                    sc += accept[id] ? 1 : 0;
-                                }
-                                else if (accept[id]) {
-                                    survivorsOut[sc++] = positionBase + i;
+                            }
+                            else if (nonNullCount > 0) {
+                                for (int i = 0; i < tileRows; i++) {
+                                    if (runDef[i] == 0) {
+                                        continue;
+                                    }
+                                    int id = ids[idIndex++];
+                                    if (branchlessCompaction) {
+                                        survivorsOut[sc] = positionBase + i;
+                                        sc += accept[id] ? 1 : 0;
+                                    }
+                                    else if (accept[id]) {
+                                        survivorsOut[sc++] = positionBase + i;
+                                    }
                                 }
                             }
                             base += tileRows;
@@ -1975,17 +1989,31 @@ public final class ColumnReader
                             }
                             int idIndex = 0;
                             int positionBase = windowPos + base;
-                            for (int i = 0; i < tileRows; i++) {
-                                if (runDef[i] == 0) {
-                                    continue;
+                            if (nonNullCount == tileRows) {
+                                for (int i = 0; i < tileRows; i++) {
+                                    int id = ids[i];
+                                    if (branchlessCompaction) {
+                                        survivorsOut[sc] = positionBase + i;
+                                        sc += accept[id] ? 1 : 0;
+                                    }
+                                    else if (accept[id]) {
+                                        survivorsOut[sc++] = positionBase + i;
+                                    }
                                 }
-                                int id = ids[idIndex++];
-                                if (branchlessCompaction) {
-                                    survivorsOut[sc] = positionBase + i;
-                                    sc += accept[id] ? 1 : 0;
-                                }
-                                else if (accept[id]) {
-                                    survivorsOut[sc++] = positionBase + i;
+                            }
+                            else if (nonNullCount > 0) {
+                                for (int i = 0; i < tileRows; i++) {
+                                    if (runDef[i] == 0) {
+                                        continue;
+                                    }
+                                    int id = ids[idIndex++];
+                                    if (branchlessCompaction) {
+                                        survivorsOut[sc] = positionBase + i;
+                                        sc += accept[id] ? 1 : 0;
+                                    }
+                                    else if (accept[id]) {
+                                        survivorsOut[sc++] = positionBase + i;
+                                    }
                                 }
                             }
                             base += tileRows;
