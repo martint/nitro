@@ -40,6 +40,44 @@ class TestDistinctKeySet
     private final FlatKeyTablePolicy flatKeyTablePolicy = engineResources.operatorResources().flatKeyTablePolicy();
 
     @Test
+    void testGeneratedPhysicalFlatDistinctReportsFirstPositions()
+    {
+        int size = 256;
+        String[] labels = new String[size];
+        long[] ids = new long[size];
+        for (int position = 0; position < size; position++) {
+            labels[position] = "label-" + (position % 8);
+            ids[position] = position;
+        }
+        labels[size - 1] = labels[size - 2];
+        ids[size - 1] = ids[size - 2];
+        Vector[] values = {utf8(labels), new I64Vector(ids)};
+        Vector[] nulls = {null, null};
+
+        try (Allocator allocator = new Allocator(engineResources)) {
+            DistinctKeySet keys = DistinctKeySet.create(
+                    values,
+                    List.of(),
+                    allocator,
+                    new Allocator.Context("generated-flat-distinct"),
+                    arrayPool,
+                    codeGeneration,
+                    DistinctKeySetPolicy.defaults(),
+                    adaptiveLongGroupingPolicy,
+                    flatKeyTablePolicy);
+            try {
+                int[] positions = new int[size];
+                assertThat(keys.addBatch(values, nulls, Mask.all(size), positions)).isEqualTo(size - 1);
+                assertThat(Arrays.copyOf(positions, size - 1)).containsExactly(java.util.stream.IntStream.range(0, size - 1).toArray());
+                assertThat(keys.addBatch(values, nulls, Mask.all(size), positions)).isZero();
+            }
+            finally {
+                keys.releaseBuffers();
+            }
+        }
+    }
+
+    @Test
     void testFlatDistinctUsesProviderCanonicalLongStorage()
     {
         BinaryVector labels = new BinaryVector(3, 3);
@@ -678,5 +716,17 @@ class TestDistinctKeySet
         finally {
             keys.releaseBuffers();
         }
+    }
+
+    private static BinaryVector utf8(String[] values)
+    {
+        byte[][] encoded = Arrays.stream(values)
+                .map(value -> value.getBytes(java.nio.charset.StandardCharsets.UTF_8))
+                .toArray(byte[][]::new);
+        BinaryVector vector = new BinaryVector(values.length, Arrays.stream(encoded).mapToInt(value -> value.length).sum());
+        for (int position = 0; position < encoded.length; position++) {
+            vector.setBytes(position, encoded[position]);
+        }
+        return vector;
     }
 }

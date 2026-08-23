@@ -963,6 +963,7 @@ final class DistinctKeySet
         private final DistinctKeySetPolicy policy;
         private final FlatGroupingTable table;
         private int[] probePositions;
+        private long[] assignedGroups;
         private boolean emptyBinarySeen;
 
         private FlatDistinctIndex(FlatKeyLayout layout, int expectedSize, PrimitiveArrayPool arrayPool, DistinctKeySetPolicy policy)
@@ -1010,6 +1011,12 @@ final class DistinctKeySet
                 if (policy.filterSentinelBeforeHash() && hasTrackedSentinel(values)) {
                     return addFlatBinaryBatch(values, nulls, mask, distinctPositions, nullFree);
                 }
+                if (nullFree && !hasTrackedSentinel(values)) {
+                    int generatedCount = addGeneratedPhysicalBatch(values, nulls, mask, distinctPositions);
+                    if (generatedCount >= 0) {
+                        return generatedCount;
+                    }
+                }
                 table.prepareBatchHashes(values, nulls, mask);
                 int count = 0;
                 for (int position : mask) {
@@ -1033,6 +1040,41 @@ final class DistinctKeySet
             finally {
                 table.endBatch();
             }
+        }
+
+        private int addGeneratedPhysicalBatch(Vector[] values, Vector[] nulls, Mask mask, int[] distinctPositions)
+        {
+            if (!mask.all()) {
+                return -1;
+            }
+            if (assignedGroups == null || assignedGroups.length < mask.size()) {
+                long[] previous = assignedGroups;
+                assignedGroups = arrayPool.borrowLongs(mask.size());
+                arrayPool.release(previous);
+            }
+            long firstNewGroup = table.recordCount();
+            long nextGroup = table.assignGeneratedDictionaryBatch(
+                    values,
+                    nulls,
+                    mask,
+                    assignedGroups,
+                    firstNewGroup);
+            if (nextGroup < 0) {
+                return -1;
+            }
+
+            int count = 0;
+            long expectedNewGroup = firstNewGroup;
+            for (int position : mask) {
+                if (assignedGroups[position] == expectedNewGroup) {
+                    distinctPositions[count++] = position;
+                    expectedNewGroup++;
+                }
+            }
+            if (expectedNewGroup != nextGroup) {
+                throw new IllegalStateException("Generated distinct output did not identify every new group");
+            }
+            return count;
         }
 
         private int addFlatBinaryBatch(Vector[] values, Vector[] nulls, Mask mask, int[] distinctPositions, boolean nullFree)
@@ -1103,7 +1145,8 @@ final class DistinctKeySet
         public long retainedBytes()
         {
             return table.retainedBytes() +
-                    (probePositions == null ? 0 : (long) probePositions.length * Integer.BYTES);
+                    (probePositions == null ? 0 : (long) probePositions.length * Integer.BYTES) +
+                    (assignedGroups == null ? 0 : (long) assignedGroups.length * Long.BYTES);
         }
 
         @Override
@@ -1112,6 +1155,8 @@ final class DistinctKeySet
             table.releaseBuffers();
             arrayPool.release(probePositions);
             probePositions = null;
+            arrayPool.release(assignedGroups);
+            assignedGroups = null;
         }
     }
 

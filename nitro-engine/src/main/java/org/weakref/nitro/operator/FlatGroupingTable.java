@@ -391,6 +391,16 @@ final class FlatGroupingTable
             I64Vector result,
             long nextGroupId)
     {
+        return assignGeneratedDictionaryBatch(values, nulls, mask, result.values(), nextGroupId);
+    }
+
+    long assignGeneratedDictionaryBatch(
+            Vector[] values,
+            Vector[] nulls,
+            Mask mask,
+            long[] result,
+            long nextGroupId)
+    {
         prepareSingleDictionaryGroupCache(mask.selectedCount(), mask.all());
         considerSparseCompositeAdmission(mask);
         if (!policy.generatedDictionaryHashProbeBatch() ||
@@ -406,7 +416,7 @@ final class FlatGroupingTable
                 values,
                 nulls,
                 nextGroupId,
-                result.values());
+                result);
     }
 
     long assignNormalizedIntBatch(
