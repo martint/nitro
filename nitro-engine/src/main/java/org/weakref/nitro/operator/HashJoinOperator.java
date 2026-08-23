@@ -954,6 +954,11 @@ public class HashJoinOperator
                 !joinIndex.supportsDirectSingleMatchPositionRangeOutput()) {
             return -1;
         }
+        // The direct emitter bypasses prepareOuterProbeChunk(), which normally records the physical probe shape
+        // used by output materialization. Preserve that state so a one-to-one flat probe payload is compacted to
+        // flat output instead of being exposed as an indexed dictionary solely because this faster loop ran.
+        singleMatchProbe = true;
+        singleMatchPositionProbe = true;
         int probeStart = currentOuterMaskIndex;
         int emitted = joinIndex.emitSingleRowsPositionsRange(
                 currentOuterJoinValues,

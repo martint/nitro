@@ -2787,6 +2787,37 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testHashJoinDenseSingleBatchRangeOutputSupportsUncachedI32DictionaryProbe()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        Operator outer = new TableOperator(
+                2,
+                List.of(TableOperator.Page.values(
+                        6,
+                        new Vector[] {
+                                DictionaryVector.wrap(new int[] {0, 1, 2, 3, 1, 0}, new I32Vector(new int[] {1, 2, 9, 3})),
+                                new I32Vector(new int[] {10, 20, 90, 30, 21, 11}),
+                        },
+                        Mask.all(6))));
+        Operator operator = new HashJoinOperator(
+                allocator,
+                outer,
+                0,
+                new ConstantTableOperator(allocator, 2, List.of(
+                        row(1, 100),
+                        row(2, 200),
+                        row(3, 300))),
+                0);
+
+        assertThat(OperatorAssertions.OperatorAssert.toRows(operator)).containsExactly(
+                row(1, 10, 1, 100),
+                row(2, 20, 2, 200),
+                row(3, 30, 3, 300),
+                row(2, 21, 2, 200),
+                row(1, 11, 1, 100));
+    }
+
+    @Test
     void testHashJoinOperatorOutputCanFeedAnotherHashJoin()
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());
