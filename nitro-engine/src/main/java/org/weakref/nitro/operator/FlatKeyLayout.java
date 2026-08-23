@@ -1307,11 +1307,13 @@ class FlatKeyLayout
     /**
      * Normalized scratch is reserved before the position loop, so reject a batch up front when a representative
      * sample shows that its integer keys are outside the exact packed domain. A mixed binary/integer key also stays
-     * on the ordinary record path when one integer lane is already highly discriminating: interning the binary lane
-     * and building a second compact identity cannot repay its extra pass when the ordinary table will insert almost
-     * every row. The same applies when nearly every value in an integer lane is outside the compact domain, since
-     * the per-position normalization attempt would almost always fall back. Individual positions are still checked
-     * by {@link #tryPrepareNormalizedIntKey} after a normalized hash strategy has been established.
+     * on the ordinary record path when one integer lane is already highly discriminating: interning a lone reusable
+     * binary lane and building a second compact identity cannot repay its extra pass when the ordinary table will
+     * insert almost every row. Two reusable binary lanes can amortize that work by replacing both byte-oriented
+     * comparisons with exact integer ids. The same rejection applies when nearly every value in an integer lane is
+     * outside the compact domain, since the per-position normalization attempt would almost always fall back.
+     * Individual positions are still checked by {@link #tryPrepareNormalizedIntKey} after a normalized hash strategy
+     * has been established.
      */
     private boolean sampledNormalizedIntKeyDomain(Vector[] values, Vector[] nulls)
     {
@@ -1322,12 +1324,14 @@ class FlatKeyLayout
         int sampleSize = Math.min(length, normalizedIntKeySamples.length);
         boolean hasBinaryField = false;
         int internedBinaryFields = 0;
+        int reusableBinaryFields = 0;
         for (FlatTypeHandler.Kind kind : fieldKinds) {
             hasBinaryField |= kind == FlatTypeHandler.Kind.BINARY;
         }
         for (int field = 0; field < fieldKinds.length; field++) {
-            if (fieldKinds[field] == FlatTypeHandler.Kind.BINARY && !fieldIdComparable[field]) {
-                internedBinaryFields++;
+            if (fieldKinds[field] == FlatTypeHandler.Kind.BINARY) {
+                internedBinaryFields += fieldIdComparable[field] ? 0 : 1;
+                reusableBinaryFields += adaptiveFlatValueIdFields[field] ? 1 : 0;
             }
         }
         if (internedBinaryFields > policy.normalizedIntKeyMaxInternedBinaryFields()) {
@@ -1386,8 +1390,9 @@ class FlatKeyLayout
                     nonNull > 0 &&
                     ((long) outOfDomain * 100 >=
                             (long) nonNull * policy.normalizedIntKeyFallbackMinPercent() ||
-                            (long) distinct * 100 >=
-                                    (long) (nonNull - outOfDomain) * policy.normalizedIntKeyDiscriminatorMinDistinctPercent())) {
+                            (reusableBinaryFields < 2 &&
+                                    (long) distinct * 100 >=
+                                            (long) (nonNull - outOfDomain) * policy.normalizedIntKeyDiscriminatorMinDistinctPercent()))) {
                 batchNormalizedIntKeyCostRejected = true;
                 return false;
             }

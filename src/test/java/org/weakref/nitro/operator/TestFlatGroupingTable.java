@@ -2466,7 +2466,10 @@ class TestFlatGroupingTable
                     DictionaryVector.wrapNested(ids, size, utf8("first", "second")),
                     new I64Vector(distinct)};
             layout.beginBatch(later, null);
-            assertThat(layout.batchSupportsNormalizedIntKey()).isFalse();
+            // The two reusable binary lanes amortize normalization even when the integer lane becomes highly
+            // discriminating. The already-established normalized strategy remains unchanged, so the alternate
+            // generated dictionary-hash path must still stay disabled.
+            assertThat(layout.batchSupportsNormalizedIntKey()).isTrue();
             assertThat(layout.prepareGeneratedDictionaryBatchHashes(size, new long[size])).isFalse();
             layout.endBatch();
         }
@@ -3135,7 +3138,7 @@ class TestFlatGroupingTable
     }
 
     @Test
-    void testNormalizedIntKeyRejectsMultipleBinaryFieldsThatRequireInterning()
+    void testNormalizedIntKeyAdmitsMultipleReusableBinaryFieldsThatRequireInterning()
     {
         int positions = 128;
         String[] first = new String[positions];
@@ -3151,7 +3154,8 @@ class TestFlatGroupingTable
         try {
             layout.beginBatch(values, new Vector[] {null, null, null});
             assertThat(layout.supportsNormalizedIntKeyShape()).isTrue();
-            assertThat(layout.batchSupportsNormalizedIntKey()).isFalse();
+            assertThat(layout.batchSupportsNormalizedIntKey()).isTrue();
+            assertThat(layout.tryPrepareNormalizedIntKey(values, new Vector[] {null, null, null}, positions - 1)).isTrue();
             layout.endBatch();
         }
         finally {
@@ -3197,6 +3201,31 @@ class TestFlatGroupingTable
             strings[position] = "value-" + position;
             first[position] = position;
             second[position] = position + 1;
+        }
+        Vector[] values = {utf8(strings), new I64Vector(first), new I64Vector(second)};
+        FlatKeyLayout layout = FlatKeyLayout.tryCreate(values, true, arrayPool, codeGeneration, flatKeyTablePolicy);
+        try {
+            layout.beginBatch(values, new Vector[] {null, null, null});
+            assertThat(layout.batchSupportsNormalizedIntKey()).isFalse();
+            assertThat(layout.tryPrepareNormalizedIntKey(values, new Vector[] {null, null, null}, 0)).isFalse();
+            layout.endBatch();
+        }
+        finally {
+            layout.releaseBuffers();
+        }
+    }
+
+    @Test
+    void testNormalizedIntKeyRejectsHighCardinalityIntegerWithOneReusableBinaryField()
+    {
+        int positions = 128;
+        String[] strings = new String[positions];
+        long[] first = new long[positions];
+        long[] second = new long[positions];
+        for (int position = 0; position < positions; position++) {
+            strings[position] = "value-" + (position % 8);
+            first[position] = position;
+            second[position] = position % 4;
         }
         Vector[] values = {utf8(strings), new I64Vector(first), new I64Vector(second)};
         FlatKeyLayout layout = FlatKeyLayout.tryCreate(values, true, arrayPool, codeGeneration, flatKeyTablePolicy);
