@@ -171,6 +171,7 @@ public final class NitroParquetBatchSource
     private final boolean adaptiveNarrowFilterWindowCandidate;
     private boolean adaptiveNarrowFilterWindowDecided;
     private final LongDomain[] filtersByColumn;
+    private final boolean[] lateRowLevelFiltersByColumn;
     private final boolean[] requiredFiltersByColumn;
     private final LongDomain[] rowGroupFiltersByColumn;
     private final VersionedLongPredicate[] filterVersionsByColumn;
@@ -540,6 +541,7 @@ public final class NitroParquetBatchSource
         this.adaptiveNarrowFilterWindowCandidate =
                 adaptiveNarrowPolicy.enabled() && numeric && columnCount <= adaptiveNarrowPolicy.maxColumns();
         this.filtersByColumn = new LongDomain[columnCount];
+        this.lateRowLevelFiltersByColumn = new boolean[columnCount];
         this.requiredFiltersByColumn = new boolean[columnCount];
         this.rowGroupFiltersByColumn = new LongDomain[columnCount];
         this.filterVersionsByColumn = new VersionedLongPredicate[columnCount];
@@ -594,11 +596,12 @@ public final class NitroParquetBatchSource
                 hasRowGroupFilters = true;
             }
         }
-        // A filter admitted after the first batch may encounter a partially consumed nullable page. Row-group
-        // metadata remains safe to consult between polls, but the row-level dictionary path requires page state
-        // initialized from its boundary. Keep late filters at row-group scope until the reader supports an explicit
-        // mid-page transition.
-        if (nextRow > 0) {
+        // Complete predicate responsibility can move into the source only before reading begins: already published
+        // rows did not observe a late predicate. Residual runtime filters remain safe to install between polls. Every
+        // reader is aligned at nextRow, and the next filter window continues from its current page cursor, so a later
+        // narrowing can avoid row-level work in unread portions of the current row group instead of waiting for its
+        // boundary. Any already decoded output slice remains a safe superset and is still checked by the join.
+        if (nextRow > 0 && enforcementRequired) {
             return false;
         }
         // Runtime filters are numeric, but their surviving payload need not be. The filtered-window path decodes
@@ -624,6 +627,7 @@ public final class NitroParquetBatchSource
             }
         }
         filtersByColumn[column] = filter;
+        lateRowLevelFiltersByColumn[column] |= nextRow > 0;
         requiredFiltersByColumn[column] = enforcementRequired;
         if (existing == null && filterOrder != null) {
             // Multiple filters can be installed before the first poll. Preserve the established order and append
@@ -1644,7 +1648,10 @@ public final class NitroParquetBatchSource
                 boolean[] cn = outputRequired[column] && nullable[column] ? colNull[column] : null;
                 java.util.function.LongPredicate predicate = filter;
                 VersionedLongPredicate predicateVersion = filterVersionsByColumn[column];
-                if (readers[column].kind() == ColumnReader.Kind.LONG) {
+                if (lateRowLevelFiltersByColumn[column]) {
+                    kept = filterLateLeadColumn(column, filter, count, nextSurvivors);
+                }
+                else if (readers[column].kind() == ColumnReader.Kind.LONG) {
                     kept = readers[column].filterDictLongs(predicate, predicateVersion, count, nextSurvivors,
                             outputRequired[column] ? colLong[column] : null, cn);
                 }
@@ -1652,7 +1659,7 @@ public final class NitroParquetBatchSource
                     kept = readers[column].filterDictInts(predicate, predicateVersion, count, nextSurvivors,
                             outputRequired[column] ? colInt[column] : null, cn);
                 }
-                if (diagnostics.sourceWork()) {
+                if (diagnostics.sourceWork() && !lateRowLevelFiltersByColumn[column]) {
                     debugDictionaryExamined[column] += count;
                 }
                 survivors = applied + 1 < order.length
@@ -1894,6 +1901,37 @@ public final class NitroParquetBatchSource
             recordCopied(c, survivorCount);
         }
         windowSurvivorCount = survivorCount;
+    }
+
+    /** Filter from the reader's current page cursor when a residual predicate narrows after scanning has begun. */
+    private int filterLateLeadColumn(int column, LongDomain filter, int count, int[] survivors)
+    {
+        readColumnInto(column, null, count, count);
+        boolean isLong = readers[column].kind() == ColumnReader.Kind.LONG;
+        long[] longValues = colLong[column];
+        int[] intValues = colInt[column];
+        boolean[] nulls = nullable[column] ? colNull[column] : null;
+        int kept = 0;
+        for (int position = 0; position < count; position++) {
+            if (nulls != null && nulls[position]) {
+                continue;
+            }
+            if (filter.test(isLong ? longValues[position] : intValues[position])) {
+                if (outputRequired[column]) {
+                    if (isLong) {
+                        longValues[kept] = longValues[position];
+                    }
+                    else {
+                        intValues[kept] = intValues[position];
+                    }
+                    if (nulls != null) {
+                        nulls[kept] = false;
+                    }
+                }
+                survivors[kept++] = position;
+            }
+        }
+        return kept;
     }
 
     /** Decode one mixed-scan BINARY payload densely at the final dynamic-filter survivor set. */
