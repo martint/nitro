@@ -359,6 +359,30 @@ public final class DictionaryVector
         return values.copyPositionsInto(allocator, allocationContext, existing, dictionaryPositions, sourceCount, outputStart, size);
     }
 
+    /**
+     * Copies a complete dense selection while retaining this vector's physical dictionary domain and borrowing its
+     * immutable values.
+     *
+     * <p>This intentionally is not the default append contract of {@link #copyPositionsInto}: generic callers may
+     * append rows backed by unrelated dictionaries into one destination. A source that owns the complete output can
+     * use this narrower operation to preserve encoding across filtering and batch slicing. The caller must keep the
+     * immutable values alive for the returned vector's lifetime.
+     */
+    public DictionaryVector copyPositionsPreservingEncodingBorrowingValues(
+            Allocator allocator,
+            Allocator.Context allocationContext,
+            int[] sourcePositions,
+            int sourceCount)
+    {
+        I32Vector outputIds = I32Vector.allocate(allocator, allocationContext, sourceCount);
+        int[] mappedIds = outputIds.values();
+        for (int index = 0; index < sourceCount; index++) {
+            mappedIds[index] = ids[sourcePositions[index]];
+        }
+        checkArgument(values.contentImmutable(), "dictionary values are not immutable");
+        return wrapOwnedIds(outputIds, sourceCount, values);
+    }
+
     @Override
     public Vector copySelectedPositionsInto(Allocator allocator, Allocator.Context allocationContext, Vector existing, SelectedPositions sourcePositions, int outputStart, int size)
     {

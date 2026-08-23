@@ -137,6 +137,7 @@ public final class ColumnReader
     private final int typeLength;
     private final List<Chunk> chunks = new ArrayList<>();
     private int cachedDictionarySize = Integer.MIN_VALUE;
+    private Boolean dictionaryOnly;
     private long zeroAcceptedDictionaryRowsObserved;
 
     private final ParquetReaderPolicy readerPolicy;
@@ -3718,6 +3719,23 @@ public final class ColumnReader
         }
         cachedDictionarySize = max;
         return cachedDictionarySize;
+    }
+
+    /**
+     * Whether every row-group chunk uses dictionary encoding for its data pages.
+     *
+     * <p>This is a metadata-only admission signal for callers choosing between selective flat materialization and a
+     * full encoded read. In particular, a low-cardinality BINARY payload is cheaper to read as dictionary ids and
+     * retain as a {@link DictionaryVector} than to copy the selected byte strings, even when relatively few logical
+     * rows survive an adjacent filter.
+     */
+    public boolean isDictionaryOnly()
+    {
+        if (dictionaryOnly == null) {
+            dictionaryOnly = !chunks.isEmpty() && chunks.stream()
+                    .allMatch(chunk -> isOnlyDictionaryEncoded(chunk.metadata()));
+        }
+        return dictionaryOnly;
     }
 
     /**

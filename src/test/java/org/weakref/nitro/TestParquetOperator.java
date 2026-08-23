@@ -830,6 +830,63 @@ public class TestParquetOperator
     }
 
     @Test
+    void testNitroParquetSourcePreservesDictionaryPayloadAcrossRowFilter()
+            throws IOException
+    {
+        List<Integer> rows = new ArrayList<>();
+        for (int position = 0; position < 100_003; position++) {
+            rows.add(position % 31);
+        }
+        java.nio.file.Path file = writeIntStringParquetFile("mixed-dictionary-payload-runtime-filter.parquet", rows);
+        assertDictionaryEncoding(file, "payload");
+        Schema schema = Schema.unspecified(List.of("value", "payload"));
+        NitroParquetScanResources resources = NitroParquetScanResources.createDefault(
+                org.weakref.nitro.parquet.ParquetArenaPolicy.confined(),
+                new ParquetRuntimeFilterPolicy(true, true, true, 8_096),
+                new ParquetScanBatchPolicy(4_000));
+
+        try (AllocationResources allocationResources = AllocationResources.createDefault();
+                Allocator allocator = new Allocator(allocationResources);
+                NitroParquetBatchSource source = new NitroParquetBatchSource(
+                        resources,
+                        allocator,
+                        List.of(file),
+                        schema)) {
+            assertThat(source.addRuntimeFilter(new RuntimeFilter(
+                    source.column(0),
+                    new TestingTypedLongDomain(source.column(0).type(), DynamicFilter.fromRange(0, 5, 7)),
+                    false).withoutResidual()))
+                    .isEqualTo(RuntimeFilterAcceptance.ENFORCED);
+
+            int positions = 0;
+            int batches = 0;
+            SourcePoll poll = source.poll();
+            while (poll instanceof SourcePoll.Ready ready) {
+                try (var batch = ready.batch()) {
+                    org.weakref.nitro.data.Vector payload = batch.column(1).borrow(Stream.VALUES);
+                    assertThat(payload).isInstanceOf(DictionaryVector.class);
+                    DictionaryVector dictionary = (DictionaryVector) payload;
+                    assertThat(dictionary.values().length()).isEqualTo(31);
+                    var keys = VectorAccess.longValues(batch.column(0).borrow(Stream.VALUES));
+                    for (int index = 0; index < batch.selection().count(); index++) {
+                        int position = batch.selection().position(index);
+                        long value = keys.value(position);
+                        assertThat(value).isBetween(5L, 7L);
+                        assertThat(utf8(dictionary.values(), dictionary.ids()[position]))
+                                .isEqualTo("payload-" + value);
+                    }
+                    positions += batch.selection().count();
+                    batches++;
+                }
+                poll = source.poll();
+            }
+            assertThat(poll).isSameAs(SourcePoll.Finished.FINISHED);
+            assertThat(batches).isGreaterThan(1);
+            assertThat(positions).isEqualTo(9_678);
+        }
+    }
+
+    @Test
     void testNitroParquetSourcePrunesRowGroupsBeforeNumericFilterWindows()
             throws IOException
     {

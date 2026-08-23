@@ -35,6 +35,7 @@ import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BatchBufferOwner;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
@@ -1905,18 +1906,24 @@ public final class NitroParquetBatchSource
         }
 
         boolean[] rawNulls = nullable[column] ? ensureColumnNullScratch(column, count) : null;
-        Vector raw = bulk
+        // For a dictionary-only physical column, reading the full logical window preserves the compact ids + values
+        // domain and avoids copying a variable-width value for every survivor. Selection density alone is therefore
+        // not a sufficient admission signal: the encoded read is normally cheaper even for a sparse survivor set.
+        boolean preserveDictionary = readers[column].isDictionaryOnly();
+        Vector raw = bulk || preserveDictionary
                 ? readers[column].readBinary(allocator, allocationContext, rawNulls, count)
                 : readers[column].readSelectedBinary(allocator, allocationContext, survivors, survivorCount, count, rawNulls);
         try {
-            windowBinary[column] = raw.copyPositionsInto(
-                    allocator,
-                    allocationContext,
-                    null,
-                    survivors,
-                    survivorCount,
-                    0,
-                    survivorCount);
+            windowBinary[column] = raw instanceof DictionaryVector dictionary
+                    ? dictionary.copyPositionsPreservingEncodingBorrowingValues(allocator, allocationContext, survivors, survivorCount)
+                    : raw.copyPositionsInto(
+                            allocator,
+                            allocationContext,
+                            null,
+                            survivors,
+                            survivorCount,
+                            0,
+                            survivorCount);
         }
         finally {
             allocator.release(allocationContext, raw);
@@ -1927,7 +1934,7 @@ public final class NitroParquetBatchSource
                 denseNulls[output] = rawNulls[survivors[output]];
             }
         }
-        if (bulk) {
+        if (bulk || preserveDictionary) {
             recordFullDecode(column, count);
         }
         else {
@@ -2155,14 +2162,16 @@ public final class NitroParquetBatchSource
                 for (int position = 0; position < sliceCount; position++) {
                     windowSlicePositions[position] = start + position;
                 }
-                valueVector = windowBinary[c].copyPositionsInto(
-                        allocator,
-                        allocationContext,
-                        null,
-                        windowSlicePositions,
-                        sliceCount,
-                        0,
-                        batchPolicy.maxRows());
+                valueVector = windowBinary[c] instanceof DictionaryVector dictionary
+                        ? dictionary.copyPositionsPreservingEncodingBorrowingValues(allocator, allocationContext, windowSlicePositions, sliceCount)
+                        : windowBinary[c].copyPositionsInto(
+                                allocator,
+                                allocationContext,
+                                null,
+                                windowSlicePositions,
+                                sliceCount,
+                                0,
+                                batchPolicy.maxRows());
             }
             else if (readers[c].isDouble()) {
                 valueVector = longBitsToDoubles(windowLong[c], start, sliceCount, batchPolicy.maxRows());
