@@ -584,7 +584,8 @@ class TestDistinctKeySet
                 defaults.adaptiveCompactLongPairStartBatch(),
                 defaults.inlineSmallGroupedLong(),
                 defaults.keyOnlyDictionaryDomain(),
-                defaults.keyOnlyDictionaryDomainMinimumReduction());
+                defaults.keyOnlyDictionaryDomainMinimumReduction(),
+                defaults.keyOnlySparseRetentionMinPercent());
     }
 
     private static DictionaryVector nestedLongDictionary(int[] outerIds, int[] innerIds, long[] values)

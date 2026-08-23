@@ -43,7 +43,8 @@ public record DistinctKeySetPolicy(
         int adaptiveCompactLongPairStartBatch,
         boolean inlineSmallGroupedLong,
         boolean keyOnlyDictionaryDomain,
-        int keyOnlyDictionaryDomainMinimumReduction)
+        int keyOnlyDictionaryDomainMinimumReduction,
+        int keyOnlySparseRetentionMinPercent)
 {
     public DistinctKeySetPolicy
     {
@@ -62,6 +63,9 @@ public record DistinctKeySetPolicy(
         }
         if (keyOnlyDictionaryDomainMinimumReduction <= 0) {
             throw new IllegalArgumentException("keyOnlyDictionaryDomainMinimumReduction must be positive");
+        }
+        if (keyOnlySparseRetentionMinPercent <= 0 || keyOnlySparseRetentionMinPercent > 100) {
+            throw new IllegalArgumentException("keyOnlySparseRetentionMinPercent must be in [1, 100]");
         }
     }
 
@@ -89,7 +93,8 @@ public record DistinctKeySetPolicy(
                 4,
                 true,
                 true,
-                4);
+                4,
+                75);
     }
 
     public static DistinctKeySetPolicy fromSystemProperties()
@@ -116,7 +121,8 @@ public record DistinctKeySetPolicy(
                 Integer.getInteger("nitro.distinct.adaptiveCompactLongPairStartBatch", 4),
                 booleanProperty("nitro.distinct.inlineSmallGroupedLong", true),
                 booleanProperty("nitro.distinct.keyOnlyDictionaryDomain", true),
-                Integer.getInteger("nitro.distinct.keyOnlyDictionaryDomainMinimumReduction", 4));
+                Integer.getInteger("nitro.distinct.keyOnlyDictionaryDomainMinimumReduction", 4),
+                Integer.getInteger("nitro.distinct.keyOnlySparseRetentionMinPercent", 75));
     }
 
     private static boolean booleanProperty(String name, boolean defaultValue)

@@ -207,6 +207,19 @@ final class InitialAggregationBatchBuilder
         return build(input, inputMask, true);
     }
 
+    /**
+     * Builds position-preserving initial output for a selected subset while transferring the complete input batch
+     * lifetime to the result. Retaining the input is useful when grouped streams can be borrowed directly: the
+     * output mask constrains every consumer to {@code inputMask}, and closing the result closes the retained input.
+     * Returning {@code null} means at least one aggregation result would require compaction.
+     */
+    Batch buildRetaining(Batch input, Mask inputMask)
+    {
+        requireNonNull(input, "input is null");
+        requireNonNull(inputMask, "inputMask is null");
+        return build(input, inputMask, true);
+    }
+
     Batch empty()
     {
         Allocator.Context context = new Allocator.Context(

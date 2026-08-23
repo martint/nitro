@@ -229,6 +229,13 @@ public final class KeyOnlyGroupingSession
                 selectedCount,
                 inputMask.size());
         try {
+            boolean retainInput = mayRetainInput &&
+                    (long) selectedCount * 100 >=
+                            (long) inputMask.selectedCount() * distinctKeySetPolicy.keyOnlySparseRetentionMinPercent();
+            pendingOutput = retainInput ? outputBuilder.buildRetaining(batch, distinctMask) : null;
+            if (pendingOutput != null) {
+                return InputOwnership.SESSION;
+            }
             pendingOutput = outputBuilder.build(batch, distinctMask);
         }
         finally {

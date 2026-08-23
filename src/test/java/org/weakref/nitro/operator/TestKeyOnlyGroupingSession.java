@@ -128,6 +128,40 @@ class TestKeyOnlyGroupingSession
     }
 
     @Test
+    void testRetainsSparseDistinctInputWhenOwnershipIsOffered()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                KeyOnlyGroupingSession session = new KeyOnlyGroupingSession(
+                        allocator,
+                        Schema.unspecified(1),
+                        List.of(0),
+                        List.of(0),
+                        resources.operatorResources())) {
+            allocator.beginExecution();
+            AtomicBoolean closed = new AtomicBoolean();
+            I64Vector values = new I64Vector(new long[] {1, 1, 2, 3});
+            Batch input = new Batch(
+                    Mask.all(4),
+                    _ -> {},
+                    mask -> mask,
+                    _ -> {},
+                    () -> closed.set(true),
+                    new Output[] {Output.of(Streams.ofValuesAndNulls(values, new BooleanVector(new boolean[4])))});
+
+            assertThat(session.addInputWithOwnership(input, 0)).isEqualTo(BatchAggregationSession.InputOwnership.SESSION);
+            assertThat(closed).isFalse();
+            try (Batch output = session.getOutput()) {
+                assertThat(output.borrowMask().all()).isFalse();
+                assertThat(output.output(0).borrow(Stream.VALUES)).isSameAs(values);
+                assertThat(selectedValues(output)).containsExactly(1L, 2L, 3L);
+                assertThat(closed).isFalse();
+            }
+            assertThat(closed).isTrue();
+        }
+    }
+
+    @Test
     void testDictionaryDomainGroupingPreservesNullAndValueRepresentatives()
     {
         try (EngineResources resources = EngineResources.createDefault();
