@@ -213,6 +213,8 @@ public final class NitroParquetBatchSource
     private final long[][] windowLong;
     private final int[][] windowInt;
     private final boolean[][] windowNull;
+    private final Vector[] windowBinary;
+    private int[] windowSlicePositions = new int[0];
     private int windowSurvivorCount;
     private int windowSurvivorCursor;
     // Payload decode path for the DF window, decided once from the first window's survival rate and frozen for the
@@ -550,6 +552,7 @@ public final class NitroParquetBatchSource
         this.windowLong = new long[columnCount][];
         this.windowInt = new int[columnCount][];
         this.windowNull = new boolean[columnCount][];
+        this.windowBinary = new Vector[columnCount];
         this.debugFilterInputs = new long[columnCount];
         this.debugFilterOutputs = new long[columnCount];
         this.debugFullDecoded = new long[columnCount];
@@ -597,12 +600,13 @@ public final class NitroParquetBatchSource
         if (nextRow > 0) {
             return false;
         }
-        // Only all-numeric scans take the row-level skip-decode path: the survivor payload is then guaranteed
-        // INT/LONG, so readSelectedInts/Longs cover it. Mixed scans still retain the domain above for metadata-only
-        // row-group rejection and keep the executable filter as a residual operator predicate.
+        // Runtime filters are numeric, but their surviving payload need not be. The filtered-window path decodes
+        // INT/LONG payload into reusable primitive scratch and preserves BINARY payload as an allocator-owned vector.
+        // This matters for ordinary dimension scans such as numeric date keys projected alongside CHAR attributes:
+        // downgrading those scans to row-group-only filtering makes a downstream dynamic-filter collector publish
+        // the entire key domain instead of the selected rows.
         if (!runtimeFilterPolicy.rowLevelFiltering() ||
-                (nullable[column] && !runtimeFilterPolicy.nullableRowLevelFiltering()) ||
-                !allNumeric) {
+                (nullable[column] && !runtimeFilterPolicy.nullableRowLevelFiltering())) {
             return false;
         }
         // Several joins can push a filter on the same probe column (e.g. this scan's own dimension join and a
@@ -1829,6 +1833,10 @@ public final class NitroParquetBatchSource
             if (deferredFilteredPayload) {
                 continue;
             }
+            if (readers[c].kind() == ColumnReader.Kind.BINARY) {
+                decodeBinaryWindow(c, survivors, survivorCount, count, dfPayloadBulk);
+                continue;
+            }
             boolean[] nulls = nullable[c] ? ensureWindowNull(c, survivorCount) : null;
             if (dfPayloadBulk) {
                 readColumnInto(c, null, count, count);
@@ -1885,6 +1893,63 @@ public final class NitroParquetBatchSource
             recordCopied(c, survivorCount);
         }
         windowSurvivorCount = survivorCount;
+    }
+
+    /** Decode one mixed-scan BINARY payload densely at the final dynamic-filter survivor set. */
+    private void decodeBinaryWindow(int column, int[] survivors, int survivorCount, int count, boolean bulk)
+    {
+        releaseWindowBinary(column);
+        if (survivorCount == 0) {
+            readers[column].skipSelectedBinary(count);
+            return;
+        }
+
+        boolean[] rawNulls = nullable[column] ? ensureColumnNullScratch(column, count) : null;
+        Vector raw = bulk
+                ? readers[column].readBinary(allocator, allocationContext, rawNulls, count)
+                : readers[column].readSelectedBinary(allocator, allocationContext, survivors, survivorCount, count, rawNulls);
+        try {
+            windowBinary[column] = raw.copyPositionsInto(
+                    allocator,
+                    allocationContext,
+                    null,
+                    survivors,
+                    survivorCount,
+                    0,
+                    survivorCount);
+        }
+        finally {
+            allocator.release(allocationContext, raw);
+        }
+        if (nullable[column]) {
+            boolean[] denseNulls = ensureWindowNull(column, survivorCount);
+            for (int output = 0; output < survivorCount; output++) {
+                denseNulls[output] = rawNulls[survivors[output]];
+            }
+        }
+        if (bulk) {
+            recordFullDecode(column, count);
+        }
+        else {
+            recordSelectedDecode(column, survivorCount);
+        }
+        recordCopied(column, survivorCount);
+    }
+
+    private boolean[] ensureColumnNullScratch(int column, int size)
+    {
+        if (colNull[column] == null || colNull[column].length < size) {
+            colNull[column] = replaceBooleans(colNull[column], size);
+        }
+        return colNull[column];
+    }
+
+    private void releaseWindowBinary(int column)
+    {
+        if (windowBinary[column] != null) {
+            allocator.release(allocationContext, windowBinary[column]);
+            windowBinary[column] = null;
+        }
     }
 
     private static void checkSurvivorBounds(int column, int[] survivors, int survivorCount, int count)
@@ -2082,6 +2147,22 @@ public final class NitroParquetBatchSource
             Vector valueVector;
             if (readers[c].kind() == ColumnReader.Kind.INT) {
                 valueVector = copyIntOutput(c, windowInt[c], start, sliceCount, batchPolicy.maxRows());
+            }
+            else if (readers[c].kind() == ColumnReader.Kind.BINARY) {
+                if (windowSlicePositions.length < sliceCount) {
+                    windowSlicePositions = replaceInts(windowSlicePositions, sliceCount);
+                }
+                for (int position = 0; position < sliceCount; position++) {
+                    windowSlicePositions[position] = start + position;
+                }
+                valueVector = windowBinary[c].copyPositionsInto(
+                        allocator,
+                        allocationContext,
+                        null,
+                        windowSlicePositions,
+                        sliceCount,
+                        0,
+                        batchPolicy.maxRows());
             }
             else if (readers[c].isDouble()) {
                 valueVector = longBitsToDoubles(windowLong[c], start, sliceCount, batchPolicy.maxRows());
@@ -2287,7 +2368,41 @@ public final class NitroParquetBatchSource
                 ? allocator.allocate(allocationContext, BooleanVector.class, batchPolicy.maxRows(), BooleanVector::new)
                 : null;
         boolean[] nulls = nullVector == null ? null : nullVector.values();
-        if (reader.kind() == ColumnReader.Kind.INT) {
+        if (reader.kind() == ColumnReader.Kind.BINARY) {
+            boolean[] rawNulls = isNullable ? ensureColumnNullScratch(column, deferredWindowRows) : null;
+            Vector raw = reader.readSelectedBinary(
+                    allocator,
+                    allocationContext,
+                    deferredRawSurvivors,
+                    decodeCount,
+                    deferredWindowRows,
+                    rawNulls);
+            Vector vector = null;
+            try {
+                for (int index = 0; index < decodeCount; index++) {
+                    int outputPosition = weakConstraint || outputPositions == null ? index : outputPositions[index];
+                    vector = raw.copySinglePositionInto(
+                            allocator,
+                            allocationContext,
+                            vector,
+                            deferredRawSurvivors[index],
+                            outputPosition,
+                            batchPolicy.maxRows());
+                    if (nulls != null) {
+                        nulls[outputPosition] = rawNulls[deferredRawSurvivors[index]];
+                    }
+                }
+            }
+            finally {
+                allocator.release(allocationContext, raw);
+            }
+            currentValues[column] = vector == null
+                    ? BinaryVector.allocate(allocator, allocationContext, batchPolicy.maxRows(), 0)
+                    : vector;
+            recordSelectedDecode(column, decodeCount);
+            recordCopied(column, decodeCount);
+        }
+        else if (reader.kind() == ColumnReader.Kind.INT) {
             ensureLazyScratch(decodeCount, false);
             reader.readSelectedInts(deferredRawSurvivors, decodeCount, deferredWindowRows, lazyScratchInt, isNullable ? lazyScratchNull : null);
             recordSelectedDecode(column, decodeCount);
@@ -2432,6 +2547,15 @@ public final class NitroParquetBatchSource
     /** Decode {@code column} into its scratch buffer: full when {@code survivors == null}, else at those positions. */
     private void readColumnInto(int column, int[] survivors, int rows, int batchRows)
     {
+        if (readers[column].kind() == ColumnReader.Kind.BINARY) {
+            if (rows != 0) {
+                throw new IllegalArgumentException("BINARY filtered-window reads require the vector payload path");
+            }
+            readers[column].skipSelectedBinary(batchRows);
+            recordSelectedDecode(column, 0);
+            recordSkipped(column, batchRows);
+            return;
+        }
         ensureColumnScratch(column, rows);
         ColumnReader reader = readers[column];
         boolean[] nulls = nullable[column] ? colNull[column] : null;
@@ -2813,6 +2937,7 @@ public final class NitroParquetBatchSource
         arrayPool.release(lazyScratchNull);
         arrayPool.release(lazyIdentity);
         arrayPool.release(deferredRawSurvivors);
+        arrayPool.release(windowSlicePositions);
         arrayPool.release(lazyResolved);
         arrayPool.release(lazyPathDecided);
         arrayPool.release(lazySkipColumn);
@@ -2821,6 +2946,7 @@ public final class NitroParquetBatchSource
             arrayPool.release(scratch);
         }
         for (int column = 0; column < readers.length; column++) {
+            releaseWindowBinary(column);
             arrayPool.release(colLong[column]);
             arrayPool.release(colInt[column]);
             arrayPool.release(colNull[column]);
