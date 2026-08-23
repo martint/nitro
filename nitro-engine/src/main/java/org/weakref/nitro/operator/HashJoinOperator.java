@@ -2485,10 +2485,11 @@ public class HashJoinOperator
         }
         Vector values = sourceOutput.borrow(Stream.VALUES);
         if (!(values instanceof DictionaryVector || values instanceof org.weakref.nitro.data.RleVector)) {
-            // A single-match join maps each admitted probe row exactly once. Wrapping a flat input in that case
-            // carries no repeated physical domain into the next operator; it only replaces a contiguous load with
-            // an indexed load. Pay the one-time compacting copy so downstream operators retain direct access.
-            return singleMatchProbe;
+            // A single-match inner join may discard unmatched probe rows, so compacting its admitted flat values
+            // can make downstream access contiguous. A probe-outer join preserves every probe row: copying every
+            // flat payload column cannot compact the logical domain and only duplicates the data. Retain one shared
+            // position mapping instead; downstream operators can decide whether their own access justifies a copy.
+            return singleMatchProbe && !probeOuterJoin;
         }
 
         int sampleSize = Math.min(currentOutputCount, outputPolicy.outerMaterializationSampleSize());
