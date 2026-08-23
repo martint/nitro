@@ -260,6 +260,9 @@ public class HashJoinOperator
     private JoinIndex joinIndex;
 
     private Mask currentOuterMask;
+    // A constrained re-borrow keeps this join-owned mask reachable from the open upstream batch. Release it only
+    // after that batch closes; the upstream allocation context cannot return a mask owned by this join context.
+    private Mask currentOuterConstraintMask;
     private Batch currentOuterBatch;
     private int currentOuterMaskIndex;
     private int outerRemaining;
@@ -1025,8 +1028,7 @@ public class HashJoinOperator
         // this boundary, ProjectOperator loses its old BatchState on next() and retains one full set of vectors per
         // input batch until query teardown.
         if (currentOuterBatch != null) {
-            currentOuterBatch.close();
-            currentOuterBatch = null;
+            closeCurrentOuterBatch();
         }
         while (probeSource.hasNext()) {
             currentOuterBatch = probeSource.next();
@@ -2050,9 +2052,9 @@ public class HashJoinOperator
     public void close()
     {
         if (currentOuterBatch != null) {
-            currentOuterBatch.close();
-            currentOuterBatch = null;
+            closeCurrentOuterBatch();
         }
+        releaseCurrentOuterConstraintMask();
         probeSource.close();
         inner.close();
         if (joinIndex != null) {
@@ -2737,7 +2739,38 @@ public class HashJoinOperator
         }
         outerConstrained = true;
         outerConstraintApplied = true;
-        probeSource.constrain(matchedOuterMask());
+        if (currentOuterConstraintMask != null) {
+            throw new IllegalStateException("Current outer batch already has a join-owned constraint");
+        }
+        Mask constraint = matchedOuterMask();
+        try {
+            probeSource.constrain(constraint);
+            currentOuterConstraintMask = constraint;
+        }
+        catch (RuntimeException | Error failure) {
+            allocator.release(allocationContext, constraint);
+            throw failure;
+        }
+    }
+
+    private void closeCurrentOuterBatch()
+    {
+        Batch batch = currentOuterBatch;
+        currentOuterBatch = null;
+        try {
+            batch.close();
+        }
+        finally {
+            releaseCurrentOuterConstraintMask();
+        }
+    }
+
+    private void releaseCurrentOuterConstraintMask()
+    {
+        if (currentOuterConstraintMask != null) {
+            allocator.release(allocationContext, currentOuterConstraintMask);
+            currentOuterConstraintMask = null;
+        }
     }
 
     /**

@@ -4845,6 +4845,38 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testHashJoinOperatorReleasesOuterConstraintWithConsumedBatch()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            allocator.beginExecution();
+            I64Vector outerValues = new I64Vector(new long[] {1L, 2L, 3L});
+            Operator outer = new SingleBatchOperator(
+                    1,
+                    Mask.all(3),
+                    () -> new Output[] {new Output(Set.of(Stream.VALUES), _ -> outerValues)});
+            try (Operator join = new HashJoinOperator(
+                    allocator,
+                    outer,
+                    0,
+                    new ConstantTableOperator(allocator, 1, List.of(row(2L))),
+                    0)) {
+                try (Batch output = join.next()) {
+                    assertThat(output.borrowMask().count()).isOne();
+                    assertThat(longValue(output.output(0).borrow(Stream.VALUES), 0)).isEqualTo(2L);
+                }
+
+                Allocator.Context joinContext = new Allocator.Context("HashJoinOperator");
+                long constrainedBatchBytes = allocator.currentBytes(joinContext);
+                try (Batch terminal = join.next()) {
+                    assertThat(terminal.borrowMask().none()).isTrue();
+                }
+                assertThat(allocator.currentBytes(joinContext)).isLessThan(constrainedBatchBytes);
+            }
+        }
+    }
+
+    @Test
     void testHashJoinOperatorPreservesObservedSchemaOnEmptyResult()
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());

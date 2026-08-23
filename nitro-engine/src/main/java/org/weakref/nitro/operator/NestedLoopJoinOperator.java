@@ -24,8 +24,10 @@ import org.weakref.nitro.operator.source.ExternallyScheduledSource;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.IdentityHashMap;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import static java.util.Objects.requireNonNull;
@@ -48,6 +50,7 @@ public class NestedLoopJoinOperator
     private final int[] innerPositionsScratch;
     private final int[] retainedInnerPositionsScratch;
     private final int[] retainedInnerMaskPositionsScratch;
+    private final Map<Batch, Mask> retainedInnerConstraintMasks = new IdentityHashMap<>();
     private final Streams[] currentOutputs;
     private final Schema fullOutputSchema;
     private int[] outputChannels;
@@ -378,7 +381,7 @@ public class NestedLoopJoinOperator
     {
         while (outer.hasNext()) {
             currentOuterBatch = outer.next();
-            currentOuterLease = new OuterBatchLease(currentOuterBatch);
+            currentOuterLease = new OuterBatchLease(currentOuterBatch, allocator, allocationContext);
             currentOuterMask = currentOuterBatch.borrowMask();
             if (!currentOuterMask.none()) {
                 outerPositionIterator = currentOuterMask.iterator();
@@ -386,7 +389,7 @@ public class NestedLoopJoinOperator
                 currentOuterPositionReady = false;
                 return true;
             }
-            currentOuterLease.release();
+            currentOuterLease.releaseOwner();
             currentOuterBatch = null;
             currentOuterLease = null;
         }
@@ -425,7 +428,7 @@ public class NestedLoopJoinOperator
         }
         boolean outerBatchConsumed = outerRemaining == 0;
         if (outerBatchConsumed && outerLease != null) {
-            outerLease.release();
+            outerLease.releaseOwner();
         }
         return new Batch(
                 batchMask,
@@ -478,8 +481,16 @@ public class NestedLoopJoinOperator
     @Override
     public void close()
     {
+        if (currentOuterLease != null) {
+            currentOuterLease.releaseOwner();
+            currentOuterLease = null;
+            currentOuterBatch = null;
+        }
         outer.close();
         inner.close();
+        retainedInnerConstraintMasks.values().forEach(mask -> allocator.release(allocationContext, mask));
+        retainedInnerConstraintMasks.clear();
+        bufferedInner.releaseBuffers();
         allocator.release(allocationContext);
     }
 
@@ -633,10 +644,23 @@ public class NestedLoopJoinOperator
                 previous = position;
             }
         }
-        innerBatch.retainedBatch().constrain(allocator.allocateSparseMask(
+        Batch retainedBatch = innerBatch.retainedBatch();
+        Mask constraint = allocator.allocateSparseMask(
                 allocationContext,
-                Arrays.copyOf(retainedInnerMaskPositionsScratch, uniqueCount),
-                innerBatch.retainedBatch().borrowMask().size()));
+                retainedInnerMaskPositionsScratch,
+                uniqueCount,
+                retainedBatch.borrowMask().size());
+        try {
+            retainedBatch.constrain(constraint);
+        }
+        catch (RuntimeException | Error failure) {
+            allocator.release(allocationContext, constraint);
+            throw failure;
+        }
+        Mask previousConstraint = retainedInnerConstraintMasks.put(retainedBatch, constraint);
+        if (previousConstraint != null) {
+            allocator.release(allocationContext, previousConstraint);
+        }
     }
 
     private void constrainOuterIfNecessary()
@@ -645,7 +669,15 @@ public class NestedLoopJoinOperator
             return;
         }
         outerConstrained = true;
-        outer.constrain(matchedOuterMask());
+        Mask constraint = matchedOuterMask();
+        try {
+            outer.constrain(constraint);
+            currentOuterLease.replaceConstraint(constraint);
+        }
+        catch (RuntimeException | Error failure) {
+            allocator.release(allocationContext, constraint);
+            throw failure;
+        }
     }
 
     private Mask matchedOuterMask()
@@ -665,7 +697,7 @@ public class NestedLoopJoinOperator
                 previous = outerPosition;
             }
         }
-        return allocator.allocateSparseMask(allocationContext, java.util.Arrays.copyOf(positions, selectedCount), currentOuterMask.size());
+        return allocator.allocateSparseMask(allocationContext, positions, selectedCount, currentOuterMask.size());
     }
 
     private static long packRowReference(int batchIndex, int position)
@@ -686,11 +718,17 @@ public class NestedLoopJoinOperator
     private static final class OuterBatchLease
     {
         private final Batch batch;
+        private final Allocator allocator;
+        private final Allocator.Context allocationContext;
+        private Mask constraint;
         private int references = 1;
+        private boolean ownerReleased;
 
-        private OuterBatchLease(Batch batch)
+        private OuterBatchLease(Batch batch, Allocator allocator, Allocator.Context allocationContext)
         {
             this.batch = requireNonNull(batch, "batch is null");
+            this.allocator = requireNonNull(allocator, "allocator is null");
+            this.allocationContext = requireNonNull(allocationContext, "allocationContext is null");
         }
 
         private void retain()
@@ -701,6 +739,15 @@ public class NestedLoopJoinOperator
             references++;
         }
 
+        private void releaseOwner()
+        {
+            if (ownerReleased) {
+                return;
+            }
+            ownerReleased = true;
+            release();
+        }
+
         private void release()
         {
             if (references <= 0) {
@@ -708,7 +755,28 @@ public class NestedLoopJoinOperator
             }
             references--;
             if (references == 0) {
-                batch.close();
+                try {
+                    batch.close();
+                }
+                finally {
+                    if (constraint != null) {
+                        allocator.release(allocationContext, constraint);
+                        constraint = null;
+                    }
+                }
+            }
+        }
+
+        private void replaceConstraint(Mask replacement)
+        {
+            requireNonNull(replacement, "replacement is null");
+            if (references <= 0) {
+                throw new IllegalStateException("Outer batch already released");
+            }
+            Mask previous = constraint;
+            constraint = replacement;
+            if (previous != null) {
+                allocator.release(allocationContext, previous);
             }
         }
     }
