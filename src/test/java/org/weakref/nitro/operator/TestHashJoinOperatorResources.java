@@ -72,6 +72,7 @@ class TestHashJoinOperatorResources
         assertThat(outputPolicy.adaptiveComposeMaxRows()).isEqualTo(1024);
         assertThat(outputPolicy.adaptiveComposeDepth()).isEqualTo(4);
         assertThat(outputPolicy.directDenseSingleMatchRangeOutput()).isTrue();
+        assertThat(outputPolicy.directSelectedSingleMatchOutput()).isTrue();
         assertThat(indexPolicy.flatDictionaryProbeCacheMaxCardinality()).isEqualTo(1 << 16);
         assertThat(indexPolicy.flatDictionaryProbeCacheMinRowsPerEntry()).isEqualTo(2);
         assertThat(indexPolicy.denseCompactPairMinCapacity()).isEqualTo(1 << 25);

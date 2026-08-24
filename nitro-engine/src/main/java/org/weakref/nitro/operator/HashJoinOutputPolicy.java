@@ -37,6 +37,7 @@ public record HashJoinOutputPolicy(
         int outerMaterializationSampleSize,
         int outerMaterializationMinimumReuse,
         boolean directDenseSingleMatchRangeOutput,
+        boolean directSelectedSingleMatchOutput,
         boolean rleRunIndexHint,
         boolean poolBuildDictionaryIds,
         boolean gatherMultiRunRetainedFixedWidthValues,
@@ -83,6 +84,7 @@ public record HashJoinOutputPolicy(
                 true,
                 true,
                 true,
+                true,
                 1,
                 64L * 1024 * 1024);
     }
@@ -114,6 +116,7 @@ public record HashJoinOutputPolicy(
                 Integer.getInteger("nitro.hash.join.outerMaterializationSampleSize", defaults.outerMaterializationSampleSize()),
                 Integer.getInteger("nitro.hash.join.outerMaterializationMinimumReuse", defaults.outerMaterializationMinimumReuse()),
                 booleanProperty("nitro.join.directDenseSingleMatchRangeOutput", defaults.directDenseSingleMatchRangeOutput()),
+                booleanProperty("nitro.join.directSelectedSingleMatchOutput", defaults.directSelectedSingleMatchOutput()),
                 booleanProperty("nitro.join.rleRunIndexHint", defaults.rleRunIndexHint()),
                 booleanProperty("nitro.hash.join.poolBuildDictionaryIds", defaults.poolBuildDictionaryIds()),
                 booleanProperty("nitro.hash.join.gatherMultiRunRetainedFixedWidthValues", defaults.gatherMultiRunRetainedFixedWidthValues()),

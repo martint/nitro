@@ -749,6 +749,15 @@ public class HashJoinOperator
                     }
                     continue;
                 }
+                emitted = tryEmitDirectSelectedSingleMatches(outputPosition);
+                if (emitted >= 0) {
+                    outputPosition += emitted;
+                    if (emitted > 0) {
+                        rowReferencesWritten = true;
+                        logicalPositionsReady = false;
+                    }
+                    continue;
+                }
                 if (preparedOuterIndex >= preparedOuterCount) {
                     if (currentOuterMaskIndex >= currentOuterMask.count()) {
                         outerRemaining = 0;
@@ -977,6 +986,56 @@ public class HashJoinOperator
                 outputInnerLogicalPositions,
                 outputPosition);
         accountJoinIndex();
+        currentOuterMaskIndex += probeCount;
+        outerRemaining -= probeCount;
+        return emitted;
+    }
+
+    /**
+     * Filter-free inner join over a unique build. Selected probe inputs cannot use the dense range emitter, but
+     * they can still combine lookup and output production: look up one bounded chunk, copy only matches into the
+     * output arrays, and retire all misses together. This avoids making the ordinary state machine revisit every
+     * selected probe position after lookup, which is particularly important for sparse joins.
+     */
+    private int tryEmitDirectSelectedSingleMatches(int outputPosition)
+    {
+        if (!outputPolicy.directSelectedSingleMatchOutput() ||
+                joinFilters.length != 0 ||
+                probeOuterJoin ||
+                preparedOuterIndex < preparedOuterCount ||
+                currentOuterMaskIndex >= currentOuterMask.count() ||
+                !joinIndex.supportsSingleMatchRefs()) {
+            return -1;
+        }
+        int probeCount = Math.min(
+                Math.min(currentOuterMask.count() - currentOuterMaskIndex, outerRemaining),
+                executionPolicy.maxBatchRows() - outputPosition);
+        if (probeCount <= 0) {
+            return -1;
+        }
+        for (int index = 0; index < probeCount; index++) {
+            preparedOuterPositions[index] = currentOuterMask.position(currentOuterMaskIndex + index);
+        }
+        joinIndex.matchSingleRows(
+                currentOuterJoinValues,
+                currentOuterJoinNulls,
+                currentOuterJoinHasNulls,
+                preparedOuterPositions,
+                probeCount,
+                preparedSingleRefs);
+        accountJoinIndex();
+
+        int emitted = 0;
+        for (int index = 0; index < probeCount; index++) {
+            long rowReference = preparedSingleRefs[index];
+            if (rowReference != NO_MATCH_ROW_REFERENCE) {
+                outputOuterPositions[outputPosition + emitted] = preparedOuterPositions[index];
+                outputInnerRows[outputPosition + emitted] = rowReference;
+                emitted++;
+            }
+        }
+        singleMatchProbe = true;
+        singleMatchPositionProbe = false;
         currentOuterMaskIndex += probeCount;
         outerRemaining -= probeCount;
         return emitted;

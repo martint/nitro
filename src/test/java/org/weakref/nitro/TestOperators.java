@@ -6042,6 +6042,31 @@ public class TestOperators
     }
 
     @Test
+    void testHashJoinDirectSelectedSingleMatchesSkipSparseProbeMisses()
+    {
+        List<Row> probeRows = new ArrayList<>();
+        for (int index = 0; index < 1_024; index++) {
+            probeRows.add(row((long) index, index % 2 == 0));
+        }
+
+        assertThat(operator(
+                new HashJoinOperator(
+                        allocator,
+                        new FilterOperator(
+                                new ConstantTableOperator(allocator, 2, probeRows),
+                                new EvaluationPlan(List.of(), List.of()),
+                                primitiveRegistry(),
+                                new Reference(new Input(1), Stream.VALUES),
+                                allocator,
+                                EngineResources.from(allocator).operatorResources().filter()),
+                        0,
+                        new ConstantTableOperator(allocator, 1, List.of(row(2L), row(1_002L))),
+                        0)
+                        .withOutputs(0)))
+                .matchesExactly(List.of(row(2L), row(1_002L)));
+    }
+
+    @Test
     void testHashJoinCompactsCompletedHighKeyStreamingRange()
     {
         long firstKey = 2_451_545;
