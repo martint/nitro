@@ -29,6 +29,17 @@ public interface JoinSession
 
     Batch getOutput();
 
+    /**
+     * Returns an output batch that may remain live while this session advances.
+     *
+     * <p>Immediate consumers should use {@link #getOutput()}; buffering consumers request this stronger ownership
+     * contract explicitly so producers do not pay retention costs on synchronous paths.
+     */
+    default Batch getRetainedOutput()
+    {
+        return getOutput();
+    }
+
     void finish();
 
     boolean isFinished();

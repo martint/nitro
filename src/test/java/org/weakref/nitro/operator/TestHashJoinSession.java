@@ -35,6 +35,35 @@ import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
 class TestHashJoinSession
 {
     @Test
+    void testPublishedOutputSurvivesFollowingProbeBatch()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                HashJoinSession session = new HashJoinSession(
+                        resources.operatorResources(),
+                        allocator,
+                        Schema.unspecified(1),
+                        new int[] {0},
+                        table(1),
+                        new int[] {0},
+                        false)) {
+            allocator.beginExecution();
+            session.addInput(batch(1));
+            assertThat(session.hasOutput()).isTrue();
+            try (Batch first = session.getRetainedOutput()) {
+                assertThat(session.hasOutput()).isFalse();
+
+                session.addInput(batch(1));
+                assertThat(session.hasOutput()).isTrue();
+                session.getOutput().close();
+
+                assertThat(VectorAccess.longValues(first.output(0).borrow(Stream.VALUES)).value(0)).isOne();
+                assertThat(VectorAccess.longValues(first.output(1).borrow(Stream.VALUES)).value(0)).isOne();
+            }
+        }
+    }
+
+    @Test
     void testIdentityProbeOutputDoesNotTransferBorrowedInputVector()
     {
         try (EngineResources resources = EngineResources.createDefault();

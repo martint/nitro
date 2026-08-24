@@ -1373,6 +1373,35 @@ public class Allocator
         return true;
     }
 
+    /**
+     * Returns whether a vector tree can be detached for asynchronous ownership without invalidating an existing
+     * producer-local lease. A leased tree is safe to retain inside its current execution island, but an asynchronous
+     * boundary must copy it before detaching because the local lease returns buffers to the producer's reuse pool.
+     */
+    public synchronized boolean canDetachVectorTreeForAsyncRelease(Vector root)
+    {
+        requireNonNull(root, "root is null");
+        Set<Vector> visited = Collections.newSetFromMap(new IdentityHashMap<>());
+        List<Vector> vectors = new java.util.ArrayList<>();
+        collectVectorTree(root, visited, vectors);
+        for (Vector vector : vectors) {
+            if (!requiresTracking(vector) || isSharedAllFalseBoolean(vector)) {
+                continue;
+            }
+            if (vectorLeases.containsKey(vector)) {
+                return false;
+            }
+            if (asyncVectorLeases.containsKey(vector)) {
+                continue;
+            }
+            boolean owned = states.values().stream().anyMatch(state -> state.inUseVectors.contains(vector));
+            if (!owned) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     private static boolean requiresTracking(Vector vector)
     {
         return vector.poolFamily() != null || vector.retainedBytes() != 0 || vector instanceof DynamicRetainedBytesVector;

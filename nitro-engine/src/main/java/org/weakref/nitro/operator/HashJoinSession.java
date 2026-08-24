@@ -32,6 +32,7 @@ import static java.util.Objects.requireNonNull;
 public final class HashJoinSession
         implements JoinSession
 {
+    private final Allocator allocator;
     private final ExternallyScheduledBatchFeed probe;
     private final HashJoinOperator join;
     private Operator outputRoot;
@@ -98,6 +99,7 @@ public final class HashJoinSession
             UnaryOperator<Operator> probePipeline,
             HashJoinOperator.JoinFilter... joinFilters)
     {
+        this.allocator = requireNonNull(allocator, "allocator is null");
         probe = new ExternallyScheduledBatchFeed(requireNonNull(probeSchema, "probeSchema is null"));
         Operator transformedProbe;
         try {
@@ -114,7 +116,7 @@ public final class HashJoinSession
                 : new ExternallyScheduledOperator(transformedProbe, probe::isFinished);
         join = new HashJoinOperator(
                 requireNonNull(operatorResources, "operatorResources is null"),
-                requireNonNull(allocator, "allocator is null"),
+                allocator,
                 scheduledProbe,
                 probeJoinColumns.clone(),
                 requireNonNull(build, "build is null"),
@@ -260,6 +262,12 @@ public final class HashJoinSession
         Batch result = output;
         output = null;
         return result;
+    }
+
+    @Override
+    public Batch getRetainedOutput()
+    {
+        return RetainedBatch.retain(allocator, getOutput(), outputRoot.outputCount());
     }
 
     /**
