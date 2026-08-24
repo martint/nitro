@@ -886,16 +886,23 @@ public class HashJoinOperator
                         outerRemaining = 0;
                         continue;
                     }
-                    preparedOuterCount = Math.min(currentOuterMask.count() - currentOuterMaskIndex, executionPolicy.maxBatchRows());
+                    int inputCount = Math.min(currentOuterMask.count() - currentOuterMaskIndex, executionPolicy.maxBatchRows());
                     preparedOuterIndex = 0;
-                    for (int index = 0; index < preparedOuterCount; index++) {
+                    for (int index = 0; index < inputCount; index++) {
                         preparedOuterPositions[index] = currentOuterMask.position(currentOuterMaskIndex++);
                     }
-                    if (!joinIndex.matchRowRanges(currentOuterJoinValues, currentOuterJoinNulls, currentOuterJoinHasNulls,
-                            preparedOuterPositions, preparedOuterCount, preparedRangeStarts, preparedRangeCounts)) {
+                    preparedOuterCount = joinIndex.matchRowRanges(currentOuterJoinValues, currentOuterJoinNulls, currentOuterJoinHasNulls,
+                            preparedOuterPositions, inputCount, preparedRangeStarts, preparedRangeCounts);
+                    if (preparedOuterCount < 0) {
                         throw new IllegalStateException("Compacted range index stopped supporting row ranges");
                     }
+                    // Range lookup has already proven that the omitted probe positions cannot produce output.
+                    // Retire them as a batch instead of making the output loop revisit every miss individually.
+                    outerRemaining -= inputCount - preparedOuterCount;
                     accountJoinIndex();
+                    if (preparedOuterCount == 0) {
+                        continue;
+                    }
                 }
                 currentOuterPosition = preparedOuterPositions[preparedOuterIndex];
                 currentMatchRangeStart = preparedRangeStarts[preparedOuterIndex];
@@ -4762,27 +4769,35 @@ public class HashJoinOperator
         }
 
         @Override
-        public boolean matchRowRanges(Vector[] valuesArray, Vector[] nullsArray, boolean hasNulls, int[] positions, int positionCount, int[] starts, int[] counts)
+        public int matchRowRanges(Vector[] valuesArray, Vector[] nullsArray, boolean hasNulls, int[] positions, int positionCount, int[] starts, int[] counts)
         {
             if (!finalized) {
                 finalizeForProbe(positionCount);
             }
             if (!compactedRows.isBuilt()) {
-                return false;
+                return -1;
             }
             VectorAccess.LongValues values = VectorAccess.longValues(valuesArray[0]);
             Vector nulls = nullsArray == null ? null : nullsArray[0];
             VectorAccess.BooleanValues nullValues = hasNulls && nulls != null ? VectorAccess.booleanValues(nulls) : null;
+            int matchCount = 0;
             for (int index = 0; index < positionCount; index++) {
                 int position = positions[index];
                 if (nullValues != null && nullValues.value(position)) {
-                    starts[index] = 0;
-                    counts[index] = 0;
                     continue;
                 }
                 setRowRange(values.value(position), index, starts, counts);
+                if (counts[index] == 0) {
+                    continue;
+                }
+                if (matchCount != index) {
+                    positions[matchCount] = position;
+                    starts[matchCount] = starts[index];
+                    counts[matchCount] = counts[index];
+                }
+                matchCount++;
             }
-            return true;
+            return matchCount;
         }
 
         private void setRowRange(long key, int index, int[] starts, int[] counts)

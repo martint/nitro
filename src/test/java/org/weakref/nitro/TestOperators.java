@@ -42,6 +42,7 @@ import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.RleVector;
+import org.weakref.nitro.data.Row;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.StructVector;
@@ -6014,6 +6015,30 @@ public class TestOperators
                         0)
                         .withOutputs(0)))
                 .matchesExactly(List.of(row(7L), row(7L)));
+    }
+
+    @Test
+    void testHashJoinCompactedRangesSkipSparseProbeMisses()
+    {
+        List<Row> probeRows = new ArrayList<>();
+        probeRows.add(row(1_000_000L));
+        for (int index = 0; index < 1_024; index++) {
+            probeRows.add(row(10_000_000L + index));
+        }
+        probeRows.add(row(2_000_000L));
+
+        assertThat(operator(
+                new HashJoinOperator(
+                        allocator,
+                        new ConstantTableOperator(allocator, 1, probeRows),
+                        0,
+                        new ConstantTableOperator(
+                                allocator,
+                                1,
+                                List.of(row(1_000_000L), row(1_000_000L), row(2_000_000L), row(2_000_000L))),
+                        0)
+                        .withOutputs(0)))
+                .matchesExactly(List.of(row(1_000_000L), row(1_000_000L), row(2_000_000L), row(2_000_000L)));
     }
 
     @Test

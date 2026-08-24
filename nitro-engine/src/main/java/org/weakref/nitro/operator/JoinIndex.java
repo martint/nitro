@@ -96,7 +96,12 @@ abstract class JoinIndex
         }
     }
 
-    boolean matchRowRanges(
+    /**
+     * Resolves and compacts matching probe positions into the leading portion of the supplied arrays.
+     *
+     * @return the number of matching probe positions, or {@code -1} when row ranges are unavailable
+     */
+    int matchRowRanges(
             Vector[] values,
             Vector[] nulls,
             boolean hasNulls,
@@ -105,7 +110,7 @@ abstract class JoinIndex
             int[] starts,
             int[] counts)
     {
-        return false;
+        return -1;
     }
 
     boolean supportsRowRanges()

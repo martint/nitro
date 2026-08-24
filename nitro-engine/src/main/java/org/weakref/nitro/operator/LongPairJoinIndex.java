@@ -490,7 +490,7 @@ final class LongPairJoinIndex
     }
 
     @Override
-    public boolean matchRowRanges(
+    public int matchRowRanges(
             Vector[] valuesArray,
             Vector[] nullsArray,
             boolean hasNulls,
@@ -501,32 +501,31 @@ final class LongPairJoinIndex
     {
         finalizeForProbe(positionCount);
         if (compactedRows == null) {
-            return false;
+            return -1;
         }
         VectorAccess.LongValues firstValues = VectorAccess.longValues(valuesArray[0]);
         VectorAccess.LongValues secondValues = VectorAccess.longValues(valuesArray[1]);
         VectorAccess.BooleanValues firstNulls = hasNulls ? VectorAccess.booleanValues(nullsArray[0]) : null;
         VectorAccess.BooleanValues secondNulls = hasNulls ? VectorAccess.booleanValues(nullsArray[1]) : null;
+        int matchCount = 0;
         for (int index = 0; index < positionCount; index++) {
             int position = positions[index];
             if (hasNulls && (firstNulls.value(position) || secondNulls.value(position))) {
-                starts[index] = 0;
-                counts[index] = 0;
                 continue;
             }
             long first = firstValues.value(position);
             long second = secondValues.value(position);
             int slot = probe(first, second, hash64(first, second));
             if (slot < 0) {
-                starts[index] = 0;
-                counts[index] = 0;
                 continue;
             }
             long range = compactedRange(slot);
-            starts[index] = (int) (range >>> Integer.SIZE);
-            counts[index] = (int) range;
+            positions[matchCount] = position;
+            starts[matchCount] = (int) (range >>> Integer.SIZE);
+            counts[matchCount] = (int) range;
+            matchCount++;
         }
-        return true;
+        return matchCount;
     }
 
     @Override
