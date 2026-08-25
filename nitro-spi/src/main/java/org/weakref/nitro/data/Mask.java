@@ -1206,11 +1206,14 @@ public class Mask
         // allocation. Materialization may overwrite it only after the compact selection is no longer needed.
         ensureCapacity(domainSize);
         Arrays.fill(positions, 0, domainSize, 0);
-        int count = 0;
         for (int position = 0; position < size; position++) {
-            int dictionaryId = ids[position];
-            positions[dictionaryId]++;
-            count += (int) ((selectedDomainBits >>> dictionaryId) & 1L);
+            positions[ids[position]]++;
+        }
+        int count = 0;
+        for (int dictionaryId = 0; dictionaryId < domainSize; dictionaryId++) {
+            if (((selectedDomainBits >>> dictionaryId) & 1L) != 0) {
+                count += positions[dictionaryId];
+            }
         }
         if (count == size) {
             selectAll(size);
