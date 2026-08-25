@@ -49,8 +49,11 @@ class TestDistinctKeySet
             labels[position] = "label-" + (position % 8);
             ids[position] = position;
         }
-        labels[size - 1] = labels[size - 2];
-        ids[size - 1] = ids[size - 2];
+        int[] repeatedPositions = {65, 130, 195, 255};
+        for (int position : repeatedPositions) {
+            labels[position] = labels[position - 1];
+            ids[position] = ids[position - 1];
+        }
         Vector[] values = {utf8(labels), new I64Vector(ids)};
         Vector[] nulls = {null, null};
 
@@ -67,8 +70,12 @@ class TestDistinctKeySet
                     flatKeyTablePolicy);
             try {
                 int[] positions = new int[size];
-                assertThat(keys.addBatch(values, nulls, Mask.all(size), positions)).isEqualTo(size - 1);
-                assertThat(Arrays.copyOf(positions, size - 1)).containsExactly(java.util.stream.IntStream.range(0, size - 1).toArray());
+                int expectedCount = size - repeatedPositions.length;
+                assertThat(keys.addBatch(values, nulls, Mask.all(size), positions)).isEqualTo(expectedCount);
+                assertThat(Arrays.copyOf(positions, expectedCount)).containsExactly(
+                        java.util.stream.IntStream.range(0, size)
+                                .filter(position -> Arrays.binarySearch(repeatedPositions, position) < 0)
+                                .toArray());
                 assertThat(keys.addBatch(values, nulls, Mask.all(size), positions)).isZero();
             }
             finally {

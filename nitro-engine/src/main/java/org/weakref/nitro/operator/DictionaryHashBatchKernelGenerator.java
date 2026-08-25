@@ -62,6 +62,10 @@ final class DictionaryHashBatchKernelGenerator
             CD_long,
             CD_int, CD_INT_ARRAY_ARRAY, CD_LONG_ARRAY_ARRAY, CD_LONG_VALUES_ARRAY, CD_BOOLEAN_VALUES_ARRAY, CD_BINARY_HASHES_ARRAY, CD_BOOLEAN_VALUES_ARRAY,
             CD_TABLE, CD_VECTOR_ARRAY, CD_VECTOR_ARRAY, CD_long, CD_LONG_ARRAY);
+    private static final MethodTypeDesc ASSIGN_DISTINCT_TYPE = MethodTypeDesc.of(
+            CD_int,
+            CD_int, CD_INT_ARRAY_ARRAY, CD_LONG_ARRAY_ARRAY, CD_LONG_VALUES_ARRAY, CD_BOOLEAN_VALUES_ARRAY, CD_BINARY_HASHES_ARRAY, CD_BOOLEAN_VALUES_ARRAY,
+            CD_TABLE, CD_VECTOR_ARRAY, CD_VECTOR_ARRAY, CD_long, CD_LONG_ARRAY, CD_INT_ARRAY);
     private static final MethodTypeDesc BOOLEAN_VALUE_TYPE = MethodTypeDesc.of(CD_boolean, CD_int);
     private static final MethodTypeDesc LONG_VALUE_TYPE = MethodTypeDesc.of(CD_long, CD_int);
     private static final MethodTypeDesc BINARY_HASH_TYPE = MethodTypeDesc.of(CD_long, CD_int);
@@ -90,6 +94,15 @@ final class DictionaryHashBatchKernelGenerator
     private static final int ASSIGN_GROUP_ID = 17;
     private static final int ASSIGN_TILE_END = 19;
     private static final int ASSIGN_TILE_START = 20;
+
+    private static final int DISTINCT_HASH_SCRATCH = 13;
+    private static final int DISTINCT_OUTPUT = 14;
+    private static final int DISTINCT_POSITION = 15;
+    private static final int DISTINCT_HASH = 16;
+    private static final int DISTINCT_GROUP_ID = 18;
+    private static final int DISTINCT_TILE_END = 20;
+    private static final int DISTINCT_TILE_START = 21;
+    private static final int DISTINCT_COUNT = 22;
 
     private final ConcurrentHashMap<KernelShape, DictionaryHashBatchKernel> kernels = new ConcurrentHashMap<>();
     private boolean closed;
@@ -151,6 +164,16 @@ final class DictionaryHashBatchKernelGenerator
                     ASSIGN_TYPE,
                     ClassFile.ACC_PUBLIC,
                     code -> emitAssign(
+                            code,
+                            shape,
+                            fieldCount,
+                            kernelShape.assignTileRows(),
+                            kernelShape.discriminatingHashField()));
+            builder.withMethodBody(
+                    "assignDistinct",
+                    ASSIGN_DISTINCT_TYPE,
+                    ClassFile.ACC_PUBLIC,
+                    code -> emitAssignDistinct(
                             code,
                             shape,
                             fieldCount,
@@ -351,6 +374,95 @@ final class DictionaryHashBatchKernelGenerator
         code.labelBinding(exit);
         code.lload(ASSIGN_NEXT_GROUP_ID);
         code.lreturn();
+    }
+
+    private static void emitAssignDistinct(CodeBuilder code, long shape, int fieldCount, int assignTileRows, int discriminatingHashField)
+    {
+        code.loadConstant(0);
+        code.istore(DISTINCT_TILE_START);
+        code.loadConstant(0);
+        code.istore(DISTINCT_COUNT);
+        Label tileTop = code.newLabel();
+        Label exit = code.newLabel();
+        code.labelBinding(tileTop);
+        code.iload(DISTINCT_TILE_START);
+        code.iload(COUNT);
+        code.if_icmpge(exit);
+
+        code.iload(DISTINCT_TILE_START);
+        code.loadConstant(assignTileRows);
+        code.iadd();
+        code.istore(DISTINCT_TILE_END);
+        Label boundedTile = code.newLabel();
+        code.iload(DISTINCT_TILE_END);
+        code.iload(COUNT);
+        code.if_icmple(boundedTile);
+        code.iload(COUNT);
+        code.istore(DISTINCT_TILE_END);
+        code.labelBinding(boundedTile);
+
+        code.iload(DISTINCT_TILE_START);
+        code.istore(DISTINCT_POSITION);
+        Label hashTop = code.newLabel();
+        Label probeStart = code.newLabel();
+        code.labelBinding(hashTop);
+        code.iload(DISTINCT_POSITION);
+        code.iload(DISTINCT_TILE_END);
+        code.if_icmpge(probeStart);
+        emitRowHash(code, shape, fieldCount, discriminatingHashField, DISTINCT_POSITION, DISTINCT_HASH);
+        code.aload(DISTINCT_HASH_SCRATCH);
+        code.iload(DISTINCT_POSITION);
+        code.lload(DISTINCT_HASH);
+        code.lastore();
+        code.iinc(DISTINCT_POSITION, 1);
+        code.goto_(hashTop);
+
+        code.labelBinding(probeStart);
+        code.iload(DISTINCT_TILE_START);
+        code.istore(DISTINCT_POSITION);
+        Label probeTop = code.newLabel();
+        Label tileDone = code.newLabel();
+        code.labelBinding(probeTop);
+        code.iload(DISTINCT_POSITION);
+        code.iload(DISTINCT_TILE_END);
+        code.if_icmpge(tileDone);
+        code.aload(DISTINCT_HASH_SCRATCH);
+        code.iload(DISTINCT_POSITION);
+        code.laload();
+        code.lstore(DISTINCT_HASH);
+        code.aload(ASSIGN_TABLE);
+        code.aload(ASSIGN_VALUES);
+        code.aload(ASSIGN_NULLS);
+        code.iload(DISTINCT_POSITION);
+        code.lload(ASSIGN_NEXT_GROUP_ID);
+        code.lload(DISTINCT_HASH);
+        code.invokevirtual(CD_TABLE, "assignGroupWithHash", ASSIGN_HASH_TYPE);
+        code.lstore(DISTINCT_GROUP_ID);
+        Label existing = code.newLabel();
+        code.lload(DISTINCT_GROUP_ID);
+        code.lload(ASSIGN_NEXT_GROUP_ID);
+        code.lcmp();
+        code.ifne(existing);
+        code.aload(DISTINCT_OUTPUT);
+        code.iload(DISTINCT_COUNT);
+        code.iload(DISTINCT_POSITION);
+        code.iastore();
+        code.iinc(DISTINCT_COUNT, 1);
+        code.lload(ASSIGN_NEXT_GROUP_ID);
+        code.loadConstant(1L);
+        code.ladd();
+        code.lstore(ASSIGN_NEXT_GROUP_ID);
+        code.labelBinding(existing);
+
+        code.iinc(DISTINCT_POSITION, 1);
+        code.goto_(probeTop);
+        code.labelBinding(tileDone);
+        code.iload(DISTINCT_TILE_END);
+        code.istore(DISTINCT_TILE_START);
+        code.goto_(tileTop);
+        code.labelBinding(exit);
+        code.iload(DISTINCT_COUNT);
+        code.ireturn();
     }
 
     private static void emitRowHash(

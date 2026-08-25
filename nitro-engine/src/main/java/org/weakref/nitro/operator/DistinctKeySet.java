@@ -963,7 +963,7 @@ final class DistinctKeySet
         private final DistinctKeySetPolicy policy;
         private final FlatGroupingTable table;
         private int[] probePositions;
-        private long[] assignedGroups;
+        private long[] generatedHashScratch;
         private boolean emptyBinarySeen;
 
         private FlatDistinctIndex(FlatKeyLayout layout, int expectedSize, PrimitiveArrayPool arrayPool, DistinctKeySetPolicy policy)
@@ -1047,34 +1047,18 @@ final class DistinctKeySet
             if (!mask.all()) {
                 return -1;
             }
-            if (assignedGroups == null || assignedGroups.length < mask.size()) {
-                long[] previous = assignedGroups;
-                assignedGroups = arrayPool.borrowLongs(mask.size());
+            if (generatedHashScratch == null || generatedHashScratch.length < mask.size()) {
+                long[] previous = generatedHashScratch;
+                generatedHashScratch = arrayPool.borrowLongs(mask.size());
                 arrayPool.release(previous);
             }
-            long firstNewGroup = table.recordCount();
-            long nextGroup = table.assignGeneratedDictionaryBatch(
+            return table.assignGeneratedDictionaryDistinctBatch(
                     values,
                     nulls,
                     mask,
-                    assignedGroups,
-                    firstNewGroup);
-            if (nextGroup < 0) {
-                return -1;
-            }
-
-            int count = 0;
-            long expectedNewGroup = firstNewGroup;
-            for (int position : mask) {
-                if (assignedGroups[position] == expectedNewGroup) {
-                    distinctPositions[count++] = position;
-                    expectedNewGroup++;
-                }
-            }
-            if (expectedNewGroup != nextGroup) {
-                throw new IllegalStateException("Generated distinct output did not identify every new group");
-            }
-            return count;
+                    generatedHashScratch,
+                    distinctPositions,
+                    table.recordCount());
         }
 
         private int addFlatBinaryBatch(Vector[] values, Vector[] nulls, Mask mask, int[] distinctPositions, boolean nullFree)
@@ -1146,7 +1130,7 @@ final class DistinctKeySet
         {
             return table.retainedBytes() +
                     (probePositions == null ? 0 : (long) probePositions.length * Integer.BYTES) +
-                    (assignedGroups == null ? 0 : (long) assignedGroups.length * Long.BYTES);
+                    (generatedHashScratch == null ? 0 : (long) generatedHashScratch.length * Long.BYTES);
         }
 
         @Override
@@ -1155,8 +1139,8 @@ final class DistinctKeySet
             table.releaseBuffers();
             arrayPool.release(probePositions);
             probePositions = null;
-            arrayPool.release(assignedGroups);
-            assignedGroups = null;
+            arrayPool.release(generatedHashScratch);
+            generatedHashScratch = null;
         }
     }
 
