@@ -440,6 +440,16 @@ public class TestOperators
         assertThat(view.domainFrequency(2)).isEqualTo(3);
         assertThat(view.retainedBytes()).isZero();
 
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        Allocator.Context allocationContext = new Allocator.Context("dictionary-frequency-copy");
+        DictionaryVector copy = (DictionaryVector) dictionary.copy(allocator, allocationContext);
+        assertThat(copy.ids()).isNotSameAs(dictionary.ids());
+        assertThat(copy.hasDomainFrequencies()).isTrue();
+        assertThat(copy.domainFrequency(0)).isEqualTo(2);
+        assertThat(copy.domainFrequency(1)).isEqualTo(3);
+        assertThat(copy.domainFrequency(2)).isEqualTo(3);
+        allocator.release(allocationContext, copy);
+
         assertThatThrownBy(() -> DictionaryVector.wrapWithDomainFrequencies(
                         new int[] {0},
                         1,

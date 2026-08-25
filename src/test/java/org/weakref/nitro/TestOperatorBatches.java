@@ -313,6 +313,53 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testAggregationOperatorConsumesExactDictionaryDomainFrequencies()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        DictionaryVector values = DictionaryVector.wrapWithDomainFrequencies(
+                new int[] {0, 1, 1, 2, 1, 2},
+                6,
+                new I64Vector(new long[] {10, 20, 30}),
+                new int[] {1, 3, 2});
+        RleVector nulls = new RleVector(new int[] {6}, new BooleanVector(new boolean[] {false}));
+
+        Operator source = new Operator()
+        {
+            private boolean hasNext = true;
+
+            @Override
+            public int outputCount()
+            {
+                return 1;
+            }
+
+            @Override
+            public boolean hasNext()
+            {
+                return hasNext;
+            }
+
+            @Override
+            public Batch next()
+            {
+                hasNext = false;
+                return new Batch(Mask.all(6), Output.of(Streams.of(values, nulls, null)));
+            }
+
+            @Override
+            public void constrain(Mask mask) {}
+
+            @Override
+            public void close() {}
+        };
+
+        try (Operator operator = new AggregationOperator(allocator, List.of(new Sum(0)), source);
+                Batch batch = operator.next()) {
+            assertThat(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values()).containsExactly(130L);
+        }
+    }
+
+    @Test
     void testGroupedAggregationOperatorSumsRleEncodedIndicators()
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());

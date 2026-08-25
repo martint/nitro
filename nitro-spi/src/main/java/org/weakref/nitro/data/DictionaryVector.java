@@ -52,6 +52,30 @@ public final class DictionaryVector
     }
 
     /**
+     * Builds a self-contained dictionary with exact physical-domain multiplicities. The row mapping is copied; the
+     * caller transfers ownership of the frequency table and must not mutate it afterward.
+     */
+    public static DictionaryVector ofTrustedIdsWithDomainFrequencies(
+            int[] ids,
+            int length,
+            Vector values,
+            int[] domainFrequencies)
+    {
+        validateDomainFrequencies(length, values, domainFrequencies);
+        return new DictionaryVector(
+                ids,
+                null,
+                length,
+                values,
+                true,
+                true,
+                false,
+                null,
+                domainFrequencies,
+                true);
+    }
+
+    /**
      * Builds a dictionary over the first {@code length} entries in {@code ids}, sharing the backing ids array. This
      * mirrors Velox's BufferPtr + logical size wrapper and is intended for short-lived operator output mappings whose
      * producer keeps the backing array stable for the vector lifetime.
@@ -82,14 +106,7 @@ public final class DictionaryVector
      */
     public static DictionaryVector wrapWithDomainFrequencies(int[] ids, int length, Vector values, int[] domainFrequencies)
     {
-        checkArgument(domainFrequencies != null, "domainFrequencies is null");
-        checkArgument(domainFrequencies.length == values.length(), "Frequency domain does not match dictionary values");
-        long frequencyTotal = 0;
-        for (int frequency : domainFrequencies) {
-            checkArgument(frequency >= 0, "Dictionary frequency is negative");
-            frequencyTotal += frequency;
-        }
-        checkArgument(frequencyTotal == length, "Dictionary frequencies do not cover the logical length");
+        validateDomainFrequencies(length, values, domainFrequencies);
         return new DictionaryVector(ids, null, length, values, false, false, false, null, domainFrequencies, true);
     }
 
@@ -355,6 +372,14 @@ public final class DictionaryVector
     @Override
     public Vector copy(Allocator allocator, Allocator.Context allocationContext)
     {
+        if (hasDomainFrequencies()) {
+            return allocator.allocateDictionaryWithDomainFrequencies(
+                    allocationContext,
+                    ids,
+                    length,
+                    values.copy(allocator, allocationContext),
+                    Arrays.copyOf(domainFrequencies, domainFrequencies.length));
+        }
         return allocator.allocateDictionary(allocationContext, Arrays.copyOf(ids, length), values.copy(allocator, allocationContext));
     }
 
@@ -506,5 +531,17 @@ public final class DictionaryVector
             int id = ids[index];
             checkArgument(id >= 0 && id < valuesLength, "Dictionary id %s is out of bounds for values length %s", id, valuesLength);
         }
+    }
+
+    private static void validateDomainFrequencies(int length, Vector values, int[] domainFrequencies)
+    {
+        checkArgument(domainFrequencies != null, "domainFrequencies is null");
+        checkArgument(domainFrequencies.length == values.length(), "Frequency domain does not match dictionary values");
+        long frequencyTotal = 0;
+        for (int frequency : domainFrequencies) {
+            checkArgument(frequency >= 0, "Dictionary frequency is negative");
+            frequencyTotal += frequency;
+        }
+        checkArgument(frequencyTotal == length, "Dictionary frequencies do not cover the logical length");
     }
 }

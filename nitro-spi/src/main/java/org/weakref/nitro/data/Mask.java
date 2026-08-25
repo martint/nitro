@@ -1219,25 +1219,14 @@ public class Mask
         // allocation. Materialization may overwrite it only after the compact selection is no longer needed.
         ensureCapacity(domainSize);
         Arrays.fill(positions, 0, domainSize, 0);
-        for (int position = 0; position < size; position++) {
-            positions[ids[position]]++;
-        }
         int count = 0;
-        for (int dictionaryId = 0; dictionaryId < domainSize; dictionaryId++) {
-            if (((selectedDomainBits >>> dictionaryId) & 1L) != 0) {
-                count += positions[dictionaryId];
-            }
-        }
-        if (count == size) {
-            selectAll(size);
-            return;
-        }
-        if (count == 0) {
-            clear(size);
-            return;
+        for (int position = 0; position < size; position++) {
+            int dictionaryId = ids[position];
+            positions[dictionaryId]++;
+            count += (int) ((selectedDomainBits >>> dictionaryId) & 1L);
         }
         selectedCount = count;
-        allSelected = false;
+        allSelected = count == size;
         positionCount = 0;
         excludedPositions = false;
         dictionaryDomainSelection = new DictionaryDomainSelection(ids, size, domainSize, selectedDomainBits);
@@ -1254,16 +1243,8 @@ public class Mask
                 count += frequency;
             }
         }
-        if (count == size) {
-            selectAll(size);
-            return;
-        }
-        if (count == 0) {
-            clear(size);
-            return;
-        }
         selectedCount = count;
-        allSelected = false;
+        allSelected = count == size;
         positionCount = 0;
         excludedPositions = false;
         dictionaryDomainSelection = new DictionaryDomainSelection(dictionary.ids(), size, domainSize, selectedDomainBits);
@@ -1289,11 +1270,10 @@ public class Mask
                 count += positions[dictionaryId];
             }
         }
-        if (count == 0) {
-            clear(size);
-            return true;
-        }
         selectedCount = count;
+        allSelected = count == size;
+        positionCount = 0;
+        excludedPositions = false;
         dictionaryDomainSelection = new DictionaryDomainSelection(ids, size, domainSize, combinedBits);
         return true;
     }

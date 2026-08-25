@@ -430,6 +430,18 @@ public final class PlanEvaluator
         if (cachedDictionaryResults.remove(vector)) {
             values = values.copy(allocator, allocationContext);
         }
+        if (dictionary.hasDomainFrequencies()) {
+            int[] domainFrequencies = new int[dictionary.values().length()];
+            for (int dictionaryId = 0; dictionaryId < domainFrequencies.length; dictionaryId++) {
+                domainFrequencies[dictionaryId] = dictionary.domainFrequency(dictionaryId);
+            }
+            return allocator.allocateDictionaryWithDomainFrequencies(
+                    allocationContext,
+                    dictionary.ids(),
+                    dictionary.length(),
+                    values,
+                    domainFrequencies);
+        }
         return allocator.allocateDictionary(allocationContext, dictionary.ids(), dictionary.length(), values);
     }
 
@@ -681,8 +693,7 @@ public final class PlanEvaluator
             DictionaryDomainCacheEntry cached = findCachedDomain(cachedDomains, cacheKey);
             if (cached != null) {
                 dictionaryDomainCacheHits++;
-                return wrapDictionaryPeeledStreams(
-                        peeling.ids(), peeling.rowCount(), cached.result(), peeling.domainFrequencies(), true);
+                return wrapDictionaryPeeledStreams(peeling.ids(), peeling.rowCount(), cached.result(), true);
             }
             if (cachedDomains != null && !cachedDomains.isEmpty()) {
                 dictionaryDomainCacheChanges++;
@@ -694,8 +705,7 @@ public final class PlanEvaluator
             if (cacheKey != null) {
                 replaceDictionaryDomainCache(call, cacheKey, baseResult);
             }
-            return wrapDictionaryPeeledStreams(
-                    peeling.ids(), peeling.rowCount(), baseResult, peeling.domainFrequencies(), false);
+            return wrapDictionaryPeeledStreams(peeling.ids(), peeling.rowCount(), baseResult, false);
         }
         finally {
             allocator.release(allocationContext, peeling.baseMask());
@@ -868,13 +878,11 @@ public final class PlanEvaluator
 
         int[] sharedIds = null;
         int rowCount = -1;
-        DictionaryVector mapping = null;
         for (Streams inputStreams : inputs) {
             if (inputStreams.getOrNull(Stream.VALUES) instanceof DictionaryVector dictionary) {
                 if (sharedIds == null) {
                     sharedIds = dictionary.ids();
                     rowCount = dictionary.length();
-                    mapping = dictionary;
                 }
                 else if (dictionary.length() != rowCount || !sameDictionaryIds(sharedIds, dictionary.ids(), rowCount)) {
                     return null;
@@ -885,8 +893,7 @@ public final class PlanEvaluator
             return null;
         }
 
-        DictionaryIdsMetadata metadata = dictionaryIdsMetadata(mapping);
-        int baseLength = metadata.baseLength();
+        int baseLength = dictionaryBaseLength(sharedIds, rowCount);
         if (dictionaryPeelTooSparse(rowCount, baseLength)) {
             return null;
         }
@@ -928,10 +935,7 @@ public final class PlanEvaluator
         }
 
         Streams.Builder result = Streams.builder();
-        int[] domainFrequencies = copyDomainFrequencies(metadata);
-        result.put(Stream.VALUES, domainFrequencies == null
-                ? wrapBorrowedDictionary(sharedIds, rowCount, baseValues)
-                : wrapBorrowedDictionary(sharedIds, rowCount, baseValues, domainFrequencies));
+        result.put(Stream.VALUES, wrapBorrowedDictionary(sharedIds, rowCount, baseValues));
         if (passthroughNulls != null && requestedStreams.contains(Stream.NULLS)) {
             result.put(Stream.NULLS, passthroughNulls);
         }
@@ -960,8 +964,7 @@ public final class PlanEvaluator
             return null;
         }
 
-        DictionaryIdsMetadata metadata = dictionaryIdsMetadata(mapping);
-        int baseLength = metadata.baseLength();
+        int baseLength = dictionaryBaseLength(sharedIds, rowCount);
         if (dictionaryPeelTooSparse(rowCount, baseLength)) {
             return null;
         }
@@ -976,12 +979,7 @@ public final class PlanEvaluator
             }
             peeledInputs.add(peeled);
         }
-        return new DictionaryPeeling(
-                sharedIds,
-                rowCount,
-                baseMask,
-                List.copyOf(peeledInputs),
-                copyDomainFrequencies(metadata));
+        return new DictionaryPeeling(sharedIds, rowCount, baseMask, List.copyOf(peeledInputs));
     }
 
     /**
@@ -1069,42 +1067,18 @@ public final class PlanEvaluator
         };
     }
 
-    private DictionaryIdsMetadata dictionaryIdsMetadata(DictionaryVector dictionary)
+    private int dictionaryBaseLength(int[] ids, int length)
     {
-        int[] ids = dictionary.ids();
-        int length = dictionary.length();
         DictionaryIdsMetadata metadata = dictionaryIdsMetadata.get(ids);
         if (metadata != null && metadata.length() == length) {
-            return metadata;
+            return metadata.baseLength();
         }
         int baseLength = 0;
-        int[] frequencies = dictionary.values().length() <= Long.SIZE ? new int[dictionary.values().length()] : null;
-        if (frequencies == null) {
-            for (int index = 0; index < length; index++) {
-                baseLength = Math.max(baseLength, ids[index] + 1);
-            }
+        for (int index = 0; index < length; index++) {
+            baseLength = Math.max(baseLength, ids[index] + 1);
         }
-        else {
-            for (int index = 0; index < length; index++) {
-                frequencies[ids[index]]++;
-            }
-            for (int dictionaryId = frequencies.length - 1; dictionaryId >= 0; dictionaryId--) {
-                if (frequencies[dictionaryId] != 0) {
-                    baseLength = dictionaryId + 1;
-                    break;
-                }
-            }
-        }
-        metadata = new DictionaryIdsMetadata(length, baseLength, frequencies);
-        dictionaryIdsMetadata.put(ids, metadata);
-        return metadata;
-    }
-
-    private static int[] copyDomainFrequencies(DictionaryIdsMetadata metadata)
-    {
-        return metadata.domainFrequencies() == null
-                ? null
-                : Arrays.copyOf(metadata.domainFrequencies(), metadata.baseLength());
+        dictionaryIdsMetadata.put(ids, new DictionaryIdsMetadata(length, baseLength));
+        return baseLength;
     }
 
     private static boolean sameDictionaryIds(int[] left, int[] right, int length)
@@ -1120,7 +1094,7 @@ public final class PlanEvaluator
         return true;
     }
 
-    private record DictionaryIdsMetadata(int length, int baseLength, int[] domainFrequencies) {}
+    private record DictionaryIdsMetadata(int length, int baseLength) {}
 
     private record EncodedMergeCondition(DictionaryVector mapping, byte[] choices) {}
 
@@ -1128,17 +1102,11 @@ public final class PlanEvaluator
             int[] sharedIds,
             int rowCount,
             Streams streams,
-            int[] domainFrequencies,
             boolean cached)
     {
         Streams.Builder wrapped = Streams.builder();
         for (Stream stream : streams.streams()) {
-            Vector values = streams.get(stream);
-            DictionaryVector dictionary = stream == Stream.VALUES &&
-                    domainFrequencies != null &&
-                    domainFrequencies.length == values.length()
-                    ? wrapBorrowedDictionary(sharedIds, rowCount, values, domainFrequencies)
-                    : wrapBorrowedDictionary(sharedIds, rowCount, values);
+            DictionaryVector dictionary = wrapBorrowedDictionary(sharedIds, rowCount, streams.get(stream));
             if (cached) {
                 cachedDictionaryResults.add(dictionary);
             }
@@ -1693,7 +1661,7 @@ public final class PlanEvaluator
         }
 
         int[] ids = mapping.ids();
-        int domainSize = dictionaryIdsMetadata(mapping).baseLength();
+        int domainSize = dictionaryBaseLength(ids, rowCount);
         byte[] choices = new byte[domainSize];
         if (!recordDictionaryBranchChoices(ids, trueMask, choices, (byte) 1) ||
                 !recordDictionaryBranchChoices(ids, falseMask, choices, (byte) 2)) {
@@ -4356,8 +4324,7 @@ public final class PlanEvaluator
             int[] ids,
             int rowCount,
             Mask baseMask,
-            List<Streams> inputs,
-            int[] domainFrequencies) {}
+            List<Streams> inputs) {}
 
     private record DictionaryDomainCacheEntry(DictionaryDomainCacheKey key, Streams result) {}
 

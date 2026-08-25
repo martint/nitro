@@ -190,12 +190,12 @@ public class Sum
                 return true;
             }
             case DictionaryVector values when values.values() instanceof I64Vector dictionaryValues -> {
-                long sum = sumDictionary(dictionaryValues.values(), values.ids(), mask);
+                long sum = sumDictionary(dictionaryValues.values(), values, mask);
                 stateVector.increment(group, sum);
                 return true;
             }
             case DictionaryVector values when values.values() instanceof I32Vector dictionaryValues -> {
-                long sum = sumDictionary(dictionaryValues.values(), values.ids(), mask);
+                long sum = sumDictionary(dictionaryValues.values(), values, mask);
                 stateVector.increment(group, sum);
                 return true;
             }
@@ -274,8 +274,17 @@ public class Sum
         };
     }
 
-    private static long sumDictionary(long[] dictionaryValues, int[] ids, Mask mask)
+    private static long sumDictionary(long[] dictionaryValues, DictionaryVector dictionary, Mask mask)
     {
+        if (mask.all() && dictionary.hasDomainFrequencies()) {
+            long sum = 0;
+            for (int dictionaryId = 0; dictionaryId < dictionaryValues.length; dictionaryId++) {
+                sum += dictionaryValues[dictionaryId] * dictionary.domainFrequency(dictionaryId);
+            }
+            return sum;
+        }
+
+        int[] ids = dictionary.ids();
         if (dictionaryValues.length == 2 && dictionaryValues[0] == 0 && dictionaryValues[1] == 1) {
             long sum = 0;
             if (mask.all()) {
@@ -305,8 +314,17 @@ public class Sum
         return sum;
     }
 
-    private static long sumDictionary(int[] dictionaryValues, int[] ids, Mask mask)
+    private static long sumDictionary(int[] dictionaryValues, DictionaryVector dictionary, Mask mask)
     {
+        if (mask.all() && dictionary.hasDomainFrequencies()) {
+            long sum = 0;
+            for (int dictionaryId = 0; dictionaryId < dictionaryValues.length; dictionaryId++) {
+                sum += (long) dictionaryValues[dictionaryId] * dictionary.domainFrequency(dictionaryId);
+            }
+            return sum;
+        }
+
+        int[] ids = dictionary.ids();
         if (dictionaryValues.length == 2 && dictionaryValues[0] == 0 && dictionaryValues[1] == 1) {
             long sum = 0;
             if (mask.all()) {

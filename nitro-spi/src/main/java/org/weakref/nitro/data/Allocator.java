@@ -176,6 +176,25 @@ public class Allocator
         return vector;
     }
 
+    public DictionaryVector allocateDictionaryWithDomainFrequencies(
+            Context context,
+            int[] ids,
+            int length,
+            Vector values,
+            int[] domainFrequencies)
+    {
+        // The mapping is copied by DictionaryVector; ownership of the caller-created frequency table transfers to
+        // the tracked result. This keeps an escaping dictionary self-contained with one allocation per metadata
+        // component rather than defensively copying the small frequency table twice.
+        DictionaryVector vector = DictionaryVector.ofTrustedIdsWithDomainFrequencies(
+                ids,
+                length,
+                values,
+                domainFrequencies);
+        state(context).trackVector(vector, false);
+        return vector;
+    }
+
     /**
      * Allocates a dictionary wrapper that shares a caller-owned, immutable id mapping. This is intended for sibling
      * vectors produced by one operation, where copying the same mapping for every value/null/error stream would add

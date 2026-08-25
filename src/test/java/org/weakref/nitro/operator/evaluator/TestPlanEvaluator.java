@@ -557,8 +557,16 @@ public class TestPlanEvaluator
                         DictionaryVector.wrap(ids, new I64Vector(new long[] {1, 8, 3})))),
                 new Allocator(EngineResources.createDefault()));
 
-        assertThat(readLongs(evaluator.evaluate(new Reference(result, Stream.VALUES), Mask.all(ids.length)).values()))
+        DictionaryVector encoded = (DictionaryVector) evaluator.evaluate(
+                        new Reference(result, Stream.VALUES),
+                        Mask.all(ids.length))
+                .values();
+        assertThat(readLongs(encoded))
                 .containsExactly(10, 800, 30, 10, 30, 800);
+        assertThat(encoded.hasDomainFrequencies()).isTrue();
+        assertThat(encoded.domainFrequency(0)).isEqualTo(2);
+        assertThat(encoded.domainFrequency(1)).isEqualTo(2);
+        assertThat(encoded.domainFrequency(2)).isEqualTo(2);
         assertThat(trueDomains.get()).containsExactly(0, 2);
         assertThat(falseDomains.get()).containsExactly(1);
     }
@@ -2317,6 +2325,13 @@ public class TestPlanEvaluator
         assertThat(dictionary.domainFrequency(1)).isEqualTo(2);
         assertThat(dictionary.domainFrequency(2)).isEqualTo(2);
         assertThat(readLongs(dictionary)).containsExactly(10, 99, 10, 30, 99, 30);
+
+        DictionaryVector transferable = (DictionaryVector) evaluator.prepareResultForTransfer(dictionary);
+        assertThat(transferable.ids()).isNotSameAs(ids);
+        assertThat(transferable.hasDomainFrequencies()).isTrue();
+        assertThat(transferable.domainFrequency(0)).isEqualTo(2);
+        assertThat(transferable.domainFrequency(1)).isEqualTo(2);
+        assertThat(transferable.domainFrequency(2)).isEqualTo(2);
     }
 
     @Test
@@ -4021,10 +4036,7 @@ public class TestPlanEvaluator
 
         DictionaryVector encoded = (DictionaryVector) result.values();
         assertThat(encoded.ids()).containsExactly(0, 1, 0, 2, 1);
-        assertThat(encoded.hasDomainFrequencies()).isTrue();
-        assertThat(encoded.domainFrequency(0)).isEqualTo(2);
-        assertThat(encoded.domainFrequency(1)).isEqualTo(2);
-        assertThat(encoded.domainFrequency(2)).isEqualTo(1);
+        assertThat(encoded.hasDomainFrequencies()).isFalse();
         BooleanVector dictionaryValues = (BooleanVector) encoded.values();
         assertThat(dictionaryValues.values()).containsExactly(true, true, false);
     }

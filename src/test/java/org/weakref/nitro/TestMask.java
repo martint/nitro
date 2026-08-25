@@ -194,6 +194,30 @@ class TestMask
     }
 
     @Test
+    void compactDictionaryComparisonRetainsFrequenciesForDegenerateSelections()
+    {
+        int[] ids = {0, 1, 0, 2, 1, 2};
+        DictionaryVector dictionary = DictionaryVector.wrap(ids, ids.length, new I64Vector(new long[] {10, 20, 30}));
+
+        Mask all = Mask.all(ids.length);
+        all.retainDictionaryComparison(ids, new boolean[] {true, true, true});
+        Mask.DictionaryDomainSelection allSelection = all.dictionaryDomainSelection(dictionary);
+        assertThat(all.all()).isTrue();
+        assertThat(allSelection).isNotNull();
+        assertThat(all.copyDictionaryDomainFrequencies(allSelection)).containsExactly(2, 2, 2);
+        all.retainDictionaryComparison(ids, new boolean[] {false, true, true});
+        assertThat(all.all()).isFalse();
+        assertThat(all).containsExactly(1, 3, 4, 5);
+
+        Mask none = Mask.all(ids.length);
+        none.retainDictionaryComparison(ids, new boolean[] {false, false, false});
+        Mask.DictionaryDomainSelection noSelection = none.dictionaryDomainSelection(dictionary);
+        assertThat(none.none()).isTrue();
+        assertThat(noSelection).isNotNull();
+        assertThat(none.copyDictionaryDomainFrequencies(noSelection)).containsExactly(2, 2, 2);
+    }
+
+    @Test
     void compactDictionaryComparisonComposesAlignedDomainsWithoutMaterializingPositions()
     {
         int[] ids = {3, 1, 2, 0, 3, 2, 1};
