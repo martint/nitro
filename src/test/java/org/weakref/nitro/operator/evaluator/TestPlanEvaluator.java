@@ -4021,6 +4021,10 @@ public class TestPlanEvaluator
 
         DictionaryVector encoded = (DictionaryVector) result.values();
         assertThat(encoded.ids()).containsExactly(0, 1, 0, 2, 1);
+        assertThat(encoded.hasDomainFrequencies()).isTrue();
+        assertThat(encoded.domainFrequency(0)).isEqualTo(2);
+        assertThat(encoded.domainFrequency(1)).isEqualTo(2);
+        assertThat(encoded.domainFrequency(2)).isEqualTo(1);
         BooleanVector dictionaryValues = (BooleanVector) encoded.values();
         assertThat(dictionaryValues.values()).containsExactly(true, true, false);
     }
@@ -4082,6 +4086,33 @@ public class TestPlanEvaluator
         assertThat(allFalseClassifications).hasValue(1);
         assertThat(streams.values()).isInstanceOf(DictionaryVector.class);
         assertThat(((DictionaryVector) streams.values()).ids()).isSameAs(ids);
+    }
+
+    @Test
+    void testDictionaryPeelingDoesNotAttachFrequenciesToChangedOutputDomain()
+    {
+        PrimitiveRegistry registry = new PrimitiveRegistry();
+        registry.register("padded_domain", (inputs, mask, requestedStreams, output, context) ->
+                Streams.ofValues(new I64Vector(mask.size() + 1)));
+
+        Variable result = new Variable(0);
+        Reference input = new Reference(new Input(0), Stream.VALUES);
+        Reference resultValues = new Reference(result, Stream.VALUES);
+        PlanEvaluator evaluator = planEvaluator(
+                new EvaluationPlan(
+                        List.of(new Assignment(result, new Call("padded_domain", List.of(input)), AllMask.ALL)),
+                        List.of(resultValues)),
+                registry,
+                inputResolver(Map.of(
+                        input,
+                        DictionaryVector.wrap(
+                                new int[] {0, 1, 0, 1, 0},
+                                new I64Vector(new long[] {11, 29})))),
+                new Allocator(EngineResources.createDefault()));
+
+        DictionaryVector encoded = (DictionaryVector) evaluator.evaluate(resultValues, Mask.all(5)).values();
+        assertThat(encoded.values().length()).isEqualTo(3);
+        assertThat(encoded.hasDomainFrequencies()).isFalse();
     }
 
     @Test

@@ -1098,6 +1098,19 @@ public class Mask
         setSelection(size, count, count == size);
     }
 
+    /** Retains a predicate from exact dictionary frequencies when the complete logical domain is still selected. */
+    public void retainDictionaryComparison(DictionaryVector dictionary, boolean[] keep)
+    {
+        checkArgument(dictionary != null, "dictionary is null");
+        checkArgument(dictionary.length() == size, "Dictionary length does not match mask size");
+        if (!none() && allSelected && dictionary.hasDomainFrequencies() && keep.length <= Long.SIZE) {
+            checkArgument(dictionary.values().length() == keep.length, "Predicate domain does not match dictionary values");
+            retainDictionaryDomain(dictionary, dictionaryKeepBits(keep), keep.length);
+            return;
+        }
+        retainDictionaryComparison(dictionary.ids(), keep);
+    }
+
     /**
      * Null-aware predicate-over-dictionary narrow: retains positions whose per-entry result {@code keep[ids[position]]}
      * equals {@code wanted} and that are not null ({@code nulls[position]} unset). {@code wanted} selects the true mask
@@ -1228,6 +1241,32 @@ public class Mask
         positionCount = 0;
         excludedPositions = false;
         dictionaryDomainSelection = new DictionaryDomainSelection(ids, size, domainSize, selectedDomainBits);
+    }
+
+    private void retainDictionaryDomain(DictionaryVector dictionary, long selectedDomainBits, int domainSize)
+    {
+        ensureCapacity(domainSize);
+        int count = 0;
+        for (int dictionaryId = 0; dictionaryId < domainSize; dictionaryId++) {
+            int frequency = dictionary.domainFrequency(dictionaryId);
+            positions[dictionaryId] = frequency;
+            if (((selectedDomainBits >>> dictionaryId) & 1L) != 0) {
+                count += frequency;
+            }
+        }
+        if (count == size) {
+            selectAll(size);
+            return;
+        }
+        if (count == 0) {
+            clear(size);
+            return;
+        }
+        selectedCount = count;
+        allSelected = false;
+        positionCount = 0;
+        excludedPositions = false;
+        dictionaryDomainSelection = new DictionaryDomainSelection(dictionary.ids(), size, domainSize, selectedDomainBits);
     }
 
     private boolean tryRetainExistingDictionaryDomain(int[] ids, long selectedDomainBits, int domainSize)

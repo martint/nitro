@@ -174,6 +174,26 @@ class TestMask
     }
 
     @Test
+    void compactDictionaryComparisonConsumesExactDomainFrequencies()
+    {
+        int[] ids = {3, 1, 2, 0, 3, 2, 1};
+        DictionaryVector dictionary = DictionaryVector.wrapWithDomainFrequencies(
+                ids,
+                ids.length,
+                new I64Vector(new long[] {10, 20, 30, 40}),
+                new int[] {1, 2, 2, 2});
+        Mask mask = Mask.all(ids.length);
+
+        mask.retainDictionaryComparison(dictionary, new boolean[] {false, true, false, true});
+
+        Mask.DictionaryDomainSelection selection = mask.dictionaryDomainSelection(dictionary);
+        assertThat(selection).isNotNull();
+        assertThat(selection.selectedDomainBits()).isEqualTo(0b1010);
+        assertThat(mask.count()).isEqualTo(4);
+        assertThat(mask).containsExactly(0, 1, 4, 6);
+    }
+
+    @Test
     void compactDictionaryComparisonComposesAlignedDomainsWithoutMaterializingPositions()
     {
         int[] ids = {3, 1, 2, 0, 3, 2, 1};
