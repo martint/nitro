@@ -1309,8 +1309,9 @@ class FlatKeyLayout
      * sample shows that its integer keys are outside the exact packed domain. A mixed binary/integer key also stays
      * on the ordinary record path when one integer lane is already highly discriminating: interning a lone reusable
      * binary lane and building a second compact identity cannot repay its extra pass when the ordinary table will
-     * insert almost every row. Two reusable binary lanes can amortize that work by replacing both byte-oriented
-     * comparisons with exact integer ids. The same rejection applies when nearly every value in an integer lane is
+     * insert almost every row. A reusable binary lane can still amortize that work by replacing byte-oriented
+     * equality and record storage with an exact integer id; a flat high-cardinality binary lane cannot. The same
+     * rejection applies when nearly every value in an integer lane is
      * outside the compact domain, since the per-position normalization attempt would almost always fall back.
      * Individual positions are still checked by {@link #tryPrepareNormalizedIntKey} after a normalized hash strategy
      * has been established.
@@ -1390,7 +1391,7 @@ class FlatKeyLayout
                     nonNull > 0 &&
                     ((long) outOfDomain * 100 >=
                             (long) nonNull * policy.normalizedIntKeyFallbackMinPercent() ||
-                            (reusableBinaryFields < 2 &&
+                            (reusableBinaryFields == 0 &&
                                     (long) distinct * 100 >=
                                             (long) (nonNull - outOfDomain) * policy.normalizedIntKeyDiscriminatorMinDistinctPercent()))) {
                 batchNormalizedIntKeyCostRejected = true;

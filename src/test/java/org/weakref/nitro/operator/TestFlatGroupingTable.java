@@ -3216,7 +3216,7 @@ class TestFlatGroupingTable
     }
 
     @Test
-    void testNormalizedIntKeyRejectsHighCardinalityIntegerWithOneReusableBinaryField()
+    void testNormalizedIntKeyAdmitsHighCardinalityIntegerWithOneReusableBinaryField()
     {
         int positions = 128;
         String[] strings = new String[positions];
@@ -3231,8 +3231,8 @@ class TestFlatGroupingTable
         FlatKeyLayout layout = FlatKeyLayout.tryCreate(values, true, arrayPool, codeGeneration, flatKeyTablePolicy);
         try {
             layout.beginBatch(values, new Vector[] {null, null, null});
-            assertThat(layout.batchSupportsNormalizedIntKey()).isFalse();
-            assertThat(layout.tryPrepareNormalizedIntKey(values, new Vector[] {null, null, null}, 0)).isFalse();
+            assertThat(layout.batchSupportsNormalizedIntKey()).isTrue();
+            assertThat(layout.tryPrepareNormalizedIntKey(values, new Vector[] {null, null, null}, 0)).isTrue();
             layout.endBatch();
         }
         finally {
