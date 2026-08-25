@@ -322,7 +322,28 @@ class TestHashJoinSession
                 assertThat(filter.accepts(100_000_010)).isTrue();
                 assertThat(filter.accepts(100_002_550)).isTrue();
                 assertThat(filter.accepts(100_000_011)).isFalse();
+                assertThat(build.separateDynamicFilterCollectionActivated()).isFalse();
             }
+        }
+    }
+
+    @Test
+    void testOrdinaryJoinStillCollectsBuildMembershipForProbePushdown()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                HashJoinOperator join = new HashJoinOperator(
+                        resources.operatorResources(),
+                        allocator,
+                        table(2),
+                        0,
+                        table(2, 3),
+                        0)) {
+            allocator.beginExecution();
+            while (join.hasNext()) {
+                join.next().close();
+            }
+            assertThat(join.separateDynamicFilterCollectionActivated()).isTrue();
         }
     }
 

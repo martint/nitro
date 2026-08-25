@@ -71,6 +71,14 @@ public final class HashJoinBuild
         return exactDynamicFilter;
     }
 
+    boolean separateDynamicFilterCollectionActivated()
+    {
+        if (closed) {
+            throw new IllegalStateException("Hash join build is closed");
+        }
+        return owner.separateDynamicFilterCollectionActivated();
+    }
+
     @Override
     public void close()
     {

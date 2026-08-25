@@ -149,6 +149,8 @@ public final class HashJoinSession
                 requireNonNull(build, "build is null"),
                 buildJoinColumns.clone(),
                 probeOuterJoin,
+                null,
+                false,
                 joinFilters.clone())
                 .withOutputs(outputChannels.clone());
         HashJoinBuild prepared = join.prepareBuild();

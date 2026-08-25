@@ -317,6 +317,7 @@ public class HashJoinOperator
     private long[] buildKeyMaxs;
     private long[] collectedBuildKeys;
     private int collectedBuildKeyCount;
+    private boolean separateDynamicFilterCollectionActivated;
     private byte collectedBuildKeyAdmission;
     private boolean buildKeysAbandoned;
     private boolean streamedInnerLoaded;
@@ -403,6 +404,31 @@ public class HashJoinOperator
             int[] innerJoinColumns,
             boolean probeOuterJoin,
             HashJoinBuild preparedBuild,
+            JoinFilter... joinFilters)
+    {
+        this(
+                operatorResources,
+                allocator,
+                outer,
+                outerJoinColumns,
+                inner,
+                innerJoinColumns,
+                probeOuterJoin,
+                preparedBuild,
+                true,
+                joinFilters);
+    }
+
+    HashJoinOperator(
+            OperatorResources operatorResources,
+            Allocator allocator,
+            Operator outer,
+            int[] outerJoinColumns,
+            Operator inner,
+            int[] innerJoinColumns,
+            boolean probeOuterJoin,
+            HashJoinBuild preparedBuild,
+            boolean collectBuildDynamicFilter,
             JoinFilter... joinFilters)
     {
         if (outerJoinColumns.length != innerJoinColumns.length) {
@@ -547,7 +573,7 @@ public class HashJoinOperator
         accountJoinScratch();
         this.preparedOuterMatches = new LongList[maxBatchRows];
         this.currentOutputs = new Streams[totalOutputCount];
-        this.buildKeysViable = preparedBuild == null && allowsLegacyKeyShortcuts && dynamicFilterPolicy.enabled() && !probeOuterJoin
+        this.buildKeysViable = collectBuildDynamicFilter && preparedBuild == null && allowsLegacyKeyShortcuts && dynamicFilterPolicy.enabled() && !probeOuterJoin
                 && (innerJoinColumns.length == 1 || dynamicFilterPolicy.multiKey());
         Arrays.fill(retainedConstraintCountsByBatch, -1);
     }
@@ -1237,6 +1263,11 @@ public class HashJoinOperator
         return joinIndex.buildDynamicFilter(probeColumn);
     }
 
+    boolean separateDynamicFilterCollectionActivated()
+    {
+        return separateDynamicFilterCollectionActivated;
+    }
+
     private void prepareProbeFirstBuildFilter()
     {
         if (!allowsLegacyKeyShortcuts ||
@@ -1597,6 +1628,7 @@ public class HashJoinOperator
                         }
                     }
                 }
+                separateDynamicFilterCollectionActivated |= collectKeys;
                 if (!collectKeys && joinIndex.addBuildRows(
                         joinValues,
                         joinNulls,
@@ -1995,6 +2027,7 @@ public class HashJoinOperator
             }
             collectKeys = !buildKeysAbandoned;
         }
+        separateDynamicFilterCollectionActivated |= collectKeys;
         if (!collectKeys && joinIndex.addBuildRows(
                 joinValues,
                 joinNulls,
