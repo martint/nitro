@@ -44,6 +44,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.LongConsumer;
 
 import static java.lang.Math.toIntExact;
 import static java.util.Objects.requireNonNull;
@@ -1266,6 +1267,11 @@ public class HashJoinOperator
     boolean separateDynamicFilterCollectionActivated()
     {
         return separateDynamicFilterCollectionActivated;
+    }
+
+    boolean visitExactBuildLongKeys(LongConsumer consumer)
+    {
+        return joinIndex != null && joinIndex.visitExactLongKeys(consumer);
     }
 
     private void prepareProbeFirstBuildFilter()
@@ -6642,6 +6648,40 @@ public class HashJoinOperator
         {
             buildSparseRangeMembership();
             return sparseMembership.dynamicFilter(probeColumn);
+        }
+
+        @Override
+        boolean visitExactLongKeys(LongConsumer consumer)
+        {
+            requireNonNull(consumer, "consumer is null");
+            if (buildCardinality.isEmpty()) {
+                return true;
+            }
+            if (directBuild.isActive()) {
+                for (int key = 0; key < directBuild.capacity(); key++) {
+                    if (directBuild.entry(key) != EMPTY) {
+                        consumer.accept(key);
+                    }
+                }
+                return true;
+            }
+            if (directLookup.isActive()) {
+                directLookup.visitKeys(denseSequence, consumer);
+                return true;
+            }
+            if (compressedRanges.isBuilt()) {
+                compressedRanges.visitKeys(consumer);
+                return true;
+            }
+            if (!hashTable.isAllocated()) {
+                return false;
+            }
+            for (int slot = 0; slot < hashTable.capacity(); slot++) {
+                if (hashTable.isOccupied(slot)) {
+                    consumer.accept(hashTable.key(slot));
+                }
+            }
+            return true;
         }
 
         private boolean sparseRangeContains(long key)

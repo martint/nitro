@@ -322,6 +322,12 @@ class TestHashJoinSession
                 assertThat(filter.accepts(100_000_010)).isTrue();
                 assertThat(filter.accepts(100_002_550)).isTrue();
                 assertThat(filter.accepts(100_000_011)).isFalse();
+                List<Long> visitedKeys = new ArrayList<>();
+                assertThat(build.visitExactLongKeys(visitedKeys::add)).isTrue();
+                assertThat(visitedKeys).hasSize(buildKeys.length);
+                for (long key : buildKeys) {
+                    assertThat(visitedKeys).contains(key);
+                }
                 assertThat(build.separateDynamicFilterCollectionActivated()).isFalse();
             }
         }
@@ -344,6 +350,34 @@ class TestHashJoinSession
                 join.next().close();
             }
             assertThat(join.separateDynamicFilterCollectionActivated()).isTrue();
+        }
+    }
+
+    @Test
+    void testPreparedBuildVisitsDenseMembership()
+    {
+        long[] buildKeys = new long[512];
+        for (int index = 0; index < buildKeys.length; index++) {
+            buildKeys[index] = 50_000L + index;
+        }
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            allocator.beginExecution();
+            try (HashJoinBuild build = HashJoinSession.prepareBuild(
+                            resources.operatorResources(),
+                            allocator,
+                            Schema.unspecified(1),
+                            new int[] {0},
+                            table(buildKeys),
+                            new int[] {0},
+                            false,
+                            new int[0])
+                    .orElseThrow()) {
+                List<Long> visitedKeys = new ArrayList<>();
+                assertThat(build.visitExactLongKeys(visitedKeys::add)).isTrue();
+                assertThat(visitedKeys).containsExactlyElementsOf(
+                        java.util.Arrays.stream(buildKeys).boxed().toList());
+            }
         }
     }
 

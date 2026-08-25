@@ -18,6 +18,8 @@ import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
 
+import java.util.function.LongConsumer;
+
 abstract class JoinIndex
 {
     private final Vector[] noNullStreams = new Vector[0];
@@ -63,6 +65,11 @@ abstract class JoinIndex
     DynamicFilter buildDynamicFilter(int probeColumn)
     {
         return null;
+    }
+
+    boolean visitExactLongKeys(LongConsumer consumer)
+    {
+        return false;
     }
 
     int[] buildOrderedIntPayload(VectorAccess.LongValues values, long[] directValues, int[] sourcePositions)

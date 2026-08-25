@@ -16,6 +16,7 @@ package org.weakref.nitro.operator;
 import org.weakref.nitro.data.PrimitiveArrayPool;
 
 import java.util.Arrays;
+import java.util.function.LongConsumer;
 
 import static java.util.Objects.requireNonNull;
 
@@ -145,6 +146,16 @@ final class CompressedLongRangeIndex
         }
         long ordinal = compress(key) - minimumOrdinal;
         return ordinal >= 0 && ordinal < entries.length ? entries[(int) ordinal] : 0;
+    }
+
+    void visitKeys(LongConsumer consumer)
+    {
+        requireNonNull(consumer, "consumer is null");
+        for (int index = 0; index < entries.length; index++) {
+            if (entries[index] != 0) {
+                consumer.accept(invariantBits | Long.expand(minimumOrdinal + index, variableMask));
+            }
+        }
     }
 
     static int start(int entry)

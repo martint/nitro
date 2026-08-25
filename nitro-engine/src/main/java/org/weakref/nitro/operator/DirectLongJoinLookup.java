@@ -16,6 +16,7 @@ package org.weakref.nitro.operator;
 import org.weakref.nitro.data.PrimitiveArrayPool;
 
 import java.util.Arrays;
+import java.util.function.LongConsumer;
 
 import static java.util.Objects.requireNonNull;
 
@@ -93,6 +94,19 @@ final class DirectLongJoinLookup
             return reference == NO_MATCH_COMPACT_REFERENCE ? noMatchReference : JoinRowReference.unpackCompact(reference);
         }
         return references[ordinal];
+    }
+
+    void visitKeys(DenseJoinSequence denseSequence, LongConsumer consumer)
+    {
+        requireNonNull(consumer, "consumer is null");
+        for (long key = minKey; ; key++) {
+            if (reference(key, denseSequence) != noMatchReference) {
+                consumer.accept(key);
+            }
+            if (key == maxKey) {
+                return;
+            }
+        }
     }
 
     long retainedBytes()

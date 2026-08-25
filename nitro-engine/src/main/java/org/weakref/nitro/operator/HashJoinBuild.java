@@ -13,6 +13,8 @@
  */
 package org.weakref.nitro.operator;
 
+import java.util.function.LongConsumer;
+
 import static java.util.Objects.requireNonNull;
 
 /**
@@ -69,6 +71,18 @@ public final class HashJoinBuild
             throw new IllegalArgumentException("Prepared build membership was already targeted to another probe column");
         }
         return exactDynamicFilter;
+    }
+
+    /**
+     * Visits every distinct non-null key in a single-long prepared build exactly once. Returns false when the build
+     * uses another physical key shape. The visitor observes the finalized index while this build remains open.
+     */
+    public synchronized boolean visitExactLongKeys(LongConsumer consumer)
+    {
+        if (closed) {
+            throw new IllegalStateException("Hash join build is closed");
+        }
+        return owner.visitExactBuildLongKeys(consumer);
     }
 
     boolean separateDynamicFilterCollectionActivated()
