@@ -46,6 +46,7 @@ public final class ProjectionMaskCompiler
 {
     private final DynamicKernelFactory dynamicKernelFactory;
     private final boolean returnedConstantComparisonMasks;
+    private final int dictionaryEqualityMinimumReuse;
     private volatile Utf8DynamicMaskKernel utf8DynamicKernel;
 
     public ProjectionMaskCompiler()
@@ -68,6 +69,7 @@ public final class ProjectionMaskCompiler
         this.dynamicKernelFactory = requireNonNull(dynamicKernelFactory, "dynamicKernelFactory is null");
         this.returnedConstantComparisonMasks =
                 requireNonNull(policy, "policy is null").returnedConstantComparisonMasks();
+        this.dictionaryEqualityMinimumReuse = policy.dictionaryEqualityMinimumReuse();
     }
 
     public Optional<CompiledMask> tryCompile(
@@ -152,7 +154,8 @@ public final class ProjectionMaskCompiler
                     List.of(
                             new ArgumentComponent(0, Stream.ERRORS),
                             new ArgumentComponent(1, Stream.ERRORS)),
-                    utf8DynamicKernel()));
+                    utf8DynamicKernel(),
+                    dictionaryEqualityMinimumReuse));
         }
 
         List<Set<Stream>> requiredStreams = inputIndex == 0
@@ -420,10 +423,11 @@ public final class ProjectionMaskCompiler
         private Utf8DynamicMask(
                 List<Set<Stream>> requiredInputStreams,
                 List<ArgumentComponent> excludedComponents,
-                Utf8DynamicMaskKernel kernel)
+                Utf8DynamicMaskKernel kernel,
+                int dictionaryEqualityMinimumReuse)
         {
             super(2, requiredInputStreams, excludedComponents);
-            support = new Utf8DynamicMaskSupport(kernel);
+            support = new Utf8DynamicMaskSupport(kernel, dictionaryEqualityMinimumReuse);
         }
 
         @Override

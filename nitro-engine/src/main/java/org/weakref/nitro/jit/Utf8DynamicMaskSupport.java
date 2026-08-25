@@ -23,6 +23,9 @@ import org.weakref.nitro.data.Utf8Traits;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
 
+import java.util.Arrays;
+
+import static java.lang.Math.toIntExact;
 import static java.util.Objects.requireNonNull;
 
 /**
@@ -34,10 +37,13 @@ import static java.util.Objects.requireNonNull;
 final class Utf8DynamicMaskSupport
 {
     private final Utf8DynamicMaskKernel kernel;
+    private final int dictionaryEqualityMinimumReuse;
+    private boolean[] dictionaryEquality = new boolean[0];
 
-    Utf8DynamicMaskSupport(Utf8DynamicMaskKernel kernel)
+    Utf8DynamicMaskSupport(Utf8DynamicMaskKernel kernel, int dictionaryEqualityMinimumReuse)
     {
         this.kernel = requireNonNull(kernel, "kernel is null");
+        this.dictionaryEqualityMinimumReuse = dictionaryEqualityMinimumReuse;
     }
 
     boolean evaluate(Streams leftInput, Streams rightInput, Mask mask, boolean selectMatches)
@@ -92,6 +98,17 @@ final class Utf8DynamicMaskSupport
                 right instanceof DictionaryVector rightEncoded &&
                 rightEncoded.baseValues() instanceof BinaryVector rightBase &&
                 rightEncoded.dictionaryDepth() == 1) {
+            if (retainDictionaryDomain(
+                    leftEncoded,
+                    leftBase,
+                    leftNulls,
+                    rightEncoded,
+                    rightBase,
+                    rightNulls,
+                    mask,
+                    selectMatches)) {
+                return true;
+            }
             kernel.retainDictionaryDictionary(
                     leftBase.data(), leftBase.offsets(), leftEncoded.ids(), leftNulls,
                     rightBase.data(), rightBase.offsets(), rightEncoded.ids(), rightNulls,
@@ -121,6 +138,95 @@ final class Utf8DynamicMaskSupport
 
         retainGeneral(left, right, leftNullVector, rightNullVector, mask, selectMatches);
         return true;
+    }
+
+    private boolean retainDictionaryDomain(
+            DictionaryVector left,
+            BinaryVector leftBase,
+            boolean[] leftNulls,
+            DictionaryVector right,
+            BinaryVector rightBase,
+            boolean[] rightNulls,
+            Mask mask,
+            boolean selectMatches)
+    {
+        int leftDictionarySize = leftBase.length();
+        int rightDictionarySize = rightBase.length();
+        long domainComparisonCount = (long) leftDictionarySize * rightDictionarySize;
+        if (domainComparisonCount > mask.selectedCount() / dictionaryEqualityMinimumReuse) {
+            return false;
+        }
+
+        if (mask.all() &&
+                leftNulls == null &&
+                rightNulls == null &&
+                leftDictionarySize == rightDictionarySize &&
+                alignedDictionaryValues(leftBase, rightBase) &&
+                Arrays.mismatch(left.ids(), 0, mask.size(), right.ids(), 0, mask.size()) < 0) {
+            if (!selectMatches) {
+                mask.clear(mask.size());
+            }
+            return true;
+        }
+
+        int relationSize = toIntExact(domainComparisonCount);
+        if (dictionaryEquality.length < relationSize) {
+            dictionaryEquality = new boolean[relationSize];
+        }
+        for (int leftPosition = 0; leftPosition < leftDictionarySize; leftPosition++) {
+            for (int rightPosition = 0; rightPosition < rightDictionarySize; rightPosition++) {
+                dictionaryEquality[leftPosition * rightDictionarySize + rightPosition] =
+                        dictionaryValueEquals(leftBase, leftPosition, rightBase, rightPosition);
+            }
+        }
+
+        int iterations = mask.selectedCount();
+        boolean dense = mask.all();
+        int[] positions = dense ? mask.positionsArrayForOverwrite(iterations) : mask.selectedPositions();
+        int[] leftIds = left.ids();
+        int[] rightIds = right.ids();
+        int retained = 0;
+        for (int index = 0; index < iterations; index++) {
+            int position = dense ? index : positions[index];
+            if ((leftNulls != null && leftNulls[position]) || (rightNulls != null && rightNulls[position])) {
+                continue;
+            }
+            boolean matches = dictionaryEquality[leftIds[position] * rightDictionarySize + rightIds[position]];
+            if (matches == selectMatches) {
+                positions[retained++] = position;
+            }
+        }
+        mask.finishRetain(retained);
+        return true;
+    }
+
+    private static boolean alignedDictionaryValues(BinaryVector left, BinaryVector right)
+    {
+        int[] leftOffsets = left.offsets();
+        int[] rightOffsets = right.offsets();
+        byte[] leftData = left.data();
+        byte[] rightData = right.data();
+        for (int position = 0; position < left.length(); position++) {
+            int leftStart = leftOffsets[position];
+            int leftEnd = leftOffsets[position + 1];
+            int rightStart = rightOffsets[position];
+            int rightEnd = rightOffsets[position + 1];
+            if (leftEnd - leftStart != rightEnd - rightStart ||
+                    Arrays.mismatch(leftData, leftStart, leftEnd, rightData, rightStart, rightEnd) >= 0) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean dictionaryValueEquals(BinaryVector left, int leftPosition, BinaryVector right, int rightPosition)
+    {
+        int leftStart = left.offsets()[leftPosition];
+        int leftEnd = left.offsets()[leftPosition + 1];
+        int rightStart = right.offsets()[rightPosition];
+        int rightEnd = right.offsets()[rightPosition + 1];
+        return leftEnd - leftStart == rightEnd - rightStart &&
+                Arrays.mismatch(left.data(), leftStart, leftEnd, right.data(), rightStart, rightEnd) < 0;
     }
 
     private static void retainGeneral(

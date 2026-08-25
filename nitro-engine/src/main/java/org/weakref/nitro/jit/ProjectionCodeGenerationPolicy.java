@@ -22,11 +22,19 @@ package org.weakref.nitro.jit;
 public record ProjectionCodeGenerationPolicy(
         boolean pooledDictionaryScratch,
         boolean mappedDictionaryDoubleInputs,
-        boolean returnedConstantComparisonMasks)
+        boolean returnedConstantComparisonMasks,
+        int dictionaryEqualityMinimumReuse)
 {
+    public ProjectionCodeGenerationPolicy
+    {
+        if (dictionaryEqualityMinimumReuse < 1) {
+            throw new IllegalArgumentException("dictionaryEqualityMinimumReuse must be at least one");
+        }
+    }
+
     public static ProjectionCodeGenerationPolicy defaults()
     {
-        return new ProjectionCodeGenerationPolicy(true, true, true);
+        return new ProjectionCodeGenerationPolicy(true, true, true, 4);
     }
 
     public static ProjectionCodeGenerationPolicy fromSystemProperties()
@@ -35,11 +43,17 @@ public record ProjectionCodeGenerationPolicy(
         return new ProjectionCodeGenerationPolicy(
                 booleanProperty("nitro.project.pooledDictionaryScratch", defaults.pooledDictionaryScratch()),
                 booleanProperty("nitro.project.mappedDictionaryDoubleInputs", defaults.mappedDictionaryDoubleInputs()),
-                booleanProperty("nitro.longComparison.returnedConstantMasks", defaults.returnedConstantComparisonMasks()));
+                booleanProperty("nitro.longComparison.returnedConstantMasks", defaults.returnedConstantComparisonMasks()),
+                integerProperty("nitro.utf8.dictionaryEqualityMinimumReuse", defaults.dictionaryEqualityMinimumReuse()));
     }
 
     private static boolean booleanProperty(String name, boolean defaultValue)
     {
         return Boolean.parseBoolean(System.getProperty(name, Boolean.toString(defaultValue)));
+    }
+
+    private static int integerProperty(String name, int defaultValue)
+    {
+        return Integer.parseInt(System.getProperty(name, Integer.toString(defaultValue)));
     }
 }

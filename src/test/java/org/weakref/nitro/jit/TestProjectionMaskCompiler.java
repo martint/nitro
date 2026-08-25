@@ -30,6 +30,7 @@ import org.weakref.nitro.function.scalar.builtin.LessThanF64Optimization;
 import org.weakref.nitro.function.scalar.builtin.LessThanI64RangeOptimization;
 import org.weakref.nitro.function.scalar.builtin.LessThanOrEqualF64Optimization;
 
+import java.lang.reflect.Proxy;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -212,6 +213,46 @@ class TestProjectionMaskCompiler
                 falseMask,
                 false)).isTrue();
         assertThat(falseMask).containsExactly(1);
+    }
+
+    @Test
+    void testCompiledUtf8InputEqualityUsesDictionaryDomainRelation()
+    {
+        ProjectionMaskCompiler compiler = new ProjectionMaskCompiler(
+                () -> (Utf8DynamicMaskKernel) Proxy.newProxyInstance(
+                        Utf8DynamicMaskKernel.class.getClassLoader(),
+                        new Class<?>[] {Utf8DynamicMaskKernel.class},
+                        (_, _, _) -> {
+                            throw new AssertionError("generated row kernel should not be invoked");
+                        }),
+                new ProjectionCodeGenerationPolicy(true, true, true, 1));
+        ProjectionMaskCompiler.CompiledMask compiled = compiler.tryCompile(
+                new EqualUtf8ProjectionOptimization(),
+                List.of(ProjectionArgument.input(), ProjectionArgument.input()))
+                .orElseThrow();
+
+        DictionaryVector left = new DictionaryVector(
+                new int[] {0, 1, 2, 1, 0, 2, 1, 0, 2, 1, 0, 2},
+                utf8("A", "B", "C"));
+        DictionaryVector right = new DictionaryVector(
+                new int[] {1, 2, 0, 2, 1, 1, 2, 1, 0, 2, 1, 0},
+                utf8("C", "A", "B"));
+        BooleanVector leftNulls = new BooleanVector(
+                new boolean[] {false, false, false, false, true, false, false, false, false, false, false, false});
+
+        Mask trueMask = Mask.all(12);
+        assertThat(compiled.evaluate(
+                List.of(Streams.ofValuesAndNulls(left, leftNulls), Streams.ofValues(right)),
+                trueMask,
+                true)).isTrue();
+        assertThat(trueMask).containsExactly(0, 1, 2, 3, 6, 7, 8, 9, 10, 11);
+
+        Mask falseMask = Mask.all(12);
+        assertThat(compiled.evaluate(
+                List.of(Streams.ofValuesAndNulls(left, leftNulls), Streams.ofValues(right)),
+                falseMask,
+                false)).isTrue();
+        assertThat(falseMask).containsExactly(5);
     }
 
     @Test
