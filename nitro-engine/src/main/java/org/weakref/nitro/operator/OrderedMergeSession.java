@@ -317,16 +317,36 @@ public final class OrderedMergeSession
         if (closed) {
             return;
         }
+        closed = true;
+        RuntimeException failure = null;
         if (outstandingOutput != null) {
-            outstandingOutput.close();
+            Batch output = outstandingOutput;
             outstandingOutput = null;
+            try {
+                output.close();
+            }
+            catch (RuntimeException e) {
+                failure = e;
+            }
         }
         for (SourceCursor cursor : sources) {
             if (cursor != null) {
-                cursor.closeBatch();
+                try {
+                    cursor.closeBatch();
+                }
+                catch (RuntimeException e) {
+                    if (failure == null) {
+                        failure = e;
+                    }
+                    else {
+                        failure.addSuppressed(e);
+                    }
+                }
             }
         }
-        closed = true;
+        if (failure != null) {
+            throw failure;
+        }
     }
 
     public record Ordering(int column, boolean descending, boolean nullsFirst) {}
@@ -374,13 +394,14 @@ public final class OrderedMergeSession
 
         private void closeBatch()
         {
-            if (batch != null) {
-                batch.close();
-                batch = null;
-            }
+            Batch current = batch;
+            batch = null;
             java.util.Arrays.fill(values, null);
             java.util.Arrays.fill(nulls, null);
             selectedIndex = 0;
+            if (current != null) {
+                current.close();
+            }
         }
     }
 }
