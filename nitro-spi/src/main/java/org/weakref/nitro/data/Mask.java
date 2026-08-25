@@ -1269,6 +1269,17 @@ public class Mask
         return selection;
     }
 
+    /**
+     * Copies the exact logical-row frequency of every entry from the current compact dictionary-domain selection.
+     * The returned immutable-by-contract snapshot can travel with a derived encoded vector after this mask is
+     * released or reused.
+     */
+    public int[] copyDictionaryDomainFrequencies(DictionaryDomainSelection selection)
+    {
+        checkArgument(selection != null && selection == dictionaryDomainSelection, "Dictionary selection is not current");
+        return Arrays.copyOf(positions, selection.domainSize());
+    }
+
     private boolean dictionarySparseWrites(int dictionarySize, long keepBits, boolean wanted)
     {
         long domainBits = dictionarySize == Long.SIZE ? -1L : (1L << dictionarySize) - 1;

@@ -1111,6 +1111,15 @@ public final class PlanEvaluator
         return dictionary;
     }
 
+    private DictionaryVector wrapBorrowedDictionary(int[] ids, int length, Vector values, int[] domainFrequencies)
+    {
+        DictionaryVector dictionary = allocator.adopt(
+                allocationContext,
+                DictionaryVector.wrapWithDomainFrequencies(ids, length, values, domainFrequencies));
+        borrowedDictionaryResults.add(dictionary);
+        return dictionary;
+    }
+
     private Streams evaluateArgument(Reference argument, Mask mask)
     {
         return evaluateArgument(argument, mask, PrimitiveFunction.ALL_INPUT_STREAMS, false);
@@ -1269,6 +1278,8 @@ public final class PlanEvaluator
         }
 
         Mask trueMask = encodedMergeBranchMask(condition, (byte) 1);
+        Mask.DictionaryDomainSelection domainSelection = trueMask.dictionaryDomainSelection(condition.mapping());
+        int[] domainFrequencies = domainSelection == null ? null : trueMask.copyDictionaryDomainFrequencies(domainSelection);
         // The encoded condition is exhaustive: every domain entry selects exactly one branch. Preserve the first
         // mask's compact domain histogram and derive the second in O(domain cardinality), rather than rescanning the
         // full logical dictionary mapping for both branches.
@@ -1296,7 +1307,13 @@ public final class PlanEvaluator
         }
         Streams.Builder result = Streams.builder();
         for (Map.Entry<Stream, Vector> entry : mergedDomains.entrySet()) {
-            result.put(entry.getKey(), wrapBorrowedDictionary(condition.mapping().ids(), mask.size(), entry.getValue()));
+            Vector domain = entry.getValue();
+            if (entry.getKey() == Stream.VALUES && domainFrequencies != null && domainFrequencies.length == domain.length()) {
+                result.put(entry.getKey(), wrapBorrowedDictionary(condition.mapping().ids(), mask.size(), domain, domainFrequencies));
+            }
+            else {
+                result.put(entry.getKey(), wrapBorrowedDictionary(condition.mapping().ids(), mask.size(), domain));
+            }
         }
         return result.build();
     }

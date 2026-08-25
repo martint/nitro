@@ -27,11 +27,13 @@ public final class DictionaryVector
     private final int length;
     private final Vector values;
     private final Object mappingIdentity;
+    private final int[] domainFrequencies;
+    private final boolean ownsDomainFrequencies;
     private Allocator.BufferLeaseOwner transferredIdsOwner;
 
     public DictionaryVector(int[] ids, Vector values)
     {
-        this(ids, null, ids.length, values, true, true, true, null);
+        this(ids, null, ids.length, values, true, true, true, null, null, false);
     }
 
     /**
@@ -46,7 +48,7 @@ public final class DictionaryVector
 
     public static DictionaryVector ofTrustedIds(int[] ids, int length, Vector values)
     {
-        return new DictionaryVector(ids, null, length, values, true, true, false, null);
+        return new DictionaryVector(ids, null, length, values, true, true, false, null, null, false);
     }
 
     /**
@@ -71,7 +73,24 @@ public final class DictionaryVector
      */
     public static DictionaryVector wrapNested(int[] ids, int length, Vector values)
     {
-        return new DictionaryVector(ids, null, length, values, false, false, false, null);
+        return new DictionaryVector(ids, null, length, values, false, false, false, null, null, false);
+    }
+
+    /**
+     * Wraps a borrowed mapping together with an immutable, exact logical-row frequency for every dictionary entry.
+     * The caller transfers ownership of {@code domainFrequencies} to the returned vector and must not mutate it.
+     */
+    public static DictionaryVector wrapWithDomainFrequencies(int[] ids, int length, Vector values, int[] domainFrequencies)
+    {
+        checkArgument(domainFrequencies != null, "domainFrequencies is null");
+        checkArgument(domainFrequencies.length == values.length(), "Frequency domain does not match dictionary values");
+        long frequencyTotal = 0;
+        for (int frequency : domainFrequencies) {
+            checkArgument(frequency >= 0, "Dictionary frequency is negative");
+            frequencyTotal += frequency;
+        }
+        checkArgument(frequencyTotal == length, "Dictionary frequencies do not cover the logical length");
+        return new DictionaryVector(ids, null, length, values, false, false, false, null, domainFrequencies, true);
     }
 
     /**
@@ -85,7 +104,7 @@ public final class DictionaryVector
     public static DictionaryVector wrapOwnedIds(I32Vector ids, int length, Vector values)
     {
         checkArgument(ids != null, "ids is null");
-        return new DictionaryVector(ids.values(), ids, length, values, false, false, false, null);
+        return new DictionaryVector(ids.values(), ids, length, values, false, false, false, null, null, false);
     }
 
     private static DictionaryVector wrap(int[] ids, int length, Vector values, boolean copyIds)
@@ -105,10 +124,10 @@ public final class DictionaryVector
                 baseValues = nestedDictionary.values();
             }
             // composed ids are derived from already-validated id arrays, so bounds are guaranteed
-            return new DictionaryVector(composedIds, null, composedIds.length, baseValues, false, true, false, null);
+            return new DictionaryVector(composedIds, null, composedIds.length, baseValues, false, true, false, null, null, false);
         }
         // callers of wrap are expected to supply bounds-valid ids; skip validation in the hot path
-        return new DictionaryVector(ids, null, length, values, copyIds, copyIds, false, null);
+        return new DictionaryVector(ids, null, length, values, copyIds, copyIds, false, null, null, false);
     }
 
     private DictionaryVector(
@@ -119,7 +138,9 @@ public final class DictionaryVector
             boolean copyIds,
             boolean ownsRawIds,
             boolean validate,
-            Object mappingIdentity)
+            Object mappingIdentity,
+            int[] domainFrequencies,
+            boolean ownsDomainFrequencies)
     {
         checkArgument(length >= 0, "length is negative");
         checkArgument(length <= ids.length, "length exceeds ids capacity");
@@ -129,6 +150,8 @@ public final class DictionaryVector
         this.length = length;
         this.values = values;
         this.mappingIdentity = mappingIdentity == null ? this : mappingIdentity;
+        this.domainFrequencies = domainFrequencies;
+        this.ownsDomainFrequencies = ownsDomainFrequencies;
         if (validate) {
             validateIds(ids, length, values.length());
         }
@@ -142,6 +165,17 @@ public final class DictionaryVector
     public Vector values()
     {
         return values;
+    }
+
+    public boolean hasDomainFrequencies()
+    {
+        return domainFrequencies != null;
+    }
+
+    public int domainFrequency(int dictionaryId)
+    {
+        checkArgument(domainFrequencies != null, "Dictionary does not carry domain frequencies");
+        return domainFrequencies[dictionaryId];
     }
 
     @Override
@@ -192,7 +226,7 @@ public final class DictionaryVector
      */
     public DictionaryVector sharedMappingView()
     {
-        return new DictionaryVector(ids, null, length, values, false, false, false, mappingIdentity);
+        return new DictionaryVector(ids, null, length, values, false, false, false, mappingIdentity, domainFrequencies, false);
     }
 
     /**
@@ -305,7 +339,11 @@ public final class DictionaryVector
     @Override
     public long retainedBytes()
     {
-        return ownedIds == null && ownsRawIds ? (long) ids.length * Integer.BYTES : 0;
+        long retained = ownedIds == null && ownsRawIds ? (long) ids.length * Integer.BYTES : 0;
+        if (ownsDomainFrequencies) {
+            retained += (long) domainFrequencies.length * Integer.BYTES;
+        }
+        return retained;
     }
 
     @Override

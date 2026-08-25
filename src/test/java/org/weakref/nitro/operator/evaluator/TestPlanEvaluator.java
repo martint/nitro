@@ -2312,6 +2312,10 @@ public class TestPlanEvaluator
         assertThat(resultVector).isInstanceOf(DictionaryVector.class);
         DictionaryVector dictionary = (DictionaryVector) resultVector;
         assertThat(dictionary.ids()).isSameAs(ids);
+        assertThat(dictionary.hasDomainFrequencies()).isTrue();
+        assertThat(dictionary.domainFrequency(0)).isEqualTo(2);
+        assertThat(dictionary.domainFrequency(1)).isEqualTo(2);
+        assertThat(dictionary.domainFrequency(2)).isEqualTo(2);
         assertThat(readLongs(dictionary)).containsExactly(10, 99, 10, 30, 99, 30);
     }
 

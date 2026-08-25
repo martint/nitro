@@ -419,6 +419,48 @@ public class TestOperators
     }
 
     @Test
+    void testDictionaryDomainFrequencyContract()
+    {
+        int[] frequencies = {2, 3, 3};
+        DictionaryVector dictionary = DictionaryVector.wrapWithDomainFrequencies(
+                new int[] {0, 1, 2, 1, 0, 2, 2, 1},
+                8,
+                new I64Vector(new long[] {10, 20, 30}),
+                frequencies);
+
+        assertThat(dictionary.hasDomainFrequencies()).isTrue();
+        assertThat(dictionary.domainFrequency(0)).isEqualTo(2);
+        assertThat(dictionary.domainFrequency(1)).isEqualTo(3);
+        assertThat(dictionary.domainFrequency(2)).isEqualTo(3);
+        assertThat(dictionary.retainedBytes()).isEqualTo(3L * Integer.BYTES);
+
+        DictionaryVector view = dictionary.sharedMappingView();
+        assertThat(view.hasSameMapping(dictionary)).isTrue();
+        assertThat(view.hasDomainFrequencies()).isTrue();
+        assertThat(view.domainFrequency(2)).isEqualTo(3);
+        assertThat(view.retainedBytes()).isZero();
+
+        assertThatThrownBy(() -> DictionaryVector.wrapWithDomainFrequencies(
+                        new int[] {0},
+                        1,
+                        new I64Vector(new long[] {10}),
+                        new int[] {-1}))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> DictionaryVector.wrapWithDomainFrequencies(
+                        new int[] {0},
+                        1,
+                        new I64Vector(new long[] {10}),
+                        new int[] {1, 0}))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> DictionaryVector.wrapWithDomainFrequencies(
+                        new int[] {0},
+                        1,
+                        new I64Vector(new long[] {10}),
+                        new int[] {0}))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
     void testProjectOperatorSupportsNestedDictionaryIntegerDispatch()
     {
         PrimitiveRegistry primitiveRegistry = primitiveRegistry();
