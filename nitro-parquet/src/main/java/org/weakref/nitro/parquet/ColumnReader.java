@@ -45,6 +45,8 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.function.LongPredicate;
 
+import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.base.Preconditions.checkState;
 import static java.util.Objects.requireNonNull;
 import static org.weakref.nitro.parquet.ParquetFile.BE_LONG;
 import static org.weakref.nitro.parquet.ParquetFile.LE_INT;
@@ -3359,6 +3361,84 @@ public final class ColumnReader
             pageCursor += pageRows;
             batchCursor = pageEnd;
         }
+        return result;
+    }
+
+    /**
+     * Skip-decodes a binary column directly into a dense vector of the selected values. Unlike
+     * {@link #readSelectedBinary(Allocator, Allocator.Context, int[], int, int, boolean[])}, the output position for
+     * {@code survivors[index]} is {@code index}. This is the appropriate contract for a caller that is already
+     * constructing a dense survivor window: it avoids first constructing a position-indexed vector and then copying
+     * the selected bytes into that window.
+     */
+    public BinaryVector readCompactedBinary(
+            Allocator allocator,
+            Allocator.Context allocationContext,
+            int[] survivors,
+            int count,
+            int batchRows,
+            boolean[] nullsOut)
+    {
+        checkArgument(count >= 0 && count <= batchRows, "count must be between 0 and batchRows");
+        checkArgument(survivors.length >= count, "survivors does not contain count entries");
+        checkArgument(nullsOut == null || nullsOut.length >= count, "nullsOut does not contain count entries");
+
+        BinaryVector result = BinaryVector.allocate(allocator, allocationContext, count, initialSelectedBinaryCapacity(count));
+        result.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        int[] offsets = result.offsets();
+        byte[] data = result.data();
+
+        int selected = 0;
+        int batchCursor = 0;
+        int dataLength = 0;
+        offsets[0] = 0;
+        while (batchCursor < batchRows) {
+            if (pageCursor >= pageValueCount) {
+                int skipped = acquirePageForSkip(survivors, selected, count, batchCursor, batchRows);
+                if (skipped >= 0) {
+                    batchCursor += skipped;
+                    continue;
+                }
+            }
+            int pageRows = Math.min(pageValueCount - pageCursor, batchRows - batchCursor);
+            int pageEnd = batchCursor + pageRows;
+            boolean pageIsDictionary = pageBinaryDeferred;
+            while (selected < count && survivors[selected] < pageEnd) {
+                int pagePosition = pageCursor + survivors[selected] - batchCursor;
+                boolean isNull = optional && pageNulls[pagePosition];
+                if (!isNull) {
+                    byte[] source;
+                    int start;
+                    int length;
+                    if (pageIsDictionary) {
+                        int id = pageDictIds[pagePosition];
+                        source = dictionaryBytes;
+                        start = dictionaryByteOffsets[id];
+                        length = dictionaryByteOffsets[id + 1] - start;
+                    }
+                    else {
+                        source = pageBytes;
+                        start = pageByteOffsets[pagePosition];
+                        length = pageByteOffsets[pagePosition + 1] - start;
+                    }
+                    if (data.length < dataLength + length) {
+                        result = BinaryVector.allocateOrGrow(allocator, allocationContext, result, count, dataLength + length, dataLength);
+                        offsets = result.offsets();
+                        data = result.data();
+                    }
+                    System.arraycopy(source, start, data, dataLength, length);
+                    dataLength += length;
+                }
+                if (nullsOut != null) {
+                    nullsOut[selected] = isNull;
+                }
+                offsets[selected + 1] = dataLength;
+                selected++;
+            }
+            pageCursor += pageRows;
+            batchCursor = pageEnd;
+        }
+        checkState(selected == count, "Expected %s selected binary values, but produced %s", count, selected);
         return result;
     }
 

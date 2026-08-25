@@ -2701,6 +2701,39 @@ public class TestParquetOperator
     }
 
     @Test
+    void testCompactedBinaryReadProducesDenseSelectedValues()
+            throws IOException
+    {
+        List<BinaryParquetRow> rows = List.of(
+                new BinaryParquetRow("zero", bytes(0)),
+                new BinaryParquetRow("one", null),
+                new BinaryParquetRow("two", bytes(2, 12)),
+                new BinaryParquetRow("three", bytes(3, 13)),
+                new BinaryParquetRow("four", null),
+                new BinaryParquetRow("five", bytes(5, 15)));
+        java.nio.file.Path file = writeBinaryParquetFile("compacted-selected-binary.parquet", false, CompressionCodecName.SNAPPY, rows);
+
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                ParquetFile parquetFile = ParquetFile.open(file);
+                ColumnReader reader = columnReader(List.of(parquetFile), "payload")) {
+            Allocator.Context context = new Allocator.Context("compacted-selected-binary");
+            boolean[] nulls = new boolean[3];
+            BinaryVector values = reader.readCompactedBinary(allocator, context, new int[] {1, 2, 5}, 3, rows.size(), nulls);
+            try {
+                assertThat(values.length()).isEqualTo(3);
+                assertThat(nulls).containsExactly(true, false, false);
+                assertThat(values.copyBytes(0)).isEmpty();
+                assertThat(values.copyBytes(1)).containsExactly((byte) 2, (byte) 12);
+                assertThat(values.copyBytes(2)).containsExactly((byte) 5, (byte) 15);
+            }
+            finally {
+                allocator.release(context, values);
+            }
+        }
+    }
+
+    @Test
     void testParquetScanFiltersCompressedDictionaryStrings()
             throws IOException
     {

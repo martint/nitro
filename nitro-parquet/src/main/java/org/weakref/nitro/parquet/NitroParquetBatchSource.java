@@ -1948,9 +1948,24 @@ public final class NitroParquetBatchSource
         // domain and avoids copying a variable-width value for every survivor. Selection density alone is therefore
         // not a sufficient admission signal: the encoded read is normally cheaper even for a sparse survivor set.
         boolean preserveDictionary = readers[column].isDictionaryOnly();
-        Vector raw = bulk || preserveDictionary
-                ? readers[column].readBinary(allocator, allocationContext, rawNulls, count)
-                : readers[column].readSelectedBinary(allocator, allocationContext, survivors, survivorCount, count, rawNulls);
+        // Flat binary payloads can compact directly even when the window-level policy favors bulk decoding. The
+        // selected reader still whole-decodes dense/fragmented pages, but writes only survivors to the destination;
+        // constructing a full logical vector first would add another variable-width byte copy with no downstream
+        // benefit. Dictionary-only columns retain their ids + shared value domain instead.
+        if (!preserveDictionary) {
+            boolean[] denseNulls = nullable[column] ? ensureWindowNull(column, survivorCount) : null;
+            windowBinary[column] = readers[column].readCompactedBinary(
+                    allocator,
+                    allocationContext,
+                    survivors,
+                    survivorCount,
+                    count,
+                    denseNulls);
+            recordSelectedDecode(column, survivorCount);
+            recordCopied(column, survivorCount);
+            return;
+        }
+        Vector raw = readers[column].readBinary(allocator, allocationContext, rawNulls, count);
         try {
             windowBinary[column] = raw instanceof DictionaryVector dictionary
                     ? dictionary.copyPositionsPreservingEncodingBorrowingValues(allocator, allocationContext, survivors, survivorCount)
