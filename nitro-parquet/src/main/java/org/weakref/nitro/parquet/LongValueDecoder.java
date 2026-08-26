@@ -32,4 +32,16 @@ interface LongValueDecoder
             output[outputOffset + index] = value(ordinal + index, dictionaryIds[ordinal + index]);
         }
     }
+
+    default int dictionaryGeneration()
+    {
+        return -1;
+    }
+
+    default void copyDictionaryValues(long[] output, int outputOffset)
+    {
+        for (int id = 0; id < dictionarySize(); id++) {
+            output[outputOffset + id] = value(0, id);
+        }
+    }
 }

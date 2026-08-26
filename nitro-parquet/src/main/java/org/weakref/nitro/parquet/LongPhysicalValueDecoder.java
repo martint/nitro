@@ -34,6 +34,7 @@ final class LongPhysicalValueDecoder
     private long[] dictionary = EMPTY_LONGS;
     private long[] values = EMPTY_LONGS;
     private int dictionarySize;
+    private int dictionaryGeneration;
 
     LongPhysicalValueDecoder(Type physicalType, PrimitiveArrayPool arrayPool)
     {
@@ -58,6 +59,7 @@ final class LongPhysicalValueDecoder
             MemorySegment.copy(body, LE_LONG, 0, dictionary, 0, valueCount);
         }
         dictionarySize = valueCount;
+        dictionaryGeneration++;
     }
 
     @Override
@@ -93,6 +95,18 @@ final class LongPhysicalValueDecoder
         for (int index = ordinal; index < end; index++) {
             output[outputOffset++] = dictionary[dictionaryIds[index]];
         }
+    }
+
+    @Override
+    public int dictionaryGeneration()
+    {
+        return dictionaryGeneration;
+    }
+
+    @Override
+    public void copyDictionaryValues(long[] output, int outputOffset)
+    {
+        System.arraycopy(dictionary, 0, output, outputOffset, dictionarySize);
     }
 
     @Override
