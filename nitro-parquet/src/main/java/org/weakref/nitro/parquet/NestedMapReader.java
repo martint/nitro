@@ -125,6 +125,19 @@ final class NestedMapReader
                 ? allocator.allocate(context, BooleanVector.class, rowCount, BooleanVector::new)
                 : null;
 
+        if (rowCount == 0) {
+            maps.setEntries(keyValues.materialize(allocator, context), values.materialize(allocator, context));
+            return mapNulls == null ? Streams.ofValues(maps) : Streams.ofValuesAndNulls(maps, mapNulls);
+        }
+
+        if (!positioned &&
+                keyReader instanceof NestedLeafEventSource keySource &&
+                valueReader instanceof NestedLeafEventSource valueSource) {
+            readEventWindows(keySource, valueSource, maps, mapNulls, rowCount, mask);
+            maps.setEntries(keyValues.materialize(allocator, context), values.materialize(allocator, context));
+            return mapNulls == null ? Streams.ofValues(maps) : Streams.ofValuesAndNulls(maps, mapNulls);
+        }
+
         int selectedIndex = 0;
         int nextSelected = mask.all() ? 0 : (mask.count() == 0 ? rowCount : mask.position(0));
         ensurePositioned();
@@ -171,6 +184,98 @@ final class NestedMapReader
         }
         maps.setEntries(keyValues.materialize(allocator, context), values.materialize(allocator, context));
         return mapNulls == null ? Streams.ofValues(maps) : Streams.ofValuesAndNulls(maps, mapNulls);
+    }
+
+    private void readEventWindows(
+            NestedLeafEventSource keySource,
+            NestedLeafEventSource valueSource,
+            MapVector maps,
+            BooleanVector mapNulls,
+            int rowCount,
+            Mask mask)
+    {
+        int row = -1;
+        int selectedIndex = 0;
+        int nextSelected = mask.all() ? 0 : (mask.count() == 0 ? rowCount : mask.position(0));
+        boolean selected = false;
+
+        while (true) {
+            NestedEventWindow keyWindow = keySource.eventWindow();
+            NestedEventWindow valueWindow = valueSource.eventWindow();
+            if (keyWindow == null || valueWindow == null) {
+                if (keyWindow == null && valueWindow == null && row == rowCount - 1) {
+                    maps.offsets()[rowCount] = keyValues.size();
+                    return;
+                }
+                throw new IllegalArgumentException("Nested MAP key/value event streams have different lengths");
+            }
+
+            int windowLength = Math.min(keyWindow.length(), valueWindow.length());
+            int consumed = 0;
+            int entryRunStart = -1;
+            int entryRunCount = 0;
+            while (consumed < windowLength) {
+                int repetitionLevel = keyWindow.repetitionLevel(consumed);
+                if (repetitionLevel != valueWindow.repetitionLevel(consumed)) {
+                    throw new IllegalArgumentException("Nested MAP key/value repetition levels differ");
+                }
+                boolean keyEntry = keyWindow.definitionLevel(consumed) >= entries.maximumDefinitionLevel();
+                boolean valueEntry = valueWindow.definitionLevel(consumed) >= entries.maximumDefinitionLevel();
+                if (keyEntry != valueEntry) {
+                    throw new IllegalArgumentException("Nested MAP key/value definition levels describe different entries");
+                }
+
+                if (repetitionLevel == 0) {
+                    if (entryRunCount != 0) {
+                        appendWindowRun(keyWindow, valueWindow, entryRunStart, entryRunCount);
+                        entryRunCount = 0;
+                    }
+                    if (row >= 0) {
+                        maps.offsets()[row + 1] = keyValues.size();
+                        if (row + 1 == rowCount) {
+                            keySource.advanceEvents(consumed);
+                            valueSource.advanceEvents(consumed);
+                            return;
+                        }
+                    }
+                    row++;
+                    selected = mask.all() || row == nextSelected;
+                    if (selected && !mask.all()) {
+                        selectedIndex++;
+                        nextSelected = selectedIndex < mask.count() ? mask.position(selectedIndex) : rowCount;
+                    }
+                    if (selected && mapNulls != null) {
+                        mapNulls.values()[row] = keyWindow.definitionLevel(consumed) < map.maximumDefinitionLevel();
+                    }
+                }
+                else if (row < 0) {
+                    throw new IllegalArgumentException("Nested MAP row starts with nonzero repetition level");
+                }
+
+                if (selected && keyEntry) {
+                    if (entryRunCount == 0) {
+                        entryRunStart = consumed;
+                    }
+                    entryRunCount++;
+                }
+                else if (entryRunCount != 0) {
+                    appendWindowRun(keyWindow, valueWindow, entryRunStart, entryRunCount);
+                    entryRunCount = 0;
+                }
+                consumed++;
+            }
+            if (entryRunCount != 0) {
+                appendWindowRun(keyWindow, valueWindow, entryRunStart, entryRunCount);
+            }
+            keySource.advanceEvents(consumed);
+            valueSource.advanceEvents(consumed);
+        }
+    }
+
+    private void appendWindowRun(NestedEventWindow keyWindow, NestedEventWindow valueWindow, int start, int count)
+    {
+        keyWindow.appendTo(keyValues, start, count);
+        valueWindow.appendTo(values, start, count);
     }
 
     void skip(long rowCount)

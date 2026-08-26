@@ -113,8 +113,8 @@ class TestNestedMapReader
         return new NestedMapReader(
                 map,
                 RleReaderPolicy.defaults(),
-                new TestingCursor(keys, new int[] {0, 1, 0, 0, 0}, new int[] {2, 2, 0, 1, 2}, new int[] {0, 1, -1, -1, 2}),
-                new TestingCursor(values, new int[] {0, 1, 0, 0, 0}, new int[] {3, 2, 0, 1, 3}, new int[] {0, -1, -1, -1, 1}));
+                new TestingCursor(keys, new int[] {0, 1, 0, 0, 0}, new int[] {2, 2, 0, 1, 2}, new int[] {0, 1, -1, -1, 2}, 2),
+                new TestingCursor(values, new int[] {0, 1, 0, 0, 0}, new int[] {3, 2, 0, 1, 3}, new int[] {0, -1, -1, -1, 1}, 3));
     }
 
     private static String value(BinaryVector vector, int position)
@@ -145,44 +145,53 @@ class TestNestedMapReader
     }
 
     private static final class TestingCursor
-            implements NestedLeafCursor
+            implements NestedLeafEventSource
     {
         private final PhysicalValueDecoder decoder;
         private final int[] repetitions;
         private final int[] definitions;
         private final int[] ordinals;
-        private int event = -1;
+        private final int windowSize;
+        private final NestedEventWindow window = new NestedEventWindow();
+        private int event;
+        private int currentEvent = -1;
 
-        private TestingCursor(PhysicalValueDecoder decoder, int[] repetitions, int[] definitions, int[] ordinals)
+        private TestingCursor(PhysicalValueDecoder decoder, int[] repetitions, int[] definitions, int[] ordinals, int windowSize)
         {
             this.decoder = decoder;
             this.repetitions = repetitions;
             this.definitions = definitions;
             this.ordinals = ordinals;
+            this.windowSize = windowSize;
         }
 
         @Override
         public boolean next()
         {
-            return ++event < repetitions.length;
+            if (event >= repetitions.length) {
+                currentEvent = -1;
+                return false;
+            }
+            currentEvent = event++;
+            return true;
         }
 
         @Override
         public int repetitionLevel()
         {
-            return repetitions[event];
+            return repetitions[currentEvent];
         }
 
         @Override
         public int definitionLevel()
         {
-            return definitions[event];
+            return definitions[currentEvent];
         }
 
         @Override
         public boolean hasValue()
         {
-            return ordinals[event] >= 0;
+            return ordinals[currentEvent] >= 0;
         }
 
         @Override
@@ -194,13 +203,30 @@ class TestNestedMapReader
         @Override
         public int valueOrdinal()
         {
-            return ordinals[event];
+            return ordinals[currentEvent];
         }
 
         @Override
         public int dictionaryId()
         {
             return -1;
+        }
+
+        @Override
+        public NestedEventWindow eventWindow()
+        {
+            if (event >= repetitions.length) {
+                return null;
+            }
+            window.reset(decoder, repetitions, definitions, ordinals, null, event, Math.min(windowSize, repetitions.length - event));
+            return window;
+        }
+
+        @Override
+        public void advanceEvents(int count)
+        {
+            event += count;
+            currentEvent = -1;
         }
 
         @Override
