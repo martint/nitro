@@ -17,6 +17,103 @@ public final class VectorAccess
 {
     private VectorAccess() {}
 
+    /** Encoded-domain view of a variable-length structural vector. */
+    public interface RepeatedValues
+    {
+        int startOffset(int position);
+
+        int endOffset(int position);
+
+        default int length(int position)
+        {
+            return endOffset(position) - startOffset(position);
+        }
+
+        int outputCount();
+
+        Streams output(int output);
+    }
+
+    /**
+     * Resolves dictionary and RLE row mappings without materializing the structural value or its children.
+     */
+    public static RepeatedValues repeatedValues(Vector vector)
+    {
+        return switch (vector) {
+            case RepeatedVector values -> new RepeatedValues()
+            {
+                @Override
+                public int startOffset(int position)
+                {
+                    return values.startOffset(position);
+                }
+
+                @Override
+                public int endOffset(int position)
+                {
+                    return values.endOffset(position);
+                }
+
+                @Override
+                public int outputCount()
+                {
+                    return values.repeatedOutputCount();
+                }
+
+                @Override
+                public Streams output(int output)
+                {
+                    return values.repeatedOutput(output);
+                }
+            };
+            case DictionaryVector dictionary -> {
+                RepeatedValues values = repeatedValues(dictionary.values());
+                int[] ids = dictionary.ids();
+                yield mappedRepeatedValues(values, position -> ids[position]);
+            }
+            case RleVector rle -> {
+                RepeatedValues values = repeatedValues(rle.values());
+                int[] hint = {0};
+                yield mappedRepeatedValues(values, position -> {
+                    int run = rle.runIndexFromHint(position, hint[0]);
+                    hint[0] = run;
+                    return run;
+                });
+            }
+            default -> throw new IllegalArgumentException("Expected repeated structural vector but found " + vector.getClass().getSimpleName());
+        };
+    }
+
+    private static RepeatedValues mappedRepeatedValues(RepeatedValues values, java.util.function.IntUnaryOperator mapping)
+    {
+        return new RepeatedValues()
+        {
+            @Override
+            public int startOffset(int position)
+            {
+                return values.startOffset(mapping.applyAsInt(position));
+            }
+
+            @Override
+            public int endOffset(int position)
+            {
+                return values.endOffset(mapping.applyAsInt(position));
+            }
+
+            @Override
+            public int outputCount()
+            {
+                return values.outputCount();
+            }
+
+            @Override
+            public Streams output(int output)
+            {
+                return values.output(output);
+            }
+        };
+    }
+
     /**
      * Copies a physical boolean stream at the selected positions. Dense flat and one-level dictionary streams avoid
      * the boxed mask iterator and polymorphic accessor used by the compatibility path. This is shared by typed

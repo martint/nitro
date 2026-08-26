@@ -46,6 +46,7 @@ public final class OperatorResources
     private final SortOperatorPolicy sortPolicy;
     private final TopNOperatorPolicy topNOperatorPolicy;
     private final TopNRankingOperatorPolicy topNRankingPolicy;
+    private final UnnestOperatorPolicy unnestPolicy;
     private final WindowOperatorPolicy windowPolicy;
     private boolean closed;
 
@@ -69,6 +70,7 @@ public final class OperatorResources
             SortOperatorPolicy sortPolicy,
             TopNOperatorPolicy topNOperatorPolicy,
             TopNRankingOperatorPolicy topNRankingPolicy,
+            UnnestOperatorPolicy unnestPolicy,
             WindowOperatorPolicy windowPolicy)
     {
         this.codeGeneration = requireNonNull(codeGeneration, "codeGeneration is null");
@@ -101,6 +103,7 @@ public final class OperatorResources
         this.sortPolicy = requireNonNull(sortPolicy, "sortPolicy is null");
         this.topNOperatorPolicy = requireNonNull(topNOperatorPolicy, "topNOperatorPolicy is null");
         this.topNRankingPolicy = requireNonNull(topNRankingPolicy, "topNRankingPolicy is null");
+        this.unnestPolicy = requireNonNull(unnestPolicy, "unnestPolicy is null");
         this.windowPolicy = requireNonNull(windowPolicy, "windowPolicy is null");
     }
 
@@ -147,6 +150,7 @@ public final class OperatorResources
                 SortOperatorPolicy.fromSystemProperties(),
                 TopNOperatorPolicy.fromSystemProperties(),
                 TopNRankingOperatorPolicy.fromSystemProperties(),
+                UnnestOperatorPolicy.fromSystemProperties(),
                 WindowOperatorPolicy.fromSystemProperties());
     }
 
@@ -278,6 +282,12 @@ public final class OperatorResources
     {
         checkOpen();
         return topNRankingPolicy;
+    }
+
+    public UnnestOperatorPolicy unnestPolicy()
+    {
+        checkOpen();
+        return unnestPolicy;
     }
 
     public WindowOperatorPolicy windowPolicy()

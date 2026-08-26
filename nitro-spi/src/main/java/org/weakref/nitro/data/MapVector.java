@@ -18,7 +18,7 @@ import java.util.function.Consumer;
 import static com.google.common.base.Preconditions.checkArgument;
 
 public final class MapVector
-        implements FlatVector
+        implements RepeatedVector
 {
     private final int positionCount;
     private final int[] offsets;
@@ -50,6 +50,22 @@ public final class MapVector
     public int length(int position)
     {
         return endOffset(position) - startOffset(position);
+    }
+
+    @Override
+    public int repeatedOutputCount()
+    {
+        return 2;
+    }
+
+    @Override
+    public Streams repeatedOutput(int output)
+    {
+        return switch (output) {
+            case 0 -> keys;
+            case 1 -> values;
+            default -> throw new IndexOutOfBoundsException(output);
+        };
     }
 
     public Streams keys()

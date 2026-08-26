@@ -18,7 +18,7 @@ import java.util.function.Consumer;
 import static com.google.common.base.Preconditions.checkArgument;
 
 public final class ArrayVector
-        implements FlatVector
+        implements RepeatedVector
 {
     private final int positionCount;
     private final int[] offsets;
@@ -49,6 +49,21 @@ public final class ArrayVector
     public int length(int position)
     {
         return endOffset(position) - startOffset(position);
+    }
+
+    @Override
+    public int repeatedOutputCount()
+    {
+        return 1;
+    }
+
+    @Override
+    public Streams repeatedOutput(int output)
+    {
+        if (output != 0) {
+            throw new IndexOutOfBoundsException(output);
+        }
+        return elements;
     }
 
     public Streams elements()

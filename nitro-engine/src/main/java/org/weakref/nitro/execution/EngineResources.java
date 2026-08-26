@@ -37,6 +37,7 @@ import org.weakref.nitro.operator.SemiJoinOperatorPolicy;
 import org.weakref.nitro.operator.SortOperatorPolicy;
 import org.weakref.nitro.operator.TopNOperatorPolicy;
 import org.weakref.nitro.operator.TopNRankingOperatorPolicy;
+import org.weakref.nitro.operator.UnnestOperatorPolicy;
 import org.weakref.nitro.operator.WindowOperatorPolicy;
 
 import static java.util.Objects.requireNonNull;
@@ -86,6 +87,7 @@ public final class EngineResources
                         SortOperatorPolicy.fromSystemProperties(),
                         TopNOperatorPolicy.fromSystemProperties(),
                         TopNRankingOperatorPolicy.fromSystemProperties(),
+                        UnnestOperatorPolicy.fromSystemProperties(),
                         WindowOperatorPolicy.fromSystemProperties()));
     }
 
@@ -119,6 +121,7 @@ public final class EngineResources
                         SortOperatorPolicy.fromSystemProperties(),
                         TopNOperatorPolicy.fromSystemProperties(),
                         TopNRankingOperatorPolicy.fromSystemProperties(),
+                        UnnestOperatorPolicy.fromSystemProperties(),
                         WindowOperatorPolicy.fromSystemProperties()));
     }
 
