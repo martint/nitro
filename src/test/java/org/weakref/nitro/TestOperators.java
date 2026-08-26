@@ -4547,6 +4547,28 @@ public class TestOperators
     }
 
     @Test
+    void testF64SumConsumesSharedDictionaryDomainFrequencies()
+    {
+        DictionaryVector values = DictionaryVector.wrapWithDomainFrequencies(
+                new int[] {0, 1, 2, 0},
+                4,
+                new F64Vector(new double[] {1, 3, 0}),
+                new int[] {2, 1, 1});
+        DictionaryVector nulls = values.sharedMappingWithValues(new BooleanVector(new boolean[] {false, false, true}));
+        Operator aggregated = new AggregationOperator(
+                allocator,
+                List.of(new SumF64(0)),
+                new TableOperator(
+                        1,
+                        List.of(new TableOperator.Page(
+                                4,
+                                new Streams[] {Streams.of(values, nulls, null)},
+                                Mask.all(4)))));
+
+        assertThat(operator(aggregated)).matchesExactly(List.of(row(5.0)));
+    }
+
+    @Test
     void testCountAvgStddevPhysicalUnitPreservesResultsAndNulls()
     {
         // Bind STDDEV first to verify that physical result slots are independent of output order.

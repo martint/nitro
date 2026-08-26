@@ -15,7 +15,9 @@ package org.weakref.nitro.parquet;
 
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.F64Vector;
+import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Streams;
 
@@ -36,6 +38,14 @@ final class DoubleNestedValueAccumulator
     private boolean[] nulls = EMPTY_BOOLEANS;
     private F64Vector directValues;
     private BooleanVector directNulls;
+    private Allocator directAllocator;
+    private Allocator.Context directContext;
+    private I32Vector directIds;
+    private I32Vector directDomainFrequencies;
+    private F64Vector directDictionary;
+    private BooleanVector directDictionaryNulls;
+    private int directDictionaryGeneration = -1;
+    private int exactSize = -1;
     private int size;
 
     DoubleNestedValueAccumulator(boolean nullable)
@@ -46,11 +56,22 @@ final class DoubleNestedValueAccumulator
     @Override
     public void reset(Allocator allocator)
     {
+        releaseDirect();
         PrimitiveArrayPool requestedPool = requireNonNull(allocator, "allocator is null").primitiveArrays();
         if (arrayPool != null && arrayPool != requestedPool) {
             throw new IllegalArgumentException("Nested accumulator cannot change allocator ownership");
         }
         arrayPool = requestedPool;
+        directValues = null;
+        directNulls = null;
+        directAllocator = null;
+        directContext = null;
+        directIds = null;
+        directDomainFrequencies = null;
+        directDictionary = null;
+        directDictionaryNulls = null;
+        directDictionaryGeneration = -1;
+        exactSize = -1;
         size = 0;
     }
 
@@ -58,7 +79,9 @@ final class DoubleNestedValueAccumulator
     public void reset(Allocator allocator, Allocator.Context context, int exactSize)
     {
         reset(allocator);
-        directValues = F64Vector.allocate(allocator, context, exactSize);
+        directAllocator = allocator;
+        directContext = requireNonNull(context, "context is null");
+        this.exactSize = exactSize;
         directNulls = nullable
                 ? allocator.allocate(context, BooleanVector.class, exactSize, BooleanVector::new)
                 : null;
@@ -67,14 +90,28 @@ final class DoubleNestedValueAccumulator
     @Override
     public void append(PhysicalValueDecoder decoder, int ordinal, int dictionaryId)
     {
-        if (!(decoder instanceof DoublePhysicalValueDecoder doubles)) {
+        if (!(decoder instanceof DoubleValueDecoder doubles)) {
             throw new IllegalArgumentException("Double accumulator requires a double physical decoder");
         }
-        if (directValues == null) {
+        if (exactSize < 0) {
             ensureCapacity(size + 1);
             values[size] = doubles.value(ordinal, dictionaryId);
         }
+        else if (dictionaryId < 0 || directValues != null) {
+            ensureDirectFlat();
+            directValues.values()[size] = doubles.value(ordinal, dictionaryId);
+        }
+        else if (directDictionary == null) {
+            beginDirectDictionary(doubles);
+            directIds.values()[size] = dictionaryId;
+            directDomainFrequencies.values()[dictionaryId]++;
+        }
+        else if (directDictionaryGeneration == doubles.dictionaryGeneration()) {
+            directIds.values()[size] = dictionaryId;
+            directDomainFrequencies.values()[dictionaryId]++;
+        }
         else {
+            ensureDirectFlat();
             directValues.values()[size] = doubles.value(ordinal, dictionaryId);
         }
         if (nullable) {
@@ -84,16 +121,55 @@ final class DoubleNestedValueAccumulator
     }
 
     @Override
+    public void appendEvents(
+            PhysicalValueDecoder decoder,
+            int[] valueOrdinals,
+            int[] dictionaryIds,
+            int eventOffset,
+            int eventCount)
+    {
+        if (!(decoder instanceof DoubleValueDecoder doubles)) {
+            throw new IllegalArgumentException("Double accumulator requires a double physical decoder");
+        }
+        if (dictionaryIds != null && exactSize >= 0 && directValues == null &&
+                (directDictionary == null || directDictionaryGeneration == doubles.dictionaryGeneration())) {
+            if (directDictionary == null) {
+                beginDirectDictionary(doubles);
+            }
+            int[] outputIds = directIds.values();
+            int[] frequencies = directDomainFrequencies.values();
+            boolean[] outputNulls = nullable ? directNulls.values() : null;
+            int nullId = directDictionary.length() - 1;
+            int output = size;
+            int end = eventOffset + eventCount;
+            for (int event = eventOffset; event < end; event++) {
+                int ordinal = valueOrdinals[event];
+                int id = ordinal < 0 ? nullId : dictionaryIds[ordinal];
+                outputIds[output] = id;
+                frequencies[id]++;
+                if (outputNulls != null) {
+                    outputNulls[output] = ordinal < 0;
+                }
+                output++;
+            }
+            size = output;
+            return;
+        }
+        NestedValueAccumulator.super.appendEvents(decoder, valueOrdinals, dictionaryIds, eventOffset, eventCount);
+    }
+
+    @Override
     public void appendPlainRun(PhysicalValueDecoder decoder, int ordinal, int count)
     {
         if (!(decoder instanceof DoubleValueDecoder doubles)) {
             throw new IllegalArgumentException("Double accumulator requires a double physical decoder");
         }
-        if (directValues == null) {
+        if (exactSize < 0) {
             ensureCapacity(size + count);
             doubles.copyPlain(ordinal, values, size, count);
         }
         else {
+            ensureDirectFlat();
             doubles.copyPlain(ordinal, directValues.values(), size, count);
         }
         if (nullable) {
@@ -108,9 +184,14 @@ final class DoubleNestedValueAccumulator
         if (!nullable) {
             throw new IllegalArgumentException("Required nested value is missing");
         }
-        if (directValues == null) {
+        if (exactSize < 0) {
             ensureCapacity(size + 1);
             values[size] = 0;
+        }
+        else if (directIds != null) {
+            int nullId = directDictionary.length() - 1;
+            directIds.values()[size] = nullId;
+            directDomainFrequencies.values()[nullId]++;
         }
         nullValues()[size] = true;
         size++;
@@ -125,12 +206,36 @@ final class DoubleNestedValueAccumulator
     @Override
     public Streams materialize(Allocator allocator, Allocator.Context context)
     {
-        if (directValues != null) {
-            F64Vector result = directValues;
-            BooleanVector resultNulls = directNulls;
+        if (exactSize >= 0) {
+            org.weakref.nitro.data.Vector result;
+            org.weakref.nitro.data.Vector resultNulls = directNulls;
+            if (directIds != null && directValues == null) {
+                DictionaryVector dictionary = DictionaryVector.wrapOwnedIdsWithDomainFrequencies(
+                        directIds,
+                        size,
+                        directDictionary.freezeContent(),
+                        directDomainFrequencies);
+                result = dictionary;
+                if (nullable) {
+                    directAllocator.release(directContext, directNulls);
+                    resultNulls = dictionary.sharedMappingWithValues(directDictionaryNulls.freezeContent());
+                }
+            }
+            else {
+                ensureDirectFlat();
+                result = directValues;
+            }
             directValues = null;
             directNulls = null;
-            return resultNulls == null ? Streams.ofValues(result) : Streams.ofValuesAndNulls(result, resultNulls);
+            directIds = null;
+            directDomainFrequencies = null;
+            directDictionary = null;
+            directDictionaryNulls = null;
+            directAllocator = null;
+            directContext = null;
+            directDictionaryGeneration = -1;
+            exactSize = -1;
+            return resultNulls == null ? Streams.ofValues(result) : Streams.of(result, resultNulls, null);
         }
         F64Vector result = F64Vector.allocate(allocator, context, size);
         System.arraycopy(values, 0, result.values(), 0, size);
@@ -165,10 +270,91 @@ final class DoubleNestedValueAccumulator
         return directNulls == null ? nulls : directNulls.values();
     }
 
+    private void beginDirectDictionary(DoubleValueDecoder decoder)
+    {
+        directIds = I32Vector.allocate(directAllocator, directContext, exactSize);
+        int dictionarySize = decoder.dictionarySize();
+        int outputDictionarySize = dictionarySize + (nullable ? 1 : 0);
+        directDomainFrequencies = I32Vector.allocate(directAllocator, directContext, outputDictionarySize);
+        Arrays.fill(directDomainFrequencies.values(), 0, outputDictionarySize, 0);
+        if (size > 0) {
+            int nullId = outputDictionarySize - 1;
+            Arrays.fill(directIds.values(), 0, size, nullId);
+            directDomainFrequencies.values()[nullId] = size;
+        }
+        directDictionary = F64Vector.allocate(directAllocator, directContext, outputDictionarySize);
+        decoder.copyDictionary(directDictionary.values(), 0);
+        if (nullable) {
+            directDictionary.values()[outputDictionarySize - 1] = 0;
+            directDictionaryNulls = directAllocator.allocate(
+                    directContext,
+                    BooleanVector.class,
+                    outputDictionarySize,
+                    BooleanVector::new);
+            Arrays.fill(directDictionaryNulls.values(), 0, outputDictionarySize, false);
+            directDictionaryNulls.values()[outputDictionarySize - 1] = true;
+        }
+        directDictionaryGeneration = decoder.dictionaryGeneration();
+    }
+
+    private void ensureDirectFlat()
+    {
+        if (directValues != null) {
+            return;
+        }
+        directValues = F64Vector.allocate(directAllocator, directContext, exactSize);
+        if (directIds == null) {
+            return;
+        }
+        int[] ids = directIds.values();
+        double[] dictionary = directDictionary.values();
+        double[] output = directValues.values();
+        for (int index = 0; index < size; index++) {
+            output[index] = dictionary[ids[index]];
+        }
+        directAllocator.release(directContext, directIds);
+        directAllocator.release(directContext, directDomainFrequencies);
+        directAllocator.release(directContext, directDictionary);
+        if (directDictionaryNulls != null) {
+            directAllocator.release(directContext, directDictionaryNulls);
+        }
+        directIds = null;
+        directDomainFrequencies = null;
+        directDictionary = null;
+        directDictionaryNulls = null;
+        directDictionaryGeneration = -1;
+    }
+
+    private void releaseDirect()
+    {
+        if (directAllocator == null) {
+            return;
+        }
+        if (directValues != null) {
+            directAllocator.release(directContext, directValues);
+        }
+        if (directNulls != null) {
+            directAllocator.release(directContext, directNulls);
+        }
+        if (directIds != null) {
+            directAllocator.release(directContext, directIds);
+        }
+        if (directDomainFrequencies != null) {
+            directAllocator.release(directContext, directDomainFrequencies);
+        }
+        if (directDictionary != null) {
+            directAllocator.release(directContext, directDictionary);
+        }
+        if (directDictionaryNulls != null) {
+            directAllocator.release(directContext, directDictionaryNulls);
+        }
+    }
+
     @Override
     public void close()
     {
         if (arrayPool != null) {
+            releaseDirect();
             arrayPool.release(values);
             arrayPool.release(nulls);
             values = EMPTY_DOUBLES;
@@ -177,6 +363,14 @@ final class DoubleNestedValueAccumulator
             size = 0;
             directValues = null;
             directNulls = null;
+            directAllocator = null;
+            directContext = null;
+            directIds = null;
+            directDomainFrequencies = null;
+            directDictionary = null;
+            directDictionaryNulls = null;
+            directDictionaryGeneration = -1;
+            exactSize = -1;
         }
     }
 }

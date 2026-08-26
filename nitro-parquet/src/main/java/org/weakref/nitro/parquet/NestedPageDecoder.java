@@ -14,6 +14,7 @@
 package org.weakref.nitro.parquet;
 
 import org.apache.parquet.format.Encoding;
+import org.weakref.nitro.data.PrimitiveArrayPool;
 
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
@@ -28,26 +29,32 @@ import static org.weakref.nitro.parquet.ParquetFile.LE_INT;
  * this same event stream.
  */
 final class NestedPageDecoder
+        implements AutoCloseable
 {
-    private static final int[] EMPTY_INTS = new int[0];
     private final int maximumRepetitionLevel;
     private final int maximumDefinitionLevel;
+    private final PrimitiveArrayPool arrayPool;
     private final RleReader repetitionReader;
     private final RleReader definitionReader;
     private final RleReader dictionaryIdReader;
 
-    private int[] repetitionLevels = EMPTY_INTS;
-    private int[] definitionLevels = EMPTY_INTS;
-    private int[] valueOrdinals = EMPTY_INTS;
-    private int[] dictionaryIds = EMPTY_INTS;
+    private int[] repetitionLevels;
+    private int[] definitionLevels;
+    private int[] valueOrdinals;
+    private int[] dictionaryIds;
     private int eventCount;
     private int physicalValueCount;
     private boolean dictionaryEncoded;
 
-    NestedPageDecoder(int maximumRepetitionLevel, int maximumDefinitionLevel, RleReaderPolicy rlePolicy)
+    NestedPageDecoder(
+            int maximumRepetitionLevel,
+            int maximumDefinitionLevel,
+            RleReaderPolicy rlePolicy,
+            PrimitiveArrayPool arrayPool)
     {
         this.maximumRepetitionLevel = maximumRepetitionLevel;
         this.maximumDefinitionLevel = maximumDefinitionLevel;
+        this.arrayPool = requireNonNull(arrayPool, "arrayPool is null");
         this.repetitionReader = new RleReader(rlePolicy);
         this.definitionReader = new RleReader(rlePolicy);
         this.dictionaryIdReader = new RleReader(rlePolicy);
@@ -164,6 +171,23 @@ final class NestedPageDecoder
         return dictionaryEncoded ? dictionaryIds[ordinal] : -1;
     }
 
+    void appendEvents(
+            NestedValueAccumulator accumulator,
+            PhysicalValueDecoder valueDecoder,
+            int eventOffset,
+            int count)
+    {
+        if (eventOffset < 0 || count < 0 || eventOffset > eventCount - count) {
+            throw new IndexOutOfBoundsException("Invalid nested event window: " + eventOffset + ", " + count);
+        }
+        accumulator.appendEvents(
+                valueDecoder,
+                valueOrdinals,
+                dictionaryEncoded ? dictionaryIds : null,
+                eventOffset,
+                count);
+    }
+
     private static int levelStreamLength(MemorySegment body, long offset, String kind)
     {
         if (offset > body.byteSize() - Integer.BYTES) {
@@ -181,8 +205,27 @@ final class NestedPageDecoder
         return Integer.SIZE - Integer.numberOfLeadingZeros(maximumLevel);
     }
 
-    private static int[] grow(int[] values, int required)
+    private int[] grow(int[] values, int required)
     {
-        return values.length >= required ? values : new int[Math.max(required, Math.max(16, values.length * 2))];
+        if (values != null && values.length >= required) {
+            return values;
+        }
+        int capacity = Math.max(required, Math.max(16, values == null ? 0 : values.length * 2));
+        int[] replacement = arrayPool.borrowInts(capacity);
+        arrayPool.release(values);
+        return replacement;
+    }
+
+    @Override
+    public void close()
+    {
+        arrayPool.release(repetitionLevels);
+        arrayPool.release(definitionLevels);
+        arrayPool.release(valueOrdinals);
+        arrayPool.release(dictionaryIds);
+        repetitionLevels = null;
+        definitionLevels = null;
+        valueOrdinals = null;
+        dictionaryIds = null;
     }
 }

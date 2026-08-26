@@ -29,7 +29,9 @@ public final class DictionaryVector
     private final Object mappingIdentity;
     private final int[] domainFrequencies;
     private final boolean ownsDomainFrequencies;
+    private I32Vector ownedDomainFrequencies;
     private Allocator.BufferLeaseOwner transferredIdsOwner;
+    private Allocator.BufferLeaseOwner transferredDomainFrequenciesOwner;
 
     public DictionaryVector(int[] ids, Vector values)
     {
@@ -122,6 +124,34 @@ public final class DictionaryVector
     {
         checkArgument(ids != null, "ids is null");
         return new DictionaryVector(ids.values(), ids, length, values, false, false, false, null, null, false);
+    }
+
+    /**
+     * Wraps allocator-owned dictionary ids and exact domain frequencies. Both metadata buffers become ownership
+     * children of the returned vector and follow its transfer/release lifecycle.
+     */
+    public static DictionaryVector wrapOwnedIdsWithDomainFrequencies(
+            I32Vector ids,
+            int length,
+            Vector values,
+            I32Vector domainFrequencies)
+    {
+        checkArgument(ids != null, "ids is null");
+        checkArgument(domainFrequencies != null, "domainFrequencies is null");
+        validateDomainFrequencies(length, values, domainFrequencies.values());
+        DictionaryVector vector = new DictionaryVector(
+                ids.values(),
+                ids,
+                length,
+                values,
+                false,
+                false,
+                false,
+                null,
+                domainFrequencies.values(),
+                false);
+        vector.ownedDomainFrequencies = domainFrequencies;
+        return vector;
     }
 
     private static DictionaryVector wrap(int[] ids, int length, Vector values, boolean copyIds)
@@ -244,6 +274,17 @@ public final class DictionaryVector
     public DictionaryVector sharedMappingView()
     {
         return new DictionaryVector(ids, null, length, values, false, false, false, mappingIdentity, domainFrequencies, false);
+    }
+
+    /** Creates a non-owning sibling value stream over this vector's exact row mapping. */
+    public DictionaryVector sharedMappingWithValues(Vector siblingValues)
+    {
+        return new DictionaryVector(ids, null, length, siblingValues, false, false, false, mappingIdentity, domainFrequencies, false);
+    }
+
+    public boolean hasSameRowMapping(DictionaryVector other)
+    {
+        return other != null && mappingIdentity == other.mappingIdentity && length == other.length;
     }
 
     /**
@@ -473,7 +514,7 @@ public final class DictionaryVector
     @Override
     public int childVectorCount()
     {
-        return ownedIds == null ? 1 : 2;
+        return 1 + (ownedIds == null ? 0 : 1) + (ownedDomainFrequencies == null ? 0 : 1);
     }
 
     @Override
@@ -483,11 +524,15 @@ public final class DictionaryVector
             if (index == 0) {
                 return ownedIds;
             }
-            if (index == 1) {
-                return values;
-            }
+            index--;
         }
-        else if (index == 0) {
+        if (ownedDomainFrequencies != null) {
+            if (index == 0) {
+                return ownedDomainFrequencies;
+            }
+            index--;
+        }
+        if (index == 0) {
             return values;
         }
         throw new IndexOutOfBoundsException(index);
@@ -499,6 +544,9 @@ public final class DictionaryVector
         if (ownedIds != null) {
             consumer.accept(ownedIds);
         }
+        if (ownedDomainFrequencies != null) {
+            consumer.accept(ownedDomainFrequencies);
+        }
         consumer.accept(values);
     }
 
@@ -508,6 +556,9 @@ public final class DictionaryVector
         if (ownedIds != null && transferredIdsOwner == null) {
             transferredIdsOwner = allocator.leaseTransferredBuffer(producerContext, ownedIds);
         }
+        if (ownedDomainFrequencies != null && transferredDomainFrequenciesOwner == null) {
+            transferredDomainFrequenciesOwner = allocator.leaseTransferredBuffer(producerContext, ownedDomainFrequencies);
+        }
     }
 
     @Override
@@ -516,6 +567,10 @@ public final class DictionaryVector
         if (transferredIdsOwner != null) {
             transferredIdsOwner.releaseLeased(ownedIds);
             transferredIdsOwner = null;
+        }
+        if (transferredDomainFrequenciesOwner != null) {
+            transferredDomainFrequenciesOwner.releaseLeased(ownedDomainFrequencies);
+            transferredDomainFrequenciesOwner = null;
         }
     }
 

@@ -69,7 +69,8 @@ final class NestedLeafReader
         this.decoder = new NestedPageDecoder(
                 leaf.maximumRepetitionLevel(),
                 leaf.maximumDefinitionLevel(),
-                requireNonNull(rlePolicy, "rlePolicy is null"));
+                requireNonNull(rlePolicy, "rlePolicy is null"),
+                requireNonNull(arrayPool, "arrayPool is null"));
         this.valueDecoder = PhysicalValueDecoders.create(leaf, requireNonNull(arrayPool, "arrayPool is null"));
         this.decodeValues = decodeValues;
     }
@@ -93,6 +94,27 @@ final class NestedLeafReader
         }
         currentEvent = eventIndex++;
         return true;
+    }
+
+    void appendFlatRows(NestedValueAccumulator accumulator, int rowCount)
+    {
+        if (leaf.maximumRepetitionLevel() != 0) {
+            throw new IllegalStateException("Bulk nested append requires a non-repeated leaf");
+        }
+        int remaining = rowCount;
+        while (remaining > 0) {
+            while (eventIndex >= decoder.eventCount()) {
+                if (!decodeNextPage()) {
+                    throw new IllegalArgumentException("Nested primitive event stream ended before requested rows");
+                }
+                eventIndex = 0;
+            }
+            int count = Math.min(remaining, decoder.eventCount() - eventIndex);
+            decoder.appendEvents(accumulator, valueDecoder, eventIndex, count);
+            eventIndex += count;
+            currentEvent = -1;
+            remaining -= count;
+        }
     }
 
     @Override
@@ -267,6 +289,7 @@ final class NestedLeafReader
         if (!closed) {
             closed = true;
             closeChunk();
+            decoder.close();
             valueDecoder.close();
             snappyByThread.clear();
             scratchArena.close();

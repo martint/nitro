@@ -240,6 +240,10 @@ final class NestedNitroParquetBatchSource
                 throw new IllegalArgumentException("Nested primitive row count and mask length differ: " + rowCount + " != " + mask.size());
             }
             values.reset(allocator, context, rowCount);
+            if (mask.all()) {
+                reader.appendFlatRows(values, rowCount);
+                return materialize(allocator, context);
+            }
             int selectedIndex = 0;
             int nextSelected = mask.all() ? 0 : (mask.count() == 0 ? rowCount : mask.position(0));
             int runOrdinal = -1;
@@ -288,6 +292,11 @@ final class NestedNitroParquetBatchSource
             if (runLength != 0) {
                 values.appendPlainRun(reader.valueDecoder(), runOrdinal, runLength);
             }
+            return materialize(allocator, context);
+        }
+
+        private Streams materialize(Allocator allocator, Allocator.Context context)
+        {
             Streams streams = values.materialize(allocator, context);
             if (!outputType.supportsVector(streams.values())) {
                 throw new UnsupportedParquetFeatureException(

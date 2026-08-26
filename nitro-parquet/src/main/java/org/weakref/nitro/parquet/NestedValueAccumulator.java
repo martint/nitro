@@ -29,6 +29,31 @@ interface NestedValueAccumulator
 
     void append(PhysicalValueDecoder decoder, int ordinal, int dictionaryId);
 
+    /**
+     * Appends a contiguous window of decoded nested events. The physical decoder owns type interpretation; the
+     * page decoder supplies only schema-level presence, physical ordinals, and optional dictionary ids. Typed
+     * accumulators can replace the generic event loop with a bulk transfer without coupling page decoding to a
+     * logical type.
+     */
+    default void appendEvents(
+            PhysicalValueDecoder decoder,
+            int[] valueOrdinals,
+            int[] dictionaryIds,
+            int eventOffset,
+            int eventCount)
+    {
+        int end = eventOffset + eventCount;
+        for (int event = eventOffset; event < end; event++) {
+            int ordinal = valueOrdinals[event];
+            if (ordinal < 0) {
+                appendNull();
+            }
+            else {
+                append(decoder, ordinal, dictionaryIds == null ? -1 : dictionaryIds[ordinal]);
+            }
+        }
+    }
+
     default void appendPlainRun(PhysicalValueDecoder decoder, int ordinal, int count)
     {
         for (int index = 0; index < count; index++) {

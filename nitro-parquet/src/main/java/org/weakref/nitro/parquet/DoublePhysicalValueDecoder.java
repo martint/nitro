@@ -31,6 +31,7 @@ final class DoublePhysicalValueDecoder
     private double[] dictionary = EMPTY_DOUBLES;
     private double[] values = EMPTY_DOUBLES;
     private int dictionarySize;
+    private int dictionaryGeneration;
 
     DoublePhysicalValueDecoder(PrimitiveArrayPool arrayPool)
     {
@@ -44,6 +45,7 @@ final class DoublePhysicalValueDecoder
         dictionary = grow(dictionary, valueCount);
         MemorySegment.copy(body, LE_DOUBLE, 0, dictionary, 0, valueCount);
         dictionarySize = valueCount;
+        dictionaryGeneration++;
     }
 
     @Override
@@ -62,6 +64,18 @@ final class DoublePhysicalValueDecoder
     public void copyPlain(int ordinal, double[] output, int outputOffset, int count)
     {
         System.arraycopy(values, ordinal, output, outputOffset, count);
+    }
+
+    @Override
+    public int dictionaryGeneration()
+    {
+        return dictionaryGeneration;
+    }
+
+    @Override
+    public void copyDictionary(double[] output, int outputOffset)
+    {
+        System.arraycopy(dictionary, 0, output, outputOffset, dictionarySize);
     }
 
     @Override

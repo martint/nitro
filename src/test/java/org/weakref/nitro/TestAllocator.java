@@ -746,6 +746,40 @@ class TestAllocator
     }
 
     @Test
+    void testDictionaryTracksAllocatorOwnedIdsAndDomainFrequencies()
+    {
+        try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
+            Allocator.Context context = new Allocator.Context("dictionary-metadata");
+            I32Vector ids = allocator.allocate(context, I32Vector.class, 4, I32Vector::new);
+            I32Vector frequencies = allocator.allocate(context, I32Vector.class, 2, I32Vector::new);
+            System.arraycopy(new int[] {0, 1, 0, 1}, 0, ids.values(), 0, 4);
+            System.arraycopy(new int[] {2, 2}, 0, frequencies.values(), 0, 2);
+
+            DictionaryVector dictionary = DictionaryVector.wrapOwnedIdsWithDomainFrequencies(
+                    ids,
+                    4,
+                    new I64Vector(new long[] {11, 29}),
+                    frequencies);
+
+            assertThat(dictionary.childVectorCount()).isEqualTo(3);
+            assertThat(dictionary.childVector(0)).isSameAs(ids);
+            assertThat(dictionary.childVector(1)).isSameAs(frequencies);
+            assertThat(dictionary.domainFrequency(0)).isEqualTo(2);
+            assertThat(dictionary.domainFrequency(1)).isEqualTo(2);
+
+            dictionary.prepareBufferTransfer(allocator, context);
+            allocator.release(context, ids);
+            allocator.release(context, frequencies);
+            assertThat(allocator.allocate(context, I32Vector.class, 4, I32Vector::new)).isNotSameAs(ids);
+            assertThat(allocator.allocate(context, I32Vector.class, 2, I32Vector::new)).isNotSameAs(frequencies);
+
+            dictionary.releaseTransferredBuffers();
+            assertThat(allocator.allocate(context, I32Vector.class, 4, I32Vector::new)).isSameAs(ids);
+            assertThat(allocator.allocate(context, I32Vector.class, 2, I32Vector::new)).isSameAs(frequencies);
+        }
+    }
+
+    @Test
     void testSingleRunRleSharesAllocatorOwnedCountMetadata()
     {
         try (EngineResources resources = EngineResources.createDefault();

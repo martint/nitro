@@ -19,6 +19,10 @@ interface DoubleValueDecoder
 {
     double value(int ordinal, int dictionaryId);
 
+    int dictionaryGeneration();
+
+    void copyDictionary(double[] output, int outputOffset);
+
     default void copyPlain(int ordinal, double[] output, int outputOffset, int count)
     {
         for (int index = 0; index < count; index++) {

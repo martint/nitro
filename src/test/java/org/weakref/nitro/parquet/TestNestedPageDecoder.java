@@ -33,7 +33,8 @@ class TestNestedPageDecoder
         NestedPageDecoder decoder = new NestedPageDecoder(
                 1,
                 2,
-                RleReaderPolicy.defaults());
+                RleReaderPolicy.defaults(),
+                new PrimitiveArrayPool(0, 0));
         LongPhysicalValueDecoder values = new LongPhysicalValueDecoder(Type.INT64, new PrimitiveArrayPool(0, 0));
         values.decodeDictionary(longs(10, 20), 2, Encoding.PLAIN);
         decodeDictionaryPage(
@@ -62,7 +63,8 @@ class TestNestedPageDecoder
         NestedPageDecoder decoder = new NestedPageDecoder(
                 1,
                 3,
-                RleReaderPolicy.defaults());
+                RleReaderPolicy.defaults(),
+                new PrimitiveArrayPool(0, 0));
         BinaryPhysicalValueDecoder values = new BinaryPhysicalValueDecoder(new PrimitiveArrayPool(0, 0));
         values.decodeDictionary(binary("one", "two"), 2, Encoding.PLAIN);
         decodeDictionaryPage(

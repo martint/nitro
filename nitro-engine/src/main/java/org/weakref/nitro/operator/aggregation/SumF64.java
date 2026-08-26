@@ -15,6 +15,7 @@ package org.weakref.nitro.operator.aggregation;
 
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.F64Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
@@ -63,6 +64,7 @@ public class SumF64
     @Override
     public void initialize(Streams state, int offset, int length)
     {
+        Arrays.fill(((F64Vector) state.values()).values(), offset, offset + length, 0);
         Arrays.fill(((BooleanVector) state.get(Stream.NULLS)).values(), offset, offset + length, true);
     }
 
@@ -72,7 +74,11 @@ public class SumF64
         F64Vector stateVector = (F64Vector) state.values();
         BooleanVector stateNulls = (BooleanVector) state.get(Stream.NULLS);
         Vector inputNullsVector = streams.stream(inputColumn, Stream.NULLS);
-        VectorAccess.DoubleValues inputValues = VectorAccess.doubleValues(streams.values(inputColumn));
+        Vector inputValuesVector = streams.values(inputColumn);
+        if (mask.all() && accumulateDictionaryDomain(stateVector, stateNulls, group, inputValuesVector, inputNullsVector)) {
+            return;
+        }
+        VectorAccess.DoubleValues inputValues = VectorAccess.doubleValues(inputValuesVector);
 
         double sum = 0;
         if (VectorAccess.isAllFalseNulls(inputNullsVector)) {
@@ -105,6 +111,31 @@ public class SumF64
 
         stateNulls.values()[group] = false;
         stateVector.values()[group] += sum;
+    }
+
+    private static boolean accumulateDictionaryDomain(
+            F64Vector state,
+            BooleanVector stateNulls,
+            int group,
+            Vector inputValues,
+            Vector inputNulls)
+    {
+        if (!(inputValues instanceof DictionaryVector dictionary) ||
+                !(dictionary.values() instanceof F64Vector) ||
+                !dictionary.hasDomainFrequencies()) {
+            return false;
+        }
+
+        double sum = ExactDoubleDomainSum.sumOrNaN(dictionary, inputNulls, state.values()[group]);
+        if (Double.isNaN(sum)) {
+            return false;
+        }
+        long nonNullCount = ExactDoubleDomainSum.nonNullCount(dictionary, inputNulls);
+        if (nonNullCount > 0) {
+            stateNulls.values()[group] = false;
+            state.values()[group] = sum;
+        }
+        return true;
     }
 
     @Override

@@ -20,6 +20,7 @@ import org.junit.jupiter.api.Test;
 import org.weakref.nitro.data.AllocationResources;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.F64Vector;
 import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Stream;
@@ -73,6 +74,43 @@ class TestDoublePhysicalValueDecoder
             assertThat(((F64Vector) streams.values()).values()).containsExactly(1.5, 0, 2.5);
             assertThat(((BooleanVector) streams.get(Stream.NULLS)).values()).containsExactly(false, true, false);
         }
+    }
+
+    @Test
+    void testPreservesOneDictionaryGenerationAndFlattensAcrossGenerations()
+    {
+        ParquetSchema.Primitive leaf = new ParquetSchema.Primitive(
+                "score", FieldRepetitionType.OPTIONAL, Type.DOUBLE, null, null, 0, 0, 0, 0,
+                List.of("person", "score"), 2, 0);
+        DoublePhysicalValueDecoder decoder = new DoublePhysicalValueDecoder(new PrimitiveArrayPool(0, 0));
+        NestedValueAccumulator values = NestedValueAccumulators.create(leaf, true);
+
+        try (AllocationResources resources = AllocationResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                values) {
+            Allocator.Context context = new Allocator.Context("test");
+            decoder.decodeDictionary(doubles(1.5, -2.25), 2, Encoding.PLAIN);
+            values.reset(allocator, context, 3);
+            values.appendEvents(decoder, new int[] {-1, 0, 1}, new int[] {1, 0}, 0, 3);
+            Streams streams = values.materialize(allocator, context);
+            DictionaryVector dictionary = (DictionaryVector) streams.values();
+            assertThat(dictionary.ids()).containsExactly(2, 1, 0);
+            assertThat(dictionary.domainFrequency(0)).isEqualTo(1);
+            assertThat(dictionary.domainFrequency(1)).isEqualTo(1);
+            assertThat(dictionary.domainFrequency(2)).isEqualTo(1);
+            assertThat(((F64Vector) dictionary.values()).values()).containsExactly(1.5, -2.25, 0);
+            DictionaryVector dictionaryNulls = (DictionaryVector) streams.get(Stream.NULLS);
+            assertThat(dictionary.hasSameRowMapping(dictionaryNulls)).isTrue();
+            assertThat(((BooleanVector) dictionaryNulls.values()).values()).containsExactly(false, false, true);
+
+            values.reset(allocator, context, 2);
+            values.append(decoder, 0, 0);
+            decoder.decodeDictionary(doubles(7.5), 1, Encoding.PLAIN);
+            values.append(decoder, 0, 0);
+            streams = values.materialize(allocator, context);
+            assertThat(((F64Vector) streams.values()).values()).containsExactly(1.5, 7.5);
+        }
+        decoder.close();
     }
 
     private static MemorySegment doubles(double... values)
