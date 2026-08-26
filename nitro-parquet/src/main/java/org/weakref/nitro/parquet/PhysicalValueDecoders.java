@@ -28,7 +28,7 @@ final class PhysicalValueDecoders
         return switch (leaf.type()) {
             case BOOLEAN -> new BooleanPhysicalValueDecoder(arrayPool);
             case DOUBLE -> new DoublePhysicalValueDecoder(arrayPool);
-            case INT32, INT64 -> new LongPhysicalValueDecoder(leaf.type(), arrayPool);
+            case INT32, INT64, FLOAT -> new LongPhysicalValueDecoder(leaf.type(), arrayPool);
             case BYTE_ARRAY -> new BinaryPhysicalValueDecoder(arrayPool);
             case FIXED_LEN_BYTE_ARRAY -> createFixedDecimal(leaf, arrayPool);
             default -> throw new UnsupportedParquetFeatureException(

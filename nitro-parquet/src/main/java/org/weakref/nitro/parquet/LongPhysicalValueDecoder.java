@@ -23,7 +23,7 @@ import static java.util.Objects.requireNonNull;
 import static org.weakref.nitro.parquet.ParquetFile.LE_INT;
 import static org.weakref.nitro.parquet.ParquetFile.LE_LONG;
 
-/** Physical INT32/INT64 decoder. Logical interpretation remains the vector/type adapter's responsibility. */
+/** Physical INT32/INT64/FLOAT decoder. Logical interpretation remains the vector/type adapter's responsibility. */
 final class LongPhysicalValueDecoder
         implements LongValueDecoder
 {
@@ -40,8 +40,8 @@ final class LongPhysicalValueDecoder
     {
         this.physicalType = requireNonNull(physicalType, "physicalType is null");
         this.arrayPool = requireNonNull(arrayPool, "arrayPool is null");
-        if (physicalType != Type.INT32 && physicalType != Type.INT64) {
-            throw new IllegalArgumentException("Not an integer physical type: " + physicalType);
+        if (physicalType != Type.INT32 && physicalType != Type.INT64 && physicalType != Type.FLOAT) {
+            throw new IllegalArgumentException("Not a long-carrier physical type: " + physicalType);
         }
     }
 
@@ -50,7 +50,7 @@ final class LongPhysicalValueDecoder
     {
         requirePlainDictionary(encoding);
         dictionary = grow(dictionary, valueCount);
-        if (physicalType == Type.INT32) {
+        if (physicalType == Type.INT32 || physicalType == Type.FLOAT) {
             for (int index = 0; index < valueCount; index++) {
                 dictionary[index] = body.get(LE_INT, (long) index * Integer.BYTES);
             }
@@ -66,7 +66,7 @@ final class LongPhysicalValueDecoder
     public void decodePlain(MemorySegment body, long offset, int valueCount)
     {
         values = grow(values, valueCount);
-        if (physicalType == Type.INT32) {
+        if (physicalType == Type.INT32 || physicalType == Type.FLOAT) {
             for (int index = 0; index < valueCount; index++) {
                 values[index] = body.get(LE_INT, offset + (long) index * Integer.BYTES);
             }

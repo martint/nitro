@@ -633,7 +633,9 @@ public final class ColumnReader
         this.flbaDecimal = physicalType == Type.FIXED_LEN_BYTE_ARRAY && decimal;
         this.decompressedPages = decompressedPages;
         this.kind = switch (physicalType) {
-            case INT32 -> Kind.INT;
+            // FLOAT uses Trino's stack convention: its raw IEEE-754 bits occupy a long carrier. Decode the four
+            // physical bytes through the INT path and leave logical interpretation to the type binding.
+            case INT32, FLOAT -> Kind.INT;
             case INT64 -> Kind.LONG;
             // DOUBLE is 8 little-endian bytes, bit-identical to INT64 in PLAIN/dictionary encoding; decode it through
             // the long path (raw bits) and let the scan reinterpret to a double vector (see isDouble()).

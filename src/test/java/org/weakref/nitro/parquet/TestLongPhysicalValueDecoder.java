@@ -40,6 +40,27 @@ class TestLongPhysicalValueDecoder
         }
     }
 
+    @Test
+    void testPreservesFloatStackBits()
+    {
+        try (LongPhysicalValueDecoder decoder = new LongPhysicalValueDecoder(Type.FLOAT, new PrimitiveArrayPool(0, 0))) {
+            decoder.decodeDictionary(ints(Float.floatToRawIntBits(-2.25f)), 1, Encoding.PLAIN);
+            decoder.decodePlain(ints(Float.floatToRawIntBits(1.5f)), 0, 1);
+
+            assertThat(decoder.value(0, -1)).isEqualTo((long) Float.floatToRawIntBits(1.5f));
+            assertThat(decoder.value(0, 0)).isEqualTo((long) Float.floatToRawIntBits(-2.25f));
+        }
+    }
+
+    private static MemorySegment ints(int... values)
+    {
+        ByteBuffer output = ByteBuffer.allocate(values.length * Integer.BYTES).order(ByteOrder.LITTLE_ENDIAN);
+        for (int value : values) {
+            output.putInt(value);
+        }
+        return MemorySegment.ofArray(output.array());
+    }
+
     private static MemorySegment longs(long... values)
     {
         ByteBuffer output = ByteBuffer.allocate(values.length * Long.BYTES).order(ByteOrder.LITTLE_ENDIAN);

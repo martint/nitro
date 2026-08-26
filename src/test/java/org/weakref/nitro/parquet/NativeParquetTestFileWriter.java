@@ -559,6 +559,7 @@ public final class NativeParquetTestFileWriter
         for (Object value : values) {
             switch (type) {
                 case INT32 -> writeLittleEndianInt(output, ((Number) value).intValue());
+                case FLOAT -> writeLittleEndianInt(output, Float.floatToRawIntBits(((Number) value).floatValue()));
                 case INT64 -> writeLittleEndianLong(output, ((Number) value).longValue());
                 case DOUBLE -> writeLittleEndianLong(output, Double.doubleToRawLongBits(((Number) value).doubleValue()));
                 case BYTE_ARRAY -> {
