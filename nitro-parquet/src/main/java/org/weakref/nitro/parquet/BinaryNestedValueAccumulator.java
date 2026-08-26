@@ -341,7 +341,6 @@ final class BinaryNestedValueAccumulator
             int[] replacementIds = arrayPool.borrowInts(capacity);
             System.arraycopy(dictionaryIds, 0, replacementIds, 0, size);
             arrayPool.release(dictionaryIds);
-            arrayPool.release(dictionaryFrequencies);
             dictionaryIds = replacementIds;
         }
     }
@@ -384,6 +383,7 @@ final class BinaryNestedValueAccumulator
             arrayPool.release(data);
             arrayPool.release(nulls);
             arrayPool.release(dictionaryIds);
+            arrayPool.release(dictionaryFrequencies);
             arrayPool.release(dictionaryOffsets);
             arrayPool.release(dictionaryData);
             offsets = EMPTY_INTS;
