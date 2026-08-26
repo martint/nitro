@@ -54,6 +54,8 @@ public final class NativeParquetTestFileWriter
 
     private NativeParquetTestFileWriter() {}
 
+    public record LongStringStruct(long id, String name) {}
+
     public record Column(String name, Type type, boolean optional, boolean utf8, List<?> values)
     {
         public Column
@@ -177,6 +179,194 @@ public final class NativeParquetTestFileWriter
         Files.write(path, file.toByteArray());
     }
 
+    public static void writeRepeatedOptionalInt64(Path path, String schemaName, String columnName, List<List<Long>> rows)
+            throws IOException
+    {
+        List<Event> events = new ArrayList<>();
+        for (List<Long> row : rows) {
+            if (row.isEmpty()) {
+                events.add(new Event(0, 0, null));
+                continue;
+            }
+            for (int index = 0; index < row.size(); index++) {
+                Long value = row.get(index);
+                events.add(new Event(index == 0 ? 0 : 1, value == null ? 1 : 2, value));
+            }
+        }
+        List<SchemaElement> schema = List.of(
+                new SchemaElement(schemaName).setNum_children(1),
+                new SchemaElement(columnName).setNum_children(1).setRepetition_type(FieldRepetitionType.REPEATED),
+                new SchemaElement("element").setType(Type.INT64).setRepetition_type(FieldRepetitionType.OPTIONAL));
+        writeNested(path, schema, rows.size(), List.of(new NestedColumn(List.of(columnName, "element"), Type.INT64, 1, 2, events)), false);
+    }
+
+    public static void writeOptionalUtf8LongMap(Path path, String schemaName, String columnName, List<Map<String, Long>> rows)
+            throws IOException
+    {
+        List<Event> keyEvents = new ArrayList<>();
+        List<Event> valueEvents = new ArrayList<>();
+        for (Map<String, Long> row : rows) {
+            if (row == null) {
+                keyEvents.add(new Event(0, 0, null));
+                valueEvents.add(new Event(0, 0, null));
+                continue;
+            }
+            if (row.isEmpty()) {
+                keyEvents.add(new Event(0, 1, null));
+                valueEvents.add(new Event(0, 1, null));
+                continue;
+            }
+            int entryIndex = 0;
+            for (Map.Entry<String, Long> entry : row.entrySet()) {
+                int repetitionLevel = entryIndex++ == 0 ? 0 : 1;
+                keyEvents.add(new Event(repetitionLevel, 2, entry.getKey()));
+                Long value = entry.getValue();
+                valueEvents.add(new Event(repetitionLevel, value == null ? 2 : 3, value));
+            }
+        }
+        List<SchemaElement> schema = List.of(
+                new SchemaElement(schemaName).setNum_children(1),
+                new SchemaElement(columnName)
+                        .setNum_children(1)
+                        .setRepetition_type(FieldRepetitionType.OPTIONAL)
+                        .setConverted_type(ConvertedType.MAP),
+                new SchemaElement("key_value").setNum_children(2).setRepetition_type(FieldRepetitionType.REPEATED),
+                new SchemaElement("key")
+                        .setType(Type.BYTE_ARRAY)
+                        .setRepetition_type(FieldRepetitionType.REQUIRED)
+                        .setConverted_type(ConvertedType.UTF8),
+                new SchemaElement("value").setType(Type.INT64).setRepetition_type(FieldRepetitionType.OPTIONAL));
+        writeNested(path, schema, rows.size(), List.of(
+                new NestedColumn(List.of(columnName, "key_value", "key"), Type.BYTE_ARRAY, 1, 2, keyEvents),
+                new NestedColumn(List.of(columnName, "key_value", "value"), Type.INT64, 1, 3, valueEvents)), true);
+    }
+
+    public static void writeOptionalLongUtf8Struct(Path path, String schemaName, String columnName, List<LongStringStruct> rows)
+            throws IOException
+    {
+        List<Event> idEvents = new ArrayList<>();
+        List<Event> nameEvents = new ArrayList<>();
+        for (LongStringStruct row : rows) {
+            if (row == null) {
+                idEvents.add(new Event(0, 0, null));
+                nameEvents.add(new Event(0, 0, null));
+                continue;
+            }
+            idEvents.add(new Event(0, 1, row.id()));
+            nameEvents.add(new Event(0, row.name() == null ? 1 : 2, row.name()));
+        }
+        List<SchemaElement> schema = List.of(
+                new SchemaElement(schemaName).setNum_children(1),
+                new SchemaElement(columnName).setNum_children(2).setRepetition_type(FieldRepetitionType.OPTIONAL),
+                new SchemaElement("id").setType(Type.INT64).setRepetition_type(FieldRepetitionType.REQUIRED),
+                new SchemaElement("name")
+                        .setType(Type.BYTE_ARRAY)
+                        .setRepetition_type(FieldRepetitionType.OPTIONAL)
+                        .setConverted_type(ConvertedType.UTF8));
+        writeNested(path, schema, rows.size(), List.of(
+                new NestedColumn(List.of(columnName, "id"), Type.INT64, 0, 1, idEvents),
+                new NestedColumn(List.of(columnName, "name"), Type.BYTE_ARRAY, 0, 2, nameEvents)), true);
+    }
+
+    private static void writeNested(
+            Path path,
+            List<SchemaElement> schema,
+            int rowCount,
+            List<NestedColumn> columns,
+            boolean dictionaryEnabled)
+            throws IOException
+    {
+        ByteArrayOutputStream file = new ByteArrayOutputStream();
+        file.write(MAGIC);
+        List<ColumnChunk> chunks = new ArrayList<>(columns.size());
+        long totalUncompressedSize = 0;
+        long totalCompressedSize = 0;
+        for (NestedColumn column : columns) {
+            WrittenChunk chunk = writeNestedColumn(file, column, dictionaryEnabled);
+            chunks.add(chunk.metadata());
+            totalUncompressedSize += chunk.uncompressedSize();
+            totalCompressedSize += chunk.compressedSize();
+        }
+        RowGroup rowGroup = new RowGroup(chunks, totalUncompressedSize, rowCount)
+                .setFile_offset(chunks.getFirst().file_offset)
+                .setTotal_compressed_size(totalCompressedSize);
+        FileMetaData footer = new FileMetaData(1, schema, rowCount, List.of(rowGroup))
+                .setCreated_by("nitro-native-test-writer");
+        ByteArrayOutputStream footerBytes = new ByteArrayOutputStream();
+        Util.writeFileMetaData(footer, footerBytes);
+        file.write(footerBytes.toByteArray());
+        writeLittleEndianInt(file, footerBytes.size());
+        file.write(MAGIC);
+        Files.write(path, file.toByteArray());
+    }
+
+    private static WrittenChunk writeNestedColumn(ByteArrayOutputStream file, NestedColumn column, boolean dictionaryEnabled)
+            throws IOException
+    {
+        long chunkOffset = file.size();
+        List<?> physicalValues = column.events().stream()
+                .filter(event -> event.value() != null)
+                .map(Event::value)
+                .toList();
+        long dictionaryOffset = 0;
+        int dictionaryUncompressedSize = 0;
+        List<Encoding> encodings = new ArrayList<>();
+        byte[] values;
+        Encoding dataEncoding;
+        if (dictionaryEnabled) {
+            Dictionary dictionary = dictionary(physicalValues);
+            dictionaryOffset = file.size();
+            byte[] dictionaryBody = encodePlain(column.type(), dictionary.values());
+            dictionaryUncompressedSize = writePage(file, PageType.DICTIONARY_PAGE, dictionaryBody, CompressionCodec.UNCOMPRESSED,
+                    new DictionaryPageHeader(dictionary.values().size(), Encoding.PLAIN), null);
+            values = encodeDictionaryIds(dictionary.ids(), dictionary.values().size());
+            dataEncoding = Encoding.PLAIN_DICTIONARY;
+            encodings.add(Encoding.PLAIN_DICTIONARY);
+        }
+        else {
+            values = encodePlain(column.type(), physicalValues);
+            dataEncoding = Encoding.PLAIN;
+            encodings.add(Encoding.PLAIN);
+        }
+
+        ByteArrayOutputStream body = new ByteArrayOutputStream();
+        if (column.maximumRepetitionLevel() > 0) {
+            byte[] repetitions = encodeRuns(column.events().stream().map(Event::repetitionLevel).toList(), bitWidth(column.maximumRepetitionLevel()));
+            writeLittleEndianInt(body, repetitions.length);
+            body.write(repetitions);
+        }
+        if (column.maximumDefinitionLevel() > 0) {
+            byte[] definitions = encodeRuns(column.events().stream().map(Event::definitionLevel).toList(), bitWidth(column.maximumDefinitionLevel()));
+            writeLittleEndianInt(body, definitions.length);
+            body.write(definitions);
+        }
+        body.write(values);
+        encodings.add(Encoding.RLE);
+        long dataOffset = file.size();
+        int dataUncompressedSize = writePage(
+                file,
+                PageType.DATA_PAGE,
+                body.toByteArray(),
+                CompressionCodec.UNCOMPRESSED,
+                null,
+                new DataPageHeader(column.events().size(), dataEncoding, Encoding.RLE, Encoding.RLE));
+        long compressedSize = file.size() - chunkOffset;
+        long uncompressedSize = dictionaryUncompressedSize + dataUncompressedSize;
+        ColumnMetaData metadata = new ColumnMetaData(
+                column.type(),
+                List.copyOf(encodings),
+                column.path(),
+                CompressionCodec.UNCOMPRESSED,
+                column.events().size(),
+                uncompressedSize,
+                compressedSize,
+                dataOffset);
+        if (dictionaryEnabled) {
+            metadata.setDictionary_page_offset(dictionaryOffset);
+        }
+        return new WrittenChunk(new ColumnChunk(chunkOffset).setMeta_data(metadata), uncompressedSize, compressedSize);
+    }
+
     private static WrittenChunk writeColumn(ByteArrayOutputStream file, Column column, boolean dictionaryEnabled, CompressionCodec codec)
             throws IOException
     {
@@ -286,13 +476,15 @@ public final class NativeParquetTestFileWriter
 
     private static Dictionary dictionary(Column column)
     {
+        return dictionary(column.values().stream().filter(value -> value != null).toList());
+    }
+
+    private static Dictionary dictionary(List<?> inputValues)
+    {
         Map<ValueKey, Integer> idsByValue = new LinkedHashMap<>();
         List<Object> values = new ArrayList<>();
         List<Integer> ids = new ArrayList<>();
-        for (Object value : column.values()) {
-            if (value == null) {
-                continue;
-            }
+        for (Object value : inputValues) {
             ValueKey key = new ValueKey(value);
             Integer id = idsByValue.get(key);
             if (id == null) {
@@ -303,6 +495,11 @@ public final class NativeParquetTestFileWriter
             ids.add(id);
         }
         return new Dictionary(List.copyOf(values), List.copyOf(ids));
+    }
+
+    private static int bitWidth(int maximumValue)
+    {
+        return maximumValue == 0 ? 0 : Integer.SIZE - Integer.numberOfLeadingZeros(maximumValue);
     }
 
     private static byte[] encodeDictionaryIds(List<Integer> ids, int dictionarySize)
@@ -438,6 +635,22 @@ public final class NativeParquetTestFileWriter
     }
 
     private record Dictionary(List<Object> values, List<Integer> ids) {}
+
+    private record Event(int repetitionLevel, int definitionLevel, Object value) {}
+
+    private record NestedColumn(
+            List<String> path,
+            Type type,
+            int maximumRepetitionLevel,
+            int maximumDefinitionLevel,
+            List<Event> events)
+    {
+        private NestedColumn
+        {
+            path = List.copyOf(path);
+            events = List.copyOf(events);
+        }
+    }
 
     private record WrittenChunk(ColumnChunk metadata, long uncompressedSize, long compressedSize) {}
 
