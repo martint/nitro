@@ -162,6 +162,32 @@ public class TestParquetOperator
 
     private static final TypeBinding BIGINT = new TestingTypeBinding(new TypeIdentity("testing:bigint"), long.class);
     private static final TypeBinding VARCHAR = new TestingTypeBinding(new TypeIdentity("testing:varchar"), byte[].class);
+    private static final TypeBinding BIGINT_ARRAY = new TypeBinding()
+    {
+        @Override
+        public TypeIdentity identity()
+        {
+            return new TypeIdentity("testing:array(bigint)");
+        }
+
+        @Override
+        public Class<?> carrierType()
+        {
+            return List.class;
+        }
+
+        @Override
+        public TypeOperators operators()
+        {
+            return TypeOperators.UNSPECIFIED;
+        }
+
+        @Override
+        public Set<Class<? extends org.weakref.nitro.data.Vector>> supportedVectorTypes()
+        {
+            return Set.of(ArrayVector.class);
+        }
+    };
     private static final TypeBinding VARCHAR_BIGINT_MAP = new TypeBinding()
     {
         @Override
@@ -531,6 +557,59 @@ public class TestParquetOperator
             assertThat(batch.column(0).borrow(Stream.VALUES)).isInstanceOf(DictionaryVector.class);
             BooleanVector nulls = (BooleanVector) batch.column(0).borrow(Stream.NULLS);
             assertThat(nulls.isAllFalse()).isTrue();
+        }
+    }
+
+    @Test
+    void testNitroParquetSourceReadsLegacyRepeatedListNatively()
+            throws IOException
+    {
+        java.nio.file.Path file = writeRepeatedNullableI64ParquetFile("native-array.parquet", List.of(
+                new NullableArrayParquetRow(java.util.Arrays.asList(10L, null, 20L)),
+                new NullableArrayParquetRow(List.of()),
+                new NullableArrayParquetRow(List.of(30L))));
+        byte[] bytes = Files.readAllBytes(file);
+        ParquetInput input = new ParquetInput()
+        {
+            @Override
+            public String id()
+            {
+                return "native-array";
+            }
+
+            @Override
+            public long size()
+            {
+                return bytes.length;
+            }
+
+            @Override
+            public ParquetInputRange readRange(long offset, int length)
+            {
+                return ParquetInputRange.retained(MemorySegment.ofArray(bytes).asSlice(offset, length));
+            }
+
+            @Override
+            public void close() {}
+        };
+        Schema schema = new Schema(List.of(new Field("items", BIGINT_ARRAY, false)));
+
+        try (NitroParquetScanResources resources = NitroParquetScanResources.createDefault();
+                AllocationResources allocationResources = AllocationResources.createDefault();
+                Allocator allocator = new Allocator(allocationResources);
+                BatchSource source = NitroParquetBatchSource.forInputs(
+                        resources,
+                        allocator,
+                        List.of(new NitroParquetBatchSource.InputSplit(input, 0, bytes.length)),
+                        schema);
+                var batch = ((SourcePoll.Ready) source.poll()).batch()) {
+            ArrayVector arrays = (ArrayVector) batch.column(0).borrow(Stream.VALUES);
+            I64Vector values = (I64Vector) arrays.elementValues();
+            BooleanVector nulls = arrays.elementNulls();
+
+            assertThat(arrays.offsets()).containsExactly(0, 3, 3, 4);
+            assertThat(values.values()).containsExactly(10, 0, 20, 30);
+            assertThat(nulls.values()).containsExactly(false, true, false, false);
         }
     }
 

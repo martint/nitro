@@ -32,12 +32,14 @@ import org.weakref.nitro.core.source.SourcePoll;
 import org.weakref.nitro.core.source.SourceProtocol;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.ArrayVector;
 import org.weakref.nitro.data.BatchBufferOwner;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
+import org.weakref.nitro.data.MapVector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Stream;
@@ -429,8 +431,10 @@ public final class NitroParquetBatchSource
     {
         splits = List.copyOf(splits);
         try {
-            if (schema.fields().stream()
-                    .anyMatch(field -> field.type().supportedVectorTypes().contains(org.weakref.nitro.data.MapVector.class))) {
+            if (schema.fields().stream().anyMatch(field -> {
+                Set<Class<? extends Vector>> vectors = field.type().supportedVectorTypes();
+                return vectors.contains(MapVector.class) || vectors.contains(ArrayVector.class);
+            })) {
                 return new NestedNitroParquetBatchSource(
                         resources,
                         allocator,
