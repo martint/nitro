@@ -102,8 +102,7 @@ java --add-modules jdk.incubator.vector --enable-native-access=ALL-UNNAMED \
 ~64 operator classes, grouped by role:
 - **Sources**: `GeneratorOperator` (synthetic data via `operator/generator`),
   `ConstantTableOperator`, `SingleBatchOperator`, and the native Nitro Parquet
-  source. `ParquetScanOperator` remains only as a legacy test reference while
-  its parquet-mr dependency is removed.
+  source.
   The engine-facing connector contract is `core.source.BatchSource`, not these
   format-specific classes. Each source constructs stable opaque
   `SourceColumnHandle` instances; runtime-filter support is explicitly checked
