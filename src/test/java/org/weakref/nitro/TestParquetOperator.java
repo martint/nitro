@@ -660,8 +660,10 @@ public class TestParquetOperator
                         schema);
                 var executor = java.util.concurrent.Executors.newSingleThreadExecutor();
                 var batch = executor.submit(() -> ((SourcePoll.Ready) source.poll()).batch()).get()) {
-            StructVector rows = (StructVector) batch.column(0).borrow(Stream.VALUES);
+            SourceMetrics metrics = source.protocol(SourceMetricsProtocol.METRICS).orElseThrow();
             BooleanVector rowNulls = (BooleanVector) batch.column(0).borrow(Stream.NULLS);
+            long nullOnlyBytes = metrics.completedBytes().orElseThrow();
+            StructVector rows = (StructVector) batch.column(0).borrow(Stream.VALUES);
             I64Vector ids = (I64Vector) rows.fieldValues("id");
             BinaryVector names = (BinaryVector) rows.fieldValues("name");
 
@@ -670,6 +672,7 @@ public class TestParquetOperator
             assertThat(utf8(names, 0)).isEqualTo("alice");
             assertThat(((BooleanVector) rows.field("name").get(Stream.NULLS)).values())
                     .containsExactly(false, true, true);
+            assertThat(nullOnlyBytes).isLessThan(metrics.completedBytes().orElseThrow());
         }
     }
 

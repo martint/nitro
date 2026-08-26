@@ -55,6 +55,39 @@ final class NestedPageDecoder
 
     long decodeDataPageV1(MemorySegment body, int valueCount, Encoding encoding, int dictionarySize)
     {
+        long offset = decodeLevels(body, valueCount);
+
+        dictionaryEncoded = encoding == Encoding.RLE_DICTIONARY || encoding == Encoding.PLAIN_DICTIONARY;
+        if (dictionaryEncoded) {
+            if (dictionarySize == 0 && physicalValueCount != 0) {
+                throw new UnsupportedParquetFeatureException("Nested dictionary data page precedes its dictionary page");
+            }
+            int bitWidth = body.get(ValueLayout.JAVA_BYTE, offset) & 0xFF;
+            offset++;
+            dictionaryIds = grow(dictionaryIds, physicalValueCount);
+            dictionaryIdReader.init(body, offset, bitWidth);
+            dictionaryIdReader.read(dictionaryIds, 0, physicalValueCount);
+            for (int index = 0; index < physicalValueCount; index++) {
+                if (dictionaryIds[index] < 0 || dictionaryIds[index] >= dictionarySize) {
+                    throw new IllegalArgumentException("Nested Parquet dictionary id is outside dictionary: " + dictionaryIds[index]);
+                }
+            }
+            return -1;
+        }
+        if (encoding != Encoding.PLAIN) {
+            throw new UnsupportedParquetFeatureException("Native nested Parquet reader does not support data encoding " + encoding);
+        }
+        return offset;
+    }
+
+    void decodeLevelsDataPageV1(MemorySegment body, int valueCount)
+    {
+        decodeLevels(body, valueCount);
+        dictionaryEncoded = false;
+    }
+
+    private long decodeLevels(MemorySegment body, int valueCount)
+    {
         requireNonNull(body, "body is null");
         eventCount = valueCount;
         repetitionLevels = grow(repetitionLevels, valueCount);
@@ -89,26 +122,6 @@ final class NestedPageDecoder
             valueOrdinals[event] = definitionLevels[event] == maximumDefinitionLevel ? physicalValueCount++ : -1;
         }
 
-        dictionaryEncoded = encoding == Encoding.RLE_DICTIONARY || encoding == Encoding.PLAIN_DICTIONARY;
-        if (dictionaryEncoded) {
-            if (dictionarySize == 0 && physicalValueCount != 0) {
-                throw new UnsupportedParquetFeatureException("Nested dictionary data page precedes its dictionary page");
-            }
-            int bitWidth = body.get(ValueLayout.JAVA_BYTE, offset) & 0xFF;
-            offset++;
-            dictionaryIds = grow(dictionaryIds, physicalValueCount);
-            dictionaryIdReader.init(body, offset, bitWidth);
-            dictionaryIdReader.read(dictionaryIds, 0, physicalValueCount);
-            for (int index = 0; index < physicalValueCount; index++) {
-                if (dictionaryIds[index] < 0 || dictionaryIds[index] >= dictionarySize) {
-                    throw new IllegalArgumentException("Nested Parquet dictionary id is outside dictionary: " + dictionaryIds[index]);
-                }
-            }
-            return -1;
-        }
-        if (encoding != Encoding.PLAIN) {
-            throw new UnsupportedParquetFeatureException("Native nested Parquet reader does not support data encoding " + encoding);
-        }
         return offset;
     }
 

@@ -39,6 +39,7 @@ final class NestedLeafReader
     private final ParquetSchema.Primitive leaf;
     private final NestedPageDecoder decoder;
     private final PhysicalValueDecoder valueDecoder;
+    private final boolean decodeValues;
     private final List<Chunk> chunks = new ArrayList<>();
     private final FastPageHeaderReader header = new FastPageHeaderReader();
     private final Map<Thread, SnappyDecompressor> snappyByThread = new ConcurrentHashMap<>();
@@ -58,12 +59,18 @@ final class NestedLeafReader
 
     NestedLeafReader(ParquetSchema.Primitive leaf, RleReaderPolicy rlePolicy)
     {
+        this(leaf, rlePolicy, true);
+    }
+
+    NestedLeafReader(ParquetSchema.Primitive leaf, RleReaderPolicy rlePolicy, boolean decodeValues)
+    {
         this.leaf = requireNonNull(leaf, "leaf is null");
         this.decoder = new NestedPageDecoder(
                 leaf.maximumRepetitionLevel(),
                 leaf.maximumDefinitionLevel(),
                 requireNonNull(rlePolicy, "rlePolicy is null"));
         this.valueDecoder = PhysicalValueDecoders.create(leaf);
+        this.decodeValues = decodeValues;
     }
 
     void addChunk(ParquetFile file, ColumnMetaData metadata)
@@ -147,10 +154,16 @@ final class NestedLeafReader
             consumedPageBytes = Math.addExact(consumedPageBytes, compressedSize);
             pagePosition = nextPage;
             if (header.type() == PageType.DICTIONARY_PAGE.getValue()) {
-                valueDecoder.decodeDictionary(body, header.valueCount(), Encoding.findByValue(header.encoding()));
+                if (decodeValues) {
+                    valueDecoder.decodeDictionary(body, header.valueCount(), Encoding.findByValue(header.encoding()));
+                }
                 continue;
             }
             if (header.type() == PageType.DATA_PAGE.getValue()) {
+                if (!decodeValues) {
+                    decoder.decodeLevelsDataPageV1(body, header.valueCount());
+                    return true;
+                }
                 long valueOffset = decoder.decodeDataPageV1(
                         body,
                         header.valueCount(),

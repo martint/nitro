@@ -61,6 +61,21 @@ final class NestedNitroParquetBatchSource
 
         Streams read(Allocator allocator, Allocator.Context context, int rowCount, Mask mask);
 
+        default boolean supportsIndependentNulls()
+        {
+            return false;
+        }
+
+        default BooleanVector readNulls(Allocator allocator, Allocator.Context context, int rowCount, Mask mask)
+        {
+            throw new UnsupportedOperationException("Reader does not support independent null resolution");
+        }
+
+        default void skipNulls(long rowCount)
+        {
+            throw new UnsupportedOperationException("Reader does not support independent null resolution");
+        }
+
         void skip(long rowCount);
 
         long consumedPageBytes();
@@ -286,6 +301,7 @@ final class NestedNitroParquetBatchSource
             implements ProjectedReader
     {
         private final NestedStructReader reader;
+        private final NestedStructNullReader nullReader;
         private final TypeBinding outputType;
         private final boolean nullable;
 
@@ -294,12 +310,16 @@ final class NestedNitroParquetBatchSource
             this.reader = new NestedStructReader(struct, rlePolicy);
             this.outputType = requireNonNull(outputType, "outputType is null");
             this.nullable = struct.repetition() != org.apache.parquet.format.FieldRepetitionType.REQUIRED;
+            this.nullReader = nullable ? new NestedStructNullReader(struct, rlePolicy) : null;
         }
 
         @Override
         public void addRowGroup(ParquetFile file, RowGroup rowGroup)
         {
             reader.addRowGroup(file, rowGroup);
+            if (nullReader != null) {
+                nullReader.addRowGroup(file, rowGroup);
+            }
         }
 
         @Override
@@ -320,9 +340,27 @@ final class NestedNitroParquetBatchSource
         }
 
         @Override
+        public boolean supportsIndependentNulls()
+        {
+            return nullReader != null;
+        }
+
+        @Override
+        public BooleanVector readNulls(Allocator allocator, Allocator.Context context, int rowCount, Mask mask)
+        {
+            return requireNonNull(nullReader, "nullReader is null").read(allocator, context, rowCount, mask);
+        }
+
+        @Override
+        public void skipNulls(long rowCount)
+        {
+            requireNonNull(nullReader, "nullReader is null").skip(rowCount);
+        }
+
+        @Override
         public long consumedPageBytes()
         {
-            return reader.consumedPageBytes();
+            return Math.addExact(reader.consumedPageBytes(), nullReader == null ? 0 : nullReader.consumedPageBytes());
         }
 
         @Override
@@ -334,7 +372,29 @@ final class NestedNitroParquetBatchSource
         @Override
         public void close()
         {
-            reader.close();
+            RuntimeException failure = null;
+            try {
+                reader.close();
+            }
+            catch (RuntimeException e) {
+                failure = e;
+            }
+            try {
+                if (nullReader != null) {
+                    nullReader.close();
+                }
+            }
+            catch (RuntimeException e) {
+                if (failure == null) {
+                    failure = e;
+                }
+                else {
+                    failure.addSuppressed(e);
+                }
+            }
+            if (failure != null) {
+                throw failure;
+            }
         }
     }
 
@@ -345,6 +405,7 @@ final class NestedNitroParquetBatchSource
     private final ProjectedReader[] readers;
     private final SourceColumnHandle[] sourceColumns;
     private final long[] pendingRows;
+    private final long[] pendingNullRows;
     private final VectorBatchScope batchScope;
     private final Allocator.Context allocationContext;
     private final int batchRows;
@@ -381,6 +442,7 @@ final class NestedNitroParquetBatchSource
         this.readers = new ProjectedReader[schema.size()];
         this.sourceColumns = new SourceColumnHandle[schema.size()];
         this.pendingRows = new long[schema.size()];
+        this.pendingNullRows = new long[schema.size()];
         for (int column = 0; column < schema.size(); column++) {
             String name = sourceOrdinals == null
                     ? schema.field(column).name().orElseThrow(
@@ -547,6 +609,7 @@ final class NestedNitroParquetBatchSource
     {
         private final int rowCount;
         private final Streams[] resolved = new Streams[readers.length];
+        private final boolean[] independentNullResolved = new boolean[readers.length];
         private final VectorSourceBatch batch;
         private Mask mask;
         private boolean batchClosed;
@@ -560,7 +623,7 @@ final class NestedNitroParquetBatchSource
                 int outputColumn = column;
                 columns[column] = new VectorColumnGeneration(
                         readers[column].streams(),
-                        stream -> resolve(outputColumn).get(stream),
+                        stream -> resolve(outputColumn, stream),
                         batchScope);
             }
             this.batch = new VectorSourceBatch(schema, mask, columns, batchScope, this::constrain, this::closed);
@@ -571,10 +634,21 @@ final class NestedNitroParquetBatchSource
             return batch;
         }
 
-        private Streams resolve(int column)
+        private Vector resolve(int column, Stream stream)
         {
-            if (resolved[column] != null) {
-                return resolved[column];
+            if (resolved[column] != null && resolved[column].has(stream)) {
+                return resolved[column].get(stream);
+            }
+            if (stream == Stream.NULLS && readers[column].supportsIndependentNulls()) {
+                long pending = pendingNullRows[column];
+                if (pending > 0) {
+                    readers[column].skipNulls(pending);
+                    pendingNullRows[column] = 0;
+                }
+                BooleanVector nulls = readers[column].readNulls(allocator, allocationContext, rowCount, mask);
+                independentNullResolved[column] = true;
+                resolved[column] = resolved[column] == null ? Streams.of(Stream.NULLS, nulls) : resolved[column].with(Stream.NULLS, nulls);
+                return nulls;
             }
             long pending = pendingRows[column];
             if (pending > 0) {
@@ -582,7 +656,7 @@ final class NestedNitroParquetBatchSource
                 pendingRows[column] = 0;
             }
             resolved[column] = readers[column].read(allocator, allocationContext, rowCount, mask);
-            return resolved[column];
+            return resolved[column].get(stream);
         }
 
         private void constrain(Mask mask)
@@ -604,6 +678,12 @@ final class NestedNitroParquetBatchSource
             for (int column = 0; column < readers.length; column++) {
                 if (resolved[column] == null) {
                     pendingRows[column] = addExact(pendingRows[column], rowCount);
+                }
+                else if (!resolved[column].has(Stream.VALUES)) {
+                    pendingRows[column] = addExact(pendingRows[column], rowCount);
+                }
+                if (readers[column].supportsIndependentNulls() && !independentNullResolved[column]) {
+                    pendingNullRows[column] = addExact(pendingNullRows[column], rowCount);
                 }
             }
             if (currentBatch == this) {
