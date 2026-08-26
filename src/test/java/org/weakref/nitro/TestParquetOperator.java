@@ -621,7 +621,7 @@ public class TestParquetOperator
 
     @Test
     void testNitroParquetSourceReadsOptionalStructNatively()
-            throws IOException
+            throws Exception
     {
         java.nio.file.Path file = writeOptionalSimpleStructParquetFile("native-struct.parquet");
         byte[] bytes = Files.readAllBytes(file);
@@ -658,7 +658,8 @@ public class TestParquetOperator
                         allocator,
                         List.of(new NitroParquetBatchSource.InputSplit(input, 0, bytes.length)),
                         schema);
-                var batch = ((SourcePoll.Ready) source.poll()).batch()) {
+                var executor = java.util.concurrent.Executors.newSingleThreadExecutor();
+                var batch = executor.submit(() -> ((SourcePoll.Ready) source.poll()).batch()).get()) {
             StructVector rows = (StructVector) batch.column(0).borrow(Stream.VALUES);
             BooleanVector rowNulls = (BooleanVector) batch.column(0).borrow(Stream.NULLS);
             I64Vector ids = (I64Vector) rows.fieldValues("id");

@@ -23,6 +23,8 @@ import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 import static java.util.Objects.requireNonNull;
 
@@ -39,8 +41,8 @@ final class NestedLeafReader
     private final PhysicalValueDecoder valueDecoder;
     private final List<Chunk> chunks = new ArrayList<>();
     private final FastPageHeaderReader header = new FastPageHeaderReader();
-    private final SnappyDecompressor snappy = SnappyDecompressor.create();
-    private final Arena scratchArena = Arena.ofConfined();
+    private final Map<Thread, SnappyDecompressor> snappyByThread = new ConcurrentHashMap<>();
+    private final Arena scratchArena = Arena.ofShared();
 
     private int chunkIndex = -1;
     private ParquetInputRange chunkRange;
@@ -206,7 +208,8 @@ final class NestedLeafReader
             decompressionBuffer = scratchArena.allocate(required);
             decompressionCapacity = required;
         }
-        snappy.decompress(input.asSlice(offset, compressedSize), decompressionBuffer.asSlice(0, uncompressedSize));
+        snappyByThread.computeIfAbsent(Thread.currentThread(), _ -> SnappyDecompressor.create())
+                .decompress(input.asSlice(offset, compressedSize), decompressionBuffer.asSlice(0, uncompressedSize));
         return decompressionBuffer.asSlice(0, required);
     }
 
@@ -245,6 +248,7 @@ final class NestedLeafReader
         if (!closed) {
             closed = true;
             closeChunk();
+            snappyByThread.clear();
             scratchArena.close();
         }
     }
