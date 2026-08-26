@@ -180,6 +180,15 @@ final class NestedMapReader
         }
     }
 
+    long consumedPageBytes()
+    {
+        if (!(keyReader instanceof NestedLeafReader physicalKeyReader) ||
+                !(valueReader instanceof NestedLeafReader physicalValueReader)) {
+            return 0;
+        }
+        return Math.addExact(physicalKeyReader.consumedPageBytes(), physicalValueReader.consumedPageBytes());
+    }
+
     private void ensurePositioned()
     {
         if (!positioned) {

@@ -51,6 +51,7 @@ final class NestedLeafReader
     private long decompressionCapacity;
     private int eventIndex;
     private int currentEvent = -1;
+    private long consumedPageBytes;
     private boolean closed;
 
     NestedLeafReader(ParquetSchema.Primitive leaf, RleReaderPolicy rlePolicy)
@@ -141,6 +142,7 @@ final class NestedLeafReader
                     compressedSize,
                     header.uncompressedSize(),
                     chunks.get(chunkIndex).metadata().codec);
+            consumedPageBytes = Math.addExact(consumedPageBytes, compressedSize);
             pagePosition = nextPage;
             if (header.type() == PageType.DICTIONARY_PAGE.getValue()) {
                 valueDecoder.decodeDictionary(body, header.valueCount(), Encoding.findByValue(header.encoding()));
@@ -214,6 +216,11 @@ final class NestedLeafReader
             throw new IllegalStateException("Nested leaf reader is not positioned on an event");
         }
         return currentEvent;
+    }
+
+    long consumedPageBytes()
+    {
+        return consumedPageBytes;
     }
 
     private void closeChunk()

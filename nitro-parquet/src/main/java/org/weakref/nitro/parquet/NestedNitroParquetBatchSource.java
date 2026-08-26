@@ -61,6 +61,8 @@ final class NestedNitroParquetBatchSource
 
         void skip(long rowCount);
 
+        long consumedPageBytes();
+
         Set<Stream> streams();
 
         @Override
@@ -148,6 +150,12 @@ final class NestedNitroParquetBatchSource
         }
 
         @Override
+        public long consumedPageBytes()
+        {
+            return reader.consumedPageBytes();
+        }
+
+        @Override
         public Set<Stream> streams()
         {
             return nullable() ? Set.of(Stream.VALUES, Stream.NULLS) : Set.of(Stream.VALUES);
@@ -195,6 +203,12 @@ final class NestedNitroParquetBatchSource
         public void skip(long rowCount)
         {
             reader.skip(rowCount);
+        }
+
+        @Override
+        public long consumedPageBytes()
+        {
+            return reader.consumedPageBytes();
         }
 
         @Override
@@ -359,7 +373,7 @@ final class NestedNitroParquetBatchSource
                 @Override
                 public OptionalLong completedBytes()
                 {
-                    return OptionalLong.empty();
+                    return nextRow == totalRows ? OptionalLong.of(consumedPageBytes()) : OptionalLong.empty();
                 }
 
                 @Override
@@ -377,6 +391,15 @@ final class NestedNitroParquetBatchSource
             return Optional.of(protocol.valueType().cast(metrics));
         }
         return Optional.empty();
+    }
+
+    private long consumedPageBytes()
+    {
+        long bytes = 0;
+        for (ProjectedReader reader : readers) {
+            bytes = Math.addExact(bytes, reader.consumedPageBytes());
+        }
+        return bytes;
     }
 
     @Override
