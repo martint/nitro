@@ -172,7 +172,8 @@ public final class VectorColumnViewOperatorIngress
         {
             vector = requireNonNull(vector, nullMessage);
             if (stream == Stream.VALUES && !type.supportsVector(vector)) {
-                throw new IllegalArgumentException("source returned a vector representation not supported by its type");
+                throw new IllegalArgumentException("Source returned %s for logical type %s; supported boundary classes are %s"
+                        .formatted(vector.getClass().getName(), type.identity(), type.supportedVectorTypes()));
             }
             return vector;
         }

@@ -80,7 +80,9 @@ class TestVectorColumnViewOperatorIngress
 
         assertThatIllegalArgumentException()
                 .isThrownBy(() -> output.borrow(Stream.VALUES))
-                .withMessageContaining("not supported");
+                .withMessageContaining(F64Vector.class.getName())
+                .withMessageContaining(TYPE.identity().toString())
+                .withMessageContaining(I64Vector.class.getName());
         output.close();
     }
 
