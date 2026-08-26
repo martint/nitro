@@ -27,9 +27,9 @@ import static org.weakref.nitro.parquet.ParquetFile.LE_LONG;
  *
  * <p>Bit-packed runs are unpacked with a branchless per-value kernel: one unaligned little-endian
  * 64-bit load at the value's byte offset, shifted by its in-byte bit offset and masked. This avoids the
- * per-byte refill loop and is the same access shape a Vector-API gather would use. It reads up to 7 bytes
- * past a value's start, so the source segment must carry {@code >= 7} bytes of trailing slack past the
- * last bit-packed run (the decompression buffer is over-allocated for this; the mmap has the footer after).
+ * per-byte refill loop and is the same access shape a Vector-API gather would use. The final word in a bounded
+ * input range is assembled from its remaining bytes, so decoding never depends on bytes from the next page or
+ * column chunk.
  */
 final class RleReader
 {
@@ -415,7 +415,7 @@ final class RleReader
             }
         }
         for (; i < n; i++) {
-            long word = data.get(LE_LONG, cursor >>> 3);
+            long word = readWord(data, cursor >>> 3, segmentLimit);
             out[base + i] = (int) ((word >>> ((int) cursor & 7)) & mask);
             cursor += width;
         }
@@ -489,7 +489,7 @@ final class RleReader
         while (remaining > 0) {
             int shift = (int) cursor & 7;
             int take = Math.min(Long.SIZE - shift, remaining);
-            long word = segment.get(LE_LONG, cursor >>> 3);
+            long word = readWord(segment, cursor >>> 3, segmentLimit);
             long mask = take == Long.SIZE ? -1L : (1L << take) - 1;
             if (((word >>> shift) & mask) != mask) {
                 bitCursor = cursor;
@@ -540,7 +540,7 @@ final class RleReader
                 int p = produced;
                 int end = produced + n;
                 while (p < end) {
-                    long word = data.get(LE_LONG, cursor >>> 3);
+                    long word = readWord(data, cursor >>> 3, segmentLimit);
                     int shift = (int) cursor & 7;
                     int take = Math.min(64 - shift, end - p);
                     for (int k = 0; k < take; k++) {
@@ -589,7 +589,7 @@ final class RleReader
                 int end = s;
                 int produced = 0;
                 while (produced < end) {
-                    long word = segment.get(LE_LONG, cursor >>> 3);
+                    long word = readWord(segment, cursor >>> 3, segmentLimit);
                     int shift = (int) cursor & 7;
                     int take = Math.min(64 - shift, end - produced);
                     long bits = (word >>> shift) & ((take == 64) ? -1L : ((1L << take) - 1));

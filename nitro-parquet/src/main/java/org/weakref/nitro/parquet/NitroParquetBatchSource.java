@@ -46,6 +46,7 @@ import org.weakref.nitro.data.VectorBatchScope;
 import org.weakref.nitro.data.VectorColumnGeneration;
 import org.weakref.nitro.data.VectorSourceBatch;
 
+import java.io.IOException;
 import java.lang.foreign.Arena;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -61,11 +62,9 @@ import static java.lang.Math.toIntExact;
 import static java.util.Objects.requireNonNull;
 
 /**
- * A Nitro-native Parquet scan operator built on {@link org.weakref.nitro.parquet} — mmap input, full
- * buffer reuse, and decoding straight into Nitro's flat value arrays (no per-position bridge, no
- * intermediate copies).
- *
- * <p>First-slice scope: flat INT32/INT64 columns; produces {@code all()}-mask batches of up to 512 rows.
+ * A Parquet batch source that decodes compressed column chunks directly into Nitro vectors. Inputs come from
+ * connector-supplied range I/O or an optional local mapping; deferred columns do not fetch their chunks until they
+ * are consumed.
  */
 public final class NitroParquetBatchSource
         implements BatchSource
@@ -85,7 +84,68 @@ public final class NitroParquetBatchSource
         }
     }
 
-    private record Splits(List<Split> values)
+    /** Transfers ownership of {@code input} to the batch source. */
+    public record InputSplit(ParquetInput input, long start, long length)
+    {
+        public InputSplit
+        {
+            requireNonNull(input, "input is null");
+            checkArgument(start >= 0, "start is negative");
+            checkArgument(length >= 0, "length is negative");
+        }
+    }
+
+    private sealed interface SourceSplit
+            permits PathSourceSplit, InputSourceSplit
+    {
+        static SourceSplit path(Split split)
+        {
+            return new PathSourceSplit(split);
+        }
+
+        static SourceSplit input(InputSplit split)
+        {
+            return new InputSourceSplit(split);
+        }
+
+        String id();
+
+        long start();
+
+        long length();
+    }
+
+    private record PathSourceSplit(Path path, long start, long length)
+            implements SourceSplit
+    {
+        private PathSourceSplit(Split split)
+        {
+            this(split.path(), split.start(), split.length());
+        }
+
+        @Override
+        public String id()
+        {
+            return path.toAbsolutePath().normalize().toString();
+        }
+    }
+
+    private record InputSourceSplit(ParquetInput input, long start, long length)
+            implements SourceSplit
+    {
+        private InputSourceSplit(InputSplit split)
+        {
+            this(split.input(), split.start(), split.length());
+        }
+
+        @Override
+        public String id()
+        {
+            return input.id();
+        }
+    }
+
+    private record Splits(List<SourceSplit> values)
     {
         private Splits
         {
@@ -292,7 +352,7 @@ public final class NitroParquetBatchSource
             List<Path> paths,
             Schema schema)
     {
-        this(resources, allocator, new Splits(paths.stream().map(Split::wholeFile).toList()), schema);
+        this(resources, allocator, new Splits(paths.stream().map(Split::wholeFile).map(SourceSplit::path).toList()), schema);
     }
 
     public static NitroParquetBatchSource forSplits(
@@ -311,7 +371,7 @@ public final class NitroParquetBatchSource
             Schema schema,
             ParquetColumnNameMatching columnNameMatching)
     {
-        return new NitroParquetBatchSource(resources, allocator, new Splits(splits), schema, columnNameMatching, null);
+        return new NitroParquetBatchSource(resources, allocator, new Splits(splits.stream().map(SourceSplit::path).toList()), schema, columnNameMatching, null);
     }
 
     public static NitroParquetBatchSource forSplitsByOrdinal(
@@ -324,10 +384,70 @@ public final class NitroParquetBatchSource
         return new NitroParquetBatchSource(
                 resources,
                 allocator,
-                new Splits(splits),
+                new Splits(splits.stream().map(SourceSplit::path).toList()),
                 schema,
                 ParquetColumnNameMatching.EXACT,
                 List.copyOf(sourceOrdinals));
+    }
+
+    public static NitroParquetBatchSource forInputs(
+            NitroParquetScanResources resources,
+            Allocator allocator,
+            List<InputSplit> splits,
+            Schema schema)
+    {
+        return forInputs(resources, allocator, splits, schema, ParquetColumnNameMatching.EXACT);
+    }
+
+    public static NitroParquetBatchSource forInputs(
+            NitroParquetScanResources resources,
+            Allocator allocator,
+            List<InputSplit> splits,
+            Schema schema,
+            ParquetColumnNameMatching columnNameMatching)
+    {
+        return forInputs(resources, allocator, splits, schema, columnNameMatching, null);
+    }
+
+    public static NitroParquetBatchSource forInputsByOrdinal(
+            NitroParquetScanResources resources,
+            Allocator allocator,
+            List<InputSplit> splits,
+            Schema schema,
+            List<Integer> sourceOrdinals)
+    {
+        return forInputs(resources, allocator, splits, schema, ParquetColumnNameMatching.EXACT, List.copyOf(sourceOrdinals));
+    }
+
+    private static NitroParquetBatchSource forInputs(
+            NitroParquetScanResources resources,
+            Allocator allocator,
+            List<InputSplit> splits,
+            Schema schema,
+            ParquetColumnNameMatching columnNameMatching,
+            List<Integer> sourceOrdinals)
+    {
+        splits = List.copyOf(splits);
+        try {
+            return new NitroParquetBatchSource(
+                    resources,
+                    allocator,
+                    new Splits(splits.stream().map(SourceSplit::input).toList()),
+                    schema,
+                    columnNameMatching,
+                    sourceOrdinals);
+        }
+        catch (RuntimeException | Error failure) {
+            for (InputSplit split : splits) {
+                try {
+                    split.input().close();
+                }
+                catch (IOException closeFailure) {
+                    failure.addSuppressed(closeFailure);
+                }
+            }
+            throw failure;
+        }
     }
 
     private NitroParquetBatchSource(
@@ -374,7 +494,7 @@ public final class NitroParquetBatchSource
 
     private NitroParquetBatchSource(
             Allocator allocator,
-            List<Split> splits,
+            List<SourceSplit> splits,
             List<String> columns,
             Schema schema,
             ParquetColumnNameMatching columnNameMatching,
@@ -439,16 +559,22 @@ public final class NitroParquetBatchSource
         this.mappedFileLeases = new ParquetMappedFileCache.Lease[splits.size()];
         this.files = new ParquetFile[splits.size()];
         for (int file = 0; file < splits.size(); file++) {
-            Path path = splits.get(file).path();
-            mappedFileLeases[file] = resources.acquireMappedFile(path);
-            if (mappedFileLeases[file] == null) {
-                if (arena == null) {
-                    arena = arenaPolicy.createArena();
+            SourceSplit split = splits.get(file);
+            switch (split) {
+                case InputSourceSplit inputSplit -> files[file] = ParquetFile.open(inputSplit.input());
+                case PathSourceSplit pathSplit -> {
+                    Path path = pathSplit.path();
+                    mappedFileLeases[file] = resources.acquireMappedFile(path);
+                    if (mappedFileLeases[file] == null) {
+                        if (arena == null) {
+                            arena = arenaPolicy.createArena();
+                        }
+                        files[file] = ParquetFile.open(path, arena, metadataCache);
+                    }
+                    else {
+                        files[file] = mappedFileLeases[file].file();
+                    }
                 }
-                files[file] = ParquetFile.open(path, arena, metadataCache);
-            }
-            else {
-                files[file] = mappedFileLeases[file].file();
             }
         }
         int columnCount = columns.size();
@@ -498,20 +624,20 @@ public final class NitroParquetBatchSource
         List<Long> rowsByGroup = new ArrayList<>();
         for (int fileIndex = 0; fileIndex < files.length; fileIndex++) {
             ParquetFile file = files[fileIndex];
-            Split split = splits.get(fileIndex);
+            SourceSplit split = splits.get(fileIndex);
             List<RowGroup> rowGroups = file.rowGroups(split.start(), split.length());
             rowGroups.forEach(rowGroup -> rowsByGroup.add(rowGroup.num_rows));
             for (int c = 0; c < columnCount; c++) {
                 ParquetFile.Column column = resolveColumn(file, c, columns, columnNameMatching, sourceOrdinals);
                 DecompressedPageCache.Source source = decompressedPages == null
                         ? null
-                        : new DecompressedPageCache.Source(splits.get(fileIndex).path(), column.name());
+                        : new DecompressedPageCache.Source(splits.get(fileIndex).id(), column.name());
                 if (source != null) {
                     decompressedPages.register(source);
                 }
                 for (RowGroup rowGroup : rowGroups) {
                     var columnMetadata = file.columnChunk(rowGroup, column).meta_data;
-                    readers[c].addChunk(file.data(), columnMetadata, rowGroup.num_rows, source);
+                    readers[c].addChunk(file, columnMetadata, rowGroup.num_rows, source);
                 }
             }
             rows += rowGroups.stream()

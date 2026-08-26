@@ -16,6 +16,7 @@ package org.weakref.nitro.parquet;
 import org.junit.jupiter.api.Test;
 
 import java.lang.foreign.MemorySegment;
+import java.util.Arrays;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -120,6 +121,25 @@ class TestRleReader
             reader.read(actual, 0, actual.length);
             assertThat(actual).containsExactly(expected);
         }
+    }
+
+    @Test
+    void testBitPackedTailDoesNotRequireTrailingBytes()
+    {
+        int[] expected = {0, 1, 2, 3, 4, 5, 6, 7};
+        byte[] encoded = Arrays.copyOf(bitPackedRun(3, expected), 4);
+        RleReader reader = new RleReader(DEFAULT_POLICY);
+        reader.init(MemorySegment.ofArray(encoded), 0, 3);
+
+        int[] actual = new int[expected.length];
+        reader.read(actual, 0, actual.length);
+
+        assertThat(actual).containsExactly(expected);
+
+        byte[] definitions = {3, (byte) 0xFF};
+        RleReader definitionReader = new RleReader(DEFAULT_POLICY);
+        definitionReader.init(MemorySegment.ofArray(definitions), 0, 1);
+        assertThat(definitionReader.consumeIfAllOnes(8)).isTrue();
     }
 
     @Test

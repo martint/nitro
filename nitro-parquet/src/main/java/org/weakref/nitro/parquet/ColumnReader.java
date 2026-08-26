@@ -124,7 +124,111 @@ public final class ColumnReader
     // directly into its final array. Nullable pages retain the row-aligned page representation because their dense
     // value stream must still be scattered around null positions; selected readers retain their independent path.
 
-    private record Chunk(MemorySegment segment, ColumnMetaData metadata, long rowCount, DecompressedPageCache.Source source) {}
+    private static final class Chunk
+    {
+        private final ChunkInput input;
+        private final ColumnMetaData metadata;
+        private final long rowCount;
+        private final DecompressedPageCache.Source source;
+
+        private Chunk(MemorySegment segment, long baseOffset, ColumnMetaData metadata, long rowCount, DecompressedPageCache.Source source)
+        {
+            this.input = new SegmentChunkInput(segment, baseOffset);
+            this.metadata = requireNonNull(metadata, "metadata is null");
+            this.rowCount = rowCount;
+            this.source = source;
+        }
+
+        private Chunk(ParquetFile file, ColumnMetaData metadata, long rowCount, DecompressedPageCache.Source source)
+        {
+            this.metadata = requireNonNull(metadata, "metadata is null");
+            this.input = new FileChunkInput(file, physicalStart(metadata), metadata.total_compressed_size);
+            this.rowCount = rowCount;
+            this.source = source;
+        }
+
+        private MemorySegment segment()
+        {
+            return input.segment();
+        }
+
+        private long baseOffset()
+        {
+            return input.baseOffset();
+        }
+
+        private ColumnMetaData metadata()
+        {
+            return metadata;
+        }
+
+        private long rowCount()
+        {
+            return rowCount;
+        }
+
+        private DecompressedPageCache.Source source()
+        {
+            return source;
+        }
+    }
+
+    private sealed interface ChunkInput
+            permits SegmentChunkInput, FileChunkInput
+    {
+        MemorySegment segment();
+
+        long baseOffset();
+    }
+
+    private record SegmentChunkInput(MemorySegment segment, long baseOffset)
+            implements ChunkInput
+    {
+        private SegmentChunkInput
+        {
+            requireNonNull(segment, "segment is null");
+            if (baseOffset < 0) {
+                throw new IllegalArgumentException("baseOffset is negative");
+            }
+        }
+    }
+
+    private static final class FileChunkInput
+            implements ChunkInput
+    {
+        private final ParquetFile file;
+        private final long baseOffset;
+        private final long length;
+        private MemorySegment segment;
+
+        private FileChunkInput(ParquetFile file, long baseOffset, long length)
+        {
+            this.file = requireNonNull(file, "file is null");
+            if (baseOffset < 0) {
+                throw new IllegalArgumentException("baseOffset is negative");
+            }
+            if (length < 0) {
+                throw new IllegalArgumentException("length is negative");
+            }
+            this.baseOffset = baseOffset;
+            this.length = length;
+        }
+
+        @Override
+        public MemorySegment segment()
+        {
+            if (segment == null) {
+                segment = file.readRange(baseOffset, length);
+            }
+            return segment;
+        }
+
+        @Override
+        public long baseOffset()
+        {
+            return baseOffset;
+        }
+    }
 
     // Dictionary materialization is a pure gather (out[i] = dictionary[ids[i]]); a Vector-API gather (hardware
     // vpgather) measurably beats the scalar loop on the dict-heavy scans (q82 -3%, q24/q50 -1.6%, byte-identical).
@@ -253,6 +357,7 @@ public final class ColumnReader
     // chunk / page iteration
     private int chunkIndex = -1;
     private MemorySegment segment;
+    private long segmentBaseOffset;
     private long pagePosition;
     private long chunkEnd;
 
@@ -463,10 +568,24 @@ public final class ColumnReader
 
     public void addChunk(MemorySegment fileSegment, ColumnMetaData metadata, long rowCount, DecompressedPageCache.Source source)
     {
+        addChunk(fileSegment, 0, metadata, rowCount, source);
+    }
+
+    public void addChunk(MemorySegment fileSegment, long baseOffset, ColumnMetaData metadata, long rowCount, DecompressedPageCache.Source source)
+    {
         if (rowCount < 0) {
             throw new IllegalArgumentException("rowCount is negative");
         }
-        chunks.add(new Chunk(fileSegment, metadata, rowCount, source));
+        chunks.add(new Chunk(fileSegment, baseOffset, metadata, rowCount, source));
+        cachedDictionarySize = Integer.MIN_VALUE;
+    }
+
+    void addChunk(ParquetFile file, ColumnMetaData metadata, long rowCount, DecompressedPageCache.Source source)
+    {
+        if (rowCount < 0) {
+            throw new IllegalArgumentException("rowCount is negative");
+        }
+        chunks.add(new Chunk(file, metadata, rowCount, source));
         cachedDictionarySize = Integer.MIN_VALUE;
     }
 
@@ -512,9 +631,7 @@ public final class ColumnReader
                     arenaPolicy,
                     scratchArena);
         }
-        for (Chunk chunk : chunks) {
-            sibling.addChunk(chunk.segment(), chunk.metadata(), chunk.rowCount(), chunk.source());
-        }
+        sibling.chunks.addAll(chunks);
         return sibling;
     }
 
@@ -1315,8 +1432,9 @@ public final class ColumnReader
             }
             chunkIndex = nextChunk;
             segment = chunk.segment();
+            segmentBaseOffset = chunk.baseOffset();
             ColumnMetaData metadata = chunk.metadata();
-            long start = metadata.dictionary_page_offset > 0 ? metadata.dictionary_page_offset : metadata.data_page_offset;
+            long start = chunkStart(chunk);
             chunkEnd = start + metadata.total_compressed_size;
             pagePosition = chunkEnd;
             pageValueCount = 0;
@@ -3760,8 +3878,9 @@ public final class ColumnReader
         }
         Chunk chunk = chunks.get(chunkIndex);
         segment = chunk.segment();
+        segmentBaseOffset = chunk.baseOffset();
         ColumnMetaData metadata = chunk.metadata();
-        long start = metadata.dictionary_page_offset > 0 ? metadata.dictionary_page_offset : metadata.data_page_offset;
+        long start = chunkStart(chunk);
         pagePosition = start;
         chunkEnd = start + metadata.total_compressed_size;
         if (!materializationPolicy.reuseNumericDictionaryScratch()) {
@@ -3790,7 +3909,7 @@ public final class ColumnReader
         for (int index = 0; index < chunks.size(); index++) {
             Chunk chunk = chunks.get(index);
             ColumnMetaData metadata = chunk.metadata();
-            long start = metadata.dictionary_page_offset > 0 ? metadata.dictionary_page_offset : metadata.data_page_offset;
+            long start = chunkStart(chunk);
             long limit = start + metadata.total_compressed_size;
             readPageHeader(chunk.segment(), start, limit);
             if (parsedPageType == PageType.DICTIONARY_PAGE.getValue()) {
@@ -3831,7 +3950,7 @@ public final class ColumnReader
         int entries = 0;
         for (Chunk chunk : chunks) {
             ColumnMetaData metadata = chunk.metadata();
-            long start = metadata.dictionary_page_offset > 0 ? metadata.dictionary_page_offset : metadata.data_page_offset;
+            long start = chunkStart(chunk);
             long limit = start + metadata.total_compressed_size;
             readPageHeader(chunk.segment(), start, limit);
             if (parsedPageType != PageType.DICTIONARY_PAGE.getValue() || parsedValueCount > maxEntries - entries) {
@@ -3849,7 +3968,7 @@ public final class ColumnReader
         try (Arena inspectionArena = Arena.ofConfined()) {
             for (Chunk chunk : chunks) {
                 ColumnMetaData metadata = chunk.metadata();
-                long start = metadata.dictionary_page_offset > 0 ? metadata.dictionary_page_offset : metadata.data_page_offset;
+                long start = chunkStart(chunk);
                 long limit = start + metadata.total_compressed_size;
                 long bodyPosition = readPageHeader(chunk.segment(), start, limit);
                 MemorySegment body;
@@ -3924,14 +4043,14 @@ public final class ColumnReader
         if (!isOnlyDictionaryEncoded(metadata)) {
             return true;
         }
-        long start = metadata.dictionary_page_offset > 0 ? metadata.dictionary_page_offset : metadata.data_page_offset;
+        long start = chunkStart(chunk);
         long limit = start + metadata.total_compressed_size;
         long bodyPosition = readPageHeader(chunk.segment(), start, limit);
         if (parsedPageType != PageType.DICTIONARY_PAGE.getValue() || parsedValueCount > maxDictionaryValues) {
             return true;
         }
         MemorySegment body = decompress(
-                chunk.segment(),
+                chunk,
                 bodyPosition,
                 parsedCompressedSize,
                 parsedUncompressedSize,
@@ -3971,6 +4090,24 @@ public final class ColumnReader
                                 encoding == Encoding.BIT_PACKED);
     }
 
+    private static long chunkStart(Chunk chunk)
+    {
+        ColumnMetaData metadata = chunk.metadata();
+        long physicalStart = physicalStart(metadata);
+        long localStart = physicalStart - chunk.baseOffset();
+        if (localStart < 0 || metadata.total_compressed_size > chunk.segment().byteSize() - localStart) {
+            throw new IllegalArgumentException("Column chunk is outside its input range");
+        }
+        return localStart;
+    }
+
+    private static long physicalStart(ColumnMetaData metadata)
+    {
+        return metadata.dictionary_page_offset > 0
+                ? metadata.dictionary_page_offset
+                : metadata.data_page_offset;
+    }
+
     private long numericStatistic(byte[] value)
     {
         ByteBuffer buffer = ByteBuffer.wrap(value).order(ByteOrder.LITTLE_ENDIAN);
@@ -3994,14 +4131,14 @@ public final class ColumnReader
         }
         for (Chunk chunk : chunks) {
             ColumnMetaData metadata = chunk.metadata();
-            long start = metadata.dictionary_page_offset > 0 ? metadata.dictionary_page_offset : metadata.data_page_offset;
+            long start = chunkStart(chunk);
             long limit = start + metadata.total_compressed_size;
             long bodyPosition = readPageHeader(chunk.segment(), start, limit);
             if (parsedPageType != PageType.DICTIONARY_PAGE.getValue()) {
                 return false;
             }
             MemorySegment body = decompress(
-                    chunk.segment(),
+                    chunk,
                     bodyPosition,
                     parsedCompressedSize,
                     parsedUncompressedSize,
@@ -4105,6 +4242,33 @@ public final class ColumnReader
      */
     private MemorySegment decompress(MemorySegment fileSegment, long offset, int compressedSize, int uncompressedSize, CompressionCodec codec)
     {
+        DecompressedPageCache.Source source = chunkIndex >= 0 && chunkIndex < chunks.size()
+                ? chunks.get(chunkIndex).source()
+                : null;
+        return decompress(fileSegment, offset, segmentBaseOffset + offset, source, compressedSize, uncompressedSize, codec);
+    }
+
+    private MemorySegment decompress(Chunk chunk, long offset, int compressedSize, int uncompressedSize, CompressionCodec codec)
+    {
+        return decompress(
+                chunk.segment(),
+                offset,
+                chunk.baseOffset() + offset,
+                chunk.source(),
+                compressedSize,
+                uncompressedSize,
+                codec);
+    }
+
+    private MemorySegment decompress(
+            MemorySegment fileSegment,
+            long offset,
+            long logicalOffset,
+            DecompressedPageCache.Source logicalSource,
+            int compressedSize,
+            int uncompressedSize,
+            CompressionCodec codec)
+    {
         // Source accounting must follow pages the decoder actually consumes. Summing every selected column chunk
         // overstates physical work when late materialization or selection pushdown leaves payload pages untouched.
         // Count before the cache lookup as a cache hit still represents a page consumed by this source; the metric
@@ -4121,11 +4285,8 @@ public final class ColumnReader
         if (codec != CompressionCodec.SNAPPY) {
             throw new IllegalStateException("Unsupported codec for NitroParquet: " + codec);
         }
-        DecompressedPageCache.Source logicalSource = chunkIndex >= 0 && chunkIndex < chunks.size()
-                ? chunks.get(chunkIndex).source()
-                : null;
         if (decompressedPages != null && logicalSource != null) {
-            MemorySegment cached = decompressedPages.lookup(logicalSource, offset, compressedSize, uncompressedSize);
+            MemorySegment cached = decompressedPages.lookup(logicalSource, logicalOffset, compressedSize, uncompressedSize);
             if (cached != null) {
                 return cached;
             }
@@ -4140,7 +4301,7 @@ public final class ColumnReader
         MemorySegment compressedSource = fileSegment.asSlice(offset, compressedSize);
         if (decompressedPages != null && logicalSource != null) {
             DecompressedPageCache.Reservation reservation = decompressedPages.reserve(
-                    logicalSource, offset, compressedSize, uncompressedSize, SLACK);
+                    logicalSource, logicalOffset, compressedSize, uncompressedSize, SLACK);
             if (reservation != null) {
                 MemorySegment cachedTarget = reservation.segment();
                 try {

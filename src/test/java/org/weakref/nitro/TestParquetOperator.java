@@ -16,6 +16,7 @@ package org.weakref.nitro;
 import org.apache.parquet.column.Encoding;
 import org.apache.parquet.example.data.Group;
 import org.apache.parquet.example.data.simple.SimpleGroupFactory;
+import org.apache.parquet.format.ColumnMetaData;
 import org.apache.parquet.hadoop.ParquetFileReader;
 import org.apache.parquet.hadoop.ParquetWriter;
 import org.apache.parquet.hadoop.example.ExampleParquetWriter;
@@ -106,6 +107,7 @@ import org.weakref.nitro.parquet.ParquetFile;
 import org.weakref.nitro.parquet.ParquetFilterEvaluationPolicy;
 import org.weakref.nitro.parquet.ParquetFilterWindowPolicy;
 import org.weakref.nitro.parquet.ParquetFilteredPayloadPolicy;
+import org.weakref.nitro.parquet.ParquetInput;
 import org.weakref.nitro.parquet.ParquetLateMaterializationPolicy;
 import org.weakref.nitro.parquet.ParquetMaterializationPolicy;
 import org.weakref.nitro.parquet.ParquetNumericDecodeAdmissionPolicy;
@@ -120,6 +122,8 @@ import org.weakref.nitro.parquet.ParquetScanDiagnostics;
 import org.weakref.nitro.parquet.RleReaderPolicy;
 
 import java.io.IOException;
+import java.lang.foreign.MemorySegment;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -133,6 +137,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import static java.lang.Math.toIntExact;
 import static org.apache.parquet.schema.LogicalTypeAnnotation.mapType;
 import static org.apache.parquet.schema.LogicalTypeAnnotation.stringType;
 import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.BINARY;
@@ -144,6 +149,8 @@ import static org.weakref.nitro.OperatorAssertions.operator;
 
 public class TestParquetOperator
 {
+    private record Range(long offset, int length) {}
+
     private static NitroParquetScanResources executableRuntimeFilterResources()
     {
         return NitroParquetScanResources.createDefault(
@@ -331,6 +338,80 @@ public class TestParquetOperator
             assertThat(metrics.completedPositions()).hasValue(3);
             assertThat(source.poll()).isSameAs(SourcePoll.Finished.FINISHED);
         }
+    }
+
+    @Test
+    void testNitroParquetSourceReadsConnectorSuppliedRanges()
+            throws IOException
+    {
+        java.nio.file.Path file = writeParquetFile("nitro-range-input.parquet", true, List.of(
+                new ParquetRow(10, true, 100L),
+                new ParquetRow(20, true, 200L)));
+        byte[] bytes = Files.readAllBytes(file);
+        Range valuesRange;
+        Range deferredRange;
+        try (ParquetFile parquetFile = ParquetFile.open(file)) {
+            var rowGroup = parquetFile.rowGroups().getFirst();
+            var valuesMetadata = parquetFile.columnChunk(rowGroup, parquetFile.column("x")).meta_data;
+            var deferredMetadata = parquetFile.columnChunk(rowGroup, parquetFile.column("maybe")).meta_data;
+            valuesRange = new Range(columnChunkStart(valuesMetadata), toIntExact(valuesMetadata.total_compressed_size));
+            deferredRange = new Range(columnChunkStart(deferredMetadata), toIntExact(deferredMetadata.total_compressed_size));
+        }
+        List<Range> reads = new ArrayList<>();
+        AtomicBoolean closed = new AtomicBoolean();
+        ParquetInput input = new ParquetInput()
+        {
+            @Override
+            public String id()
+            {
+                return "test://nitro-range-input.parquet";
+            }
+
+            @Override
+            public long size()
+            {
+                return bytes.length;
+            }
+
+            @Override
+            public MemorySegment readRange(long offset, int length)
+            {
+                reads.add(new Range(offset, length));
+                return MemorySegment.ofArray(bytes).asSlice(offset, length);
+            }
+
+            @Override
+            public void close()
+            {
+                closed.set(true);
+            }
+        };
+        Schema schema = new Schema(List.of(
+                new Field("x", BIGINT, false),
+                new Field("maybe", BIGINT, true)));
+
+        try (AllocationResources allocationResources = AllocationResources.createDefault();
+                Allocator allocator = new Allocator(allocationResources);
+                NitroParquetBatchSource source = NitroParquetBatchSource.forInputs(
+                        NitroParquetScanResources.createDefault(),
+                        allocator,
+                        List.of(new NitroParquetBatchSource.InputSplit(input, 0, bytes.length)),
+                        schema)) {
+            SourcePoll.Ready ready = (SourcePoll.Ready) source.poll();
+            assertThat(((I64Vector) ready.batch().column(0).borrow(Stream.VALUES)).values())
+                    .startsWith(10L, 20L);
+            ready.batch().close();
+            assertThat(reads).noneMatch(range -> range.offset() == 0 && range.length() == bytes.length);
+            assertThat(reads).anyMatch(range -> range.offset() == bytes.length - 8 && range.length() == 8);
+            assertThat(reads).contains(valuesRange);
+            assertThat(reads).doesNotContain(deferredRange);
+        }
+        assertThat(closed).isTrue();
+    }
+
+    private static long columnChunkStart(ColumnMetaData metadata)
+    {
+        return metadata.dictionary_page_offset > 0 ? metadata.dictionary_page_offset : metadata.data_page_offset;
     }
 
     @Test
@@ -2191,10 +2272,10 @@ public class TestParquetOperator
             try (org.weakref.nitro.parquet.ColumnReader reader = new org.weakref.nitro.parquet.ColumnReader(
                     column.type(), column.optional(), column.typeLength(), column.decimal(), null, arrayPool, ParquetReaderPolicy.defaults())) {
                 for (org.apache.parquet.format.RowGroup rowGroup : firstFile.rowGroups()) {
-                    reader.addChunk(firstFile.data(), firstFile.columnChunk(rowGroup, column).meta_data, rowGroup.num_rows);
+                    reader.addChunk(firstFile.readRange(0, firstFile.size()), firstFile.columnChunk(rowGroup, column).meta_data, rowGroup.num_rows);
                 }
                 for (org.apache.parquet.format.RowGroup rowGroup : secondFile.rowGroups()) {
-                    reader.addChunk(secondFile.data(), secondFile.columnChunk(rowGroup, column).meta_data, rowGroup.num_rows);
+                    reader.addChunk(secondFile.readRange(0, secondFile.size()), secondFile.columnChunk(rowGroup, column).meta_data, rowGroup.num_rows);
                 }
 
                 reader.skip(3);
@@ -2227,10 +2308,10 @@ public class TestParquetOperator
             try (org.weakref.nitro.parquet.ColumnReader reader = new org.weakref.nitro.parquet.ColumnReader(
                     column.type(), column.optional(), column.typeLength(), column.decimal(), null, arrayPool, ParquetReaderPolicy.defaults())) {
                 for (org.apache.parquet.format.RowGroup rowGroup : firstFile.rowGroups()) {
-                    reader.addChunk(firstFile.data(), firstFile.columnChunk(rowGroup, column).meta_data, rowGroup.num_rows);
+                    reader.addChunk(firstFile.readRange(0, firstFile.size()), firstFile.columnChunk(rowGroup, column).meta_data, rowGroup.num_rows);
                 }
                 for (org.apache.parquet.format.RowGroup rowGroup : secondFile.rowGroups()) {
-                    reader.addChunk(secondFile.data(), secondFile.columnChunk(rowGroup, column).meta_data, rowGroup.num_rows);
+                    reader.addChunk(secondFile.readRange(0, secondFile.size()), secondFile.columnChunk(rowGroup, column).meta_data, rowGroup.num_rows);
                 }
 
                 long[] values = new long[7];
@@ -2353,7 +2434,7 @@ public class TestParquetOperator
                             ParquetDictionaryFilterPolicy.defaults(),
                             ParquetDecodeScratchPolicy.defaults()))) {
                 for (org.apache.parquet.format.RowGroup rowGroup : parquet.rowGroups()) {
-                    reader.addChunk(parquet.data(), parquet.columnChunk(rowGroup, column).meta_data, rowGroup.num_rows);
+                    reader.addChunk(parquet.readRange(0, parquet.size()), parquet.columnChunk(rowGroup, column).meta_data, rowGroup.num_rows);
                 }
 
                 int[] survivors = new int[100];
@@ -2392,7 +2473,7 @@ public class TestParquetOperator
             try (org.weakref.nitro.parquet.ColumnReader reader = new org.weakref.nitro.parquet.ColumnReader(
                     column.type(), column.optional(), column.typeLength(), column.decimal(), null, arrayPool, ParquetReaderPolicy.defaults())) {
                 for (org.apache.parquet.format.RowGroup rowGroup : parquet.rowGroups()) {
-                    reader.addChunk(parquet.data(), parquet.columnChunk(rowGroup, column).meta_data, rowGroup.num_rows);
+                    reader.addChunk(parquet.readRange(0, parquet.size()), parquet.columnChunk(rowGroup, column).meta_data, rowGroup.num_rows);
                 }
 
                 int[] survivors = {1, 2, 17, 63, 96, 97, 151, 199};
@@ -4447,7 +4528,7 @@ public class TestParquetOperator
         for (ParquetFile file : files) {
             ParquetFile.Column column = file.column(columnName);
             for (org.apache.parquet.format.RowGroup rowGroup : file.rowGroups()) {
-                reader.addChunk(file.data(), file.columnChunk(rowGroup, column).meta_data, rowGroup.num_rows);
+                reader.addChunk(file.readRange(0, file.size()), file.columnChunk(rowGroup, column).meta_data, rowGroup.num_rows);
             }
         }
         return reader;

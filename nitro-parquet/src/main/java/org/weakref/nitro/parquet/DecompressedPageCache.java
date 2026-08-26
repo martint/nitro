@@ -229,12 +229,17 @@ public final class DecompressedPageCache
         }
     }
 
-    public record Source(Path path, String column)
+    public record Source(String inputId, String column)
     {
         public Source
         {
-            path = requireNonNull(path, "path is null").toAbsolutePath().normalize();
+            inputId = requireNonNull(inputId, "inputId is null");
             column = requireNonNull(column, "column is null");
+        }
+
+        public Source(Path path, String column)
+        {
+            this(requireNonNull(path, "path is null").toAbsolutePath().normalize().toString(), column);
         }
     }
 

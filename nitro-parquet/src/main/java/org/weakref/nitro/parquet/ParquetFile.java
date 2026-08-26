@@ -28,9 +28,7 @@ import java.io.UncheckedIOException;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
-import java.nio.channels.FileChannel;
 import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -45,10 +43,8 @@ import static java.nio.ByteOrder.LITTLE_ENDIAN;
 import static java.util.Objects.requireNonNull;
 
 /**
- * A memory-mapped Parquet file. The whole file is mapped into a single off-heap {@link MemorySegment}
- * (zero I/O copy); the footer is parsed once via the parquet-format Thrift reader. Column-chunk page
- * bytes are then read as zero-copy slices of the mapping. Designed as the foundation of a Nitro-native
- * decoder: no per-page heap I/O buffers, no {@code Slice} allocation machinery.
+ * Metadata and bounded column-chunk access over a connector-supplied {@link ParquetInput}. Local callers may use a
+ * zero-copy mapping; object-store connectors can provide the same contract over their ordinary range-I/O layer.
  */
 public final class ParquetFile
         implements AutoCloseable
@@ -62,9 +58,7 @@ public final class ParquetFile
 
     private static final int MAGIC = 0x31524150; // "PAR1" little-endian
 
-    private final Arena arena;
-    private final boolean ownsArena;
-    private final MemorySegment data;
+    private final ParquetInput input;
     private final FileMetaData footer;
     private final List<Column> columns;
     private final Map<String, Integer> columnIndexByName;
@@ -120,38 +114,76 @@ public final class ParquetFile
     {
         try {
             BasicFileAttributes attributes = java.nio.file.Files.readAttributes(path, BasicFileAttributes.class);
-            // The caller selects confined or shared lifetime according to the execution boundary.
-            MemorySegment data;
-            long size;
-            try (FileChannel channel = FileChannel.open(path, StandardOpenOption.READ)) {
-                size = channel.size();
-                data = channel.map(FileChannel.MapMode.READ_ONLY, 0, size, arena);
-            }
+            ParquetInput input = MappedParquetInput.open(path, arena, ownsArena);
+            long size = input.size();
             if (size != attributes.size()) {
+                input.close();
                 throw new IOException("Parquet file size changed while opening: " + path);
             }
             Metadata metadata = metadataCache == null
-                    ? readMetadata(data, size)
-                    : metadataCache.get(path, size, attributes.lastModifiedTime(), () -> readMetadata(data, size));
-            return new ParquetFile(arena, ownsArena, data, size, metadata);
+                    ? readMetadata(input)
+                    : metadataCache.get(path, size, attributes.lastModifiedTime(), () -> readMetadata(input));
+            return new ParquetFile(input, metadata);
         }
         catch (IOException e) {
-            if (ownsArena) {
+            if (ownsArena && arena.scope().isAlive()) {
                 arena.close();
             }
             throw new UncheckedIOException("Unable to open Parquet file: " + path, e);
         }
+        catch (RuntimeException e) {
+            if (ownsArena && arena.scope().isAlive()) {
+                arena.close();
+            }
+            throw e;
+        }
     }
 
-    private static Metadata readMetadata(MemorySegment data, long size)
+    public static ParquetFile open(ParquetInput input)
+    {
+        input = requireNonNull(input, "input is null");
+        String inputId = requireNonNull(input.id(), "input id is null");
+        try {
+            return new ParquetFile(input, readMetadata(input));
+        }
+        catch (IOException e) {
+            closeAfterFailure(input, e);
+            throw new UncheckedIOException("Unable to open Parquet input: " + inputId, e);
+        }
+        catch (RuntimeException e) {
+            closeAfterFailure(input, e);
+            throw e;
+        }
+    }
+
+    private static void closeAfterFailure(ParquetInput input, Throwable failure)
+    {
+        try {
+            input.close();
+        }
+        catch (IOException closeFailure) {
+            failure.addSuppressed(closeFailure);
+        }
+    }
+
+    private static Metadata readMetadata(ParquetInput input)
             throws IOException
     {
-        if (size < 8 || data.get(LE_INT, size - 4) != MAGIC) {
+        long size = input.size();
+        if (size < 8) {
             throw new IOException("Not a Parquet file (bad magic)");
         }
-        int footerLength = data.get(LE_INT, size - 8);
+        MemorySegment tail = input.readRange(size - 8, 8);
+        if (tail.get(LE_INT, 4) != MAGIC) {
+            throw new IOException("Not a Parquet file (bad magic)");
+        }
+        int footerLength = tail.get(LE_INT, 0);
         long footerStart = size - 8 - footerLength;
-        try (InputStream in = new SegmentInputStream(data, footerStart, footerLength)) {
+        if (footerLength < 0 || footerStart < 0) {
+            throw new IOException("Invalid Parquet footer length: " + footerLength);
+        }
+        MemorySegment footerData = input.readRange(footerStart, footerLength);
+        try (InputStream in = new SegmentInputStream(footerData, 0, footerLength)) {
             FileMetaData footer = Util.readFileMetaData(in);
 
             // Flat schema: schema[0] is the root; schema[1..] are leaf columns in column-chunk order.
@@ -171,15 +203,9 @@ public final class ParquetFile
         }
     }
 
-    private ParquetFile(Arena arena, boolean ownsArena, MemorySegment data, long size, Metadata metadata)
-            throws IOException
+    private ParquetFile(ParquetInput input, Metadata metadata)
     {
-        this.arena = arena;
-        this.ownsArena = ownsArena;
-        this.data = data;
-        if (size < 8 || data.get(LE_INT, size - 4) != MAGIC) {
-            throw new IOException("Not a Parquet file (bad magic)");
-        }
+        this.input = requireNonNull(input, "input is null");
         this.footer = metadata.footer();
         this.columns = metadata.columns();
         this.columnIndexByName = metadata.columnIndexByName();
@@ -265,16 +291,43 @@ public final class ParquetFile
         return rowGroup.columns.get(column.leafIndex());
     }
 
-    public MemorySegment data()
+    public MemorySegment readRange(long offset, long length)
     {
-        return data;
+        if (offset < 0) {
+            throw new IllegalArgumentException("Parquet range offset is negative: " + offset);
+        }
+        if (length < 0) {
+            throw new IllegalArgumentException("Parquet range length is negative: " + length);
+        }
+        if (length > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("Parquet range is too large: " + length);
+        }
+        long size = input.size();
+        if (offset > size || length > size - offset) {
+            throw new IllegalArgumentException("Parquet range is outside the input: offset=" + offset + ", length=" + length + ", size=" + size);
+        }
+        try {
+            return input.readRange(offset, (int) length);
+        }
+        catch (IOException e) {
+            throw new UncheckedIOException("Unable to read Parquet range from " + input.id(), e);
+        }
+    }
+
+    public long size()
+    {
+        return input.size();
     }
 
     @Override
     public void close()
     {
-        if (ownsArena) {
-            arena.close();
+        String inputId = input.id();
+        try {
+            input.close();
+        }
+        catch (IOException e) {
+            throw new UncheckedIOException("Unable to close Parquet input: " + inputId, e);
         }
     }
 

@@ -170,7 +170,7 @@ public final class VerifyDfSkip
                         ParquetReaderPolicy.defaults());
             }
             for (var rowGroup : file.rowGroups()) {
-                reader.addChunk(file.data(), file.columnChunk(rowGroup, col).meta_data, rowGroup.num_rows);
+                reader.addChunk(file.readRange(0, file.size()), file.columnChunk(rowGroup, col).meta_data, rowGroup.num_rows);
             }
         }
         return reader;

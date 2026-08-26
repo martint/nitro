@@ -21,16 +21,22 @@ import org.apache.parquet.format.RowGroup;
 import org.apache.parquet.format.Statistics;
 import org.apache.parquet.format.Type;
 import org.junit.jupiter.api.Test;
+import org.weakref.nitro.core.type.Schema;
+import org.weakref.nitro.data.AllocationResources;
+import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.operator.DynamicFilter;
 
+import java.io.UncheckedIOException;
 import java.lang.foreign.MemorySegment;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class TestNitroParquetBatchSource
@@ -95,6 +101,48 @@ class TestNitroParquetBatchSource
             assertTrue(reader.chunkMayMatch(0, DynamicFilter.fromRange(0, 19, 30)));
             assertTrue(reader.chunkMayMatch(0, DynamicFilter.fromRange(0, 0, 10)));
         }
+    }
+
+    @Test
+    void testInputIsClosedWhenSourceConstructionFails()
+    {
+        AtomicBoolean closed = new AtomicBoolean();
+        ParquetInput input = new ParquetInput()
+        {
+            @Override
+            public String id()
+            {
+                return "test://invalid.parquet";
+            }
+
+            @Override
+            public long size()
+            {
+                return 8;
+            }
+
+            @Override
+            public MemorySegment readRange(long offset, int length)
+            {
+                return MemorySegment.ofArray(new byte[length]);
+            }
+
+            @Override
+            public void close()
+            {
+                closed.set(true);
+            }
+        };
+
+        try (AllocationResources allocationResources = AllocationResources.createDefault();
+                Allocator allocator = new Allocator(allocationResources)) {
+            assertThrows(UncheckedIOException.class, () -> NitroParquetBatchSource.forInputs(
+                    NitroParquetScanResources.createDefault(),
+                    allocator,
+                    List.of(new NitroParquetBatchSource.InputSplit(input, 0, 8)),
+                    Schema.unspecified(List.of("value"))));
+        }
+        assertTrue(closed.get());
     }
 
     private static boolean admits(int selected, int total, int scanColumns, int payloadColumns)
