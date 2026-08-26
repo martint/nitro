@@ -34,6 +34,7 @@ import org.weakref.nitro.data.MapVector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
+import org.weakref.nitro.data.StructVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorBatchScope;
 import org.weakref.nitro.data.VectorColumnGeneration;
@@ -281,6 +282,62 @@ final class NestedNitroParquetBatchSource
         }
     }
 
+    private static final class StructProjectedReader
+            implements ProjectedReader
+    {
+        private final NestedStructReader reader;
+        private final TypeBinding outputType;
+        private final boolean nullable;
+
+        private StructProjectedReader(ParquetSchema.Group struct, TypeBinding outputType, RleReaderPolicy rlePolicy)
+        {
+            this.reader = new NestedStructReader(struct, rlePolicy);
+            this.outputType = requireNonNull(outputType, "outputType is null");
+            this.nullable = struct.repetition() != org.apache.parquet.format.FieldRepetitionType.REQUIRED;
+        }
+
+        @Override
+        public void addRowGroup(ParquetFile file, RowGroup rowGroup)
+        {
+            reader.addRowGroup(file, rowGroup);
+        }
+
+        @Override
+        public Streams read(Allocator allocator, Allocator.Context context, int rowCount, Mask mask)
+        {
+            Streams streams = reader.read(allocator, context, rowCount, mask);
+            if (!outputType.supportsVector(streams.values())) {
+                throw new UnsupportedParquetFeatureException(
+                        "Native Parquet struct representation does not match output type " + outputType.identity());
+            }
+            return streams;
+        }
+
+        @Override
+        public void skip(long rowCount)
+        {
+            reader.skip(rowCount);
+        }
+
+        @Override
+        public long consumedPageBytes()
+        {
+            return reader.consumedPageBytes();
+        }
+
+        @Override
+        public Set<Stream> streams()
+        {
+            return nullable ? Set.of(Stream.VALUES, Stream.NULLS) : Set.of(Stream.VALUES);
+        }
+
+        @Override
+        public void close()
+        {
+            reader.close();
+        }
+    }
+
     private final NitroParquetScanResources resources;
     private final Allocator allocator;
     private final Schema schema;
@@ -372,6 +429,8 @@ final class NestedNitroParquetBatchSource
                 }
                 yield new ArrayProjectedReader(group, outputType, resources.readerPolicy().rle());
             }
+            case ParquetSchema.Group group when outputType.supportedVectorTypes().contains(StructVector.class) ->
+                    new StructProjectedReader(group, outputType, resources.readerPolicy().rle());
             case ParquetSchema.Group group -> throw new UnsupportedParquetFeatureException(
                     "Native Nitro Parquet reader does not support nested field '" + group.name() + "' with this logical layout");
         };

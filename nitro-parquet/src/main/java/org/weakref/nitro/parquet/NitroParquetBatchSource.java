@@ -43,6 +43,7 @@ import org.weakref.nitro.data.MapVector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Stream;
+import org.weakref.nitro.data.StructVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorBatchScope;
 import org.weakref.nitro.data.VectorColumnGeneration;
@@ -433,7 +434,9 @@ public final class NitroParquetBatchSource
         try {
             if (schema.fields().stream().anyMatch(field -> {
                 Set<Class<? extends Vector>> vectors = field.type().supportedVectorTypes();
-                return vectors.contains(MapVector.class) || vectors.contains(ArrayVector.class);
+                return vectors.contains(MapVector.class) ||
+                        vectors.contains(ArrayVector.class) ||
+                        vectors.contains(StructVector.class);
             })) {
                 return new NestedNitroParquetBatchSource(
                         resources,

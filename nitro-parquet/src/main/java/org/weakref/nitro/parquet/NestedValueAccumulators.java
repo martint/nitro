@@ -21,6 +21,11 @@ final class NestedValueAccumulators
     static NestedValueAccumulator create(ParquetSchema.Primitive leaf)
     {
         boolean nullable = leaf.repetition() == org.apache.parquet.format.FieldRepetitionType.OPTIONAL;
+        return create(leaf, nullable);
+    }
+
+    static NestedValueAccumulator create(ParquetSchema.Primitive leaf, boolean nullable)
+    {
         return switch (leaf.type()) {
             case INT32 -> new LongNestedValueAccumulator(true, nullable);
             case INT64 -> new LongNestedValueAccumulator(false, nullable);

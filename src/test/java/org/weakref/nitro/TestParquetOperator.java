@@ -188,6 +188,32 @@ public class TestParquetOperator
             return Set.of(ArrayVector.class);
         }
     };
+    private static final TypeBinding BIGINT_VARCHAR_ROW = new TypeBinding()
+    {
+        @Override
+        public TypeIdentity identity()
+        {
+            return new TypeIdentity("testing:row(id bigint,name varchar)");
+        }
+
+        @Override
+        public Class<?> carrierType()
+        {
+            return Row.class;
+        }
+
+        @Override
+        public TypeOperators operators()
+        {
+            return TypeOperators.UNSPECIFIED;
+        }
+
+        @Override
+        public Set<Class<? extends org.weakref.nitro.data.Vector>> supportedVectorTypes()
+        {
+            return Set.of(StructVector.class);
+        }
+    };
     private static final TypeBinding VARCHAR_BIGINT_MAP = new TypeBinding()
     {
         @Override
@@ -610,6 +636,59 @@ public class TestParquetOperator
             assertThat(arrays.offsets()).containsExactly(0, 3, 3, 4);
             assertThat(values.values()).containsExactly(10, 0, 20, 30);
             assertThat(nulls.values()).containsExactly(false, true, false, false);
+        }
+    }
+
+    @Test
+    void testNitroParquetSourceReadsOptionalStructNatively()
+            throws IOException
+    {
+        java.nio.file.Path file = writeOptionalSimpleStructParquetFile("native-struct.parquet");
+        byte[] bytes = Files.readAllBytes(file);
+        ParquetInput input = new ParquetInput()
+        {
+            @Override
+            public String id()
+            {
+                return "native-struct";
+            }
+
+            @Override
+            public long size()
+            {
+                return bytes.length;
+            }
+
+            @Override
+            public ParquetInputRange readRange(long offset, int length)
+            {
+                return ParquetInputRange.retained(MemorySegment.ofArray(bytes).asSlice(offset, length));
+            }
+
+            @Override
+            public void close() {}
+        };
+        Schema schema = new Schema(List.of(new Field("person", BIGINT_VARCHAR_ROW, true)));
+
+        try (NitroParquetScanResources resources = NitroParquetScanResources.createDefault();
+                AllocationResources allocationResources = AllocationResources.createDefault();
+                Allocator allocator = new Allocator(allocationResources);
+                BatchSource source = NitroParquetBatchSource.forInputs(
+                        resources,
+                        allocator,
+                        List.of(new NitroParquetBatchSource.InputSplit(input, 0, bytes.length)),
+                        schema);
+                var batch = ((SourcePoll.Ready) source.poll()).batch()) {
+            StructVector rows = (StructVector) batch.column(0).borrow(Stream.VALUES);
+            BooleanVector rowNulls = (BooleanVector) batch.column(0).borrow(Stream.NULLS);
+            I64Vector ids = (I64Vector) rows.fieldValues("id");
+            BinaryVector names = (BinaryVector) rows.fieldValues("name");
+
+            assertThat(rowNulls.values()).containsExactly(false, true, false);
+            assertThat(ids.values()).containsExactly(11, 0, 12);
+            assertThat(utf8(names, 0)).isEqualTo("alice");
+            assertThat(((BooleanVector) rows.field("name").get(Stream.NULLS)).values())
+                    .containsExactly(false, true, true);
         }
     }
 
@@ -5089,6 +5168,33 @@ public class TestParquetOperator
                 }
                 writer.write(group);
             }
+        }
+        return file;
+    }
+
+    private java.nio.file.Path writeOptionalSimpleStructParquetFile(String name)
+            throws IOException
+    {
+        java.nio.file.Path file = tempDirectory.resolve(name);
+        MessageType schema = Types.buildMessage()
+                .optionalGroup()
+                    .required(INT64).named("id")
+                    .optional(BINARY).as(stringType()).named("name")
+                .named("person")
+                .named("nitro_optional_simple_struct_test");
+
+        SimpleGroupFactory groups = new SimpleGroupFactory(schema);
+        try (ParquetWriter<Group> writer = ExampleParquetWriter.builder(new LocalOutputFile(file))
+                .withType(schema)
+                .withDictionaryEncoding(true)
+                .build()) {
+            Group first = groups.newGroup();
+            first.addGroup("person").append("id", 11L).append("name", "alice");
+            writer.write(first);
+            writer.write(groups.newGroup());
+            Group third = groups.newGroup();
+            third.addGroup("person").append("id", 12L);
+            writer.write(third);
         }
         return file;
     }
