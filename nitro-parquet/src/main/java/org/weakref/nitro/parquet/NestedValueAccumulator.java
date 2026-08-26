@@ -43,13 +43,41 @@ interface NestedValueAccumulator
             int eventCount)
     {
         int end = eventOffset + eventCount;
+        if (dictionaryIds == null) {
+            int runOrdinal = -1;
+            int runCount = 0;
+            for (int event = eventOffset; event < end; event++) {
+                int ordinal = valueOrdinals[event];
+                if (ordinal >= 0 && (runCount == 0 || ordinal == runOrdinal + runCount)) {
+                    if (runCount == 0) {
+                        runOrdinal = ordinal;
+                    }
+                    runCount++;
+                    continue;
+                }
+                if (runCount != 0) {
+                    appendPlainRun(decoder, runOrdinal, runCount);
+                    runCount = 0;
+                }
+                if (ordinal < 0) {
+                    appendNull();
+                }
+                else {
+                    append(decoder, ordinal, -1);
+                }
+            }
+            if (runCount != 0) {
+                appendPlainRun(decoder, runOrdinal, runCount);
+            }
+            return;
+        }
         for (int event = eventOffset; event < end; event++) {
             int ordinal = valueOrdinals[event];
             if (ordinal < 0) {
                 appendNull();
             }
             else {
-                append(decoder, ordinal, dictionaryIds == null ? -1 : dictionaryIds[ordinal]);
+                append(decoder, ordinal, dictionaryIds[ordinal]);
             }
         }
     }
