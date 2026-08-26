@@ -158,6 +158,28 @@ final class NestedMapReader
         return mapNulls == null ? Streams.ofValues(maps) : Streams.ofValuesAndNulls(maps, mapNulls);
     }
 
+    void skip(long rowCount)
+    {
+        if (rowCount < 0) {
+            throw new IllegalArgumentException("rowCount is negative");
+        }
+        ensurePositioned();
+        for (long row = 0; row < rowCount; row++) {
+            if (exhausted) {
+                throw new IllegalArgumentException("Nested MAP event stream ended before skipped row " + row);
+            }
+            requireAlignedEvents();
+            if (keyReader.repetitionLevel() != 0) {
+                throw new IllegalArgumentException("Nested MAP row starts with nonzero repetition level");
+            }
+            do {
+                requireAlignedEvents();
+                advanceTogether();
+            }
+            while (!exhausted && keyReader.repetitionLevel() != 0);
+        }
+    }
+
     private void ensurePositioned()
     {
         if (!positioned) {

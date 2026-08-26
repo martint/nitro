@@ -30,6 +30,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.weakref.nitro.clickbench.ClickBenchHitsSupport;
 import org.weakref.nitro.core.function.VersionedLongPredicate;
+import org.weakref.nitro.core.source.BatchSource;
 import org.weakref.nitro.core.source.DomainCapability;
 import org.weakref.nitro.core.source.LongDomainCapability;
 import org.weakref.nitro.core.source.RuntimeFilter;
@@ -161,6 +162,32 @@ public class TestParquetOperator
 
     private static final TypeBinding BIGINT = new TestingTypeBinding(new TypeIdentity("testing:bigint"), long.class);
     private static final TypeBinding VARCHAR = new TestingTypeBinding(new TypeIdentity("testing:varchar"), byte[].class);
+    private static final TypeBinding VARCHAR_BIGINT_MAP = new TypeBinding()
+    {
+        @Override
+        public TypeIdentity identity()
+        {
+            return new TypeIdentity("testing:map(varchar,bigint)");
+        }
+
+        @Override
+        public Class<?> carrierType()
+        {
+            return Map.class;
+        }
+
+        @Override
+        public TypeOperators operators()
+        {
+            return TypeOperators.UNSPECIFIED;
+        }
+
+        @Override
+        public Set<Class<? extends org.weakref.nitro.data.Vector>> supportedVectorTypes()
+        {
+            return Set.of(MapVector.class);
+        }
+    };
     private static final ParquetScanBatchPolicy LEGACY_PARQUET_SCAN_BATCH_POLICY = new ParquetScanBatchPolicy(512);
     private static final ParquetPageNavigationPolicy GENERIC_PAGE_NAVIGATION =
             new ParquetPageNavigationPolicy(false, 0, 101, Integer.MAX_VALUE, false, 0, Integer.MAX_VALUE, false);
@@ -397,7 +424,7 @@ public class TestParquetOperator
 
         try (AllocationResources allocationResources = AllocationResources.createDefault();
                 Allocator allocator = new Allocator(allocationResources);
-                NitroParquetBatchSource source = NitroParquetBatchSource.forInputs(
+                BatchSource source = NitroParquetBatchSource.forInputs(
                         NitroParquetScanResources.createDefault(),
                         allocator,
                         List.of(new NitroParquetBatchSource.InputSplit(input, 0, bytes.length)),
@@ -414,6 +441,66 @@ public class TestParquetOperator
         }
         assertThat(closed).isTrue();
         assertThat(released).containsExactlyInAnyOrderElementsOf(reads);
+    }
+
+    @Test
+    void testNativeNestedMapSourceHonorsSelectionBeforeMaterialization()
+            throws IOException
+    {
+        java.nio.file.Path file = writeOptionalMapParquetFile("native-map.parquet", List.of(
+                new MapParquetRow(null),
+                new MapParquetRow(Map.of()),
+                new MapParquetRow(orderedMap("alpha", 1L, "beta", null)),
+                new MapParquetRow(orderedMap("gamma", 3L))));
+        byte[] bytes = Files.readAllBytes(file);
+        ParquetInput input = new ParquetInput()
+        {
+            @Override
+            public String id()
+            {
+                return "native-map";
+            }
+
+            @Override
+            public long size()
+            {
+                return bytes.length;
+            }
+
+            @Override
+            public ParquetInputRange readRange(long offset, int length)
+            {
+                return ParquetInputRange.retained(MemorySegment.ofArray(bytes).asSlice(offset, length));
+            }
+
+            @Override
+            public void close() {}
+        };
+        Schema schema = new Schema(List.of(new Field("items", VARCHAR_BIGINT_MAP, true)));
+
+        try (NitroParquetScanResources resources = NitroParquetScanResources.createDefault();
+                AllocationResources allocationResources = AllocationResources.createDefault();
+                Allocator allocator = new Allocator(allocationResources);
+                BatchSource source = NitroParquetBatchSource.forInputs(
+                        resources,
+                        allocator,
+                        List.of(new NitroParquetBatchSource.InputSplit(input, 0, bytes.length)),
+                        schema)) {
+            try (var batch = ((SourcePoll.Ready) source.poll()).batch()) {
+                batch.select(new org.weakref.nitro.data.MaskSelection(Mask.sparse(new int[] {2}, 4)));
+                MapVector maps = (MapVector) batch.column(0).borrow(Stream.VALUES);
+                BinaryVector keys = (BinaryVector) maps.keyValues();
+                I64Vector values = (I64Vector) maps.valueValues();
+                BooleanVector valueNulls = (BooleanVector) maps.valueStreamOrNull(Stream.NULLS);
+
+                assertThat(maps.offsets()).containsExactly(0, 0, 0, 2, 2);
+                assertThat(utf8(keys, 0)).isEqualTo("alpha");
+                assertThat(utf8(keys, 1)).isEqualTo("beta");
+                assertThat(values.values()).containsExactly(1L, 0L);
+                assertThat(valueNulls.values()).containsExactly(false, true);
+            }
+            assertThat(source.poll()).isSameAs(SourcePoll.Finished.FINISHED);
+        }
     }
 
     private static long columnChunkStart(ColumnMetaData metadata)

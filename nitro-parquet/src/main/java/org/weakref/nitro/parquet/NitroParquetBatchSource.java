@@ -390,7 +390,7 @@ public final class NitroParquetBatchSource
                 List.copyOf(sourceOrdinals));
     }
 
-    public static NitroParquetBatchSource forInputs(
+    public static BatchSource forInputs(
             NitroParquetScanResources resources,
             Allocator allocator,
             List<InputSplit> splits,
@@ -399,7 +399,7 @@ public final class NitroParquetBatchSource
         return forInputs(resources, allocator, splits, schema, ParquetColumnNameMatching.EXACT);
     }
 
-    public static NitroParquetBatchSource forInputs(
+    public static BatchSource forInputs(
             NitroParquetScanResources resources,
             Allocator allocator,
             List<InputSplit> splits,
@@ -409,7 +409,7 @@ public final class NitroParquetBatchSource
         return forInputs(resources, allocator, splits, schema, columnNameMatching, null);
     }
 
-    public static NitroParquetBatchSource forInputsByOrdinal(
+    public static BatchSource forInputsByOrdinal(
             NitroParquetScanResources resources,
             Allocator allocator,
             List<InputSplit> splits,
@@ -419,7 +419,7 @@ public final class NitroParquetBatchSource
         return forInputs(resources, allocator, splits, schema, ParquetColumnNameMatching.EXACT, List.copyOf(sourceOrdinals));
     }
 
-    private static NitroParquetBatchSource forInputs(
+    private static BatchSource forInputs(
             NitroParquetScanResources resources,
             Allocator allocator,
             List<InputSplit> splits,
@@ -429,6 +429,16 @@ public final class NitroParquetBatchSource
     {
         splits = List.copyOf(splits);
         try {
+            if (schema.fields().stream()
+                    .anyMatch(field -> field.type().supportedVectorTypes().contains(org.weakref.nitro.data.MapVector.class))) {
+                return new NestedNitroParquetBatchSource(
+                        resources,
+                        allocator,
+                        splits,
+                        schema,
+                        columnNameMatching,
+                        sourceOrdinals);
+            }
             return new NitroParquetBatchSource(
                     resources,
                     allocator,

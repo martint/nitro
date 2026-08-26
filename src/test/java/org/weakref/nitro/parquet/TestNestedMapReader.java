@@ -76,6 +76,21 @@ class TestNestedMapReader
         }
     }
 
+    @Test
+    void testSkipAdvancesWithoutMaterializingEntries()
+    {
+        try (Allocator allocator = new Allocator(EngineResources.createDefault());
+                NestedMapReader reader = reader()) {
+            reader.skip(3);
+            Streams streams = reader.read(allocator, new Allocator.Context("test"), 1, Mask.all(1));
+            MapVector maps = (MapVector) streams.values();
+
+            assertThat(maps.offsets()).containsExactly(0, 1);
+            assertThat(((I64Vector) maps.keyValues()).values()).containsExactly(3);
+            assertThat(value((BinaryVector) maps.valueValues(), 0)).isEqualTo("three");
+        }
+    }
+
     private static NestedMapReader reader()
     {
         ParquetSchema.Primitive key = new ParquetSchema.Primitive(
