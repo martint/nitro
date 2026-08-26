@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.parquet;
 
+import jdk.incubator.vector.IntVector;
 import org.apache.parquet.format.Encoding;
 import org.apache.parquet.format.Type;
 import org.junit.jupiter.api.Test;
@@ -189,6 +190,30 @@ class TestNestedPageDecoder
         assertThat(decoder.hasValue(2)).isTrue();
         assertThat(binary(decoder, values, 0)).isEqualTo("one");
         assertThat(binary(decoder, values, 2)).isEqualTo("two");
+    }
+
+    @Test
+    void testRejectsDictionaryIdOutsideDictionaryInVectorAndTailLanes()
+    {
+        int vectorLength = IntVector.SPECIES_PREFERRED.length();
+        for (int invalidPosition : new int[] {vectorLength - 1, vectorLength}) {
+            int[] definitions = new int[vectorLength + 1];
+            int[] ids = new int[definitions.length];
+            Arrays.fill(definitions, 2);
+            ids[invalidPosition] = 2;
+
+            NestedPageDecoder decoder = new NestedPageDecoder(
+                    1,
+                    2,
+                    RleReaderPolicy.defaults(),
+                    new PrimitiveArrayPool(0, 0));
+            LongPhysicalValueDecoder values = new LongPhysicalValueDecoder(Type.INT64, new PrimitiveArrayPool(0, 0));
+            values.decodeDictionary(longs(10, 20), 2, Encoding.PLAIN);
+
+            assertThatThrownBy(() -> decodeDictionaryPage(decoder, values, new int[definitions.length], 1, definitions, 2, ids, 2))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessage("Nested Parquet dictionary id is outside dictionary: 2");
+        }
     }
 
     private static void decodeDictionaryPage(

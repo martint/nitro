@@ -13,6 +13,8 @@
  */
 package org.weakref.nitro.parquet;
 
+import jdk.incubator.vector.IntVector;
+import jdk.incubator.vector.VectorOperators;
 import org.apache.parquet.format.Encoding;
 import org.weakref.nitro.data.PrimitiveArrayPool;
 
@@ -88,11 +90,7 @@ final class NestedPageDecoder
             dictionaryIds = grow(dictionaryIds, physicalValueCount);
             dictionaryIdReader.init(body, offset, bitWidth);
             dictionaryIdReader.read(dictionaryIds, 0, physicalValueCount);
-            for (int index = 0; index < physicalValueCount; index++) {
-                if (dictionaryIds[index] < 0 || dictionaryIds[index] >= dictionarySize) {
-                    throw new IllegalArgumentException("Nested Parquet dictionary id is outside dictionary: " + dictionaryIds[index]);
-                }
-            }
+            validateDictionaryIds(dictionaryIds, physicalValueCount, dictionarySize);
             return -1;
         }
         if (encoding != Encoding.PLAIN) {
@@ -288,6 +286,31 @@ final class NestedPageDecoder
     private static int bitWidth(int maximumLevel)
     {
         return Integer.SIZE - Integer.numberOfLeadingZeros(maximumLevel);
+    }
+
+    private static void validateDictionaryIds(int[] dictionaryIds, int count, int dictionarySize)
+    {
+        int vectorEnd = IntVector.SPECIES_PREFERRED.loopBound(count);
+        IntVector upperBound = IntVector.broadcast(IntVector.SPECIES_PREFERRED, dictionarySize);
+        IntVector zero = IntVector.zero(IntVector.SPECIES_PREFERRED);
+        for (int index = 0; index < vectorEnd; index += IntVector.SPECIES_PREFERRED.length()) {
+            IntVector ids = IntVector.fromArray(IntVector.SPECIES_PREFERRED, dictionaryIds, index);
+            if (ids.compare(VectorOperators.LT, zero)
+                    .or(ids.compare(VectorOperators.GE, upperBound))
+                    .anyTrue()) {
+                validateDictionaryIdsScalar(dictionaryIds, index, index + IntVector.SPECIES_PREFERRED.length(), dictionarySize);
+            }
+        }
+        validateDictionaryIdsScalar(dictionaryIds, vectorEnd, count, dictionarySize);
+    }
+
+    private static void validateDictionaryIdsScalar(int[] dictionaryIds, int start, int end, int dictionarySize)
+    {
+        for (int index = start; index < end; index++) {
+            if (dictionaryIds[index] < 0 || dictionaryIds[index] >= dictionarySize) {
+                throw new IllegalArgumentException("Nested Parquet dictionary id is outside dictionary: " + dictionaryIds[index]);
+            }
+        }
     }
 
     private int[] grow(int[] values, int required)
