@@ -99,9 +99,18 @@ final class NestedNitroParquetBatchSource
         {
             this.leaf = leaf;
             this.outputType = outputType;
+            if (leaf.maximumRepetitionLevel() != 0) {
+                throw new UnsupportedParquetFeatureException(
+                        "Direct primitive projection does not support repeated path '" + String.join(".", leaf.path()) + "'");
+            }
+            if (leaf.maximumDefinitionLevel() > 1) {
+                throw new UnsupportedParquetFeatureException(
+                        "Direct primitive projection does not support multiple nullable path components '" +
+                                String.join(".", leaf.path()) + "'");
+            }
             this.reader = new ColumnReader(
                     leaf.type(),
-                    leaf.repetition() != org.apache.parquet.format.FieldRepetitionType.REQUIRED,
+                    leaf.maximumDefinitionLevel() != 0,
                     leaf.typeLength(),
                     leaf.decimal(),
                     null,
@@ -157,7 +166,7 @@ final class NestedNitroParquetBatchSource
 
         private boolean nullable()
         {
-            return leaf.repetition() != org.apache.parquet.format.FieldRepetitionType.REQUIRED;
+            return leaf.maximumDefinitionLevel() != 0;
         }
 
         @Override
@@ -176,6 +185,102 @@ final class NestedNitroParquetBatchSource
         public Set<Stream> streams()
         {
             return nullable() ? Set.of(Stream.VALUES, Stream.NULLS) : Set.of(Stream.VALUES);
+        }
+
+        @Override
+        public void close()
+        {
+            reader.close();
+        }
+    }
+
+    private static final class NestedPrimitiveProjectedReader
+            implements ProjectedReader
+    {
+        private final ParquetSchema.Primitive leaf;
+        private final NestedLeafReader reader;
+        private final NestedValueAccumulator values;
+        private final TypeBinding outputType;
+        private final boolean nullable;
+
+        private NestedPrimitiveProjectedReader(ParquetSchema.Primitive leaf, TypeBinding outputType, RleReaderPolicy rlePolicy)
+        {
+            this.leaf = requireNonNull(leaf, "leaf is null");
+            if (leaf.maximumRepetitionLevel() != 0) {
+                throw new UnsupportedParquetFeatureException(
+                        "Direct primitive projection does not support repeated path '" + String.join(".", leaf.path()) + "'");
+            }
+            this.outputType = requireNonNull(outputType, "outputType is null");
+            this.nullable = leaf.maximumDefinitionLevel() != 0;
+            this.reader = new NestedLeafReader(leaf, rlePolicy);
+            this.values = NestedValueAccumulators.create(leaf, nullable);
+        }
+
+        @Override
+        public void addRowGroup(ParquetFile file, RowGroup rowGroup)
+        {
+            reader.addChunk(file, file.columnChunk(rowGroup, leaf).meta_data);
+        }
+
+        @Override
+        public Streams read(Allocator allocator, Allocator.Context context, int rowCount, Mask mask)
+        {
+            if (rowCount < 0 || mask.size() != rowCount) {
+                throw new IllegalArgumentException("Nested primitive row count and mask length differ: " + rowCount + " != " + mask.size());
+            }
+            values.reset();
+            int selectedIndex = 0;
+            int nextSelected = mask.all() ? 0 : (mask.count() == 0 ? rowCount : mask.position(0));
+            for (int row = 0; row < rowCount; row++) {
+                if (!reader.next()) {
+                    throw new IllegalArgumentException("Nested primitive event stream ended before requested rows");
+                }
+                if (reader.repetitionLevel() != 0) {
+                    throw new IllegalArgumentException("Projected primitive row starts with nonzero repetition level");
+                }
+                boolean selected = mask.all() || row == nextSelected;
+                if ((selected || !nullable) && reader.hasValue()) {
+                    values.append(reader.valueDecoder(), reader.valueOrdinal(), reader.dictionaryId());
+                }
+                else {
+                    values.appendNull();
+                }
+                if (selected && !mask.all()) {
+                    selectedIndex++;
+                    nextSelected = selectedIndex < mask.count() ? mask.position(selectedIndex) : rowCount;
+                }
+            }
+            Streams streams = values.materialize(allocator, context);
+            if (!outputType.supportsVector(streams.values())) {
+                throw new UnsupportedParquetFeatureException(
+                        "Native nested primitive representation does not match output type " + outputType.identity());
+            }
+            return streams;
+        }
+
+        @Override
+        public void skip(long rowCount)
+        {
+            if (rowCount < 0) {
+                throw new IllegalArgumentException("rowCount is negative");
+            }
+            for (long row = 0; row < rowCount; row++) {
+                if (!reader.next()) {
+                    throw new IllegalArgumentException("Nested primitive event stream ended before requested rows");
+                }
+            }
+        }
+
+        @Override
+        public long consumedPageBytes()
+        {
+            return reader.consumedPageBytes();
+        }
+
+        @Override
+        public Set<Stream> streams()
+        {
+            return nullable ? Set.of(Stream.VALUES, Stream.NULLS) : Set.of(Stream.VALUES);
         }
 
         @Override
@@ -423,6 +528,31 @@ final class NestedNitroParquetBatchSource
             ParquetColumnNameMatching columnNameMatching,
             List<Integer> sourceOrdinals)
     {
+        this(resources, allocator, splits, schema, columnNameMatching, sourceOrdinals, null, false);
+    }
+
+    NestedNitroParquetBatchSource(
+            NitroParquetScanResources resources,
+            Allocator allocator,
+            List<NitroParquetBatchSource.InputSplit> splits,
+            Schema schema,
+            ParquetColumnNameMatching columnNameMatching,
+            List<NitroParquetBatchSource.ColumnProjection> projections,
+            boolean projectionsByName)
+    {
+        this(resources, allocator, splits, schema, columnNameMatching, null, projections, projectionsByName);
+    }
+
+    private NestedNitroParquetBatchSource(
+            NitroParquetScanResources resources,
+            Allocator allocator,
+            List<NitroParquetBatchSource.InputSplit> splits,
+            Schema schema,
+            ParquetColumnNameMatching columnNameMatching,
+            List<Integer> sourceOrdinals,
+            List<NitroParquetBatchSource.ColumnProjection> projections,
+            boolean projectionsByName)
+    {
         this.resources = requireNonNull(resources, "resources is null");
         this.allocator = requireNonNull(allocator, "allocator is null");
         this.schema = requireNonNull(schema, "schema is null");
@@ -434,6 +564,12 @@ final class NestedNitroParquetBatchSource
         if (sourceOrdinals != null && sourceOrdinals.size() != schema.size()) {
             throw new IllegalArgumentException("source ordinals size does not match projected columns");
         }
+        if (projections != null && projections.size() != schema.size()) {
+            throw new IllegalArgumentException("source projections size does not match projected columns");
+        }
+        if (sourceOrdinals != null && projections != null) {
+            throw new IllegalArgumentException("source ordinals and projections are mutually exclusive");
+        }
 
         this.files = new ParquetFile[splits.size()];
         for (int index = 0; index < files.length; index++) {
@@ -444,11 +580,13 @@ final class NestedNitroParquetBatchSource
         this.pendingRows = new long[schema.size()];
         this.pendingNullRows = new long[schema.size()];
         for (int column = 0; column < schema.size(); column++) {
-            String name = sourceOrdinals == null
+            String name = sourceOrdinals == null && projections == null
                     ? schema.field(column).name().orElseThrow(
                             () -> new IllegalArgumentException("nested Parquet source requires named output fields"))
                     : "";
-            ParquetSchema.Node node = resolveNode(files[0].schema(), name, columnNameMatching, sourceOrdinals, column);
+            ParquetSchema.Node node = projections == null
+                    ? resolveNode(files[0].schema(), name, columnNameMatching, sourceOrdinals, column)
+                    : resolveProjection(files[0].schema(), columnNameMatching, projections.get(column), projectionsByName);
             readers[column] = createReader(node, schema.field(column).type());
             sourceColumns[column] = new OrdinalSourceColumnHandle(column, schema.field(column).type());
         }
@@ -474,6 +612,8 @@ final class NestedNitroParquetBatchSource
     private ProjectedReader createReader(ParquetSchema.Node node, TypeBinding outputType)
     {
         return switch (node) {
+            case ParquetSchema.Primitive primitive when primitive.maximumDefinitionLevel() > 1 ->
+                    new NestedPrimitiveProjectedReader(primitive, outputType, resources.readerPolicy().rle());
             case ParquetSchema.Primitive primitive -> new PrimitiveProjectedReader(primitive, outputType);
             case ParquetSchema.Group group when group.isMap() -> {
                 if (!outputType.supportedVectorTypes().contains(MapVector.class)) {
@@ -514,6 +654,54 @@ final class NestedNitroParquetBatchSource
         String normalized = name.toLowerCase(Locale.ROOT);
         ParquetSchema.Node result = null;
         for (ParquetSchema.Node field : parquetSchema.fields()) {
+            if (field.name().toLowerCase(Locale.ROOT).equals(normalized)) {
+                if (result != null) {
+                    throw new IllegalArgumentException("Ambiguous case-insensitive column: " + name);
+                }
+                result = field;
+            }
+        }
+        if (result == null) {
+            throw new IllegalArgumentException("No such Parquet field: " + name);
+        }
+        return result;
+    }
+
+    private static ParquetSchema.Node resolveProjection(
+            ParquetSchema parquetSchema,
+            ParquetColumnNameMatching matching,
+            NitroParquetBatchSource.ColumnProjection projection,
+            boolean byName)
+    {
+        ParquetSchema.Node node = byName
+                ? resolveField(parquetSchema.fields(), projection.baseName(), matching)
+                : parquetSchema.fields().get(projection.baseOrdinal());
+        for (int depth = 0; depth < projection.fieldOrdinals().size(); depth++) {
+            if (!(node instanceof ParquetSchema.Group group)) {
+                throw new UnsupportedParquetFeatureException(
+                        "Parquet projection descends through primitive field '" + node.name() + "'");
+            }
+            node = byName
+                    ? resolveField(group.children(), projection.fieldNames().get(depth), matching)
+                    : group.children().get(projection.fieldOrdinals().get(depth));
+        }
+        return node;
+    }
+
+    private static ParquetSchema.Node resolveField(
+            List<ParquetSchema.Node> fields,
+            String name,
+            ParquetColumnNameMatching matching)
+    {
+        if (matching == ParquetColumnNameMatching.EXACT) {
+            return fields.stream()
+                    .filter(field -> field.name().equals(name))
+                    .findFirst()
+                    .orElseThrow(() -> new IllegalArgumentException("No such Parquet field: " + name));
+        }
+        String normalized = name.toLowerCase(Locale.ROOT);
+        ParquetSchema.Node result = null;
+        for (ParquetSchema.Node field : fields) {
             if (field.name().toLowerCase(Locale.ROOT).equals(normalized)) {
                 if (result != null) {
                     throw new IllegalArgumentException("Ambiguous case-insensitive column: " + name);

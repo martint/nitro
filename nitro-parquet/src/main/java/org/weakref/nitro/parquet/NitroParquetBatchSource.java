@@ -72,6 +72,22 @@ import static java.util.Objects.requireNonNull;
 public final class NitroParquetBatchSource
         implements BatchSource
 {
+    public record ColumnProjection(String baseName, int baseOrdinal, List<String> fieldNames, List<Integer> fieldOrdinals)
+    {
+        public ColumnProjection
+        {
+            baseName = requireNonNull(baseName, "baseName is null");
+            fieldNames = List.copyOf(requireNonNull(fieldNames, "fieldNames is null"));
+            fieldOrdinals = List.copyOf(requireNonNull(fieldOrdinals, "fieldOrdinals is null"));
+            if (baseOrdinal < 0) {
+                throw new IllegalArgumentException("baseOrdinal is negative");
+            }
+            if (fieldNames.size() != fieldOrdinals.size()) {
+                throw new IllegalArgumentException("Projection field name and ordinal counts differ");
+            }
+        }
+    }
+
     public record Split(Path path, long start, long length)
     {
         public Split
@@ -420,6 +436,60 @@ public final class NitroParquetBatchSource
             List<Integer> sourceOrdinals)
     {
         return forInputs(resources, allocator, splits, schema, ParquetColumnNameMatching.EXACT, List.copyOf(sourceOrdinals));
+    }
+
+    public static BatchSource forProjectedInputsByName(
+            NitroParquetScanResources resources,
+            Allocator allocator,
+            List<InputSplit> splits,
+            Schema schema,
+            ParquetColumnNameMatching columnNameMatching,
+            List<ColumnProjection> projections)
+    {
+        return forProjectedInputs(resources, allocator, splits, schema, columnNameMatching, projections, true);
+    }
+
+    public static BatchSource forProjectedInputsByOrdinal(
+            NitroParquetScanResources resources,
+            Allocator allocator,
+            List<InputSplit> splits,
+            Schema schema,
+            List<ColumnProjection> projections)
+    {
+        return forProjectedInputs(resources, allocator, splits, schema, ParquetColumnNameMatching.EXACT, projections, false);
+    }
+
+    private static BatchSource forProjectedInputs(
+            NitroParquetScanResources resources,
+            Allocator allocator,
+            List<InputSplit> splits,
+            Schema schema,
+            ParquetColumnNameMatching columnNameMatching,
+            List<ColumnProjection> projections,
+            boolean byName)
+    {
+        splits = List.copyOf(splits);
+        try {
+            return new NestedNitroParquetBatchSource(
+                    resources,
+                    allocator,
+                    splits,
+                    schema,
+                    columnNameMatching,
+                    List.copyOf(projections),
+                    byName);
+        }
+        catch (RuntimeException | Error failure) {
+            for (InputSplit split : splits) {
+                try {
+                    split.input().close();
+                }
+                catch (IOException closeFailure) {
+                    failure.addSuppressed(closeFailure);
+                }
+            }
+            throw failure;
+        }
     }
 
     private static BatchSource forInputs(

@@ -142,6 +142,32 @@ public class TestParquetOperator
 
     private static final TypeBinding BIGINT = new TestingTypeBinding(new TypeIdentity("testing:bigint"), long.class);
     private static final TypeBinding VARCHAR = new TestingTypeBinding(new TypeIdentity("testing:varchar"), byte[].class);
+    private static final TypeBinding ENCODED_VARCHAR = new TypeBinding()
+    {
+        @Override
+        public TypeIdentity identity()
+        {
+            return new TypeIdentity("testing:encoded-varchar");
+        }
+
+        @Override
+        public Class<?> carrierType()
+        {
+            return byte[].class;
+        }
+
+        @Override
+        public TypeOperators operators()
+        {
+            return TypeOperators.UNSPECIFIED;
+        }
+
+        @Override
+        public Set<Class<? extends org.weakref.nitro.data.Vector>> supportedVectorTypes()
+        {
+            return Set.of(BinaryVector.class, DictionaryVector.class, RleVector.class);
+        }
+    };
     private static final TypeBinding BIGINT_ARRAY = new TypeBinding()
     {
         @Override
@@ -673,6 +699,75 @@ public class TestParquetOperator
             assertThat(((BooleanVector) rows.field("name").get(Stream.NULLS)).values())
                     .containsExactly(false, true, true);
             assertThat(nullOnlyBytes).isLessThan(metrics.completedBytes().orElseThrow());
+        }
+    }
+
+    @Test
+    void testNitroParquetSourceProjectsNestedLeafNatively()
+            throws Exception
+    {
+        java.nio.file.Path file = writeOptionalSimpleStructParquetFile("native-struct-projection.parquet");
+        byte[] bytes = Files.readAllBytes(file);
+        assertProjectedStructName(bytes, true);
+        assertProjectedStructName(bytes, false);
+    }
+
+    private static void assertProjectedStructName(byte[] bytes, boolean byName)
+            throws Exception
+    {
+        ParquetInput input = new ParquetInput()
+        {
+            @Override
+            public String id()
+            {
+                return "native-struct-projection";
+            }
+
+            @Override
+            public long size()
+            {
+                return bytes.length;
+            }
+
+            @Override
+            public ParquetInputRange readRange(long offset, int length)
+            {
+                return ParquetInputRange.retained(MemorySegment.ofArray(bytes).asSlice(offset, length));
+            }
+
+            @Override
+            public void close() {}
+        };
+        Schema schema = new Schema(List.of(new Field("name", ENCODED_VARCHAR, true)));
+        List<NitroParquetBatchSource.ColumnProjection> projections = List.of(
+                new NitroParquetBatchSource.ColumnProjection("person", 0, List.of("name"), List.of(1)));
+
+        try (NitroParquetScanResources resources = NitroParquetScanResources.createDefault();
+                AllocationResources allocationResources = AllocationResources.createDefault();
+                Allocator allocator = new Allocator(allocationResources);
+                BatchSource source = byName
+                        ? NitroParquetBatchSource.forProjectedInputsByName(
+                                resources,
+                                allocator,
+                                List.of(new NitroParquetBatchSource.InputSplit(input, 0, bytes.length)),
+                                schema,
+                                ParquetColumnNameMatching.EXACT,
+                                projections)
+                        : NitroParquetBatchSource.forProjectedInputsByOrdinal(
+                                resources,
+                                allocator,
+                                List.of(new NitroParquetBatchSource.InputSplit(input, 0, bytes.length)),
+                                schema,
+                                projections);
+                var executor = java.util.concurrent.Executors.newSingleThreadExecutor();
+                var batch = executor.submit(() -> ((SourcePoll.Ready) source.poll()).batch()).get()) {
+            VectorAccess.BinaryValues names = VectorAccess.binaryValues(batch.column(0).borrow(Stream.VALUES));
+            BooleanVector nulls = (BooleanVector) batch.column(0).borrow(Stream.NULLS);
+
+            VectorAccess.BinarySlice first = names.value(0);
+            assertThat(new String(first.data(), first.offset(), first.length(), java.nio.charset.StandardCharsets.UTF_8))
+                    .isEqualTo("alice");
+            assertThat(nulls.values()).containsExactly(false, true, true);
         }
     }
 
