@@ -124,6 +124,28 @@ class TestRleReader
     }
 
     @Test
+    void testVectorUnpackAcrossPhysicalWidthsAndReadBoundaries()
+    {
+        for (RleReaderPolicy policy : new RleReaderPolicy[] {
+                DEFAULT_POLICY,
+                new RleReaderPolicy(true, true, true, false, false)}) {
+            RleReader reader = new RleReader(policy);
+            for (int width = 1; width <= 20; width++) {
+                int[] expected = new int[40];
+                int mask = (1 << width) - 1;
+                for (int index = 0; index < expected.length; index++) {
+                    expected[index] = (index * 17 + 3) & mask;
+                }
+                reader.init(MemorySegment.ofArray(bitPackedRun(width, expected)), 0, width);
+                int[] actual = new int[expected.length];
+                reader.read(actual, 0, 13);
+                reader.read(actual, 13, expected.length - 13);
+                assertThat(actual).as("width %s with policy %s", width, policy).containsExactly(expected);
+            }
+        }
+    }
+
+    @Test
     void testBitPackedTailDoesNotRequireTrailingBytes()
     {
         int[] expected = {0, 1, 2, 3, 4, 5, 6, 7};
@@ -140,12 +162,23 @@ class TestRleReader
         RleReader definitionReader = new RleReader(DEFAULT_POLICY);
         definitionReader.init(MemorySegment.ofArray(definitions), 0, 1);
         assertThat(definitionReader.consumeIfAllOnes(8)).isTrue();
+
+        for (int width : new int[] {1, 2, 4, 8, 16}) {
+            int mask = (1 << width) - 1;
+            int[] widthExpected = {0, 1 & mask, 2 & mask, 3 & mask, 4 & mask, 5 & mask, 6 & mask, mask};
+            byte[] exactEncoded = Arrays.copyOf(bitPackedRun(width, widthExpected), 1 + width);
+            RleReader widthReader = new RleReader(DEFAULT_POLICY);
+            widthReader.init(MemorySegment.ofArray(exactEncoded), 0, width);
+            int[] widthActual = new int[widthExpected.length];
+            widthReader.read(widthActual, 0, widthActual.length);
+            assertThat(widthActual).containsExactly(widthExpected);
+        }
     }
 
     @Test
     void testDisabledPolicyUsesGenericDecodingPaths()
     {
-        RleReaderPolicy policy = new RleReaderPolicy(false, false, false, false);
+        RleReaderPolicy policy = new RleReaderPolicy(false, false, false, false, false);
 
         byte[] header = new byte[16];
         int offset = writeUleb128(header, 16_384);

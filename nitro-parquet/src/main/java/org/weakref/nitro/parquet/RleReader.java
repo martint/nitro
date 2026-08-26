@@ -403,16 +403,29 @@ final class RleReader
         if ((cursor & 7) == 0) {
             VectorBitUnpacker.Tables tables = vectorTablesFor(width);
             int groups = n & ~7;
-            long limit = segmentLimit - 32;
-            while (i < groups) {
-                long byteOffset = cursor >>> 3;
-                if (byteOffset > limit) {
-                    break;
-                }
-                VectorBitUnpacker.unpack8(data, byteOffset, out, base + i, tables);
-                cursor += (long) width * 8;
-                i += 8;
+            if (policy.specializedBitPacking()) {
+                i = VectorBitUnpacker.unpackGroups(
+                        data,
+                        cursor >>> 3,
+                        segmentLimit,
+                        out,
+                        base,
+                        groups,
+                        width,
+                        tables);
             }
+            else {
+                i = VectorBitUnpacker.unpackGeneral(
+                        data,
+                        cursor >>> 3,
+                        segmentLimit,
+                        out,
+                        base,
+                        groups,
+                        width,
+                        tables);
+            }
+            cursor += (long) width * i;
         }
         for (; i < n; i++) {
             long word = readWord(data, cursor >>> 3, segmentLimit);
@@ -425,7 +438,9 @@ final class RleReader
     private VectorBitUnpacker.Tables vectorTablesFor(int width)
     {
         if (vectorTablesWidth != width) {
-            vectorTables = VectorBitUnpacker.buildTables(width);
+            vectorTables = policy.specializedBitPacking()
+                    ? VectorBitUnpacker.buildTables(width)
+                    : VectorBitUnpacker.buildGeneralTables(width);
             vectorTablesWidth = width;
         }
         return vectorTables;

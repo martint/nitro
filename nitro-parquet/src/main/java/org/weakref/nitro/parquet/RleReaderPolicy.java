@@ -20,11 +20,12 @@ public record RleReaderPolicy(
         boolean unrolledUleb128,
         boolean swarUleb128,
         boolean scanAllOneDefinitionRuns,
-        boolean directNullableDictionaryUnrollIds)
+        boolean directNullableDictionaryUnrollIds,
+        boolean specializedBitPacking)
 {
     public static RleReaderPolicy defaults()
     {
-        return new RleReaderPolicy(true, true, true, false);
+        return new RleReaderPolicy(true, true, true, false, true);
     }
 
     public static RleReaderPolicy fromSystemProperties()
@@ -33,6 +34,7 @@ public record RleReaderPolicy(
                 Boolean.parseBoolean(System.getProperty("nitro.parquet.unrolledUleb128", "true")),
                 Boolean.parseBoolean(System.getProperty("nitro.parquet.swarUleb128", "true")),
                 Boolean.parseBoolean(System.getProperty("nitro.parquet.scanAllOneDefinitionRuns", "true")),
-                Boolean.parseBoolean(System.getProperty("nitro.parquet.directNullableDictionaryUnrollIds", "false")));
+                Boolean.parseBoolean(System.getProperty("nitro.parquet.directNullableDictionaryUnrollIds", "false")),
+                Boolean.parseBoolean(System.getProperty("nitro.parquet.specializedBitPacking", "true")));
     }
 }
