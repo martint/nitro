@@ -13,6 +13,9 @@
  */
 package org.weakref.nitro.parquet;
 
+import jdk.incubator.vector.IntVector;
+import jdk.incubator.vector.VectorOperators;
+import jdk.incubator.vector.VectorSpecies;
 import org.apache.parquet.format.FieldRepetitionType;
 import org.apache.parquet.format.RowGroup;
 import org.weakref.nitro.data.Allocator;
@@ -33,6 +36,8 @@ import static java.util.Objects.requireNonNull;
 final class NestedMapReader
         implements AutoCloseable
 {
+    private static final VectorSpecies<Integer> INT_SPECIES = IntVector.SPECIES_PREFERRED;
+
     private final ParquetSchema.Group map;
     private final ParquetSchema.Group entries;
     private final ParquetSchema.Primitive key;
@@ -424,6 +429,16 @@ final class NestedMapReader
     private static boolean allAtLeast(int[] values, int offset, int length, int minimum)
     {
         int end = offset + length;
+        int vectorEnd = offset + INT_SPECIES.loopBound(length);
+        IntVector threshold = IntVector.broadcast(INT_SPECIES, minimum);
+        for (int index = offset; index < vectorEnd; index += INT_SPECIES.length()) {
+            if (IntVector.fromArray(INT_SPECIES, values, index)
+                    .compare(VectorOperators.LT, threshold)
+                    .anyTrue()) {
+                return false;
+            }
+        }
+        offset = vectorEnd;
         for (int index = offset; index < end; index++) {
             if (values[index] < minimum) {
                 return false;

@@ -34,11 +34,27 @@ import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.List;
+import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 class TestNestedMapReader
 {
+    @Test
+    void testReconstructsDenseVectorWidthWindow()
+    {
+        int rowCount = 64;
+        try (Allocator allocator = new Allocator(EngineResources.createDefault());
+                NestedMapReader reader = denseReader(rowCount)) {
+            MapVector maps = (MapVector) reader.read(allocator, new Allocator.Context("test"), rowCount, Mask.all(rowCount)).values();
+
+            assertThat(maps.offsets()).containsExactly(IntStream.rangeClosed(0, rowCount).toArray());
+            assertThat(((I64Vector) maps.keyValues()).values())
+                    .containsExactly(IntStream.range(0, rowCount).mapToLong(index -> index + 1L).toArray());
+            assertThat(((BinaryVector) maps.valueValues()).offsets()).hasSize(rowCount + 1);
+        }
+    }
+
     @Test
     void testReconstructsNullEmptyAndPopulatedMaps()
     {
@@ -115,6 +131,38 @@ class TestNestedMapReader
                 RleReaderPolicy.defaults(),
                 new TestingCursor(keys, new int[] {0, 1, 0, 0, 0}, new int[] {2, 2, 0, 1, 2}, new int[] {0, 1, -1, -1, 2}, 2),
                 new TestingCursor(values, new int[] {0, 1, 0, 0, 0}, new int[] {3, 2, 0, 1, 3}, new int[] {0, -1, -1, -1, 1}, 3));
+    }
+
+    private static NestedMapReader denseReader(int rowCount)
+    {
+        ParquetSchema.Primitive key = new ParquetSchema.Primitive(
+                "key", FieldRepetitionType.REQUIRED, Type.INT64, null, null, 0, 0, 0, 0,
+                List.of("attributes", "key_value", "key"), 1, 1);
+        ParquetSchema.Primitive value = new ParquetSchema.Primitive(
+                "value", FieldRepetitionType.REQUIRED, Type.BYTE_ARRAY, ConvertedType.UTF8, null, 0, 0, 0, 0,
+                List.of("attributes", "key_value", "value"), 1, 1);
+        ParquetSchema.Group entries = new ParquetSchema.Group(
+                "key_value", FieldRepetitionType.REPEATED, null, null, List.of(key, value), 1, 1);
+        ParquetSchema.Group map = new ParquetSchema.Group(
+                "attributes", FieldRepetitionType.REQUIRED, ConvertedType.MAP, null, List.of(entries), 0, 0);
+
+        long[] keyData = IntStream.range(0, rowCount).mapToLong(index -> index + 1L).toArray();
+        String[] valueData = new String[rowCount];
+        Arrays.fill(valueData, "x");
+        LongPhysicalValueDecoder keys = new LongPhysicalValueDecoder(Type.INT64, new PrimitiveArrayPool(0, 0));
+        keys.decodePlain(longs(keyData), 0, rowCount);
+        BinaryPhysicalValueDecoder values = new BinaryPhysicalValueDecoder(new PrimitiveArrayPool(0, 0));
+        values.decodePlain(binary(valueData), 0, rowCount);
+
+        int[] repetitions = new int[rowCount];
+        int[] definitions = new int[rowCount];
+        Arrays.fill(definitions, 1);
+        int[] ordinals = IntStream.range(0, rowCount).toArray();
+        return new NestedMapReader(
+                map,
+                RleReaderPolicy.defaults(),
+                new TestingCursor(keys, repetitions, definitions, ordinals, rowCount),
+                new TestingCursor(values, repetitions, definitions, ordinals, rowCount));
     }
 
     private static String value(BinaryVector vector, int position)
