@@ -41,13 +41,13 @@ final class BinaryNestedValueAccumulator
     private byte[] data = EMPTY_BYTES;
     private boolean[] nulls = EMPTY_BOOLEANS;
     private int[] dictionaryIds = EMPTY_INTS;
+    private int[] dictionaryFrequencies = EMPTY_INTS;
     private int[] dictionaryOffsets = EMPTY_INTS;
     private byte[] dictionaryData = EMPTY_BYTES;
     private boolean dictionaryCandidate;
     private int dictionaryGeneration;
     private int dictionarySize;
     private int dictionaryBytes;
-    private int logicalBytes;
     private int size;
     private int bytes;
 
@@ -69,7 +69,6 @@ final class BinaryNestedValueAccumulator
         dictionaryGeneration = -1;
         dictionarySize = 0;
         dictionaryBytes = 0;
-        logicalBytes = 0;
         size = 0;
         bytes = 0;
     }
@@ -95,7 +94,6 @@ final class BinaryNestedValueAccumulator
         if (nullable) {
             nulls[size - 1] = false;
         }
-        logicalBytes += length;
     }
 
     @Override
@@ -114,20 +112,22 @@ final class BinaryNestedValueAccumulator
             NestedValueAccumulator.super.appendEvents(decoder, valueOrdinals, pageDictionaryIds, eventOffset, eventCount);
             return;
         }
-        ensurePositionCapacity(size + eventCount);
-        int end = eventOffset + eventCount;
-        for (int event = eventOffset; event < end; event++) {
-            int ordinal = valueOrdinals[event];
-            int dictionaryId = ordinal < 0 ? -1 : pageDictionaryIds[ordinal];
-            dictionaryIds[size] = dictionaryId;
-            if (nullable) {
-                nulls[size] = ordinal < 0;
-            }
-            if (dictionaryId >= 0) {
-                logicalBytes += binary.length(ordinal, dictionaryId);
-            }
-            size++;
+        NestedValueAccumulator.super.appendEvents(decoder, valueOrdinals, pageDictionaryIds, eventOffset, eventCount);
+    }
+
+    @Override
+    public void appendDictionaryRun(PhysicalValueDecoder decoder, int[] pageDictionaryIds, int ordinal, int count)
+    {
+        if (!(decoder instanceof BinaryValueDecoder binary) || !prepareDictionary(binary)) {
+            NestedValueAccumulator.super.appendDictionaryRun(decoder, pageDictionaryIds, ordinal, count);
+            return;
         }
+        ensurePositionCapacity(size + count);
+        System.arraycopy(pageDictionaryIds, ordinal, dictionaryIds, size, count);
+        if (nullable) {
+            Arrays.fill(nulls, size, size + count, false);
+        }
+        size += count;
     }
 
     @Override
@@ -193,7 +193,6 @@ final class BinaryNestedValueAccumulator
         if (nullable) {
             nulls[size] = false;
         }
-        logicalBytes += decoder.length(0, dictionaryId);
         size++;
         return true;
     }
@@ -215,6 +214,7 @@ final class BinaryNestedValueAccumulator
         dictionaryBytes = decoder.dictionaryByteSize();
         dictionaryOffsets = grow(dictionaryOffsets, dictionarySize + 1);
         dictionaryData = grow(dictionaryData, dictionaryBytes);
+        dictionaryFrequencies = grow(dictionaryFrequencies, dictionarySize);
         decoder.copyDictionary(dictionaryOffsets, dictionaryData);
         return true;
     }
@@ -225,6 +225,17 @@ final class BinaryNestedValueAccumulator
             return false;
         }
         int outputDictionarySize = dictionarySize + (nullable ? 1 : 0);
+        Arrays.fill(dictionaryFrequencies, 0, dictionarySize, 0);
+        long logicalBytes = 0;
+        for (int position = 0; position < size; position++) {
+            int id = dictionaryIds[position];
+            if (id >= 0) {
+                dictionaryFrequencies[id]++;
+            }
+        }
+        for (int id = 0; id < dictionarySize; id++) {
+            logicalBytes += (long) dictionaryFrequencies[id] * (dictionaryOffsets[id + 1] - dictionaryOffsets[id]);
+        }
         long dictionaryFootprint = dictionaryBytes +
                 (long) Integer.BYTES * (dictionarySize + 1L + size + outputDictionarySize) +
                 (nullable ? outputDictionarySize : 0);
@@ -238,11 +249,16 @@ final class BinaryNestedValueAccumulator
         int nullId = outputDictionarySize - 1;
         I32Vector ids = I32Vector.allocate(allocator, context, size);
         I32Vector frequencies = I32Vector.allocate(allocator, context, outputDictionarySize);
-        Arrays.fill(frequencies.values(), 0, outputDictionarySize, 0);
+        System.arraycopy(dictionaryFrequencies, 0, frequencies.values(), 0, dictionarySize);
+        if (nullable) {
+            frequencies.values()[nullId] = 0;
+        }
         for (int position = 0; position < size; position++) {
             int id = dictionaryIds[position] < 0 ? nullId : dictionaryIds[position];
             ids.values()[position] = id;
-            frequencies.values()[id]++;
+            if (id == nullId && nullable) {
+                frequencies.values()[nullId]++;
+            }
         }
         BinaryVector dictionary = BinaryVector.allocate(allocator, context, outputDictionarySize, dictionaryBytes);
         System.arraycopy(dictionaryOffsets, 0, dictionary.offsets(), 0, dictionarySize + 1);
@@ -278,7 +294,14 @@ final class BinaryNestedValueAccumulator
         }
         dictionaryCandidate = false;
         ensurePositionCapacity(size);
-        ensureByteCapacity(logicalBytes);
+        int requiredBytes = 0;
+        for (int position = 0; position < size; position++) {
+            int id = dictionaryIds[position];
+            if (id >= 0) {
+                requiredBytes += dictionaryOffsets[id + 1] - dictionaryOffsets[id];
+            }
+        }
+        ensureByteCapacity(requiredBytes);
         bytes = 0;
         for (int position = 0; position < size; position++) {
             offsets[position] = bytes;
@@ -318,6 +341,7 @@ final class BinaryNestedValueAccumulator
             int[] replacementIds = arrayPool.borrowInts(capacity);
             System.arraycopy(dictionaryIds, 0, replacementIds, 0, size);
             arrayPool.release(dictionaryIds);
+            arrayPool.release(dictionaryFrequencies);
             dictionaryIds = replacementIds;
         }
     }
@@ -366,6 +390,7 @@ final class BinaryNestedValueAccumulator
             data = EMPTY_BYTES;
             nulls = EMPTY_BOOLEANS;
             dictionaryIds = EMPTY_INTS;
+            dictionaryFrequencies = EMPTY_INTS;
             dictionaryOffsets = EMPTY_INTS;
             dictionaryData = EMPTY_BYTES;
             arrayPool = null;
@@ -373,7 +398,6 @@ final class BinaryNestedValueAccumulator
             dictionaryGeneration = -1;
             dictionarySize = 0;
             dictionaryBytes = 0;
-            logicalBytes = 0;
             size = 0;
             bytes = 0;
         }

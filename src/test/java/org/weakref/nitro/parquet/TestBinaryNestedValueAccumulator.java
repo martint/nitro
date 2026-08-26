@@ -34,6 +34,32 @@ import static org.assertj.core.api.Assertions.assertThat;
 class TestBinaryNestedValueAccumulator
 {
     @Test
+    void testPreservesContiguousDictionaryRun()
+    {
+        PrimitiveArrayPool arrays = new PrimitiveArrayPool(0, 0);
+        try (Allocator allocator = new Allocator(EngineResources.createDefault());
+                BinaryPhysicalValueDecoder decoder = new BinaryPhysicalValueDecoder(arrays);
+                BinaryNestedValueAccumulator accumulator = new BinaryNestedValueAccumulator(true, false)) {
+            decoder.decodeDictionary(binary("zero", "one"), 2, Encoding.PLAIN);
+            accumulator.reset(allocator);
+            int[] ordinals = new int[1_000];
+            int[] ids = new int[1_000];
+            for (int position = 0; position < ordinals.length; position++) {
+                ordinals[position] = position;
+                ids[position] = position & 1;
+            }
+            accumulator.appendEvents(decoder, ordinals, ids, 0, ordinals.length);
+
+            Streams streams = accumulator.materialize(allocator, new Allocator.Context("test"));
+            assertThat(streams.values()).isInstanceOf(DictionaryVector.class);
+            VectorAccess.BinaryValues values = VectorAccess.binaryValues(streams.values());
+            assertThat(utf8(values, 0)).isEqualTo("zero");
+            assertThat(utf8(values, 1)).isEqualTo("one");
+            assertThat(utf8(values, 999)).isEqualTo("one");
+        }
+    }
+
+    @Test
     void testPreservesBeneficialDictionaryEncoding()
     {
         PrimitiveArrayPool arrays = new PrimitiveArrayPool(0, 0);

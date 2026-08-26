@@ -22,6 +22,8 @@ import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Streams;
 
+import java.util.Arrays;
+
 import static java.util.Objects.requireNonNull;
 
 /**
@@ -198,41 +200,55 @@ final class NestedMapReader
         int selectedIndex = 0;
         int nextSelected = mask.all() ? 0 : (mask.count() == 0 ? rowCount : mask.position(0));
         boolean selected = false;
+        int outputEntryCount = 0;
+        int entryDefinitionLevel = entries.maximumDefinitionLevel();
+        int mapDefinitionLevel = map.maximumDefinitionLevel();
 
         while (true) {
             NestedEventWindow keyWindow = keySource.eventWindow();
             NestedEventWindow valueWindow = valueSource.eventWindow();
             if (keyWindow == null || valueWindow == null) {
                 if (keyWindow == null && valueWindow == null && row == rowCount - 1) {
-                    maps.offsets()[rowCount] = keyValues.size();
+                    maps.offsets()[rowCount] = outputEntryCount;
                     return;
                 }
                 throw new IllegalArgumentException("Nested MAP key/value event streams have different lengths");
             }
 
             int windowLength = Math.min(keyWindow.length(), valueWindow.length());
+            int keyOffset = keyWindow.offset();
+            int valueOffset = valueWindow.offset();
+            int[] keyRepetitionLevels = keyWindow.repetitionLevels();
+            int[] valueRepetitionLevels = valueWindow.repetitionLevels();
+            if (Arrays.mismatch(
+                    keyRepetitionLevels,
+                    keyOffset,
+                    keyOffset + windowLength,
+                    valueRepetitionLevels,
+                    valueOffset,
+                    valueOffset + windowLength) >= 0) {
+                throw new IllegalArgumentException("Nested MAP key/value repetition levels differ");
+            }
+            int[] keyDefinitionLevels = keyWindow.definitionLevels();
+            int[] valueDefinitionLevels = valueWindow.definitionLevels();
             int consumed = 0;
             int entryRunStart = -1;
             int entryRunCount = 0;
             while (consumed < windowLength) {
-                int repetitionLevel = keyWindow.repetitionLevel(consumed);
-                if (repetitionLevel != valueWindow.repetitionLevel(consumed)) {
-                    throw new IllegalArgumentException("Nested MAP key/value repetition levels differ");
-                }
-                boolean keyEntry = keyWindow.definitionLevel(consumed) >= entries.maximumDefinitionLevel();
-                boolean valueEntry = valueWindow.definitionLevel(consumed) >= entries.maximumDefinitionLevel();
+                int repetitionLevel = keyRepetitionLevels[keyOffset + consumed];
+                boolean keyEntry = keyDefinitionLevels[keyOffset + consumed] >= entryDefinitionLevel;
+                boolean valueEntry = valueDefinitionLevels[valueOffset + consumed] >= entryDefinitionLevel;
                 if (keyEntry != valueEntry) {
                     throw new IllegalArgumentException("Nested MAP key/value definition levels describe different entries");
                 }
 
                 if (repetitionLevel == 0) {
-                    if (entryRunCount != 0) {
-                        appendWindowRun(keyWindow, valueWindow, entryRunStart, entryRunCount);
-                        entryRunCount = 0;
-                    }
                     if (row >= 0) {
-                        maps.offsets()[row + 1] = keyValues.size();
+                        maps.offsets()[row + 1] = outputEntryCount;
                         if (row + 1 == rowCount) {
+                            if (entryRunCount != 0) {
+                                appendWindowRun(keyWindow, valueWindow, entryRunStart, entryRunCount);
+                            }
                             keySource.advanceEvents(consumed);
                             valueSource.advanceEvents(consumed);
                             return;
@@ -245,7 +261,7 @@ final class NestedMapReader
                         nextSelected = selectedIndex < mask.count() ? mask.position(selectedIndex) : rowCount;
                     }
                     if (selected && mapNulls != null) {
-                        mapNulls.values()[row] = keyWindow.definitionLevel(consumed) < map.maximumDefinitionLevel();
+                        mapNulls.values()[row] = keyDefinitionLevels[keyOffset + consumed] < mapDefinitionLevel;
                     }
                 }
                 else if (row < 0) {
@@ -257,6 +273,7 @@ final class NestedMapReader
                         entryRunStart = consumed;
                     }
                     entryRunCount++;
+                    outputEntryCount++;
                 }
                 else if (entryRunCount != 0) {
                     appendWindowRun(keyWindow, valueWindow, entryRunStart, entryRunCount);

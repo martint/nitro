@@ -56,6 +56,21 @@ final class NestedEventWindow
         return definitionLevels[offset + index];
     }
 
+    int[] repetitionLevels()
+    {
+        return repetitionLevels;
+    }
+
+    int[] definitionLevels()
+    {
+        return definitionLevels;
+    }
+
+    int offset()
+    {
+        return offset;
+    }
+
     void appendTo(NestedValueAccumulator accumulator, int start, int count)
     {
         if (start < 0 || count < 0 || start > length - count) {

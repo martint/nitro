@@ -43,6 +43,21 @@ interface NestedValueAccumulator
             int eventCount)
     {
         int end = eventOffset + eventCount;
+        if (eventCount > 0) {
+            int firstOrdinal = valueOrdinals[eventOffset];
+            int lastOrdinal = valueOrdinals[end - 1];
+            // NestedPageDecoder assigns consecutive ordinals to present values. Matching endpoints therefore
+            // prove that the whole event window is present, without rescanning it for nulls.
+            if (firstOrdinal >= 0 && lastOrdinal == firstOrdinal + eventCount - 1) {
+                if (dictionaryIds == null) {
+                    appendPlainRun(decoder, firstOrdinal, eventCount);
+                }
+                else {
+                    appendDictionaryRun(decoder, dictionaryIds, firstOrdinal, eventCount);
+                }
+                return;
+            }
+        }
         if (dictionaryIds == null) {
             int runOrdinal = -1;
             int runCount = 0;
@@ -79,6 +94,17 @@ interface NestedValueAccumulator
             else {
                 append(decoder, ordinal, dictionaryIds[ordinal]);
             }
+        }
+    }
+
+    default void appendDictionaryRun(
+            PhysicalValueDecoder decoder,
+            int[] dictionaryIds,
+            int ordinal,
+            int count)
+    {
+        for (int index = 0; index < count; index++) {
+            append(decoder, ordinal + index, dictionaryIds[ordinal + index]);
         }
     }
 
