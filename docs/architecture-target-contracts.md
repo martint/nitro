@@ -1133,11 +1133,8 @@ Why this matters:
 - the ClickBench benchmarking work already showed that a `10_000` row default
   produces more representative performance for real parquet workloads
 
-This default applies to both:
-
-- Nitro parquet scans through `TrinoParquetScanOperator`
-- Trino-side parquet page readers used by the operator-assembly comparison
-  harnesses
+This default applies to the native Nitro Parquet source. Host-engine reader
+comparisons belong at explicit integration boundaries, not in the Nitro engine.
 
 Smaller values are still useful for debugging, but benchmark code should have a
 representative large-batch default and let tests override it explicitly when

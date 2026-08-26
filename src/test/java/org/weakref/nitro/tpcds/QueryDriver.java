@@ -27,7 +27,6 @@ import java.lang.reflect.Method;
  * Runs one named interpreted TPC-DS query (the same operator tree the JMH harness uses) in a warmed loop so it can be
  * wrapped in {@code sudo perf record}/{@code stat} to bucket scan vs compute and read IPC. The first argument is a
  * query number or a diagnostic method name, followed by warmup and measured iteration counts.
- * Pass -Dnitro.skipScan -Dnitro.dynamicFilter to exercise the dynamic-filter path.
  */
 public final class QueryDriver
 {

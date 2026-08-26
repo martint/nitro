@@ -21,8 +21,8 @@ import org.weakref.nitro.execution.EngineResources;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.MultiStageOperator;
 import org.weakref.nitro.operator.Operator;
-import org.weakref.nitro.operator.source.compatibility.parquet.TrinoParquetScanOperator;
-import org.weakref.nitro.operator.source.compatibility.parquet.TrinoParquetScanPolicy;
+import org.weakref.nitro.operator.source.compatibility.parquet.NitroParquetScanOperator;
+import org.weakref.nitro.parquet.NitroParquetScanResources;
 
 import java.util.List;
 
@@ -65,7 +65,7 @@ public final class ScanIpcDriver
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());
         List<java.nio.file.Path> files = tables.tableFiles("store_sales");
-        Operator scan = new MultiStageOperator(COLUMNS.size(), files, path -> new TrinoParquetScanOperator(TrinoParquetScanPolicy.fromSystemProperties(), allocator, path, COLUMNS));
+        Operator scan = new MultiStageOperator(COLUMNS.size(), files, path -> new NitroParquetScanOperator(NitroParquetScanResources.createDefault(), allocator, List.of(path), COLUMNS));
         long sum = 0;
         try (scan) {
             while (scan.hasNext()) {

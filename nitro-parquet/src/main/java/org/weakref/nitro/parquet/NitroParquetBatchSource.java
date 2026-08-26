@@ -167,7 +167,7 @@ public final class NitroParquetBatchSource
     // Admission is execution-local and keyed only by normalized file/physical-column identity.
     // Late materialization (non-DF scans): defer per-column decode until the column is pulled, and once a filter
     // above the scan pushes a survivor mask via constrain(), decode the remaining columns only for survivor rows
-    // (skip-decode + scatter to position) instead of every row. Mirrors TrinoParquetScanOperator's masked path.
+    // (skip-decode + scatter to position) instead of every row.
     // A very sparse numeric mask can profit even when survivors are isolated: decoding the compact page IDs once
     // and gathering only live values avoids materializing/copying every wide value. Require multiple payloads to
     // amortize the alternate scan lifecycle, but cap their count because page-ID setup repeated over a very wide

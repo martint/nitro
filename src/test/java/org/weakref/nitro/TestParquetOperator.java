@@ -65,12 +65,10 @@ import org.weakref.nitro.execution.EngineResources;
 import org.weakref.nitro.function.scalar.PrimitiveExecutionContext;
 import org.weakref.nitro.function.scalar.PrimitiveFunction;
 import org.weakref.nitro.operator.Batch;
-import org.weakref.nitro.operator.ConstantTableOperator;
 import org.weakref.nitro.operator.DynamicFilter;
 import org.weakref.nitro.operator.FilterOperator;
 import org.weakref.nitro.operator.GroupOperator;
 import org.weakref.nitro.operator.GroupedAggregationOperator;
-import org.weakref.nitro.operator.HashJoinOperator;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.ProjectOperator;
 import org.weakref.nitro.operator.aggregation.CountAll;
@@ -89,14 +87,8 @@ import org.weakref.nitro.operator.evaluator.ir.Variable;
 import org.weakref.nitro.operator.source.BatchSourceOperator;
 import org.weakref.nitro.operator.source.compatibility.NativeSourceOperatorIngress;
 import org.weakref.nitro.operator.source.compatibility.OperatorBatchSource;
-import org.weakref.nitro.operator.source.compatibility.parquet.HardwoodParquetScanOperator;
-import org.weakref.nitro.operator.source.compatibility.parquet.HardwoodParquetScanPolicy;
 import org.weakref.nitro.operator.source.compatibility.parquet.NitroParquetScanOperator;
 import org.weakref.nitro.operator.source.compatibility.parquet.ParquetScanOperator;
-import org.weakref.nitro.operator.source.compatibility.parquet.SkipDecodeScanOperator;
-import org.weakref.nitro.operator.source.compatibility.parquet.SkipDecodeScanPolicy;
-import org.weakref.nitro.operator.source.compatibility.parquet.TrinoParquetScanOperator;
-import org.weakref.nitro.operator.source.compatibility.parquet.TrinoParquetScanPolicy;
 import org.weakref.nitro.parquet.ColumnReader;
 import org.weakref.nitro.parquet.DecompressedPageCachePolicy;
 import org.weakref.nitro.parquet.NitroParquetBatchSource;
@@ -1495,7 +1487,7 @@ public class TestParquetOperator
     }
 
     @Test
-    void testCompatibilityParquetScansExposeProjectedColumnNames()
+    void testParquetScansExposeProjectedColumnNames()
             throws IOException
     {
         java.nio.file.Path file = writeParquetFile("compatibility-scan-schema.parquet", true, List.of(
@@ -1503,12 +1495,9 @@ public class TestParquetOperator
         List<String> columns = List.of("x", "maybe");
 
         try (Allocator allocator = new Allocator(EngineResources.createDefault());
-                Operator hardwood = new HardwoodParquetScanOperator(HardwoodParquetScanPolicy.defaults(), allocator, file, columns);
                 Operator nitro = new NitroParquetScanOperator(NitroParquetScanResources.createDefault(), allocator, List.of(file), columns);
-                Operator parquet = new ParquetScanOperator(LEGACY_PARQUET_SCAN_BATCH_POLICY, allocator, file, columns);
-                Operator skip = new SkipDecodeScanOperator(SkipDecodeScanPolicy.defaults(), allocator, List.of(file), columns);
-                Operator trino = new TrinoParquetScanOperator(TrinoParquetScanPolicy.defaults(), allocator, file, columns)) {
-            for (Operator scan : List.of(hardwood, nitro, parquet, skip, trino)) {
+                Operator parquet = new ParquetScanOperator(LEGACY_PARQUET_SCAN_BATCH_POLICY, allocator, file, columns)) {
+            for (Operator scan : List.of(nitro, parquet)) {
                 assertThat(scan.outputSchema().fields())
                         .extracting(field -> field.name().orElseThrow())
                         .containsExactlyElementsOf(columns);
@@ -1862,75 +1851,6 @@ public class TestParquetOperator
             assertThat(((I64Vector) second.output(0).borrow(Stream.VALUES)).values()[0])
                     .isEqualTo(13);
             assertThat(operator.hasNext()).isFalse();
-        }
-    }
-
-    @Test
-    void testTrinoParquetScanReadsPlainColumns()
-            throws IOException
-    {
-        java.nio.file.Path file = writeParquetFile("trino-plain.parquet", false, List.of(
-                new ParquetRow(11, true, 101L),
-                new ParquetRow(12, false, null),
-                new ParquetRow(13, true, 103L)));
-
-        try (TrinoParquetScanOperator operator = new TrinoParquetScanOperator(TrinoParquetScanPolicy.fromSystemProperties(), new Allocator(EngineResources.createDefault()), file, List.of("x", "flag", "maybe"))) {
-            assertThat(operator(operator))
-                    .matchesExactly(List.of(
-                            Row.row(11L, 1L, 101L),
-                            Row.row(12L, 0L, null),
-                            Row.row(13L, 1L, 103L)));
-        }
-    }
-
-    @Test
-    void testTrinoParquetScanUsesExplicitDynamicFilterPolicy()
-            throws IOException
-    {
-        java.nio.file.Path file = writeParquetFile("trino-dynamic-filter-policy.parquet", false, List.of(
-                new ParquetRow(11, true, 101L),
-                new ParquetRow(12, true, 102L),
-                new ParquetRow(13, true, 103L)));
-
-        TrinoParquetScanPolicy policy = new TrinoParquetScanPolicy(1, 1, 0.30);
-        try (TrinoParquetScanOperator operator = new TrinoParquetScanOperator(
-                policy,
-                new Allocator(EngineResources.createDefault()),
-                file,
-                List.of("x"))) {
-            operator.pushDynamicFilter(DynamicFilter.fromRange(0, 11, 11));
-
-            assertThat(operator(operator))
-                    .matchesExactly(List.of(
-                            Row.row(11L),
-                            Row.row(12L),
-                            Row.row(13L)));
-        }
-    }
-
-    @Test
-    void testTrinoParquetScanReadsClickBenchI32Columns()
-            throws IOException
-    {
-        java.nio.file.Path file = ClickBenchHitsSupport.writeHitsFixture(tempDirectory.resolve("trino-clickbench.parquet"), 3);
-
-        try (TrinoParquetScanOperator operator = new TrinoParquetScanOperator(TrinoParquetScanPolicy.fromSystemProperties(), new Allocator(EngineResources.createDefault()), file, List.of("AdvEngineID", "ResolutionWidth", "UserID"))) {
-            Batch batch = operator.next();
-
-            assertThat(batch.output(0).borrow(Stream.VALUES)).isInstanceOf(I32Vector.class);
-            assertThat(batch.output(1).borrow(Stream.VALUES)).isInstanceOf(I32Vector.class);
-            assertThat(batch.output(2).borrow(Stream.VALUES)).isInstanceOf(I64Vector.class);
-            assertThat(((I32Vector) batch.output(0).borrow(Stream.VALUES)).values()[0]).isEqualTo(0);
-            assertThat(((I32Vector) batch.output(1).borrow(Stream.VALUES)).values()[0]).isEqualTo(1000);
-            assertThat(((I64Vector) batch.output(2).borrow(Stream.VALUES)).values()[0]).isEqualTo(1L);
-        }
-
-        try (TrinoParquetScanOperator operator = new TrinoParquetScanOperator(TrinoParquetScanPolicy.fromSystemProperties(), new Allocator(EngineResources.createDefault()), file, List.of("AdvEngineID", "ResolutionWidth", "UserID"))) {
-            assertThat(operator(operator))
-                    .matchesExactly(List.of(
-                            Row.row(0, 1000, 1L),
-                            Row.row(10, 1200, 2L),
-                            Row.row(10, 900, 2L)));
         }
     }
 
@@ -2460,25 +2380,6 @@ public class TestParquetOperator
     }
 
     @Test
-    void testTrinoParquetScanPreservesDictionaryEncodingForUtf8Columns()
-            throws IOException
-    {
-        java.nio.file.Path file = writeBinaryParquetFile("trino-dictionary-strings.parquet", true, List.of(
-                new BinaryParquetRow("alice", bytes(1, 2, 3)),
-                new BinaryParquetRow("bob", null),
-                new BinaryParquetRow("alice", bytes(4, 5))));
-
-        assertDictionaryEncoding(file, "name");
-
-        try (TrinoParquetScanOperator operator = new TrinoParquetScanOperator(TrinoParquetScanPolicy.fromSystemProperties(), new Allocator(EngineResources.createDefault()), file, List.of("name", "payload"))) {
-            Batch batch = operator.next();
-            BinaryVector names = (BinaryVector) batch.output(0).borrow(Stream.VALUES);
-            assertThat(names.hasTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING)).isTrue();
-            assertThat(utf8(names, 0)).isEqualTo("alice");
-        }
-    }
-
-    @Test
     void testParquetScanHonorsConstrainBeforeBorrowingPlainColumn()
             throws IOException
     {
@@ -2742,138 +2643,6 @@ public class TestParquetOperator
                     }
                 }
             }
-        }
-    }
-
-    @Test
-    void testTrinoParquetScanHonorsConstrainBeforeBorrowingPlainColumn()
-            throws IOException
-    {
-        java.nio.file.Path file = writeParquetFile("trino-plain-constrained.parquet", false, List.of(
-                new ParquetRow(11, true, 101L),
-                new ParquetRow(12, false, 102L),
-                new ParquetRow(13, true, 103L)));
-
-        try (TrinoParquetScanOperator operator = new TrinoParquetScanOperator(TrinoParquetScanPolicy.fromSystemProperties(), new Allocator(EngineResources.createDefault()), file, List.of("x", "maybe"))) {
-            operator.next();
-            Batch batch = operator.next();
-            operator.constrain(Mask.sparse(new int[] {1}, 2));
-
-            I64Vector values = (I64Vector) batch.output(0).borrow(Stream.VALUES);
-            BooleanVector nulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
-
-            assertThat(values.values()[0]).isEqualTo(0L);
-            assertThat(values.values()[1]).isEqualTo(13L);
-            assertThat(nulls.values()[0]).isFalse();
-            assertThat(nulls.values()[1]).isFalse();
-        }
-    }
-
-    @Test
-    void testTrinoParquetScanCanBorrowValuesAfterNullsAcrossConstrain()
-            throws IOException
-    {
-        java.nio.file.Path file = writeParquetFile("trino-nulls-then-values-constrained.parquet", false, List.of(
-                new ParquetRow(11, true, 101L),
-                new ParquetRow(12, false, null),
-                new ParquetRow(13, true, 103L)));
-
-        try (TrinoParquetScanOperator operator = new TrinoParquetScanOperator(TrinoParquetScanPolicy.fromSystemProperties(), new Allocator(EngineResources.createDefault()), file, List.of("x", "maybe"))) {
-            operator.next();
-            Batch batch = operator.next();
-
-            BooleanVector nulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
-            assertThat(nulls.values()[0]).isTrue();
-            assertThat(nulls.values()[1]).isFalse();
-
-            Mask constrainedMask = Mask.sparse(new int[] {1}, 2);
-            operator.constrain(constrainedMask);
-            batch.constrain(constrainedMask);
-
-            I64Vector values = (I64Vector) batch.output(1).borrow(Stream.VALUES);
-            BooleanVector constrainedNulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
-
-            assertThat(values.length()).isGreaterThan(0);
-            assertThat(constrainedNulls.length()).isEqualTo(values.length());
-            assertThat(values.values()[values.length() - 1]).isEqualTo(103L);
-            assertThat(constrainedNulls.values()[constrainedNulls.length() - 1]).isFalse();
-        }
-    }
-
-    @Test
-    void testTrinoParquetScanReadsMultipleFiles()
-            throws IOException
-    {
-        java.nio.file.Path first = writeParquetFile("trino-multi-1.parquet", false, List.of(
-                new ParquetRow(11, true, 101L),
-                new ParquetRow(12, false, null)));
-        java.nio.file.Path second = writeParquetFile("trino-multi-2.parquet", false, List.of(
-                new ParquetRow(13, true, 103L),
-                new ParquetRow(14, false, 104L)));
-
-        try (TrinoParquetScanOperator operator = new TrinoParquetScanOperator(TrinoParquetScanPolicy.fromSystemProperties(), new Allocator(EngineResources.createDefault()), List.of(first, second), List.of("x", "flag", "maybe"))) {
-            assertThat(operator(operator))
-                    .matchesExactly(List.of(
-                            Row.row(11L, 1L, 101L),
-                            Row.row(12L, 0L, null),
-                            Row.row(13L, 1L, 103L),
-                            Row.row(14L, 0L, 104L)));
-        }
-    }
-
-    @Test
-    void testHashJoinLateMaterializesProjectedInnerPayloadOverMultiBatchParquet()
-            throws IOException
-    {
-        // Regression guard for deferred payload materialization over an irreversible source.
-        // The inner side is a projection over a multi-file (irreversibly advancing) Trino Parquet
-        // scan. Such a source reports supportsConstrainedReborrow() == false, so the join must NOT
-        // defer the projected payload past the scan's advance - it must materialize eagerly. This
-        // exercises the exact shape that previously crashed real Parquet joins with an
-        // ArrayIndexOutOfBoundsException and confirms it now materializes correctly without crashing.
-        java.nio.file.Path first = writeParquetFile("join-inner-1.parquet", false, List.of(
-                new ParquetRow(1, true, 10L),
-                new ParquetRow(2, true, 20L)));
-        java.nio.file.Path second = writeParquetFile("join-inner-2.parquet", false, List.of(
-                new ParquetRow(3, true, 30L),
-                new ParquetRow(4, true, 40L)));
-        java.nio.file.Path third = writeParquetFile("join-inner-3.parquet", false, List.of(
-                new ParquetRow(5, true, 50L),
-                new ParquetRow(6, true, 60L)));
-
-        PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
-        Allocator allocator = new Allocator(EngineResources.createDefault());
-
-        // Project a squared payload that is only computed when the projected output is borrowed.
-        Variable squaredPayload = new Variable(0);
-        EvaluationPlan projectPlan = new EvaluationPlan(
-                List.of(new Assignment(
-                        squaredPayload,
-                        new Call("multiply", List.of(
-                                new Reference(new Input(2), Stream.VALUES),
-                                new Reference(new Input(2), Stream.VALUES))),
-                        AllMask.ALL)),
-                List.of(
-                        new Reference(new Input(0), Stream.VALUES),
-                        new Reference(squaredPayload, Stream.VALUES)));
-
-        Operator inner = new ProjectOperator(
-                allocator,
-                projectPlan,
-                primitiveRegistry,
-                new TrinoParquetScanOperator(TrinoParquetScanPolicy.fromSystemProperties(), allocator, List.of(first, second, third), List.of("x", "flag", "maybe")));
-
-        try (Operator join = new HashJoinOperator(
-                allocator,
-                new ConstantTableOperator(allocator, 1, List.of(Row.row(2L), Row.row(5L))),
-                0,
-                inner,
-                0)) {
-            // outer key, inner key, inner squared payload
-            assertThat(operator(join))
-                    .matchesExactly(List.of(
-                            Row.row(2L, 2L, 400L),
-                            Row.row(5L, 5L, 2_500L)));
         }
     }
 
