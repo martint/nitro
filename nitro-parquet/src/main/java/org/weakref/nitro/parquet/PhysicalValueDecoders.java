@@ -22,6 +22,7 @@ final class PhysicalValueDecoders
     {
         return switch (leaf.type()) {
             case BOOLEAN -> new BooleanPhysicalValueDecoder();
+            case DOUBLE -> new DoublePhysicalValueDecoder();
             case INT32, INT64 -> new LongPhysicalValueDecoder(leaf.type());
             case BYTE_ARRAY -> new BinaryPhysicalValueDecoder();
             default -> throw new UnsupportedParquetFeatureException(

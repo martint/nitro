@@ -28,6 +28,7 @@ final class NestedValueAccumulators
     {
         return switch (leaf.type()) {
             case BOOLEAN -> new BooleanNestedValueAccumulator(nullable);
+            case DOUBLE -> new DoubleNestedValueAccumulator(nullable);
             case INT32 -> new LongNestedValueAccumulator(true, nullable);
             case INT64 -> new LongNestedValueAccumulator(false, nullable);
             case BYTE_ARRAY -> new BinaryNestedValueAccumulator(leaf.string(), nullable);
