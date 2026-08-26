@@ -13,16 +13,13 @@
  */
 package org.weakref.nitro;
 
-import org.apache.parquet.column.Encoding;
 import org.apache.parquet.example.data.Group;
 import org.apache.parquet.example.data.simple.SimpleGroupFactory;
 import org.apache.parquet.format.ColumnMetaData;
-import org.apache.parquet.hadoop.ParquetFileReader;
+import org.apache.parquet.format.CompressionCodec;
+import org.apache.parquet.format.Encoding;
 import org.apache.parquet.hadoop.ParquetWriter;
 import org.apache.parquet.hadoop.example.ExampleParquetWriter;
-import org.apache.parquet.hadoop.metadata.CompressionCodecName;
-import org.apache.parquet.hadoop.metadata.ParquetMetadata;
-import org.apache.parquet.io.LocalInputFile;
 import org.apache.parquet.io.LocalOutputFile;
 import org.apache.parquet.schema.MessageType;
 import org.apache.parquet.schema.Types;
@@ -127,11 +124,17 @@ import static java.lang.Math.toIntExact;
 import static org.apache.parquet.schema.LogicalTypeAnnotation.mapType;
 import static org.apache.parquet.schema.LogicalTypeAnnotation.stringType;
 import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.BINARY;
-import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.BOOLEAN;
-import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.INT32;
 import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.INT64;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.weakref.nitro.OperatorAssertions.operator;
+import static org.weakref.nitro.parquet.NativeParquetTestFileWriter.Column.optionalBinary;
+import static org.weakref.nitro.parquet.NativeParquetTestFileWriter.Column.optionalInt32;
+import static org.weakref.nitro.parquet.NativeParquetTestFileWriter.Column.optionalInt64;
+import static org.weakref.nitro.parquet.NativeParquetTestFileWriter.Column.requiredBinary;
+import static org.weakref.nitro.parquet.NativeParquetTestFileWriter.Column.requiredBoolean;
+import static org.weakref.nitro.parquet.NativeParquetTestFileWriter.Column.requiredInt32;
+import static org.weakref.nitro.parquet.NativeParquetTestFileWriter.Column.requiredInt64;
+import static org.weakref.nitro.parquet.NativeParquetTestFileWriter.write;
 
 public class TestParquetOperator
 {
@@ -466,8 +469,9 @@ public class TestParquetOperator
                         schema)) {
             assertThat(released).containsAll(reads);
             SourcePoll.Ready ready = (SourcePoll.Ready) source.poll();
-            assertThat(((I64Vector) ready.batch().column(0).borrow(Stream.VALUES)).values())
-                    .startsWith(10L, 20L);
+            VectorAccess.LongValues values = VectorAccess.longValues(ready.batch().column(0).borrow(Stream.VALUES));
+            assertThat(new long[] {values.value(0), values.value(1)})
+                    .containsExactly(10L, 20L);
             ready.batch().close();
             assertThat(reads).noneMatch(range -> range.offset() == 0 && range.length() == bytes.length);
             assertThat(reads).anyMatch(range -> range.offset() == bytes.length - 8 && range.length() == 8);
@@ -1059,10 +1063,12 @@ public class TestParquetOperator
                         List.of(0, 2))) {
             SourcePoll.Ready ready = (SourcePoll.Ready) source.poll();
             try (var batch = ready.batch()) {
-                assertThat(((I64Vector) batch.column(0).borrow(Stream.VALUES)).values())
-                        .startsWith(10, 20, 30);
-                assertThat(((I64Vector) batch.column(1).borrow(Stream.VALUES)).values())
-                        .startsWith(100, 0, 300);
+                VectorAccess.LongValues x = VectorAccess.longValues(batch.column(0).borrow(Stream.VALUES));
+                VectorAccess.LongValues maybe = VectorAccess.longValues(batch.column(1).borrow(Stream.VALUES));
+                assertThat(new long[] {x.value(0), x.value(1), x.value(2)})
+                        .containsExactly(10, 20, 30);
+                assertThat(new long[] {maybe.value(0), maybe.value(1), maybe.value(2)})
+                        .containsExactly(100, 0, 300);
                 assertThat(((BooleanVector) batch.column(1).borrow(Stream.NULLS)).values())
                         .startsWith(false, true, false);
             }
@@ -1706,11 +1712,11 @@ public class TestParquetOperator
 
             Batch selected = scan.next();
             scan.constrain(Mask.sparse(new int[] {1}, 3));
-            I64Vector x = (I64Vector) selected.output(0).borrow(Stream.VALUES);
-            I64Vector maybe = (I64Vector) selected.output(1).borrow(Stream.VALUES);
+            VectorAccess.LongValues x = VectorAccess.longValues(selected.output(0).borrow(Stream.VALUES));
+            VectorAccess.LongValues maybe = VectorAccess.longValues(selected.output(1).borrow(Stream.VALUES));
             BooleanVector nulls = (BooleanVector) selected.output(1).borrow(Stream.NULLS);
-            assertThat(x.values()[1]).isEqualTo(22L);
-            assertThat(maybe.values()[1]).isEqualTo(202L);
+            assertThat(x.value(1)).isEqualTo(22L);
+            assertThat(maybe.value(1)).isEqualTo(202L);
             assertThat(nulls.values()[1]).isFalse();
             assertThat(scan.hasNext()).isFalse();
         }
@@ -2555,7 +2561,7 @@ public class TestParquetOperator
                 new BinaryParquetRow("three", bytes(3, 13)),
                 new BinaryParquetRow("four", null),
                 new BinaryParquetRow("five", bytes(5, 15)));
-        java.nio.file.Path file = writeBinaryParquetFile("compacted-selected-binary.parquet", false, CompressionCodecName.SNAPPY, rows);
+        java.nio.file.Path file = writeBinaryParquetFile("compacted-selected-binary.parquet", false, CompressionCodec.SNAPPY, rows);
 
         try (EngineResources resources = EngineResources.createDefault();
                 Allocator allocator = new Allocator(resources);
@@ -2727,27 +2733,10 @@ public class TestParquetOperator
             throws IOException
     {
         java.nio.file.Path file = tempDirectory.resolve(name);
-        MessageType schema = Types.buildMessage()
-                .required(INT64).named("x")
-                .required(BOOLEAN).named("flag")
-                .optional(INT64).named("maybe")
-                .named("nitro_test");
-
-        SimpleGroupFactory groups = new SimpleGroupFactory(schema);
-        try (ParquetWriter<Group> writer = ExampleParquetWriter.builder(new LocalOutputFile(file))
-                .withType(schema)
-                .withDictionaryEncoding(dictionaryEnabled)
-                .build()) {
-            for (ParquetRow row : rows) {
-                Group group = groups.newGroup()
-                        .append("x", row.x())
-                        .append("flag", row.flag());
-                if (row.maybe() != null) {
-                    group.append("maybe", row.maybe());
-                }
-                writer.write(group);
-            }
-        }
+        write(file, "nitro_test", List.of(
+                requiredInt64("x", rows.stream().map(ParquetRow::x).toList()),
+                requiredBoolean("flag", rows.stream().map(ParquetRow::flag).toList()),
+                optionalInt64("maybe", rows.stream().map(ParquetRow::maybe).toList())), dictionaryEnabled);
         return file;
     }
 
@@ -2755,18 +2744,7 @@ public class TestParquetOperator
             throws IOException
     {
         java.nio.file.Path file = tempDirectory.resolve(name);
-        MessageType schema = Types.buildMessage()
-                .required(INT32).named("value")
-                .named("nitro_int32_test");
-
-        SimpleGroupFactory groups = new SimpleGroupFactory(schema);
-        try (ParquetWriter<Group> writer = ExampleParquetWriter.builder(new LocalOutputFile(file))
-                .withType(schema)
-                .build()) {
-            for (int value : values) {
-                writer.write(groups.newGroup().append("value", value));
-            }
-        }
+        write(file, "nitro_int32_test", List.of(requiredInt32("value", values)), values.size() >= 128);
         return file;
     }
 
@@ -2774,23 +2752,7 @@ public class TestParquetOperator
             throws IOException
     {
         java.nio.file.Path file = tempDirectory.resolve(name);
-        MessageType schema = Types.buildMessage()
-                .optional(INT32).named("value")
-                .named("nitro_nullable_int32_test");
-
-        SimpleGroupFactory groups = new SimpleGroupFactory(schema);
-        try (ParquetWriter<Group> writer = ExampleParquetWriter.builder(new LocalOutputFile(file))
-                .withType(schema)
-                .withDictionaryEncoding(true)
-                .build()) {
-            for (Integer value : values) {
-                Group group = groups.newGroup();
-                if (value != null) {
-                    group.append("value", value);
-                }
-                writer.write(group);
-            }
-        }
+        write(file, "nitro_nullable_int32_test", List.of(optionalInt32("value", values)), true);
         return file;
     }
 
@@ -2798,21 +2760,9 @@ public class TestParquetOperator
             throws IOException
     {
         java.nio.file.Path file = tempDirectory.resolve(name);
-        MessageType schema = Types.buildMessage()
-                .required(INT32).named("value")
-                .required(BINARY).as(stringType()).named("payload")
-                .named("nitro_int_string_test");
-
-        SimpleGroupFactory groups = new SimpleGroupFactory(schema);
-        try (ParquetWriter<Group> writer = ExampleParquetWriter.builder(new LocalOutputFile(file))
-                .withType(schema)
-                .build()) {
-            for (int value : values) {
-                writer.write(groups.newGroup()
-                        .append("value", value)
-                        .append("payload", "payload-" + value));
-            }
-        }
+        write(file, "nitro_int_string_test", List.of(
+                requiredInt32("value", values),
+                requiredBinary("payload", values.stream().map(value -> "payload-" + value).toList()).asUtf8()), true);
         return file;
     }
 
@@ -2893,109 +2843,28 @@ public class TestParquetOperator
             throws IOException
     {
         java.nio.file.Path file = tempDirectory.resolve(name);
-        MessageType schema = Types.buildMessage()
-                .required(INT64).named("key")
-                .required(INT64).named("p1")
-                .required(INT64).named("p2")
-                .required(INT64).named("p3")
-                .required(INT64).named("p4")
-                .named("nitro_wide_numeric_test");
-        SimpleGroupFactory groups = new SimpleGroupFactory(schema);
-        try (ParquetWriter<Group> writer = ExampleParquetWriter.builder(new LocalOutputFile(file))
-                .withType(schema)
-                .withDictionaryEncoding(true)
-                .build()) {
-            for (WideNumericRow row : rows) {
-                writer.write(groups.newGroup()
-                        .append("key", row.key())
-                        .append("p1", row.p1())
-                        .append("p2", row.p2())
-                        .append("p3", row.p3())
-                        .append("p4", row.p4()));
-            }
-        }
+        write(file, "nitro_wide_numeric_test", List.of(
+                requiredInt64("key", rows.stream().map(WideNumericRow::key).toList()),
+                requiredInt64("p1", rows.stream().map(WideNumericRow::p1).toList()),
+                requiredInt64("p2", rows.stream().map(WideNumericRow::p2).toList()),
+                requiredInt64("p3", rows.stream().map(WideNumericRow::p3).toList()),
+                requiredInt64("p4", rows.stream().map(WideNumericRow::p4).toList())), true);
         return file;
     }
 
     private java.nio.file.Path writeBinaryParquetFile(String name, boolean dictionaryEnabled, List<BinaryParquetRow> rows)
             throws IOException
     {
-        return writeBinaryParquetFile(name, dictionaryEnabled, CompressionCodecName.UNCOMPRESSED, rows);
+        return writeBinaryParquetFile(name, dictionaryEnabled, CompressionCodec.UNCOMPRESSED, rows);
     }
 
-    private java.nio.file.Path writeBinaryParquetFile(String name, boolean dictionaryEnabled, CompressionCodecName compressionCodecName, List<BinaryParquetRow> rows)
+    private java.nio.file.Path writeBinaryParquetFile(String name, boolean dictionaryEnabled, CompressionCodec compressionCodec, List<BinaryParquetRow> rows)
             throws IOException
     {
         java.nio.file.Path file = tempDirectory.resolve(name);
-        MessageType schema = Types.buildMessage()
-                .required(BINARY).as(stringType()).named("name")
-                .optional(BINARY).named("payload")
-                .named("nitro_binary_test");
-
-        SimpleGroupFactory groups = new SimpleGroupFactory(schema);
-        try (ParquetWriter<Group> writer = ExampleParquetWriter.builder(new LocalOutputFile(file))
-                .withType(schema)
-                .withDictionaryEncoding(dictionaryEnabled)
-                .withCompressionCodec(compressionCodecName)
-                .build()) {
-            for (BinaryParquetRow row : rows) {
-                Group group = groups.newGroup()
-                        .append("name", row.name());
-                if (row.payload() != null) {
-                    group.append("payload", org.apache.parquet.io.api.Binary.fromConstantByteArray(row.payload()));
-                }
-                writer.write(group);
-            }
-        }
-        return file;
-    }
-
-    private java.nio.file.Path writeUtf8PairParquetFile(String name, boolean dictionaryEnabled, List<Utf8PairRow> rows)
-            throws IOException
-    {
-        java.nio.file.Path file = tempDirectory.resolve(name);
-        MessageType schema = Types.buildMessage()
-                .required(BINARY).as(stringType()).named("left_name")
-                .optional(BINARY).as(stringType()).named("right_name")
-                .named("nitro_utf8_test");
-
-        SimpleGroupFactory groups = new SimpleGroupFactory(schema);
-        try (ParquetWriter<Group> writer = ExampleParquetWriter.builder(new LocalOutputFile(file))
-                .withType(schema)
-                .withDictionaryEncoding(dictionaryEnabled)
-                .build()) {
-            for (Utf8PairRow row : rows) {
-                Group group = groups.newGroup()
-                        .append("left_name", row.left());
-                if (row.right() != null) {
-                    group.append("right_name", row.right());
-                }
-                writer.write(group);
-            }
-        }
-        return file;
-    }
-
-    private java.nio.file.Path writeRepeatedI64ParquetFile(String name, List<ArrayParquetRow> rows)
-            throws IOException
-    {
-        java.nio.file.Path file = tempDirectory.resolve(name);
-        MessageType schema = Types.buildMessage()
-                .repeated(INT64).named("items")
-                .named("nitro_array_test");
-
-        SimpleGroupFactory groups = new SimpleGroupFactory(schema);
-        try (ParquetWriter<Group> writer = ExampleParquetWriter.builder(new LocalOutputFile(file))
-                .withType(schema)
-                .build()) {
-            for (ArrayParquetRow row : rows) {
-                Group group = groups.newGroup();
-                for (long item : row.items()) {
-                    group.append("items", item);
-                }
-                writer.write(group);
-            }
-        }
+        write(file, "nitro_binary_test", List.of(
+                requiredBinary("name", rows.stream().map(BinaryParquetRow::name).toList()).asUtf8(),
+                optionalBinary("payload", rows.stream().map(BinaryParquetRow::payload).toList())), dictionaryEnabled, compressionCodec);
         return file;
     }
 
@@ -3027,103 +2896,6 @@ public class TestParquetOperator
         return file;
     }
 
-    private java.nio.file.Path writeNullableArrayLookupParquetFile(String name, List<NullableArrayLookupParquetRow> rows)
-            throws IOException
-    {
-        java.nio.file.Path file = tempDirectory.resolve(name);
-        MessageType schema = Types.buildMessage()
-                .repeatedGroup()
-                    .optional(INT64).named("element")
-                .named("items")
-                .optional(INT64).named("index")
-                .named("nitro_nullable_array_lookup_test");
-
-        SimpleGroupFactory groups = new SimpleGroupFactory(schema);
-        try (ParquetWriter<Group> writer = ExampleParquetWriter.builder(new LocalOutputFile(file))
-                .withType(schema)
-                .build()) {
-            for (NullableArrayLookupParquetRow row : rows) {
-                Group group = groups.newGroup();
-                for (Long item : row.items()) {
-                    Group elementGroup = group.addGroup("items");
-                    if (item != null) {
-                        elementGroup.append("element", item);
-                    }
-                }
-                if (row.index() != null) {
-                    group.append("index", row.index());
-                }
-                writer.write(group);
-            }
-        }
-        return file;
-    }
-
-    private java.nio.file.Path writeNullableArrayContainsParquetFile(String name, List<NullableArrayContainsParquetRow> rows)
-            throws IOException
-    {
-        java.nio.file.Path file = tempDirectory.resolve(name);
-        MessageType schema = Types.buildMessage()
-                .repeatedGroup()
-                    .optional(INT64).named("element")
-                .named("items")
-                .optional(INT64).named("needle")
-                .named("nitro_nullable_array_contains_test");
-
-        SimpleGroupFactory groups = new SimpleGroupFactory(schema);
-        try (ParquetWriter<Group> writer = ExampleParquetWriter.builder(new LocalOutputFile(file))
-                .withType(schema)
-                .build()) {
-            for (NullableArrayContainsParquetRow row : rows) {
-                Group group = groups.newGroup();
-                for (Long item : row.items()) {
-                    Group elementGroup = group.addGroup("items");
-                    if (item != null) {
-                        elementGroup.append("element", item);
-                    }
-                }
-                if (row.needle() != null) {
-                    group.append("needle", row.needle());
-                }
-                writer.write(group);
-            }
-        }
-        return file;
-    }
-
-    private java.nio.file.Path writeStructParquetFile(String name, List<StructParquetRow> rows)
-            throws IOException
-    {
-        java.nio.file.Path file = tempDirectory.resolve(name);
-        MessageType schema = Types.buildMessage()
-                .requiredGroup()
-                    .required(INT64).named("id")
-                    .optional(BINARY).as(stringType()).named("name")
-                    .optional(BOOLEAN).named("active")
-                .named("person")
-                .named("nitro_struct_test");
-
-        SimpleGroupFactory groups = new SimpleGroupFactory(schema);
-        try (ParquetWriter<Group> writer = ExampleParquetWriter.builder(new LocalOutputFile(file))
-                .withType(schema)
-                .withDictionaryEncoding(true)
-                .build()) {
-            for (StructParquetRow row : rows) {
-                Group group = groups.newGroup();
-                Group person = group.addGroup("person")
-                        .append("id", row.id());
-                if (row.name() != null) {
-                    person.append("name", row.name());
-                }
-                if (row.active() != null) {
-                    person.append("active", row.active());
-                }
-                writer.write(group);
-            }
-        }
-        return file;
-    }
-
     private java.nio.file.Path writeOptionalMapParquetFile(String name, List<MapParquetRow> rows)
             throws IOException
     {
@@ -3145,130 +2917,6 @@ public class TestParquetOperator
             for (MapParquetRow row : rows) {
                 Group group = groups.newGroup();
                 appendMap(group, "items", row.items());
-                writer.write(group);
-            }
-        }
-        return file;
-    }
-
-    private java.nio.file.Path writeRequiredMapParquetFile(String name, List<MapParquetRow> rows)
-            throws IOException
-    {
-        java.nio.file.Path file = tempDirectory.resolve(name);
-        MessageType schema = Types.buildMessage()
-                .requiredGroup().as(mapType())
-                    .repeatedGroup()
-                        .required(BINARY).as(stringType()).named("key")
-                        .optional(INT64).named("value")
-                    .named("key_value")
-                .named("items")
-                .named("nitro_required_map_test");
-
-        SimpleGroupFactory groups = new SimpleGroupFactory(schema);
-        try (ParquetWriter<Group> writer = ExampleParquetWriter.builder(new LocalOutputFile(file))
-                .withType(schema)
-                .withDictionaryEncoding(true)
-                .build()) {
-            for (MapParquetRow row : rows) {
-                Group group = groups.newGroup();
-                appendMap(group, "items", row.items());
-                writer.write(group);
-            }
-        }
-        return file;
-    }
-
-    private java.nio.file.Path writeMapLookupParquetFile(String name, List<MapLookupParquetRow> rows)
-            throws IOException
-    {
-        java.nio.file.Path file = tempDirectory.resolve(name);
-        MessageType schema = Types.buildMessage()
-                .optionalGroup().as(mapType())
-                    .repeatedGroup()
-                        .required(BINARY).as(stringType()).named("key")
-                        .optional(INT64).named("value")
-                    .named("key_value")
-                .named("items")
-                .optional(BINARY).as(stringType()).named("needle")
-                .named("nitro_map_lookup_test");
-
-        SimpleGroupFactory groups = new SimpleGroupFactory(schema);
-        try (ParquetWriter<Group> writer = ExampleParquetWriter.builder(new LocalOutputFile(file))
-                .withType(schema)
-                .withDictionaryEncoding(true)
-                .build()) {
-            for (MapLookupParquetRow row : rows) {
-                Group group = groups.newGroup();
-                appendMap(group, "items", row.items());
-                if (row.needle() != null) {
-                    group.append("needle", row.needle());
-                }
-                writer.write(group);
-            }
-        }
-        return file;
-    }
-
-    private java.nio.file.Path writeUtf8MapLookupParquetFile(String name, List<MapLookupUtf8ParquetRow> rows)
-            throws IOException
-    {
-        java.nio.file.Path file = tempDirectory.resolve(name);
-        MessageType schema = Types.buildMessage()
-                .optionalGroup().as(mapType())
-                    .repeatedGroup()
-                        .required(BINARY).as(stringType()).named("key")
-                        .optional(BINARY).as(stringType()).named("value")
-                    .named("key_value")
-                .named("items")
-                .optional(BINARY).as(stringType()).named("needle")
-                .named("nitro_utf8_map_lookup_test");
-
-        SimpleGroupFactory groups = new SimpleGroupFactory(schema);
-        try (ParquetWriter<Group> writer = ExampleParquetWriter.builder(new LocalOutputFile(file))
-                .withType(schema)
-                .withDictionaryEncoding(true)
-                .build()) {
-            for (MapLookupUtf8ParquetRow row : rows) {
-                Group group = groups.newGroup();
-                appendUtf8Map(group, "items", row.items());
-                if (row.needle() != null) {
-                    group.append("needle", row.needle());
-                }
-                writer.write(group);
-            }
-        }
-        return file;
-    }
-
-    private java.nio.file.Path writeOptionalStructParquetFile(String name, List<OptionalStructParquetRow> rows)
-            throws IOException
-    {
-        java.nio.file.Path file = tempDirectory.resolve(name);
-        MessageType schema = Types.buildMessage()
-                .optionalGroup()
-                    .required(INT64).named("id")
-                    .optional(BINARY).as(stringType()).named("name")
-                    .optional(BOOLEAN).named("active")
-                .named("person")
-                .named("nitro_optional_struct_test");
-
-        SimpleGroupFactory groups = new SimpleGroupFactory(schema);
-        try (ParquetWriter<Group> writer = ExampleParquetWriter.builder(new LocalOutputFile(file))
-                .withType(schema)
-                .withDictionaryEncoding(true)
-                .build()) {
-            for (OptionalStructParquetRow row : rows) {
-                Group group = groups.newGroup();
-                if (row.person() != null) {
-                    Group person = group.addGroup("person")
-                            .append("id", row.person().id());
-                    if (row.person().name() != null) {
-                        person.append("name", row.person().name());
-                    }
-                    if (row.person().active() != null) {
-                        person.append("active", row.person().active());
-                    }
-                }
                 writer.write(group);
             }
         }
@@ -3335,51 +2983,21 @@ public class TestParquetOperator
         return map;
     }
 
-    private static void appendUtf8Map(Group group, String fieldName, Map<String, String> entries)
-    {
-        if (entries == null) {
-            return;
-        }
-        Group mapGroup = group.addGroup(fieldName);
-        for (Map.Entry<String, String> entry : entries.entrySet()) {
-            Group keyValue = mapGroup.addGroup("key_value")
-                    .append("key", entry.getKey());
-            if (entry.getValue() != null) {
-                keyValue.append("value", entry.getValue());
-            }
-        }
-    }
-
-    private static Map<String, String> orderedUtf8Map(Object... entries)
-    {
-        LinkedHashMap<String, String> map = new LinkedHashMap<>();
-        for (int index = 0; index < entries.length; index += 2) {
-            map.put((String) entries[index], (String) entries[index + 1]);
-        }
-        return map;
-    }
-
     private static void assertDictionaryEncoding(java.nio.file.Path file, String columnName)
-            throws IOException
     {
-        try (ParquetFileReader reader = ParquetFileReader.open(new LocalInputFile(file))) {
-            ParquetMetadata metadata = reader.getFooter();
-            assertThat(metadata.getBlocks()).isNotEmpty();
-            assertThat(metadata.getBlocks().getFirst().getColumns().stream()
-                    .filter(column -> column.getPath().toDotString().equals(columnName))
-                    .flatMap(column -> column.getEncodings().stream()))
-                    .anyMatch(Encoding::usesDictionary);
+        try (ParquetFile parquet = ParquetFile.open(file)) {
+            assertThat(parquet.rowGroups()).isNotEmpty();
+            assertThat(parquet.rowGroups().getFirst().columns.stream()
+                    .map(column -> column.meta_data)
+                    .filter(metadata -> metadata.path_in_schema.equals(List.of(columnName)))
+                    .flatMap(metadata -> metadata.encodings.stream()))
+                    .anyMatch(encoding -> encoding == Encoding.RLE_DICTIONARY || encoding == Encoding.PLAIN_DICTIONARY);
         }
     }
 
     private static PrimitiveFunction eqUtf8()
     {
         return TestPrimitiveFunctions.primitiveRegistry().get("eq_utf8");
-    }
-
-    private static long expectedUtf8Hash(String value)
-    {
-        return value.hashCode();
     }
 
     private static boolean booleanValue(org.weakref.nitro.data.Vector values, int position)
@@ -3416,23 +3034,7 @@ public class TestParquetOperator
 
     private record BinaryParquetRow(String name, byte[] payload) {}
 
-    private record Utf8PairRow(String left, String right) {}
-
-    private record ArrayParquetRow(List<Long> items) {}
-
     private record NullableArrayParquetRow(List<Long> items) {}
 
-    private record NullableArrayLookupParquetRow(List<Long> items, Long index) {}
-
-    private record NullableArrayContainsParquetRow(List<Long> items, Long needle) {}
-
-    private record StructParquetRow(long id, String name, Boolean active) {}
-
-    private record OptionalStructParquetRow(StructParquetRow person) {}
-
     private record MapParquetRow(Map<String, Long> items) {}
-
-    private record MapLookupParquetRow(Map<String, Long> items, String needle) {}
-
-    private record MapLookupUtf8ParquetRow(Map<String, String> items, String needle) {}
 }
