@@ -120,6 +120,33 @@ final class LongNestedValueAccumulator
     }
 
     @Override
+    public void appendDictionaryRun(PhysicalValueDecoder decoder, int[] dictionaryIds, int ordinal, int count)
+    {
+        if (!(decoder instanceof LongValueDecoder longs)) {
+            throw new IllegalArgumentException("Integer accumulator requires an integer physical decoder");
+        }
+        if (count < 0) {
+            throw new IllegalArgumentException("count is negative");
+        }
+        if (directValues instanceof I64Vector longValues) {
+            longs.copyDictionary(dictionaryIds, ordinal, longValues.values(), size, count);
+        }
+        else {
+            ensureCapacity(size + count);
+            longs.copyDictionary(dictionaryIds, ordinal, values, size, count);
+            if (directValues instanceof I32Vector integers) {
+                for (int index = 0; index < count; index++) {
+                    integers.values()[size + index] = toIntExact(values[size + index]);
+                }
+            }
+        }
+        if (nullable) {
+            java.util.Arrays.fill(nullValues(), size, size + count, false);
+        }
+        size += count;
+    }
+
+    @Override
     public void appendNull()
     {
         if (!nullable) {

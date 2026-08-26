@@ -87,6 +87,15 @@ final class LongPhysicalValueDecoder
     }
 
     @Override
+    public void copyDictionary(int[] dictionaryIds, int ordinal, long[] output, int outputOffset, int count)
+    {
+        int end = ordinal + count;
+        for (int index = ordinal; index < end; index++) {
+            output[outputOffset++] = dictionary[dictionaryIds[index]];
+        }
+    }
+
+    @Override
     public void resetDictionary()
     {
         dictionarySize = 0;

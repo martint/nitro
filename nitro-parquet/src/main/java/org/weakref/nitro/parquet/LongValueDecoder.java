@@ -25,4 +25,11 @@ interface LongValueDecoder
             output[outputOffset + index] = value(ordinal + index, -1);
         }
     }
+
+    default void copyDictionary(int[] dictionaryIds, int ordinal, long[] output, int outputOffset, int count)
+    {
+        for (int index = 0; index < count; index++) {
+            output[outputOffset + index] = value(ordinal + index, dictionaryIds[ordinal + index]);
+        }
+    }
 }
