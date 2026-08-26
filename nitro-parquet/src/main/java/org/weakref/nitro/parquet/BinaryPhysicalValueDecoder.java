@@ -24,7 +24,7 @@ import static org.weakref.nitro.parquet.ParquetFile.LE_INT;
 
 /** Physical BYTE_ARRAY decoder. UTF-8 and binary logical semantics are intentionally outside this layer. */
 final class BinaryPhysicalValueDecoder
-        implements PhysicalValueDecoder
+        implements BinaryValueDecoder
 {
     private static final int[] EMPTY_INTS = new int[0];
     private static final byte[] EMPTY_BYTES = new byte[0];
@@ -35,6 +35,7 @@ final class BinaryPhysicalValueDecoder
     private int[] offsets = EMPTY_INTS;
     private byte[] data = EMPTY_BYTES;
     private int dictionarySize;
+    private int dictionaryGeneration;
 
     BinaryPhysicalValueDecoder(PrimitiveArrayPool arrayPool)
     {
@@ -51,6 +52,7 @@ final class BinaryPhysicalValueDecoder
         dictionaryOffsets = grow(dictionaryOffsets, valueCount + 1);
         dictionaryData = decode(body, 0, valueCount, dictionaryOffsets, dictionaryData);
         dictionarySize = valueCount;
+        dictionaryGeneration++;
     }
 
     @Override
@@ -60,14 +62,16 @@ final class BinaryPhysicalValueDecoder
         data = decode(body, offset, valueCount, offsets, data);
     }
 
-    int length(int ordinal, int dictionaryId)
+    @Override
+    public int length(int ordinal, int dictionaryId)
     {
         int[] selectedOffsets = dictionaryId >= 0 ? dictionaryOffsets : offsets;
         int index = dictionaryId >= 0 ? dictionaryId : ordinal;
         return selectedOffsets[index + 1] - selectedOffsets[index];
     }
 
-    void copy(int ordinal, int dictionaryId, byte[] output, int outputOffset)
+    @Override
+    public void copy(int ordinal, int dictionaryId, byte[] output, int outputOffset)
     {
         int[] selectedOffsets = dictionaryId >= 0 ? dictionaryOffsets : offsets;
         byte[] selectedData = dictionaryId >= 0 ? dictionaryData : data;
@@ -85,6 +89,25 @@ final class BinaryPhysicalValueDecoder
     public int dictionarySize()
     {
         return dictionarySize;
+    }
+
+    @Override
+    public int dictionaryGeneration()
+    {
+        return dictionaryGeneration;
+    }
+
+    @Override
+    public int dictionaryByteSize()
+    {
+        return dictionaryOffsets[dictionarySize];
+    }
+
+    @Override
+    public void copyDictionary(int[] offsets, byte[] data)
+    {
+        System.arraycopy(dictionaryOffsets, 0, offsets, 0, dictionarySize + 1);
+        System.arraycopy(dictionaryData, 0, data, 0, dictionaryByteSize());
     }
 
     private byte[] decode(MemorySegment body, long offset, int valueCount, int[] offsets, byte[] data)

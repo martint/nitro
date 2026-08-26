@@ -16,8 +16,12 @@ package org.weakref.nitro.parquet;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Streams;
+
+import java.util.Arrays;
 
 import static java.util.Objects.requireNonNull;
 import static org.weakref.nitro.data.Utf8Traits.UTF8_STRING;
@@ -36,6 +40,14 @@ final class BinaryNestedValueAccumulator
     private int[] offsets = EMPTY_INTS;
     private byte[] data = EMPTY_BYTES;
     private boolean[] nulls = EMPTY_BOOLEANS;
+    private int[] dictionaryIds = EMPTY_INTS;
+    private int[] dictionaryOffsets = EMPTY_INTS;
+    private byte[] dictionaryData = EMPTY_BYTES;
+    private boolean dictionaryCandidate;
+    private int dictionaryGeneration;
+    private int dictionarySize;
+    private int dictionaryBytes;
+    private int logicalBytes;
     private int size;
     private int bytes;
 
@@ -53,6 +65,11 @@ final class BinaryNestedValueAccumulator
             throw new IllegalArgumentException("Nested accumulator cannot change allocator ownership");
         }
         arrayPool = requestedPool;
+        dictionaryCandidate = true;
+        dictionaryGeneration = -1;
+        dictionarySize = 0;
+        dictionaryBytes = 0;
+        logicalBytes = 0;
         size = 0;
         bytes = 0;
     }
@@ -60,9 +77,13 @@ final class BinaryNestedValueAccumulator
     @Override
     public void append(PhysicalValueDecoder decoder, int ordinal, int dictionaryId)
     {
-        if (!(decoder instanceof BinaryPhysicalValueDecoder binary)) {
+        if (!(decoder instanceof BinaryValueDecoder binary)) {
             throw new IllegalArgumentException("Binary accumulator requires a binary physical decoder");
         }
+        if (dictionaryId >= 0 && appendDictionaryId(binary, dictionaryId)) {
+            return;
+        }
+        ensureFlat();
         int length = binary.length(ordinal, dictionaryId);
         ensurePositionCapacity(size + 1);
         ensureByteCapacity(bytes + length);
@@ -74,6 +95,46 @@ final class BinaryNestedValueAccumulator
         if (nullable) {
             nulls[size - 1] = false;
         }
+        logicalBytes += length;
+    }
+
+    @Override
+    public void appendEvents(
+            PhysicalValueDecoder decoder,
+            int[] valueOrdinals,
+            int[] pageDictionaryIds,
+            int eventOffset,
+            int eventCount)
+    {
+        if (!(decoder instanceof BinaryValueDecoder binary)) {
+            throw new IllegalArgumentException("Binary accumulator requires a binary physical decoder");
+        }
+        if (pageDictionaryIds == null || !prepareDictionary(binary)) {
+            ensureFlat();
+            NestedValueAccumulator.super.appendEvents(decoder, valueOrdinals, pageDictionaryIds, eventOffset, eventCount);
+            return;
+        }
+        ensurePositionCapacity(size + eventCount);
+        int end = eventOffset + eventCount;
+        for (int event = eventOffset; event < end; event++) {
+            int ordinal = valueOrdinals[event];
+            int dictionaryId = ordinal < 0 ? -1 : pageDictionaryIds[ordinal];
+            dictionaryIds[size] = dictionaryId;
+            if (nullable) {
+                nulls[size] = ordinal < 0;
+            }
+            if (dictionaryId >= 0) {
+                logicalBytes += binary.length(ordinal, dictionaryId);
+            }
+            size++;
+        }
+    }
+
+    @Override
+    public void appendPlainRun(PhysicalValueDecoder decoder, int ordinal, int count)
+    {
+        ensureFlat();
+        NestedValueAccumulator.super.appendPlainRun(decoder, ordinal, count);
     }
 
     @Override
@@ -83,6 +144,12 @@ final class BinaryNestedValueAccumulator
             throw new IllegalArgumentException("Required nested value is missing");
         }
         ensurePositionCapacity(size + 1);
+        if (dictionaryCandidate) {
+            dictionaryIds[size] = -1;
+            nulls[size] = true;
+            size++;
+            return;
+        }
         offsets[size] = bytes;
         nulls[size] = true;
         size++;
@@ -98,6 +165,10 @@ final class BinaryNestedValueAccumulator
     @Override
     public Streams materialize(Allocator allocator, Allocator.Context context)
     {
+        if (shouldMaterializeDictionary()) {
+            return materializeDictionary(allocator, context);
+        }
+        ensureFlat();
         BinaryVector result = BinaryVector.allocate(allocator, context, size, bytes);
         System.arraycopy(offsets, 0, result.offsets(), 0, size + 1);
         System.arraycopy(data, 0, result.data(), 0, bytes);
@@ -112,21 +183,142 @@ final class BinaryNestedValueAccumulator
         return Streams.ofValuesAndNulls(result, resultNulls);
     }
 
-    private void ensurePositionCapacity(int required)
+    private boolean appendDictionaryId(BinaryValueDecoder decoder, int dictionaryId)
     {
-        if (offsets.length >= required + 1) {
+        if (!prepareDictionary(decoder)) {
+            return false;
+        }
+        ensurePositionCapacity(size + 1);
+        dictionaryIds[size] = dictionaryId;
+        if (nullable) {
+            nulls[size] = false;
+        }
+        logicalBytes += decoder.length(0, dictionaryId);
+        size++;
+        return true;
+    }
+
+    private boolean prepareDictionary(BinaryValueDecoder decoder)
+    {
+        if (!dictionaryCandidate) {
+            return false;
+        }
+        if (dictionaryGeneration == decoder.dictionaryGeneration()) {
+            return true;
+        }
+        if (dictionaryGeneration >= 0) {
+            ensureFlat();
+            return false;
+        }
+        dictionaryGeneration = decoder.dictionaryGeneration();
+        dictionarySize = decoder.dictionarySize();
+        dictionaryBytes = decoder.dictionaryByteSize();
+        dictionaryOffsets = grow(dictionaryOffsets, dictionarySize + 1);
+        dictionaryData = grow(dictionaryData, dictionaryBytes);
+        decoder.copyDictionary(dictionaryOffsets, dictionaryData);
+        return true;
+    }
+
+    private boolean shouldMaterializeDictionary()
+    {
+        if (!dictionaryCandidate || dictionaryGeneration < 0) {
+            return false;
+        }
+        int outputDictionarySize = dictionarySize + (nullable ? 1 : 0);
+        long dictionaryFootprint = dictionaryBytes +
+                (long) Integer.BYTES * (dictionarySize + 1L + size + outputDictionarySize) +
+                (nullable ? outputDictionarySize : 0);
+        long flatFootprint = logicalBytes + (long) Integer.BYTES * (size + 1L) + (nullable ? size : 0);
+        return dictionaryFootprint < flatFootprint;
+    }
+
+    private Streams materializeDictionary(Allocator allocator, Allocator.Context context)
+    {
+        int outputDictionarySize = dictionarySize + (nullable ? 1 : 0);
+        int nullId = outputDictionarySize - 1;
+        I32Vector ids = I32Vector.allocate(allocator, context, size);
+        I32Vector frequencies = I32Vector.allocate(allocator, context, outputDictionarySize);
+        Arrays.fill(frequencies.values(), 0, outputDictionarySize, 0);
+        for (int position = 0; position < size; position++) {
+            int id = dictionaryIds[position] < 0 ? nullId : dictionaryIds[position];
+            ids.values()[position] = id;
+            frequencies.values()[id]++;
+        }
+        BinaryVector dictionary = BinaryVector.allocate(allocator, context, outputDictionarySize, dictionaryBytes);
+        System.arraycopy(dictionaryOffsets, 0, dictionary.offsets(), 0, dictionarySize + 1);
+        if (nullable) {
+            dictionary.offsets()[outputDictionarySize] = dictionaryBytes;
+        }
+        System.arraycopy(dictionaryData, 0, dictionary.data(), 0, dictionaryBytes);
+        if (utf8) {
+            dictionary.addTrait(UTF8_STRING);
+        }
+        DictionaryVector result = DictionaryVector.wrapOwnedIdsWithDomainFrequencies(
+                ids,
+                size,
+                dictionary.freezeContent(),
+                frequencies);
+        if (!nullable) {
+            return Streams.ofValues(result);
+        }
+        BooleanVector dictionaryNulls = allocator.allocate(
+                context,
+                BooleanVector.class,
+                outputDictionarySize,
+                BooleanVector::new);
+        Arrays.fill(dictionaryNulls.values(), 0, outputDictionarySize, false);
+        dictionaryNulls.values()[nullId] = true;
+        return Streams.of(result, result.sharedMappingWithValues(dictionaryNulls.freezeContent()), null);
+    }
+
+    private void ensureFlat()
+    {
+        if (!dictionaryCandidate) {
             return;
         }
-        int capacity = Math.max(required, Math.max(16, offsets.length * 2));
-        int[] replacementOffsets = arrayPool.borrowInts(capacity + 1);
-        System.arraycopy(offsets, 0, replacementOffsets, 0, Math.min(offsets.length, size + 1));
-        arrayPool.release(offsets);
-        offsets = replacementOffsets;
-        if (nullable) {
+        dictionaryCandidate = false;
+        ensurePositionCapacity(size);
+        ensureByteCapacity(logicalBytes);
+        bytes = 0;
+        for (int position = 0; position < size; position++) {
+            offsets[position] = bytes;
+            int id = dictionaryIds[position];
+            if (id >= 0) {
+                int start = dictionaryOffsets[id];
+                int length = dictionaryOffsets[id + 1] - start;
+                System.arraycopy(dictionaryData, start, data, bytes, length);
+                bytes += length;
+            }
+        }
+        offsets[size] = bytes;
+    }
+
+    private void ensurePositionCapacity(int required)
+    {
+        if (offsets.length >= required + 1 &&
+                dictionaryIds.length >= required &&
+                (!nullable || nulls.length >= required)) {
+            return;
+        }
+        int currentCapacity = Math.max(dictionaryIds.length, Math.max(0, offsets.length - 1));
+        int capacity = Math.max(required, Math.max(16, currentCapacity * 2));
+        if (offsets.length < capacity + 1) {
+            int[] replacementOffsets = arrayPool.borrowInts(capacity + 1);
+            System.arraycopy(offsets, 0, replacementOffsets, 0, Math.min(offsets.length, size + 1));
+            arrayPool.release(offsets);
+            offsets = replacementOffsets;
+        }
+        if (nullable && nulls.length < capacity) {
             boolean[] replacementNulls = arrayPool.borrowBooleans(capacity);
             System.arraycopy(nulls, 0, replacementNulls, 0, size);
             arrayPool.release(nulls);
             nulls = replacementNulls;
+        }
+        if (dictionaryIds.length < capacity) {
+            int[] replacementIds = arrayPool.borrowInts(capacity);
+            System.arraycopy(dictionaryIds, 0, replacementIds, 0, size);
+            arrayPool.release(dictionaryIds);
+            dictionaryIds = replacementIds;
         }
     }
 
@@ -140,6 +332,26 @@ final class BinaryNestedValueAccumulator
         }
     }
 
+    private int[] grow(int[] current, int required)
+    {
+        if (current.length >= required) {
+            return current;
+        }
+        int[] replacement = arrayPool.borrowInts(Math.max(required, Math.max(16, current.length * 2)));
+        arrayPool.release(current);
+        return replacement;
+    }
+
+    private byte[] grow(byte[] current, int required)
+    {
+        if (current.length >= required) {
+            return current;
+        }
+        byte[] replacement = arrayPool.borrowBytes(Math.max(required, Math.max(64, current.length * 2)));
+        arrayPool.release(current);
+        return replacement;
+    }
+
     @Override
     public void close()
     {
@@ -147,10 +359,21 @@ final class BinaryNestedValueAccumulator
             arrayPool.release(offsets);
             arrayPool.release(data);
             arrayPool.release(nulls);
+            arrayPool.release(dictionaryIds);
+            arrayPool.release(dictionaryOffsets);
+            arrayPool.release(dictionaryData);
             offsets = EMPTY_INTS;
             data = EMPTY_BYTES;
             nulls = EMPTY_BOOLEANS;
+            dictionaryIds = EMPTY_INTS;
+            dictionaryOffsets = EMPTY_INTS;
+            dictionaryData = EMPTY_BYTES;
             arrayPool = null;
+            dictionaryCandidate = false;
+            dictionaryGeneration = -1;
+            dictionarySize = 0;
+            dictionaryBytes = 0;
+            logicalBytes = 0;
             size = 0;
             bytes = 0;
         }
