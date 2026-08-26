@@ -18,6 +18,8 @@ import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Streams;
 
+import java.util.Arrays;
+
 import static java.util.Objects.requireNonNull;
 
 /** Reusable accumulation for BOOLEAN physical leaves. */
@@ -80,6 +82,25 @@ final class BooleanNestedValueAccumulator
             nullValues()[size] = false;
         }
         size++;
+    }
+
+    @Override
+    public void appendPlainRun(PhysicalValueDecoder decoder, int ordinal, int count)
+    {
+        if (!(decoder instanceof BooleanValueDecoder booleans)) {
+            throw new IllegalArgumentException("Boolean accumulator requires a boolean physical decoder");
+        }
+        if (directValues == null) {
+            ensureCapacity(size + count);
+            booleans.copyPlain(ordinal, values, size, count);
+        }
+        else {
+            booleans.copyPlain(ordinal, directValues.values(), size, count);
+        }
+        if (nullable) {
+            Arrays.fill(nullValues(), size, size + count, false);
+        }
+        size += count;
     }
 
     @Override

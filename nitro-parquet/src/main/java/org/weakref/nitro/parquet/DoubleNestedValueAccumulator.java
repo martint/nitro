@@ -19,6 +19,8 @@ import org.weakref.nitro.data.F64Vector;
 import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Streams;
 
+import java.util.Arrays;
+
 import static java.util.Objects.requireNonNull;
 
 /** Reusable accumulation for DOUBLE physical leaves. */
@@ -79,6 +81,25 @@ final class DoubleNestedValueAccumulator
             nullValues()[size] = false;
         }
         size++;
+    }
+
+    @Override
+    public void appendPlainRun(PhysicalValueDecoder decoder, int ordinal, int count)
+    {
+        if (!(decoder instanceof DoubleValueDecoder doubles)) {
+            throw new IllegalArgumentException("Double accumulator requires a double physical decoder");
+        }
+        if (directValues == null) {
+            ensureCapacity(size + count);
+            doubles.copyPlain(ordinal, values, size, count);
+        }
+        else {
+            doubles.copyPlain(ordinal, directValues.values(), size, count);
+        }
+        if (nullable) {
+            Arrays.fill(nullValues(), size, size + count, false);
+        }
+        size += count;
     }
 
     @Override

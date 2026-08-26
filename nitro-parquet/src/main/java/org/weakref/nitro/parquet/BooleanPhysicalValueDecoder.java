@@ -23,7 +23,7 @@ import static java.util.Objects.requireNonNull;
 
 /** Physical BOOLEAN decoder for Parquet's least-significant-bit-first PLAIN representation. */
 final class BooleanPhysicalValueDecoder
-        implements PhysicalValueDecoder
+        implements BooleanValueDecoder
 {
     private static final boolean[] EMPTY_BOOLEANS = new boolean[0];
 
@@ -55,9 +55,15 @@ final class BooleanPhysicalValueDecoder
         }
     }
 
-    boolean value(int ordinal)
+    public boolean value(int ordinal)
     {
         return values[ordinal];
+    }
+
+    @Override
+    public void copyPlain(int ordinal, boolean[] output, int outputOffset, int count)
+    {
+        System.arraycopy(values, ordinal, output, outputOffset, count);
     }
 
     @Override

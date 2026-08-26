@@ -23,7 +23,7 @@ import static org.weakref.nitro.parquet.ParquetFile.LE_DOUBLE;
 
 /** Physical DOUBLE decoder. Logical interpretation remains the vector/type adapter's responsibility. */
 final class DoublePhysicalValueDecoder
-        implements PhysicalValueDecoder
+        implements DoubleValueDecoder
 {
     private static final double[] EMPTY_DOUBLES = new double[0];
 
@@ -53,9 +53,15 @@ final class DoublePhysicalValueDecoder
         MemorySegment.copy(body, LE_DOUBLE, offset, values, 0, valueCount);
     }
 
-    double value(int ordinal, int dictionaryId)
+    public double value(int ordinal, int dictionaryId)
     {
         return dictionaryId >= 0 ? dictionary[dictionaryId] : values[ordinal];
+    }
+
+    @Override
+    public void copyPlain(int ordinal, double[] output, int outputOffset, int count)
+    {
+        System.arraycopy(values, ordinal, output, outputOffset, count);
     }
 
     @Override

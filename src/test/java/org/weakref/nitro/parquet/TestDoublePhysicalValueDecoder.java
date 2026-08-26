@@ -45,6 +45,11 @@ class TestDoublePhysicalValueDecoder
         assertThat(decoder.value(1, -1)).isEqualTo(9.5);
         assertThat(decoder.value(0, 1)).isEqualTo(-2.25);
         assertThat(decoder.dictionarySize()).isEqualTo(2);
+
+        double[] output = new double[4];
+        decoder.copyPlain(0, output, 1, 2);
+        assertThat(output).containsExactly(0, 7.75, 9.5, 0);
+        decoder.close();
     }
 
     @Test

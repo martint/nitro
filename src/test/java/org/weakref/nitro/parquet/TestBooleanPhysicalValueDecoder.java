@@ -32,6 +32,11 @@ class TestBooleanPhysicalValueDecoder
 
         assertThat(values(decoder, 10))
                 .containsExactly(true, true, false, false, true, false, true, false, true, true);
+
+        boolean[] output = new boolean[6];
+        decoder.copyPlain(1, output, 1, 4);
+        assertThat(output).containsExactly(false, true, false, false, true, false);
+        decoder.close();
     }
 
     @Test
