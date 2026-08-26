@@ -333,6 +333,35 @@ final class NestedMapReader
             }
             int[] keyDefinitionLevels = keyWindow.definitionLevels();
             int[] valueDefinitionLevels = valueWindow.definitionLevels();
+            if (allAtLeast(keyDefinitionLevels, keyOffset, windowLength, entryDefinitionLevel) &&
+                    allAtLeast(valueDefinitionLevels, valueOffset, windowLength, entryDefinitionLevel)) {
+                int consumed = 0;
+                while (consumed < windowLength) {
+                    if (keyRepetitionLevels[keyOffset + consumed] == 0) {
+                        if (row >= 0) {
+                            maps.offsets()[row + 1] = outputEntryCount + consumed;
+                            if (row + 1 == rowCount) {
+                                keyWindow.appendTo(keyValues, 0, consumed);
+                                valueWindow.appendTo(values, 0, consumed);
+                                keySource.advanceEvents(consumed);
+                                valueSource.advanceEvents(consumed);
+                                return;
+                            }
+                        }
+                        row++;
+                    }
+                    else if (row < 0) {
+                        throw new IllegalArgumentException("Nested MAP row starts with nonzero repetition level");
+                    }
+                    consumed++;
+                }
+                keyWindow.appendTo(keyValues, 0, consumed);
+                valueWindow.appendTo(values, 0, consumed);
+                outputEntryCount += consumed;
+                keySource.advanceEvents(consumed);
+                valueSource.advanceEvents(consumed);
+                continue;
+            }
             int consumed = 0;
             int entryRunStart = -1;
             int entryRunCount = 0;
@@ -390,6 +419,17 @@ final class NestedMapReader
     {
         keyWindow.appendTo(keyValues, start, count);
         valueWindow.appendTo(values, start, count);
+    }
+
+    private static boolean allAtLeast(int[] values, int offset, int length, int minimum)
+    {
+        int end = offset + length;
+        for (int index = offset; index < end; index++) {
+            if (values[index] < minimum) {
+                return false;
+            }
+        }
+        return true;
     }
 
     void skip(long rowCount)
