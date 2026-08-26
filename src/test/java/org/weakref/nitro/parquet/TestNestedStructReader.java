@@ -50,12 +50,16 @@ class TestNestedStructReader
             BooleanVector idNulls = (BooleanVector) rows.field("id").get(Stream.NULLS);
             BinaryVector names = (BinaryVector) rows.fieldValues("name");
             BooleanVector nameNulls = (BooleanVector) rows.field("name").get(Stream.NULLS);
+            BooleanVector active = (BooleanVector) rows.fieldValues("active");
+            BooleanVector activeNulls = (BooleanVector) rows.field("active").get(Stream.NULLS);
 
             assertThat(rowNulls.values()).containsExactly(false, true, false);
             assertThat(ids.values()).containsExactly(1, 0, 2);
             assertThat(idNulls.values()).containsExactly(false, true, false);
             assertThat(value(names, 0)).isEqualTo("alice");
             assertThat(nameNulls.values()).containsExactly(false, true, true);
+            assertThat(active.values()).containsExactly(true, false, false);
+            assertThat(activeNulls.values()).containsExactly(false, true, false);
         }
     }
 
@@ -93,19 +97,25 @@ class TestNestedStructReader
         ParquetSchema.Primitive name = new ParquetSchema.Primitive(
                 "name", FieldRepetitionType.OPTIONAL, Type.BYTE_ARRAY, ConvertedType.UTF8, null, 0, 0, 0, 1,
                 List.of("person", "name"), 2, 0);
+        ParquetSchema.Primitive active = new ParquetSchema.Primitive(
+                "active", FieldRepetitionType.OPTIONAL, Type.BOOLEAN, null, null, 0, 0, 0, 2,
+                List.of("person", "active"), 2, 0);
         ParquetSchema.Group person = new ParquetSchema.Group(
-                "person", FieldRepetitionType.OPTIONAL, null, null, List.of(id, name), 1, 0);
+                "person", FieldRepetitionType.OPTIONAL, null, null, List.of(id, name, active), 1, 0);
 
         LongPhysicalValueDecoder ids = new LongPhysicalValueDecoder(Type.INT64);
         ids.decodePlain(longs(1, 2), 0, 2);
         BinaryPhysicalValueDecoder names = new BinaryPhysicalValueDecoder();
         names.decodePlain(binary("alice"), 0, 1);
+        BooleanPhysicalValueDecoder activeValues = new BooleanPhysicalValueDecoder();
+        activeValues.decodePlain(MemorySegment.ofArray(new byte[] {0b0000_0001}), 0, 2);
         return new NestedStructReader(
                 person,
                 RleReaderPolicy.defaults(),
                 new NestedLeafCursor[] {
                     new TestingCursor(ids, new int[] {1, 0, 1}, new int[] {0, -1, 1}),
-                    new TestingCursor(names, new int[] {2, 0, 1}, new int[] {0, -1, -1})});
+                    new TestingCursor(names, new int[] {2, 0, 1}, new int[] {0, -1, -1}),
+                    new TestingCursor(activeValues, new int[] {2, 0, 2}, new int[] {0, -1, 1})});
     }
 
     private static String value(BinaryVector vector, int position)

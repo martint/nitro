@@ -21,6 +21,7 @@ final class PhysicalValueDecoders
     static PhysicalValueDecoder create(ParquetSchema.Primitive leaf)
     {
         return switch (leaf.type()) {
+            case BOOLEAN -> new BooleanPhysicalValueDecoder();
             case INT32, INT64 -> new LongPhysicalValueDecoder(leaf.type());
             case BYTE_ARRAY -> new BinaryPhysicalValueDecoder();
             default -> throw new UnsupportedParquetFeatureException(

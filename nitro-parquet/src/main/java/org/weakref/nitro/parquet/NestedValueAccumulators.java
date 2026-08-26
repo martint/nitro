@@ -27,6 +27,7 @@ final class NestedValueAccumulators
     static NestedValueAccumulator create(ParquetSchema.Primitive leaf, boolean nullable)
     {
         return switch (leaf.type()) {
+            case BOOLEAN -> new BooleanNestedValueAccumulator(nullable);
             case INT32 -> new LongNestedValueAccumulator(true, nullable);
             case INT64 -> new LongNestedValueAccumulator(false, nullable);
             case BYTE_ARRAY -> new BinaryNestedValueAccumulator(leaf.string(), nullable);
