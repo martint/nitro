@@ -50,7 +50,7 @@ final class VectorBitUnpacker
         return switch (width) {
             case 1 -> unpackWidth1(segment, byteOffset, endOffset, output, outputOffset, valueCount, tables);
             case 2, 3, 4, 5 -> unpackBytes(segment, byteOffset, endOffset, output, outputOffset, valueCount, width, tables);
-            case 6, 7, 9, 10, 11, 12, 13 -> unpackShorts(segment, byteOffset, endOffset, output, outputOffset, valueCount, width, tables);
+            case 6, 7, 9, 10, 11, 12, 13, 14, 15 -> unpackShorts(segment, byteOffset, endOffset, output, outputOffset, valueCount, width, tables);
             case 8 -> unpackWidth8(segment, byteOffset, endOffset, output, outputOffset, valueCount, tables);
             case 16 -> unpackWidth16(segment, byteOffset, endOffset, output, outputOffset, valueCount, tables);
             default -> unpackGeneral(segment, byteOffset, endOffset, output, outputOffset, valueCount, width, tables);
@@ -94,7 +94,7 @@ final class VectorBitUnpacker
     {
         return switch (width) {
             case 1, 2, 3, 4, 5 -> buildByteTables(width);
-            case 6, 7, 9, 10, 11, 12, 13 -> buildShortTables(width);
+            case 6, 7, 9, 10, 11, 12, 13, 14, 15 -> buildShortTables(width);
             case 8 -> new WideningTables(IntVector.broadcast(IntVector.SPECIES_256, 255));
             case 16 -> new WideningTables(IntVector.broadcast(IntVector.SPECIES_256, 65_535));
             default -> buildGeneralTables(width);
