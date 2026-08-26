@@ -82,6 +82,28 @@ class TestNestedArrayReader
         }
     }
 
+    @Test
+    void testEmptyReadDoesNotAdvanceEventWindow()
+    {
+        try (Allocator allocator = new Allocator(EngineResources.createDefault());
+                NestedArrayReader reader = reader()) {
+            ArrayVector empty = (ArrayVector) reader.read(
+                    allocator,
+                    new Allocator.Context("empty"),
+                    0,
+                    Mask.all(0)).values();
+            assertThat(empty.offsets()).containsExactly(0);
+
+            ArrayVector first = (ArrayVector) reader.read(
+                    allocator,
+                    new Allocator.Context("first"),
+                    1,
+                    Mask.all(1)).values();
+            assertThat(first.offsets()).containsExactly(0, 3);
+            assertThat(((I64Vector) first.elementValues()).values()).containsExactly(1, 0, 3);
+        }
+    }
+
     private static NestedArrayReader reader()
     {
         ParquetSchema.Primitive element = new ParquetSchema.Primitive(
@@ -112,12 +134,13 @@ class TestNestedArrayReader
     }
 
     private static final class TestingCursor
-            implements NestedLeafCursor
+            implements NestedLeafEventSource
     {
         private final PhysicalValueDecoder decoder;
         private final int[] repetitions;
         private final int[] definitions;
         private final int[] ordinals;
+        private final NestedEventWindow window = new NestedEventWindow();
         private int event = -1;
 
         private TestingCursor(PhysicalValueDecoder decoder, int[] repetitions, int[] definitions, int[] ordinals)
@@ -168,6 +191,23 @@ class TestNestedArrayReader
         public int dictionaryId()
         {
             return -1;
+        }
+
+        @Override
+        public NestedEventWindow eventWindow()
+        {
+            int offset = event + 1;
+            if (offset == repetitions.length) {
+                return null;
+            }
+            window.reset(decoder, repetitions, definitions, ordinals, null, offset, repetitions.length - offset);
+            return window;
+        }
+
+        @Override
+        public void advanceEvents(int count)
+        {
+            event += count;
         }
 
         @Override

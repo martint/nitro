@@ -107,6 +107,17 @@ final class NestedArrayReader
                 ? allocator.allocate(context, BooleanVector.class, rowCount, BooleanVector::new)
                 : null;
 
+        if (rowCount == 0) {
+            arrays.setElements(elements.materialize(allocator, context));
+            return listNulls == null ? Streams.ofValues(arrays) : Streams.ofValuesAndNulls(arrays, listNulls);
+        }
+
+        if (!positioned && elementReader instanceof NestedLeafEventSource eventSource) {
+            readEventWindows(eventSource, arrays, listNulls, rowCount, mask);
+            arrays.setElements(elements.materialize(allocator, context));
+            return listNulls == null ? Streams.ofValues(arrays) : Streams.ofValuesAndNulls(arrays, listNulls);
+        }
+
         int selectedIndex = 0;
         int nextSelected = mask.all() ? 0 : (mask.count() == 0 ? rowCount : mask.position(0));
         ensurePositioned();
@@ -147,6 +158,79 @@ final class NestedArrayReader
 
         arrays.setElements(elements.materialize(allocator, context));
         return listNulls == null ? Streams.ofValues(arrays) : Streams.ofValuesAndNulls(arrays, listNulls);
+    }
+
+    private void readEventWindows(
+            NestedLeafEventSource reader,
+            ArrayVector arrays,
+            BooleanVector listNulls,
+            int rowCount,
+            Mask mask)
+    {
+        int row = -1;
+        int selectedIndex = 0;
+        int nextSelected = mask.all() ? 0 : (mask.count() == 0 ? rowCount : mask.position(0));
+        boolean selected = false;
+
+        while (true) {
+            NestedEventWindow window = reader.eventWindow();
+            if (window == null) {
+                if (row == rowCount - 1) {
+                    arrays.offsets()[rowCount] = elements.size();
+                    return;
+                }
+                throw new IllegalArgumentException("Nested LIST event stream ended before row " + (row + 1));
+            }
+
+            int consumed = 0;
+            int elementRunStart = -1;
+            int elementRunCount = 0;
+            while (consumed < window.length()) {
+                int repetitionLevel = window.repetitionLevel(consumed);
+                if (repetitionLevel == 0) {
+                    if (elementRunCount != 0) {
+                        window.appendTo(elements, elementRunStart, elementRunCount);
+                        elementRunCount = 0;
+                    }
+                    if (row >= 0) {
+                        arrays.offsets()[row + 1] = elements.size();
+                        if (row + 1 == rowCount) {
+                            reader.advanceEvents(consumed);
+                            return;
+                        }
+                    }
+                    row++;
+                    selected = mask.all() || row == nextSelected;
+                    if (selected && !mask.all()) {
+                        selectedIndex++;
+                        nextSelected = selectedIndex < mask.count() ? mask.position(selectedIndex) : rowCount;
+                    }
+                    if (selected && listNulls != null) {
+                        listNulls.values()[row] = window.definitionLevel(consumed) < list.maximumDefinitionLevel();
+                    }
+                }
+                else if (row < 0) {
+                    throw new IllegalArgumentException("Nested LIST row starts with nonzero repetition level");
+                }
+
+                boolean hasElement = window.definitionLevel(consumed) >= repeatedValues.maximumDefinitionLevel();
+                if (selected && hasElement) {
+                    if (elementRunCount == 0) {
+                        elementRunStart = consumed;
+                    }
+                    elementRunCount++;
+                }
+                else if (elementRunCount != 0) {
+                    window.appendTo(elements, elementRunStart, elementRunCount);
+                    elementRunCount = 0;
+                }
+                consumed++;
+            }
+            if (elementRunCount != 0) {
+                window.appendTo(elements, elementRunStart, elementRunCount);
+            }
+            reader.advanceEvents(consumed);
+        }
     }
 
     void skip(long rowCount)

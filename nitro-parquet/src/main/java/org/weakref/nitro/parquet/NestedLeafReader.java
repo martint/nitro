@@ -31,7 +31,7 @@ import static java.util.Objects.requireNonNull;
 
 /** Forward-only native reader for one nested physical leaf and its repetition/definition event stream. */
 final class NestedLeafReader
-        implements NestedLeafCursor
+        implements NestedLeafEventSource
 {
     private record Chunk(ParquetFile file, ColumnMetaData metadata) {}
 
@@ -43,6 +43,7 @@ final class NestedLeafReader
     private final boolean decodeValues;
     private final List<Chunk> chunks = new ArrayList<>();
     private final FastPageHeaderReader header = new FastPageHeaderReader();
+    private final NestedEventWindow eventWindow = new NestedEventWindow();
     private final Map<Thread, SnappyDecompressor> snappyByThread = new ConcurrentHashMap<>();
     private final Arena scratchArena = Arena.ofShared();
 
@@ -115,6 +116,30 @@ final class NestedLeafReader
             currentEvent = -1;
             remaining -= count;
         }
+    }
+
+    @Override
+    public NestedEventWindow eventWindow()
+    {
+        while (eventIndex >= decoder.eventCount()) {
+            if (!decodeNextPage()) {
+                return null;
+            }
+            eventIndex = 0;
+        }
+        decoder.resetWindow(eventWindow, valueDecoder, eventIndex);
+        currentEvent = -1;
+        return eventWindow;
+    }
+
+    @Override
+    public void advanceEvents(int count)
+    {
+        if (count < 0 || count > decoder.eventCount() - eventIndex) {
+            throw new IndexOutOfBoundsException("Invalid nested event advance: " + count);
+        }
+        eventIndex += count;
+        currentEvent = -1;
     }
 
     @Override

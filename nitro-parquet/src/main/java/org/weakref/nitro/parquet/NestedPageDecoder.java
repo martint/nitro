@@ -188,6 +188,21 @@ final class NestedPageDecoder
                 count);
     }
 
+    void resetWindow(NestedEventWindow window, PhysicalValueDecoder valueDecoder, int eventOffset)
+    {
+        if (eventOffset < 0 || eventOffset >= eventCount) {
+            throw new IndexOutOfBoundsException("Invalid nested event offset: " + eventOffset);
+        }
+        window.reset(
+                valueDecoder,
+                repetitionLevels,
+                definitionLevels,
+                valueOrdinals,
+                dictionaryEncoded ? dictionaryIds : null,
+                eventOffset,
+                eventCount - eventOffset);
+    }
+
     private static int levelStreamLength(MemorySegment body, long offset, String kind)
     {
         if (offset > body.byteSize() - Integer.BYTES) {
