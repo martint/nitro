@@ -18,14 +18,30 @@ import org.weakref.nitro.data.Streams;
 
 /** Schema-selected bridge from a physical leaf decoder to allocator-owned Nitro child vectors. */
 interface NestedValueAccumulator
+        extends AutoCloseable
 {
-    void reset();
+    void reset(Allocator allocator);
+
+    default void reset(Allocator allocator, Allocator.Context context, int exactSize)
+    {
+        reset(allocator);
+    }
 
     void append(PhysicalValueDecoder decoder, int ordinal, int dictionaryId);
+
+    default void appendPlainRun(PhysicalValueDecoder decoder, int ordinal, int count)
+    {
+        for (int index = 0; index < count; index++) {
+            append(decoder, ordinal + index, -1);
+        }
+    }
 
     void appendNull();
 
     int size();
 
     Streams materialize(Allocator allocator, Allocator.Context context);
+
+    @Override
+    void close();
 }

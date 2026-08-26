@@ -14,6 +14,7 @@
 package org.weakref.nitro.parquet;
 
 import org.apache.parquet.format.Encoding;
+import org.weakref.nitro.data.PrimitiveArrayPool;
 
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
@@ -28,11 +29,17 @@ final class BinaryPhysicalValueDecoder
     private static final int[] EMPTY_INTS = new int[0];
     private static final byte[] EMPTY_BYTES = new byte[0];
 
+    private final PrimitiveArrayPool arrayPool;
     private int[] dictionaryOffsets = EMPTY_INTS;
     private byte[] dictionaryData = EMPTY_BYTES;
     private int[] offsets = EMPTY_INTS;
     private byte[] data = EMPTY_BYTES;
     private int dictionarySize;
+
+    BinaryPhysicalValueDecoder(PrimitiveArrayPool arrayPool)
+    {
+        this.arrayPool = requireNonNull(arrayPool, "arrayPool is null");
+    }
 
     @Override
     public void decodeDictionary(MemorySegment body, int valueCount, Encoding encoding)
@@ -80,7 +87,7 @@ final class BinaryPhysicalValueDecoder
         return dictionarySize;
     }
 
-    private static byte[] decode(MemorySegment body, long offset, int valueCount, int[] offsets, byte[] data)
+    private byte[] decode(MemorySegment body, long offset, int valueCount, int[] offsets, byte[] data)
     {
         long cursor = offset;
         int bytes = 0;
@@ -107,13 +114,37 @@ final class BinaryPhysicalValueDecoder
         return data;
     }
 
-    private static int[] grow(int[] values, int required)
+    @Override
+    public void close()
     {
-        return values.length >= required ? values : new int[Math.max(required, Math.max(16, values.length * 2))];
+        arrayPool.release(dictionaryOffsets);
+        arrayPool.release(dictionaryData);
+        arrayPool.release(offsets);
+        arrayPool.release(data);
+        dictionaryOffsets = EMPTY_INTS;
+        dictionaryData = EMPTY_BYTES;
+        offsets = EMPTY_INTS;
+        data = EMPTY_BYTES;
+        dictionarySize = 0;
     }
 
-    private static byte[] grow(byte[] values, int required)
+    private int[] grow(int[] current, int required)
     {
-        return values.length >= required ? values : new byte[Math.max(required, Math.max(16, values.length * 2))];
+        if (current.length >= required) {
+            return current;
+        }
+        int[] replacement = arrayPool.borrowInts(Math.max(required, Math.max(16, current.length * 2)));
+        arrayPool.release(current);
+        return replacement;
+    }
+
+    private byte[] grow(byte[] current, int required)
+    {
+        if (current.length >= required) {
+            return current;
+        }
+        byte[] replacement = arrayPool.borrowBytes(Math.max(required, Math.max(16, current.length * 2)));
+        arrayPool.release(current);
+        return replacement;
     }
 }

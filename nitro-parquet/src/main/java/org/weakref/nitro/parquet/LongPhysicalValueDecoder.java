@@ -15,6 +15,7 @@ package org.weakref.nitro.parquet;
 
 import org.apache.parquet.format.Encoding;
 import org.apache.parquet.format.Type;
+import org.weakref.nitro.data.PrimitiveArrayPool;
 
 import java.lang.foreign.MemorySegment;
 
@@ -24,18 +25,20 @@ import static org.weakref.nitro.parquet.ParquetFile.LE_LONG;
 
 /** Physical INT32/INT64 decoder. Logical interpretation remains the vector/type adapter's responsibility. */
 final class LongPhysicalValueDecoder
-        implements PhysicalValueDecoder
+        implements LongValueDecoder
 {
     private static final long[] EMPTY_LONGS = new long[0];
 
     private final Type physicalType;
+    private final PrimitiveArrayPool arrayPool;
     private long[] dictionary = EMPTY_LONGS;
     private long[] values = EMPTY_LONGS;
     private int dictionarySize;
 
-    LongPhysicalValueDecoder(Type physicalType)
+    LongPhysicalValueDecoder(Type physicalType, PrimitiveArrayPool arrayPool)
     {
         this.physicalType = requireNonNull(physicalType, "physicalType is null");
+        this.arrayPool = requireNonNull(arrayPool, "arrayPool is null");
         if (physicalType != Type.INT32 && physicalType != Type.INT64) {
             throw new IllegalArgumentException("Not an integer physical type: " + physicalType);
         }
@@ -71,9 +74,16 @@ final class LongPhysicalValueDecoder
         }
     }
 
-    long value(int ordinal, int dictionaryId)
+    @Override
+    public long value(int ordinal, int dictionaryId)
     {
         return dictionaryId >= 0 ? dictionary[dictionaryId] : values[ordinal];
+    }
+
+    @Override
+    public void copyPlain(int ordinal, long[] output, int outputOffset, int count)
+    {
+        System.arraycopy(values, ordinal, output, outputOffset, count);
     }
 
     @Override
@@ -95,8 +105,23 @@ final class LongPhysicalValueDecoder
         }
     }
 
-    private static long[] grow(long[] values, int required)
+    @Override
+    public void close()
     {
-        return values.length >= required ? values : new long[Math.max(required, Math.max(16, values.length * 2))];
+        arrayPool.release(dictionary);
+        arrayPool.release(values);
+        dictionary = EMPTY_LONGS;
+        values = EMPTY_LONGS;
+        dictionarySize = 0;
+    }
+
+    private long[] grow(long[] current, int required)
+    {
+        if (current.length >= required) {
+            return current;
+        }
+        long[] replacement = arrayPool.borrowLongs(Math.max(required, Math.max(16, current.length * 2)));
+        arrayPool.release(current);
+        return replacement;
     }
 }

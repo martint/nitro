@@ -15,9 +15,10 @@ package org.weakref.nitro.parquet;
 
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Streams;
 
-import java.util.Arrays;
+import static java.util.Objects.requireNonNull;
 
 /** Reusable accumulation for BOOLEAN physical leaves. */
 final class BooleanNestedValueAccumulator
@@ -26,8 +27,11 @@ final class BooleanNestedValueAccumulator
     private static final boolean[] EMPTY_BOOLEANS = new boolean[0];
 
     private final boolean nullable;
+    private PrimitiveArrayPool arrayPool;
     private boolean[] values = EMPTY_BOOLEANS;
     private boolean[] nulls = EMPTY_BOOLEANS;
+    private BooleanVector directValues;
+    private BooleanVector directNulls;
     private int size;
 
     BooleanNestedValueAccumulator(boolean nullable)
@@ -36,9 +40,24 @@ final class BooleanNestedValueAccumulator
     }
 
     @Override
-    public void reset()
+    public void reset(Allocator allocator)
     {
+        PrimitiveArrayPool requestedPool = requireNonNull(allocator, "allocator is null").primitiveArrays();
+        if (arrayPool != null && arrayPool != requestedPool) {
+            throw new IllegalArgumentException("Nested accumulator cannot change allocator ownership");
+        }
+        arrayPool = requestedPool;
         size = 0;
+    }
+
+    @Override
+    public void reset(Allocator allocator, Allocator.Context context, int exactSize)
+    {
+        reset(allocator);
+        directValues = allocator.allocate(context, BooleanVector.class, exactSize, BooleanVector::new);
+        directNulls = nullable
+                ? allocator.allocate(context, BooleanVector.class, exactSize, BooleanVector::new)
+                : null;
     }
 
     @Override
@@ -50,10 +69,15 @@ final class BooleanNestedValueAccumulator
         if (dictionaryId >= 0) {
             throw new IllegalArgumentException("Parquet BOOLEAN values cannot use dictionary encoding");
         }
-        ensureCapacity(size + 1);
-        values[size] = booleans.value(ordinal);
+        if (directValues == null) {
+            ensureCapacity(size + 1);
+            values[size] = booleans.value(ordinal);
+        }
+        else {
+            directValues.values()[size] = booleans.value(ordinal);
+        }
         if (nullable) {
-            nulls[size] = false;
+            nullValues()[size] = false;
         }
         size++;
     }
@@ -64,9 +88,11 @@ final class BooleanNestedValueAccumulator
         if (!nullable) {
             throw new IllegalArgumentException("Required nested value is missing");
         }
-        ensureCapacity(size + 1);
-        values[size] = false;
-        nulls[size] = true;
+        if (directValues == null) {
+            ensureCapacity(size + 1);
+            values[size] = false;
+        }
+        nullValues()[size] = true;
         size++;
     }
 
@@ -79,6 +105,13 @@ final class BooleanNestedValueAccumulator
     @Override
     public Streams materialize(Allocator allocator, Allocator.Context context)
     {
+        if (directValues != null) {
+            BooleanVector result = directValues;
+            BooleanVector resultNulls = directNulls;
+            directValues = null;
+            directNulls = null;
+            return resultNulls == null ? Streams.ofValues(result) : Streams.ofValuesAndNulls(result, resultNulls);
+        }
         BooleanVector result = allocator.allocate(context, BooleanVector.class, size, BooleanVector::new);
         System.arraycopy(values, 0, result.values(), 0, size);
         if (!nullable) {
@@ -95,9 +128,35 @@ final class BooleanNestedValueAccumulator
             return;
         }
         int capacity = Math.max(required, Math.max(16, values.length * 2));
-        values = Arrays.copyOf(values, capacity);
+        boolean[] replacement = arrayPool.borrowBooleans(capacity);
+        System.arraycopy(values, 0, replacement, 0, size);
+        arrayPool.release(values);
+        values = replacement;
         if (nullable) {
-            nulls = Arrays.copyOf(nulls, capacity);
+            boolean[] replacementNulls = arrayPool.borrowBooleans(capacity);
+            System.arraycopy(nulls, 0, replacementNulls, 0, size);
+            arrayPool.release(nulls);
+            nulls = replacementNulls;
+        }
+    }
+
+    private boolean[] nullValues()
+    {
+        return directNulls == null ? nulls : directNulls.values();
+    }
+
+    @Override
+    public void close()
+    {
+        if (arrayPool != null) {
+            arrayPool.release(values);
+            arrayPool.release(nulls);
+            values = EMPTY_BOOLEANS;
+            nulls = EMPTY_BOOLEANS;
+            arrayPool = null;
+            size = 0;
+            directValues = null;
+            directNulls = null;
         }
     }
 }

@@ -19,6 +19,7 @@ import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.MapVector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Streams;
 
 import static java.util.Objects.requireNonNull;
@@ -42,14 +43,24 @@ final class NestedMapReader
     private boolean positioned;
     private boolean exhausted;
 
-    NestedMapReader(ParquetSchema.Group map, RleReaderPolicy rlePolicy)
+    NestedMapReader(ParquetSchema.Group map, RleReaderPolicy rlePolicy, PrimitiveArrayPool arrayPool)
     {
-        this(map, rlePolicy, null, null);
+        this(map, rlePolicy, arrayPool, null, null);
     }
 
     NestedMapReader(
             ParquetSchema.Group map,
             RleReaderPolicy rlePolicy,
+            NestedLeafCursor keyCursor,
+            NestedLeafCursor valueCursor)
+    {
+        this(map, rlePolicy, null, keyCursor, valueCursor);
+    }
+
+    private NestedMapReader(
+            ParquetSchema.Group map,
+            RleReaderPolicy rlePolicy,
+            PrimitiveArrayPool arrayPool,
             NestedLeafCursor keyCursor,
             NestedLeafCursor valueCursor)
     {
@@ -76,8 +87,12 @@ final class NestedMapReader
         if (value.repetition() == FieldRepetitionType.REPEATED) {
             throw unsupported("MAP value cannot be repeated");
         }
-        this.keyReader = keyCursor == null ? new NestedLeafReader(key, rlePolicy) : keyCursor;
-        this.valueReader = valueCursor == null ? new NestedLeafReader(value, rlePolicy) : valueCursor;
+        this.keyReader = keyCursor == null
+                ? new NestedLeafReader(key, rlePolicy, requireNonNull(arrayPool, "arrayPool is null"))
+                : keyCursor;
+        this.valueReader = valueCursor == null
+                ? new NestedLeafReader(value, rlePolicy, requireNonNull(arrayPool, "arrayPool is null"))
+                : valueCursor;
         this.keyValues = NestedValueAccumulators.create(key);
         this.values = NestedValueAccumulators.create(value);
     }
@@ -103,8 +118,8 @@ final class NestedMapReader
             throw new IllegalArgumentException("Nested MAP row count and mask length differ: " + rowCount + " != " + mask.size());
         }
 
-        keyValues.reset();
-        values.reset();
+        keyValues.reset(allocator);
+        values.reset(allocator);
         MapVector maps = allocator.allocateMap(context, rowCount);
         BooleanVector mapNulls = map.repetition() == FieldRepetitionType.OPTIONAL
                 ? allocator.allocate(context, BooleanVector.class, rowCount, BooleanVector::new)
@@ -233,8 +248,8 @@ final class NestedMapReader
     @Override
     public void close()
     {
-        try (keyReader; valueReader) {
-            // Closing the resources in the try header releases both leaf ranges and scratch arenas.
+        try (keyReader; valueReader; keyValues; values) {
+            // Closing releases leaf resources and allocator-owned accumulation buffers.
         }
     }
 }

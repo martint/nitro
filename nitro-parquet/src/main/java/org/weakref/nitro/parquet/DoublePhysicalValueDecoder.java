@@ -14,9 +14,11 @@
 package org.weakref.nitro.parquet;
 
 import org.apache.parquet.format.Encoding;
+import org.weakref.nitro.data.PrimitiveArrayPool;
 
 import java.lang.foreign.MemorySegment;
 
+import static java.util.Objects.requireNonNull;
 import static org.weakref.nitro.parquet.ParquetFile.LE_DOUBLE;
 
 /** Physical DOUBLE decoder. Logical interpretation remains the vector/type adapter's responsibility. */
@@ -25,9 +27,15 @@ final class DoublePhysicalValueDecoder
 {
     private static final double[] EMPTY_DOUBLES = new double[0];
 
+    private final PrimitiveArrayPool arrayPool;
     private double[] dictionary = EMPTY_DOUBLES;
     private double[] values = EMPTY_DOUBLES;
     private int dictionarySize;
+
+    DoublePhysicalValueDecoder(PrimitiveArrayPool arrayPool)
+    {
+        this.arrayPool = requireNonNull(arrayPool, "arrayPool is null");
+    }
 
     @Override
     public void decodeDictionary(MemorySegment body, int valueCount, Encoding encoding)
@@ -69,8 +77,23 @@ final class DoublePhysicalValueDecoder
         }
     }
 
-    private static double[] grow(double[] values, int required)
+    @Override
+    public void close()
     {
-        return values.length >= required ? values : new double[Math.max(required, Math.max(16, values.length * 2))];
+        arrayPool.release(dictionary);
+        arrayPool.release(values);
+        dictionary = EMPTY_DOUBLES;
+        values = EMPTY_DOUBLES;
+        dictionarySize = 0;
+    }
+
+    private double[] grow(double[] current, int required)
+    {
+        if (current.length >= required) {
+            return current;
+        }
+        double[] replacement = arrayPool.borrowDoubles(Math.max(required, Math.max(16, current.length * 2)));
+        arrayPool.release(current);
+        return replacement;
     }
 }

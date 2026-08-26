@@ -22,6 +22,7 @@ import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.StructVector;
@@ -103,11 +104,11 @@ class TestNestedStructReader
         ParquetSchema.Group person = new ParquetSchema.Group(
                 "person", FieldRepetitionType.OPTIONAL, null, null, List.of(id, name, active), 1, 0);
 
-        LongPhysicalValueDecoder ids = new LongPhysicalValueDecoder(Type.INT64);
+        LongPhysicalValueDecoder ids = new LongPhysicalValueDecoder(Type.INT64, new PrimitiveArrayPool(0, 0));
         ids.decodePlain(longs(1, 2), 0, 2);
-        BinaryPhysicalValueDecoder names = new BinaryPhysicalValueDecoder();
+        BinaryPhysicalValueDecoder names = new BinaryPhysicalValueDecoder(new PrimitiveArrayPool(0, 0));
         names.decodePlain(binary("alice"), 0, 1);
-        BooleanPhysicalValueDecoder activeValues = new BooleanPhysicalValueDecoder();
+        BooleanPhysicalValueDecoder activeValues = new BooleanPhysicalValueDecoder(new PrimitiveArrayPool(0, 0));
         activeValues.decodePlain(MemorySegment.ofArray(new byte[] {0b0000_0001}), 0, 2);
         return new NestedStructReader(
                 person,

@@ -15,6 +15,7 @@ package org.weakref.nitro.parquet;
 
 import org.apache.parquet.format.Encoding;
 import org.junit.jupiter.api.Test;
+import org.weakref.nitro.data.PrimitiveArrayPool;
 
 import java.lang.foreign.MemorySegment;
 
@@ -26,7 +27,7 @@ class TestBooleanPhysicalValueDecoder
     @Test
     void testDecodesPlainValuesAcrossByteBoundary()
     {
-        BooleanPhysicalValueDecoder decoder = new BooleanPhysicalValueDecoder();
+        BooleanPhysicalValueDecoder decoder = new BooleanPhysicalValueDecoder(new PrimitiveArrayPool(0, 0));
         decoder.decodePlain(MemorySegment.ofArray(new byte[] {(byte) 0b0101_0011, 0b0000_0011}), 0, 10);
 
         assertThat(values(decoder, 10))
@@ -36,7 +37,7 @@ class TestBooleanPhysicalValueDecoder
     @Test
     void testRejectsTruncatedAndDictionaryInputs()
     {
-        BooleanPhysicalValueDecoder decoder = new BooleanPhysicalValueDecoder();
+        BooleanPhysicalValueDecoder decoder = new BooleanPhysicalValueDecoder(new PrimitiveArrayPool(0, 0));
 
         assertThatThrownBy(() -> decoder.decodePlain(MemorySegment.ofArray(new byte[1]), 0, 9))
                 .isInstanceOf(IllegalArgumentException.class)

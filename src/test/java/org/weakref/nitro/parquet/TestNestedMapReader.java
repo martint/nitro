@@ -23,6 +23,7 @@ import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.MapVector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.execution.EngineResources;
@@ -104,9 +105,9 @@ class TestNestedMapReader
         ParquetSchema.Group map = new ParquetSchema.Group(
                 "attributes", FieldRepetitionType.OPTIONAL, ConvertedType.MAP, null, List.of(entries), 1, 0);
 
-        LongPhysicalValueDecoder keys = new LongPhysicalValueDecoder(Type.INT64);
+        LongPhysicalValueDecoder keys = new LongPhysicalValueDecoder(Type.INT64, new PrimitiveArrayPool(0, 0));
         keys.decodePlain(longs(1, 2, 3), 0, 3);
-        BinaryPhysicalValueDecoder values = new BinaryPhysicalValueDecoder();
+        BinaryPhysicalValueDecoder values = new BinaryPhysicalValueDecoder(new PrimitiveArrayPool(0, 0));
         values.decodePlain(binary("one", "three"), 0, 2);
 
         return new NestedMapReader(

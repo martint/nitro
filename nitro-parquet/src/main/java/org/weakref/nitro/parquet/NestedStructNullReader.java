@@ -18,6 +18,7 @@ import org.apache.parquet.format.RowGroup;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.PrimitiveArrayPool;
 
 import static java.util.Objects.requireNonNull;
 
@@ -29,7 +30,7 @@ final class NestedStructNullReader
     private final ParquetSchema.Primitive anchor;
     private final NestedLeafReader reader;
 
-    NestedStructNullReader(ParquetSchema.Group struct, RleReaderPolicy rlePolicy)
+    NestedStructNullReader(ParquetSchema.Group struct, RleReaderPolicy rlePolicy, PrimitiveArrayPool arrayPool)
     {
         this.struct = requireNonNull(struct, "struct is null");
         if (struct.repetition() != FieldRepetitionType.OPTIONAL || struct.isMap() || struct.isList()) {
@@ -41,7 +42,11 @@ final class NestedStructNullReader
                 .findFirst()
                 .orElseThrow(() -> new UnsupportedParquetFeatureException(
                         "Optional struct '" + struct.name() + "' has no primitive anchor leaf"));
-        this.reader = new NestedLeafReader(anchor, requireNonNull(rlePolicy, "rlePolicy is null"), false);
+        this.reader = new NestedLeafReader(
+                anchor,
+                requireNonNull(rlePolicy, "rlePolicy is null"),
+                requireNonNull(arrayPool, "arrayPool is null"),
+                false);
     }
 
     void addRowGroup(ParquetFile file, RowGroup rowGroup)

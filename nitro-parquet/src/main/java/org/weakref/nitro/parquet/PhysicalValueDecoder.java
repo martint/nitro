@@ -22,6 +22,7 @@ import java.lang.foreign.MemorySegment;
  * Implementations own reusable high-water buffers and expose a carrier appropriate for the physical type.
  */
 interface PhysicalValueDecoder
+        extends AutoCloseable
 {
     void decodeDictionary(MemorySegment body, int valueCount, Encoding encoding);
 
@@ -30,4 +31,7 @@ interface PhysicalValueDecoder
     void resetDictionary();
 
     int dictionarySize();
+
+    @Override
+    void close();
 }

@@ -18,6 +18,7 @@ import org.apache.parquet.format.RowGroup;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.StructVector;
 
@@ -35,12 +36,21 @@ final class NestedStructReader
     private final NestedValueAccumulator[] values;
     private boolean exhausted;
 
-    NestedStructReader(ParquetSchema.Group struct, RleReaderPolicy rlePolicy)
+    NestedStructReader(ParquetSchema.Group struct, RleReaderPolicy rlePolicy, PrimitiveArrayPool arrayPool)
     {
-        this(struct, rlePolicy, null);
+        this(struct, rlePolicy, arrayPool, null);
     }
 
     NestedStructReader(ParquetSchema.Group struct, RleReaderPolicy rlePolicy, NestedLeafCursor[] cursors)
+    {
+        this(struct, rlePolicy, null, cursors);
+    }
+
+    private NestedStructReader(
+            ParquetSchema.Group struct,
+            RleReaderPolicy rlePolicy,
+            PrimitiveArrayPool arrayPool,
+            NestedLeafCursor[] cursors)
     {
         this.struct = requireNonNull(struct, "struct is null");
         if (struct.isMap() || struct.isList() || struct.repetition() == FieldRepetitionType.REPEATED) {
@@ -60,7 +70,9 @@ final class NestedStructReader
         this.values = new NestedValueAccumulator[fields.size()];
         for (int field = 0; field < fields.size(); field++) {
             ParquetSchema.Primitive leaf = fields.get(field);
-            readers[field] = cursors == null ? new NestedLeafReader(leaf, rlePolicy) : requireNonNull(cursors[field], "cursor is null");
+            readers[field] = cursors == null
+                    ? new NestedLeafReader(leaf, rlePolicy, requireNonNull(arrayPool, "arrayPool is null"))
+                    : requireNonNull(cursors[field], "cursor is null");
             values[field] = NestedValueAccumulators.create(leaf, true);
         }
     }
@@ -86,7 +98,7 @@ final class NestedStructReader
             throw new IllegalArgumentException("Nested struct row count and mask length differ: " + rowCount + " != " + mask.size());
         }
         for (NestedValueAccumulator accumulator : values) {
-            accumulator.reset();
+            accumulator.reset(allocator, context, rowCount);
         }
         StructVector result = allocator.allocate(context, StructVector.class, rowCount, StructVector::new);
         BooleanVector structNulls = struct.repetition() == FieldRepetitionType.OPTIONAL
@@ -179,6 +191,19 @@ final class NestedStructReader
         for (NestedLeafCursor reader : readers) {
             try {
                 reader.close();
+            }
+            catch (RuntimeException e) {
+                if (failure == null) {
+                    failure = e;
+                }
+                else {
+                    failure.addSuppressed(e);
+                }
+            }
+        }
+        for (NestedValueAccumulator accumulator : values) {
+            try {
+                accumulator.close();
             }
             catch (RuntimeException e) {
                 if (failure == null) {

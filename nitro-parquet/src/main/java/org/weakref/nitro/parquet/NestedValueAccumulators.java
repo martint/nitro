@@ -32,8 +32,18 @@ final class NestedValueAccumulators
             case INT32 -> new LongNestedValueAccumulator(true, nullable);
             case INT64 -> new LongNestedValueAccumulator(false, nullable);
             case BYTE_ARRAY -> new BinaryNestedValueAccumulator(leaf.string(), nullable);
+            case FIXED_LEN_BYTE_ARRAY -> createFixedDecimal(leaf, nullable);
             default -> throw new UnsupportedParquetFeatureException(
                     "Native nested Parquet output does not support physical type " + leaf.type() + " at '" + String.join(".", leaf.path()) + "'");
         };
+    }
+
+    private static NestedValueAccumulator createFixedDecimal(ParquetSchema.Primitive leaf, boolean nullable)
+    {
+        if (!leaf.decimal() || leaf.typeLength() > Long.BYTES) {
+            throw new UnsupportedParquetFeatureException(
+                    "Native nested Parquet output does not support fixed-width field '" + String.join(".", leaf.path()) + "'");
+        }
+        return new LongNestedValueAccumulator(false, nullable);
     }
 }

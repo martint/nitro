@@ -14,10 +14,12 @@
 package org.weakref.nitro.parquet;
 
 import org.apache.parquet.format.Encoding;
+import org.weakref.nitro.data.PrimitiveArrayPool;
 
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
-import java.util.Arrays;
+
+import static java.util.Objects.requireNonNull;
 
 /** Physical BOOLEAN decoder for Parquet's least-significant-bit-first PLAIN representation. */
 final class BooleanPhysicalValueDecoder
@@ -25,7 +27,13 @@ final class BooleanPhysicalValueDecoder
 {
     private static final boolean[] EMPTY_BOOLEANS = new boolean[0];
 
+    private final PrimitiveArrayPool arrayPool;
     private boolean[] values = EMPTY_BOOLEANS;
+
+    BooleanPhysicalValueDecoder(PrimitiveArrayPool arrayPool)
+    {
+        this.arrayPool = requireNonNull(arrayPool, "arrayPool is null");
+    }
 
     @Override
     public void decodeDictionary(MemorySegment body, int valueCount, Encoding encoding)
@@ -61,8 +69,20 @@ final class BooleanPhysicalValueDecoder
         return 0;
     }
 
-    private static boolean[] grow(boolean[] values, int required)
+    @Override
+    public void close()
     {
-        return values.length >= required ? values : Arrays.copyOf(values, Math.max(required, Math.max(16, values.length * 2)));
+        arrayPool.release(values);
+        values = EMPTY_BOOLEANS;
+    }
+
+    private boolean[] grow(boolean[] current, int required)
+    {
+        if (current.length >= required) {
+            return current;
+        }
+        boolean[] replacement = arrayPool.borrowBooleans(Math.max(required, Math.max(16, current.length * 2)));
+        arrayPool.release(current);
+        return replacement;
     }
 }

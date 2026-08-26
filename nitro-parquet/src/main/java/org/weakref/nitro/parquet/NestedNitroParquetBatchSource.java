@@ -32,6 +32,7 @@ import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.MapVector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.StructVector;
@@ -89,11 +90,13 @@ final class NestedNitroParquetBatchSource
     private final class PrimitiveProjectedReader
             implements ProjectedReader
     {
+        private static final long[] EMPTY_LONGS = new long[0];
+
         private final ParquetSchema.Primitive leaf;
         private final ColumnReader reader;
         private final TypeBinding outputType;
         private final boolean intOutputAsLong;
-        private long[] doubleScratch = new long[0];
+        private long[] doubleScratch = EMPTY_LONGS;
 
         private PrimitiveProjectedReader(ParquetSchema.Primitive leaf, TypeBinding outputType)
         {
@@ -155,7 +158,9 @@ final class NestedNitroParquetBatchSource
             }
             F64Vector values = F64Vector.allocate(allocator, context, rowCount);
             if (doubleScratch.length < rowCount) {
-                doubleScratch = new long[rowCount];
+                long[] replacement = allocator.primitiveArrays().borrowLongs(rowCount);
+                allocator.primitiveArrays().release(doubleScratch);
+                doubleScratch = replacement;
             }
             reader.readLongs(doubleScratch, nulls, rowCount);
             for (int position = 0; position < rowCount; position++) {
@@ -191,6 +196,8 @@ final class NestedNitroParquetBatchSource
         public void close()
         {
             reader.close();
+            allocator.primitiveArrays().release(doubleScratch);
+            doubleScratch = EMPTY_LONGS;
         }
     }
 
@@ -203,7 +210,11 @@ final class NestedNitroParquetBatchSource
         private final TypeBinding outputType;
         private final boolean nullable;
 
-        private NestedPrimitiveProjectedReader(ParquetSchema.Primitive leaf, TypeBinding outputType, RleReaderPolicy rlePolicy)
+        private NestedPrimitiveProjectedReader(
+                ParquetSchema.Primitive leaf,
+                TypeBinding outputType,
+                RleReaderPolicy rlePolicy,
+                PrimitiveArrayPool arrayPool)
         {
             this.leaf = requireNonNull(leaf, "leaf is null");
             if (leaf.maximumRepetitionLevel() != 0) {
@@ -212,7 +223,7 @@ final class NestedNitroParquetBatchSource
             }
             this.outputType = requireNonNull(outputType, "outputType is null");
             this.nullable = leaf.maximumDefinitionLevel() != 0;
-            this.reader = new NestedLeafReader(leaf, rlePolicy);
+            this.reader = new NestedLeafReader(leaf, rlePolicy, arrayPool);
             this.values = NestedValueAccumulators.create(leaf, nullable);
         }
 
@@ -228,9 +239,11 @@ final class NestedNitroParquetBatchSource
             if (rowCount < 0 || mask.size() != rowCount) {
                 throw new IllegalArgumentException("Nested primitive row count and mask length differ: " + rowCount + " != " + mask.size());
             }
-            values.reset();
+            values.reset(allocator, context, rowCount);
             int selectedIndex = 0;
             int nextSelected = mask.all() ? 0 : (mask.count() == 0 ? rowCount : mask.position(0));
+            int runOrdinal = -1;
+            int runLength = 0;
             for (int row = 0; row < rowCount; row++) {
                 if (!reader.next()) {
                     throw new IllegalArgumentException("Nested primitive event stream ended before requested rows");
@@ -240,15 +253,40 @@ final class NestedNitroParquetBatchSource
                 }
                 boolean selected = mask.all() || row == nextSelected;
                 if ((selected || !nullable) && reader.hasValue()) {
-                    values.append(reader.valueDecoder(), reader.valueOrdinal(), reader.dictionaryId());
+                    int ordinal = reader.valueOrdinal();
+                    int dictionaryId = reader.dictionaryId();
+                    if (dictionaryId < 0 && (runLength == 0 || ordinal == runOrdinal + runLength)) {
+                        if (runLength == 0) {
+                            runOrdinal = ordinal;
+                        }
+                        runLength++;
+                    }
+                    else {
+                        if (runLength != 0) {
+                            values.appendPlainRun(reader.valueDecoder(), runOrdinal, runLength);
+                            runLength = 0;
+                        }
+                        values.append(reader.valueDecoder(), ordinal, dictionaryId);
+                    }
                 }
                 else {
+                    if (runLength != 0) {
+                        values.appendPlainRun(reader.valueDecoder(), runOrdinal, runLength);
+                        runLength = 0;
+                    }
                     values.appendNull();
                 }
                 if (selected && !mask.all()) {
                     selectedIndex++;
                     nextSelected = selectedIndex < mask.count() ? mask.position(selectedIndex) : rowCount;
                 }
+                if (runLength != 0 && reader.pageExhausted()) {
+                    values.appendPlainRun(reader.valueDecoder(), runOrdinal, runLength);
+                    runLength = 0;
+                }
+            }
+            if (runLength != 0) {
+                values.appendPlainRun(reader.valueDecoder(), runOrdinal, runLength);
             }
             Streams streams = values.materialize(allocator, context);
             if (!outputType.supportsVector(streams.values())) {
@@ -286,7 +324,27 @@ final class NestedNitroParquetBatchSource
         @Override
         public void close()
         {
-            reader.close();
+            RuntimeException failure = null;
+            try {
+                reader.close();
+            }
+            catch (RuntimeException e) {
+                failure = e;
+            }
+            try {
+                values.close();
+            }
+            catch (RuntimeException e) {
+                if (failure == null) {
+                    failure = e;
+                }
+                else {
+                    failure.addSuppressed(e);
+                }
+            }
+            if (failure != null) {
+                throw failure;
+            }
         }
     }
 
@@ -297,9 +355,13 @@ final class NestedNitroParquetBatchSource
         private final TypeBinding outputType;
         private final boolean nullable;
 
-        private MapProjectedReader(ParquetSchema.Group map, TypeBinding outputType, RleReaderPolicy rlePolicy)
+        private MapProjectedReader(
+                ParquetSchema.Group map,
+                TypeBinding outputType,
+                RleReaderPolicy rlePolicy,
+                PrimitiveArrayPool arrayPool)
         {
-            this.reader = new NestedMapReader(map, rlePolicy);
+            this.reader = new NestedMapReader(map, rlePolicy, arrayPool);
             this.outputType = requireNonNull(outputType, "outputType is null");
             this.nullable = map.repetition() != org.apache.parquet.format.FieldRepetitionType.REQUIRED;
         }
@@ -353,9 +415,13 @@ final class NestedNitroParquetBatchSource
         private final TypeBinding outputType;
         private final boolean nullable;
 
-        private ArrayProjectedReader(ParquetSchema.Group list, TypeBinding outputType, RleReaderPolicy rlePolicy)
+        private ArrayProjectedReader(
+                ParquetSchema.Group list,
+                TypeBinding outputType,
+                RleReaderPolicy rlePolicy,
+                PrimitiveArrayPool arrayPool)
         {
-            this.reader = new NestedArrayReader(list, rlePolicy);
+            this.reader = new NestedArrayReader(list, rlePolicy, arrayPool);
             this.outputType = requireNonNull(outputType, "outputType is null");
             this.nullable = list.repetition() != org.apache.parquet.format.FieldRepetitionType.REQUIRED;
         }
@@ -410,12 +476,16 @@ final class NestedNitroParquetBatchSource
         private final TypeBinding outputType;
         private final boolean nullable;
 
-        private StructProjectedReader(ParquetSchema.Group struct, TypeBinding outputType, RleReaderPolicy rlePolicy)
+        private StructProjectedReader(
+                ParquetSchema.Group struct,
+                TypeBinding outputType,
+                RleReaderPolicy rlePolicy,
+                PrimitiveArrayPool arrayPool)
         {
-            this.reader = new NestedStructReader(struct, rlePolicy);
+            this.reader = new NestedStructReader(struct, rlePolicy, arrayPool);
             this.outputType = requireNonNull(outputType, "outputType is null");
             this.nullable = struct.repetition() != org.apache.parquet.format.FieldRepetitionType.REQUIRED;
-            this.nullReader = nullable ? new NestedStructNullReader(struct, rlePolicy) : null;
+            this.nullReader = nullable ? new NestedStructNullReader(struct, rlePolicy, arrayPool) : null;
         }
 
         @Override
@@ -613,14 +683,18 @@ final class NestedNitroParquetBatchSource
     {
         return switch (node) {
             case ParquetSchema.Primitive primitive when primitive.maximumDefinitionLevel() > 1 ->
-                    new NestedPrimitiveProjectedReader(primitive, outputType, resources.readerPolicy().rle());
+                    new NestedPrimitiveProjectedReader(
+                            primitive,
+                            outputType,
+                            resources.readerPolicy().rle(),
+                            allocator.primitiveArrays());
             case ParquetSchema.Primitive primitive -> new PrimitiveProjectedReader(primitive, outputType);
             case ParquetSchema.Group group when group.isMap() -> {
                 if (!outputType.supportedVectorTypes().contains(MapVector.class)) {
                     throw new UnsupportedParquetFeatureException(
                             "Parquet MAP field '" + group.name() + "' has no MapVector output representation");
                 }
-                yield new MapProjectedReader(group, outputType, resources.readerPolicy().rle());
+                yield new MapProjectedReader(group, outputType, resources.readerPolicy().rle(), allocator.primitiveArrays());
             }
             case ParquetSchema.Group group when group.isList() ||
                     (group.repetition() == org.apache.parquet.format.FieldRepetitionType.REPEATED &&
@@ -629,10 +703,10 @@ final class NestedNitroParquetBatchSource
                     throw new UnsupportedParquetFeatureException(
                             "Parquet LIST field '" + group.name() + "' has no ArrayVector output representation");
                 }
-                yield new ArrayProjectedReader(group, outputType, resources.readerPolicy().rle());
+                yield new ArrayProjectedReader(group, outputType, resources.readerPolicy().rle(), allocator.primitiveArrays());
             }
             case ParquetSchema.Group group when outputType.supportedVectorTypes().contains(StructVector.class) ->
-                    new StructProjectedReader(group, outputType, resources.readerPolicy().rle());
+                    new StructProjectedReader(group, outputType, resources.readerPolicy().rle(), allocator.primitiveArrays());
             case ParquetSchema.Group group -> throw new UnsupportedParquetFeatureException(
                     "Native Nitro Parquet reader does not support nested field '" + group.name() + "' with this logical layout");
         };

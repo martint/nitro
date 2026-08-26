@@ -22,6 +22,7 @@ import org.weakref.nitro.data.ArrayVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.execution.EngineResources;
@@ -91,7 +92,7 @@ class TestNestedArrayReader
         ParquetSchema.Group list = new ParquetSchema.Group(
                 "items", FieldRepetitionType.OPTIONAL, ConvertedType.LIST, null, List.of(repeatedValues), 1, 0);
 
-        LongPhysicalValueDecoder values = new LongPhysicalValueDecoder(Type.INT64);
+        LongPhysicalValueDecoder values = new LongPhysicalValueDecoder(Type.INT64, new PrimitiveArrayPool(0, 0));
         values.decodePlain(longs(1, 3, 4), 0, 3);
         return new NestedArrayReader(
                 list,

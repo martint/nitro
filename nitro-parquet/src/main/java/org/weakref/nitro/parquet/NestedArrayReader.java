@@ -19,6 +19,7 @@ import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.ArrayVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Streams;
 
 import static java.util.Objects.requireNonNull;
@@ -36,12 +37,21 @@ final class NestedArrayReader
     private boolean positioned;
     private boolean exhausted;
 
-    NestedArrayReader(ParquetSchema.Group list, RleReaderPolicy rlePolicy)
+    NestedArrayReader(ParquetSchema.Group list, RleReaderPolicy rlePolicy, PrimitiveArrayPool arrayPool)
     {
-        this(list, rlePolicy, null);
+        this(list, rlePolicy, arrayPool, null);
     }
 
     NestedArrayReader(ParquetSchema.Group list, RleReaderPolicy rlePolicy, NestedLeafCursor elementCursor)
+    {
+        this(list, rlePolicy, null, elementCursor);
+    }
+
+    private NestedArrayReader(
+            ParquetSchema.Group list,
+            RleReaderPolicy rlePolicy,
+            PrimitiveArrayPool arrayPool,
+            NestedLeafCursor elementCursor)
     {
         this.list = requireNonNull(list, "list is null");
         if (list.isList()) {
@@ -66,7 +76,9 @@ final class NestedArrayReader
             throw unsupported("LIST element cannot be repeated");
         }
         this.element = elementLeaf;
-        this.elementReader = elementCursor == null ? new NestedLeafReader(element, rlePolicy) : elementCursor;
+        this.elementReader = elementCursor == null
+                ? new NestedLeafReader(element, rlePolicy, requireNonNull(arrayPool, "arrayPool is null"))
+                : elementCursor;
         this.elements = NestedValueAccumulators.create(element);
     }
 
@@ -89,7 +101,7 @@ final class NestedArrayReader
             throw new IllegalArgumentException("Nested LIST row count and mask length differ: " + rowCount + " != " + mask.size());
         }
 
-        elements.reset();
+        elements.reset(allocator);
         ArrayVector arrays = allocator.allocateArray(context, rowCount);
         BooleanVector listNulls = list.repetition() == FieldRepetitionType.OPTIONAL
                 ? allocator.allocate(context, BooleanVector.class, rowCount, BooleanVector::new)
@@ -184,6 +196,8 @@ final class NestedArrayReader
     @Override
     public void close()
     {
-        elementReader.close();
+        try (elementReader; elements) {
+            // Closing releases both leaf resources and allocator-owned accumulation buffers.
+        }
     }
 }

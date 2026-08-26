@@ -16,10 +16,10 @@ package org.weakref.nitro.parquet;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Streams;
 
-import java.util.Arrays;
-
+import static java.util.Objects.requireNonNull;
 import static org.weakref.nitro.data.Utf8Traits.UTF8_STRING;
 
 /** Reusable accumulation for BYTE_ARRAY leaves, preserving the schema's UTF-8 annotation. */
@@ -32,6 +32,7 @@ final class BinaryNestedValueAccumulator
 
     private final boolean utf8;
     private final boolean nullable;
+    private PrimitiveArrayPool arrayPool;
     private int[] offsets = EMPTY_INTS;
     private byte[] data = EMPTY_BYTES;
     private boolean[] nulls = EMPTY_BOOLEANS;
@@ -45,8 +46,13 @@ final class BinaryNestedValueAccumulator
     }
 
     @Override
-    public void reset()
+    public void reset(Allocator allocator)
     {
+        PrimitiveArrayPool requestedPool = requireNonNull(allocator, "allocator is null").primitiveArrays();
+        if (arrayPool != null && arrayPool != requestedPool) {
+            throw new IllegalArgumentException("Nested accumulator cannot change allocator ownership");
+        }
+        arrayPool = requestedPool;
         size = 0;
         bytes = 0;
     }
@@ -112,16 +118,41 @@ final class BinaryNestedValueAccumulator
             return;
         }
         int capacity = Math.max(required, Math.max(16, offsets.length * 2));
-        offsets = Arrays.copyOf(offsets, capacity + 1);
+        int[] replacementOffsets = arrayPool.borrowInts(capacity + 1);
+        System.arraycopy(offsets, 0, replacementOffsets, 0, Math.min(offsets.length, size + 1));
+        arrayPool.release(offsets);
+        offsets = replacementOffsets;
         if (nullable) {
-            nulls = Arrays.copyOf(nulls, capacity);
+            boolean[] replacementNulls = arrayPool.borrowBooleans(capacity);
+            System.arraycopy(nulls, 0, replacementNulls, 0, size);
+            arrayPool.release(nulls);
+            nulls = replacementNulls;
         }
     }
 
     private void ensureByteCapacity(int required)
     {
         if (data.length < required) {
-            data = Arrays.copyOf(data, Math.max(required, Math.max(64, data.length * 2)));
+            byte[] replacement = arrayPool.borrowBytes(Math.max(required, Math.max(64, data.length * 2)));
+            System.arraycopy(data, 0, replacement, 0, bytes);
+            arrayPool.release(data);
+            data = replacement;
+        }
+    }
+
+    @Override
+    public void close()
+    {
+        if (arrayPool != null) {
+            arrayPool.release(offsets);
+            arrayPool.release(data);
+            arrayPool.release(nulls);
+            offsets = EMPTY_INTS;
+            data = EMPTY_BYTES;
+            nulls = EMPTY_BOOLEANS;
+            arrayPool = null;
+            size = 0;
+            bytes = 0;
         }
     }
 }

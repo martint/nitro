@@ -16,6 +16,7 @@ package org.weakref.nitro.parquet;
 import org.apache.parquet.format.Encoding;
 import org.apache.parquet.format.Type;
 import org.junit.jupiter.api.Test;
+import org.weakref.nitro.data.PrimitiveArrayPool;
 
 import java.lang.foreign.MemorySegment;
 import java.nio.ByteBuffer;
@@ -33,7 +34,7 @@ class TestNestedPageDecoder
                 1,
                 2,
                 RleReaderPolicy.defaults());
-        LongPhysicalValueDecoder values = new LongPhysicalValueDecoder(Type.INT64);
+        LongPhysicalValueDecoder values = new LongPhysicalValueDecoder(Type.INT64, new PrimitiveArrayPool(0, 0));
         values.decodeDictionary(longs(10, 20), 2, Encoding.PLAIN);
         decodeDictionaryPage(
                 decoder,
@@ -62,7 +63,7 @@ class TestNestedPageDecoder
                 1,
                 3,
                 RleReaderPolicy.defaults());
-        BinaryPhysicalValueDecoder values = new BinaryPhysicalValueDecoder();
+        BinaryPhysicalValueDecoder values = new BinaryPhysicalValueDecoder(new PrimitiveArrayPool(0, 0));
         values.decodeDictionary(binary("one", "two"), 2, Encoding.PLAIN);
         decodeDictionaryPage(
                 decoder,

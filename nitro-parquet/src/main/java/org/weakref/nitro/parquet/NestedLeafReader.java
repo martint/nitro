@@ -18,6 +18,7 @@ import org.apache.parquet.format.ColumnMetaData;
 import org.apache.parquet.format.CompressionCodec;
 import org.apache.parquet.format.Encoding;
 import org.apache.parquet.format.PageType;
+import org.weakref.nitro.data.PrimitiveArrayPool;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
@@ -57,19 +58,19 @@ final class NestedLeafReader
     private long consumedPageBytes;
     private boolean closed;
 
-    NestedLeafReader(ParquetSchema.Primitive leaf, RleReaderPolicy rlePolicy)
+    NestedLeafReader(ParquetSchema.Primitive leaf, RleReaderPolicy rlePolicy, PrimitiveArrayPool arrayPool)
     {
-        this(leaf, rlePolicy, true);
+        this(leaf, rlePolicy, arrayPool, true);
     }
 
-    NestedLeafReader(ParquetSchema.Primitive leaf, RleReaderPolicy rlePolicy, boolean decodeValues)
+    NestedLeafReader(ParquetSchema.Primitive leaf, RleReaderPolicy rlePolicy, PrimitiveArrayPool arrayPool, boolean decodeValues)
     {
         this.leaf = requireNonNull(leaf, "leaf is null");
         this.decoder = new NestedPageDecoder(
                 leaf.maximumRepetitionLevel(),
                 leaf.maximumDefinitionLevel(),
                 requireNonNull(rlePolicy, "rlePolicy is null"));
-        this.valueDecoder = PhysicalValueDecoders.create(leaf);
+        this.valueDecoder = PhysicalValueDecoders.create(leaf, requireNonNull(arrayPool, "arrayPool is null"));
         this.decodeValues = decodeValues;
     }
 
@@ -239,6 +240,11 @@ final class NestedLeafReader
         return consumedPageBytes;
     }
 
+    boolean pageExhausted()
+    {
+        return eventIndex >= decoder.eventCount();
+    }
+
     private void closeChunk()
     {
         if (chunkRange != null) {
@@ -261,6 +267,7 @@ final class NestedLeafReader
         if (!closed) {
             closed = true;
             closeChunk();
+            valueDecoder.close();
             snappyByThread.clear();
             scratchArena.close();
         }
