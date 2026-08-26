@@ -239,15 +239,13 @@ final class NestedMapReader
                     valueOffset + windowLength) >= 0) {
                 throw new IllegalArgumentException("Nested MAP key/value repetition levels differ");
             }
-            int[] keyDefinitionLevels = keyWindow.definitionLevels();
-            int[] valueDefinitionLevels = valueWindow.definitionLevels();
             int consumed = 0;
             int entryRunStart = -1;
             int entryRunCount = 0;
             while (consumed < windowLength) {
                 int repetitionLevel = keyRepetitionLevels[keyOffset + consumed];
-                boolean keyEntry = keyDefinitionLevels[keyOffset + consumed] >= entryDefinitionLevel;
-                boolean valueEntry = valueDefinitionLevels[valueOffset + consumed] >= entryDefinitionLevel;
+                boolean keyEntry = keyWindow.definitionLevel(consumed) >= entryDefinitionLevel;
+                boolean valueEntry = valueWindow.definitionLevel(consumed) >= entryDefinitionLevel;
                 if (keyEntry != valueEntry) {
                     throw new IllegalArgumentException("Nested MAP key/value definition levels describe different entries");
                 }
@@ -271,7 +269,7 @@ final class NestedMapReader
                         nextSelected = selectedIndex < mask.count() ? mask.position(selectedIndex) : rowCount;
                     }
                     if (selected && mapNulls != null) {
-                        mapNulls.values()[row] = keyDefinitionLevels[keyOffset + consumed] < mapDefinitionLevel;
+                        mapNulls.values()[row] = keyWindow.definitionLevel(consumed) < mapDefinitionLevel;
                     }
                 }
                 else if (row < 0) {
@@ -336,10 +334,8 @@ final class NestedMapReader
                     valueOffset + windowLength) >= 0) {
                 throw new IllegalArgumentException("Nested MAP key/value repetition levels differ");
             }
-            int[] keyDefinitionLevels = keyWindow.definitionLevels();
-            int[] valueDefinitionLevels = valueWindow.definitionLevels();
-            if (allAtLeast(keyDefinitionLevels, keyOffset, windowLength, entryDefinitionLevel) &&
-                    allAtLeast(valueDefinitionLevels, valueOffset, windowLength, entryDefinitionLevel)) {
+            if (allAtLeast(keyWindow, windowLength, entryDefinitionLevel) &&
+                    allAtLeast(valueWindow, windowLength, entryDefinitionLevel)) {
                 int consumed = 0;
                 while (consumed < windowLength) {
                     if (keyRepetitionLevels[keyOffset + consumed] == 0) {
@@ -372,8 +368,8 @@ final class NestedMapReader
             int entryRunCount = 0;
             while (consumed < windowLength) {
                 int repetitionLevel = keyRepetitionLevels[keyOffset + consumed];
-                boolean keyEntry = keyDefinitionLevels[keyOffset + consumed] >= entryDefinitionLevel;
-                boolean valueEntry = valueDefinitionLevels[valueOffset + consumed] >= entryDefinitionLevel;
+                boolean keyEntry = keyWindow.definitionLevel(consumed) >= entryDefinitionLevel;
+                boolean valueEntry = valueWindow.definitionLevel(consumed) >= entryDefinitionLevel;
                 if (keyEntry != valueEntry) {
                     throw new IllegalArgumentException("Nested MAP key/value definition levels describe different entries");
                 }
@@ -392,7 +388,7 @@ final class NestedMapReader
                     }
                     row++;
                     if (mapNulls != null) {
-                        mapNulls.values()[row] = keyDefinitionLevels[keyOffset + consumed] < mapDefinitionLevel;
+                        mapNulls.values()[row] = keyWindow.definitionLevel(consumed) < mapDefinitionLevel;
                     }
                 }
                 else if (row < 0) {
@@ -426,8 +422,16 @@ final class NestedMapReader
         valueWindow.appendTo(values, start, count);
     }
 
-    private static boolean allAtLeast(int[] values, int offset, int length, int minimum)
+    private static boolean allAtLeast(NestedEventWindow window, int length, int minimum)
     {
+        if (window.allDefinitionLevelsAtLeast(minimum)) {
+            return true;
+        }
+        int[] values = window.definitionLevels();
+        if (values == null) {
+            return false;
+        }
+        int offset = window.offset();
         int end = offset + length;
         int vectorEnd = offset + INT_SPECIES.loopBound(length);
         IntVector threshold = IntVector.broadcast(INT_SPECIES, minimum);

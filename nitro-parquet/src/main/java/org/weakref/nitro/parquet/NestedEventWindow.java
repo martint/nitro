@@ -22,6 +22,9 @@ final class NestedEventWindow
     private int[] dictionaryIds;
     private int offset;
     private int length;
+    private boolean constantDefinitionLevel;
+    private int definitionLevel;
+    private boolean physicalValuesPresent;
 
     void reset(
             PhysicalValueDecoder values,
@@ -39,6 +42,29 @@ final class NestedEventWindow
         this.dictionaryIds = dictionaryIds;
         this.offset = offset;
         this.length = length;
+        this.constantDefinitionLevel = false;
+        this.physicalValuesPresent = false;
+    }
+
+    void resetConstantDefinitionLevel(
+            PhysicalValueDecoder values,
+            int[] repetitionLevels,
+            int definitionLevel,
+            boolean physicalValuesPresent,
+            int[] dictionaryIds,
+            int offset,
+            int length)
+    {
+        this.values = values;
+        this.repetitionLevels = repetitionLevels;
+        this.definitionLevels = null;
+        this.valueOrdinals = null;
+        this.dictionaryIds = dictionaryIds;
+        this.offset = offset;
+        this.length = length;
+        this.constantDefinitionLevel = true;
+        this.definitionLevel = definitionLevel;
+        this.physicalValuesPresent = physicalValuesPresent;
     }
 
     int length()
@@ -53,7 +79,7 @@ final class NestedEventWindow
 
     int definitionLevel(int index)
     {
-        return definitionLevels[offset + index];
+        return constantDefinitionLevel ? definitionLevel : definitionLevels[offset + index];
     }
 
     int[] repetitionLevels()
@@ -66,6 +92,11 @@ final class NestedEventWindow
         return definitionLevels;
     }
 
+    boolean allDefinitionLevelsAtLeast(int minimum)
+    {
+        return constantDefinitionLevel && definitionLevel >= minimum;
+    }
+
     int offset()
     {
         return offset;
@@ -75,6 +106,20 @@ final class NestedEventWindow
     {
         if (start < 0 || count < 0 || start > length - count) {
             throw new IndexOutOfBoundsException("Invalid nested event subwindow: " + start + ", " + count);
+        }
+        if (constantDefinitionLevel) {
+            if (!physicalValuesPresent) {
+                for (int index = 0; index < count; index++) {
+                    accumulator.appendNull();
+                }
+            }
+            else if (dictionaryIds == null) {
+                accumulator.appendPlainRun(values, offset + start, count);
+            }
+            else {
+                accumulator.appendDictionaryRun(values, dictionaryIds, offset + start, count);
+            }
+            return;
         }
         accumulator.appendEvents(values, valueOrdinals, dictionaryIds, offset + start, count);
     }

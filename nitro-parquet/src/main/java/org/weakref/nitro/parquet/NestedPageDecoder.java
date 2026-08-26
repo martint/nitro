@@ -46,6 +46,8 @@ final class NestedPageDecoder
     private int eventCount;
     private int physicalValueCount;
     private boolean dictionaryEncoded;
+    private boolean constantDefinitionLevel;
+    private int definitionLevel;
 
     NestedPageDecoder(
             int maximumRepetitionLevel,
@@ -112,11 +114,6 @@ final class NestedPageDecoder
         if (decodeRepetitionLevels) {
             repetitionLevels = grow(repetitionLevels, valueCount);
         }
-        definitionLevels = grow(definitionLevels, valueCount);
-        if (decodeValueOrdinals) {
-            valueOrdinals = grow(valueOrdinals, valueCount);
-        }
-
         long offset = 0;
         if (maximumRepetitionLevel == 0) {
             if (decodeRepetitionLevels) {
@@ -134,21 +131,35 @@ final class NestedPageDecoder
         }
 
         if (maximumDefinitionLevel == 0) {
-            Arrays.fill(definitionLevels, 0, valueCount, 0);
+            constantDefinitionLevel = true;
+            definitionLevel = 0;
         }
         else {
             int length = levelStreamLength(body, offset, "definition");
             offset += Integer.BYTES;
             definitionReader.init(body.asSlice(0, offset + length), offset, bitWidth(maximumDefinitionLevel));
-            definitionReader.read(definitionLevels, 0, valueCount);
+            definitionLevel = definitionReader.consumeSingleRleValue(valueCount);
+            constantDefinitionLevel = definitionLevel >= 0;
+            if (!constantDefinitionLevel) {
+                definitionLevels = grow(definitionLevels, valueCount);
+                definitionReader.init(body.asSlice(0, offset + length), offset, bitWidth(maximumDefinitionLevel));
+                definitionReader.read(definitionLevels, 0, valueCount);
+            }
             offset += length;
         }
 
-        physicalValueCount = 0;
-        if (decodeValueOrdinals) {
+        if (constantDefinitionLevel) {
+            physicalValueCount = definitionLevel == maximumDefinitionLevel ? valueCount : 0;
+        }
+        else if (decodeValueOrdinals) {
+            valueOrdinals = grow(valueOrdinals, valueCount);
+            physicalValueCount = 0;
             for (int event = 0; event < valueCount; event++) {
                 valueOrdinals[event] = definitionLevels[event] == maximumDefinitionLevel ? physicalValueCount++ : -1;
             }
+        }
+        else {
+            physicalValueCount = 0;
         }
 
         return offset;
@@ -169,12 +180,12 @@ final class NestedPageDecoder
 
     int definitionLevel(int event)
     {
-        return definitionLevels[event];
+        return constantDefinitionLevel ? definitionLevel : definitionLevels[event];
     }
 
     boolean hasValue(int event)
     {
-        return valueOrdinals[event] >= 0;
+        return constantDefinitionLevel ? definitionLevel == maximumDefinitionLevel : valueOrdinals[event] >= 0;
     }
 
     int physicalValueCount()
@@ -184,7 +195,8 @@ final class NestedPageDecoder
 
     int valueOrdinal(int event)
     {
-        int ordinal = valueOrdinals[event];
+        int ordinal = constantDefinitionLevel && definitionLevel == maximumDefinitionLevel ? event :
+                constantDefinitionLevel ? -1 : valueOrdinals[event];
         if (ordinal < 0) {
             throw new IllegalStateException("Nested Parquet event has no physical value");
         }
@@ -205,6 +217,22 @@ final class NestedPageDecoder
         if (eventOffset < 0 || count < 0 || eventOffset > eventCount - count) {
             throw new IndexOutOfBoundsException("Invalid nested event window: " + eventOffset + ", " + count);
         }
+        if (constantDefinitionLevel) {
+            if (definitionLevel == maximumDefinitionLevel) {
+                if (dictionaryEncoded) {
+                    accumulator.appendDictionaryRun(valueDecoder, dictionaryIds, eventOffset, count);
+                }
+                else {
+                    accumulator.appendPlainRun(valueDecoder, eventOffset, count);
+                }
+            }
+            else {
+                for (int index = 0; index < count; index++) {
+                    accumulator.appendNull();
+                }
+            }
+            return;
+        }
         accumulator.appendEvents(
                 valueDecoder,
                 valueOrdinals,
@@ -218,14 +246,26 @@ final class NestedPageDecoder
         if (eventOffset < 0 || eventOffset >= eventCount) {
             throw new IndexOutOfBoundsException("Invalid nested event offset: " + eventOffset);
         }
-        window.reset(
-                valueDecoder,
-                repetitionLevels,
-                definitionLevels,
-                valueOrdinals,
-                dictionaryEncoded ? dictionaryIds : null,
-                eventOffset,
-                eventCount - eventOffset);
+        if (constantDefinitionLevel) {
+            window.resetConstantDefinitionLevel(
+                    valueDecoder,
+                    repetitionLevels,
+                    definitionLevel,
+                    definitionLevel == maximumDefinitionLevel,
+                    dictionaryEncoded ? dictionaryIds : null,
+                    eventOffset,
+                    eventCount - eventOffset);
+        }
+        else {
+            window.reset(
+                    valueDecoder,
+                    repetitionLevels,
+                    definitionLevels,
+                    valueOrdinals,
+                    dictionaryEncoded ? dictionaryIds : null,
+                    eventOffset,
+                    eventCount - eventOffset);
+        }
     }
 
     boolean hasRepetitionLevels()

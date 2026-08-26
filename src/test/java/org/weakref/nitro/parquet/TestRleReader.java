@@ -81,6 +81,47 @@ class TestRleReader
     }
 
     @Test
+    void testConsumeSingleRleValue()
+    {
+        byte[] encoded = new byte[16];
+        int offset = writeUleb128(encoded, 16); // eight-value RLE run
+        encoded[offset] = 3;
+
+        RleReader reader = new RleReader(DEFAULT_POLICY);
+        reader.init(MemorySegment.ofArray(encoded), 0, 2);
+
+        assertThat(reader.consumeSingleRleValue(8)).isEqualTo(3);
+    }
+
+    @Test
+    void testConsumeSingleRleValueRejectsNonConstantWindowWithoutConsumingValues()
+    {
+        int[] expected = {0, 1, 2, 3, 0, 1, 2, 3};
+        byte[] encoded = bitPackedRun(2, expected);
+
+        RleReader reader = new RleReader(DEFAULT_POLICY);
+        reader.init(MemorySegment.ofArray(encoded), 0, 2);
+
+        assertThat(reader.consumeSingleRleValue(expected.length)).isEqualTo(-1);
+        int[] actual = new int[expected.length];
+        reader.read(actual, 0, actual.length);
+        assertThat(actual).containsExactly(expected);
+    }
+
+    @Test
+    void testConsumeSingleRleValueRejectsShortRun()
+    {
+        byte[] encoded = new byte[16];
+        int offset = writeUleb128(encoded, 8); // four-value RLE run
+        encoded[offset] = 1;
+
+        RleReader reader = new RleReader(DEFAULT_POLICY);
+        reader.init(MemorySegment.ofArray(encoded), 0, 1);
+
+        assertThat(reader.consumeSingleRleValue(5)).isEqualTo(-1);
+    }
+
+    @Test
     void testFilterNullableDictionaryLongsPreservesBothCursorsAcrossWindows()
     {
         int[] definitionLevels = {1, 1, 0, 1, 1, 0, 1, 1, 1, 0, 1, 1, 0, 1, 1, 1};

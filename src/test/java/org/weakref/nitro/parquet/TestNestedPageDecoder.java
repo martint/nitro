@@ -24,9 +24,90 @@ import java.nio.ByteOrder;
 import java.util.Arrays;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class TestNestedPageDecoder
 {
+    @Test
+    void testConstantPresentDefinitionLevelsUseSequentialPhysicalOrdinals()
+    {
+        NestedPageDecoder decoder = new NestedPageDecoder(
+                1,
+                2,
+                RleReaderPolicy.defaults(),
+                new PrimitiveArrayPool(0, 0));
+        LongPhysicalValueDecoder values = new LongPhysicalValueDecoder(Type.INT64, new PrimitiveArrayPool(0, 0));
+        values.decodeDictionary(longs(10, 20), 2, Encoding.PLAIN);
+        decodeDictionaryPage(
+                decoder,
+                values,
+                new int[] {0, 1, 0, 1},
+                1,
+                rleRun(2, 2, 4),
+                new int[] {0, 1, 1, 0},
+                1);
+
+        assertThat(decoder.physicalValueCount()).isEqualTo(4);
+        assertThat(decoder.definitionLevel(0)).isEqualTo(2);
+        assertThat(decoder.definitionLevel(3)).isEqualTo(2);
+        assertThat(decoder.valueOrdinal(0)).isZero();
+        assertThat(decoder.valueOrdinal(3)).isEqualTo(3);
+        assertThat(longValue(decoder, values, 2)).isEqualTo(20);
+    }
+
+    @Test
+    void testConstantNullDefinitionLevelsHaveNoPhysicalValues()
+    {
+        NestedPageDecoder decoder = new NestedPageDecoder(
+                1,
+                2,
+                RleReaderPolicy.defaults(),
+                new PrimitiveArrayPool(0, 0));
+        LongPhysicalValueDecoder values = new LongPhysicalValueDecoder(Type.INT64, new PrimitiveArrayPool(0, 0));
+        decodeDictionaryPage(
+                decoder,
+                values,
+                new int[] {0, 1, 0, 1},
+                1,
+                rleRun(2, 1, 4),
+                new int[0],
+                0);
+
+        assertThat(decoder.physicalValueCount()).isZero();
+        assertThat(decoder.definitionLevel(2)).isOne();
+        assertThat(decoder.hasValue(2)).isFalse();
+        assertThatThrownBy(() -> decoder.valueOrdinal(2))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("Nested Parquet event has no physical value");
+    }
+
+    @Test
+    void testMixedDefinitionLevelsRetainPhysicalOrdinalMapping()
+    {
+        NestedPageDecoder decoder = new NestedPageDecoder(
+                1,
+                2,
+                RleReaderPolicy.defaults(),
+                new PrimitiveArrayPool(0, 0));
+        LongPhysicalValueDecoder values = new LongPhysicalValueDecoder(Type.INT64, new PrimitiveArrayPool(0, 0));
+        values.decodeDictionary(longs(10, 20), 2, Encoding.PLAIN);
+        decodeDictionaryPage(
+                decoder,
+                values,
+                new int[] {0, 1, 0, 1},
+                1,
+                new int[] {2, 1, 2, 1},
+                2,
+                new int[] {0, 1},
+                1);
+
+        assertThat(decoder.physicalValueCount()).isEqualTo(2);
+        assertThat(decoder.hasValue(0)).isTrue();
+        assertThat(decoder.hasValue(1)).isFalse();
+        assertThat(decoder.valueOrdinal(2)).isOne();
+        assertThat(longValue(decoder, values, 2)).isEqualTo(20);
+    }
+
     @Test
     void testSkipsSharedRepetitionLevelMaterialization()
     {
@@ -124,6 +205,19 @@ class TestNestedPageDecoder
         decoder.decodeDataPageV1(page, repetitions.length, Encoding.RLE_DICTIONARY, values.dictionarySize());
     }
 
+    private static void decodeDictionaryPage(
+            NestedPageDecoder decoder,
+            PhysicalValueDecoder values,
+            int[] repetitions,
+            int repetitionWidth,
+            byte[] definitions,
+            int[] ids,
+            int idWidth)
+    {
+        MemorySegment page = dictionaryPage(repetitions, repetitionWidth, definitions, ids, idWidth);
+        decoder.decodeDataPageV1(page, repetitions.length, Encoding.RLE_DICTIONARY, values.dictionarySize());
+    }
+
     private static MemorySegment dictionaryPage(
             int[] repetitions,
             int repetitionWidth,
@@ -142,6 +236,35 @@ class TestNestedPageDecoder
         output.putInt(definitionData.length).put(definitionData);
         output.put((byte) idWidth).put(idData);
         return MemorySegment.ofArray(output.array());
+    }
+
+    private static MemorySegment dictionaryPage(
+            int[] repetitions,
+            int repetitionWidth,
+            byte[] definitionData,
+            int[] ids,
+            int idWidth)
+    {
+        byte[] repetitionData = bitPackedRun(repetitionWidth, repetitions);
+        byte[] idData = bitPackedRun(idWidth, ids);
+        ByteBuffer output = ByteBuffer.allocate(
+                        Integer.BYTES + repetitionData.length + Integer.BYTES + definitionData.length + 1 + idData.length)
+                .order(ByteOrder.LITTLE_ENDIAN);
+        output.putInt(repetitionData.length).put(repetitionData);
+        output.putInt(definitionData.length).put(definitionData);
+        output.put((byte) idWidth).put(idData);
+        return MemorySegment.ofArray(output.array());
+    }
+
+    private static byte[] rleRun(int bitWidth, int value, int count)
+    {
+        byte[] output = new byte[16];
+        int offset = writeUleb128(output, count << 1);
+        int byteWidth = (bitWidth + Byte.SIZE - 1) / Byte.SIZE;
+        for (int byteIndex = 0; byteIndex < byteWidth; byteIndex++) {
+            output[offset++] = (byte) (value >>> (byteIndex * Byte.SIZE));
+        }
+        return Arrays.copyOf(output, offset);
     }
 
     private static MemorySegment longs(long... values)

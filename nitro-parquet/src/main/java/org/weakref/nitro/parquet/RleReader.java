@@ -363,6 +363,29 @@ final class RleReader
     }
 
     /**
+     * Consume {@code count} values when they are represented by one RLE run. The returned value is the encoded
+     * constant, or {@code -1} when the requested window is not a single RLE run. A failed probe may have loaded the
+     * next run, but consumes no values.
+     */
+    int consumeSingleRleValue(int count)
+    {
+        if (count < 0) {
+            throw new IllegalArgumentException("count is negative");
+        }
+        if (count == 0) {
+            return 0;
+        }
+        if (rleRemaining == 0 && bitPackedRemaining == 0) {
+            loadNextRun();
+        }
+        if (bitPackedRemaining != 0 || rleRemaining < count) {
+            return -1;
+        }
+        rleRemaining -= count;
+        return rleValue;
+    }
+
+    /**
      * Run-oriented cursor for the predicate-over-dictionary filter. Returns a positive {@code k} when the next
      * {@code k} values (capped at {@code max}) are a single RLE run — all equal to {@link #currentRleValue()} — and
      * consumes them; the caller tests the predicate once and emits/skips the whole run. Returns a negative {@code -k}
