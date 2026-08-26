@@ -191,7 +191,7 @@ public final class ParquetFile
             FileMetaData footer = Util.readFileMetaData(in);
 
             ParquetSchema parquetSchema = ParquetSchema.parse(footer.schema);
-            SchemaColumns flatSchema = flatColumns(parquetSchema);
+            SchemaColumns flatSchema = primitiveColumns(parquetSchema, false);
             return new Metadata(footer, parquetSchema, flatSchema.columns(), flatSchema.columnIndexByName());
         }
     }
@@ -212,12 +212,20 @@ public final class ParquetFile
 
     private static SchemaColumns flatColumns(ParquetSchema schema)
     {
+        return primitiveColumns(schema, true);
+    }
+
+    private static SchemaColumns primitiveColumns(ParquetSchema schema, boolean rejectNested)
+    {
         List<Column> columns = new ArrayList<>(schema.fields().size());
         Map<String, Integer> columnIndexByName = new HashMap<>();
         for (ParquetSchema.Node field : schema.fields()) {
             if (!(field instanceof ParquetSchema.Primitive primitive)) {
-                throw new UnsupportedParquetFeatureException(
-                        "Native Nitro Parquet reader does not yet support nested field '" + field.name() + "'");
+                if (rejectNested) {
+                    throw new UnsupportedParquetFeatureException(
+                            "Native Nitro Parquet reader does not yet support nested field '" + field.name() + "'");
+                }
+                continue;
             }
             if (primitive.repetition() == FieldRepetitionType.REPEATED) {
                 throw new UnsupportedParquetFeatureException(
@@ -304,7 +312,12 @@ public final class ParquetFile
 
     public Column column(int ordinal)
     {
-        return columns.get(ordinal);
+        ParquetSchema.Node field = schema.fields().get(ordinal);
+        if (!(field instanceof ParquetSchema.Primitive primitive)) {
+            throw new UnsupportedParquetFeatureException(
+                    "Native Nitro Parquet primitive reader cannot decode nested field '" + field.name() + "'");
+        }
+        return primitiveColumn(primitive);
     }
 
     public Column column(String name, ParquetColumnNameMatching matching)
@@ -312,26 +325,66 @@ public final class ParquetFile
         Integer index = columnIndexByName.get(name);
         if (index == null && matching == ParquetColumnNameMatching.CASE_INSENSITIVE) {
             String normalizedName = name.toLowerCase(Locale.ROOT);
-            for (Map.Entry<String, Integer> entry : columnIndexByName.entrySet()) {
-                if (!entry.getKey().toLowerCase(Locale.ROOT).equals(normalizedName)) {
+            ParquetSchema.Node matched = null;
+            for (int fieldIndex = 0; fieldIndex < schema.fields().size(); fieldIndex++) {
+                ParquetSchema.Node field = schema.fields().get(fieldIndex);
+                if (!field.name().toLowerCase(Locale.ROOT).equals(normalizedName)) {
                     continue;
                 }
-                if (index != null) {
+                if (matched != null) {
                     throw new IllegalArgumentException("Ambiguous case-insensitive column: " + name);
                 }
-                index = entry.getValue();
+                matched = field;
+            }
+            if (matched != null) {
+                if (!(matched instanceof ParquetSchema.Primitive primitive)) {
+                    throw new UnsupportedParquetFeatureException(
+                            "Native Nitro Parquet primitive reader cannot decode nested field '" + matched.name() + "'");
+                }
+                return primitiveColumn(primitive);
             }
         }
         if (index == null) {
-            throw new IllegalArgumentException("No such column: " + name + " (have " + columnIndexByName.keySet() + ")");
+            ParquetSchema.Node field;
+            try {
+                field = schema.field(name);
+            }
+            catch (IllegalArgumentException _) {
+                throw new IllegalArgumentException("No such column: " + name + " (have " + schema.fields().stream().map(ParquetSchema.Node::name).toList() + ")");
+            }
+            if (!(field instanceof ParquetSchema.Primitive primitive)) {
+                throw new UnsupportedParquetFeatureException(
+                        "Native Nitro Parquet primitive reader cannot decode nested field '" + field.name() + "'");
+            }
+            return primitiveColumn(primitive);
         }
         return columns.get(index);
+    }
+
+    private static Column primitiveColumn(ParquetSchema.Primitive primitive)
+    {
+        if (primitive.repetition() == FieldRepetitionType.REPEATED) {
+            throw new UnsupportedParquetFeatureException(
+                    "Native Nitro Parquet primitive reader does not support repeated field '" + primitive.name() + "'");
+        }
+        return new Column(
+                primitive.name(),
+                primitive.type(),
+                primitive.repetition() == FieldRepetitionType.OPTIONAL,
+                primitive.leafIndex(),
+                primitive.typeLength(),
+                primitive.decimal());
     }
 
     /** The column chunk for {@code column} within {@code rowGroup}. */
     public ColumnChunk columnChunk(RowGroup rowGroup, Column column)
     {
         return rowGroup.columns.get(column.leafIndex());
+    }
+
+    ColumnChunk columnChunk(RowGroup rowGroup, ParquetSchema.Primitive leaf)
+    {
+        return rowGroup.columns.get(leaf.leafIndex());
     }
 
     public ParquetInputRange readRange(long offset, long length)

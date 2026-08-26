@@ -15,6 +15,7 @@ package org.weakref.nitro.parquet;
 
 import org.apache.parquet.format.ConvertedType;
 import org.apache.parquet.format.FieldRepetitionType;
+import org.apache.parquet.format.LogicalType;
 import org.apache.parquet.format.SchemaElement;
 import org.apache.parquet.format.Type;
 
@@ -46,6 +47,7 @@ final class ParquetSchema
             String name,
             FieldRepetitionType repetition,
             ConvertedType convertedType,
+            LogicalType logicalType,
             List<Node> children,
             int maximumDefinitionLevel,
             int maximumRepetitionLevel)
@@ -65,12 +67,12 @@ final class ParquetSchema
 
         boolean isMap()
         {
-            return convertedType == ConvertedType.MAP;
+            return convertedType == ConvertedType.MAP || (logicalType != null && logicalType.isSetMAP());
         }
 
         boolean isList()
         {
-            return convertedType == ConvertedType.LIST;
+            return convertedType == ConvertedType.LIST || (logicalType != null && logicalType.isSetLIST());
         }
     }
 
@@ -79,6 +81,7 @@ final class ParquetSchema
             FieldRepetitionType repetition,
             Type type,
             ConvertedType convertedType,
+            LogicalType logicalType,
             int typeLength,
             int leafIndex,
             List<String> path,
@@ -101,7 +104,12 @@ final class ParquetSchema
 
         boolean decimal()
         {
-            return convertedType == ConvertedType.DECIMAL;
+            return convertedType == ConvertedType.DECIMAL || (logicalType != null && logicalType.isSetDECIMAL());
+        }
+
+        boolean string()
+        {
+            return convertedType == ConvertedType.UTF8 || (logicalType != null && logicalType.isSetSTRING());
         }
     }
 
@@ -183,6 +191,7 @@ final class ParquetSchema
                             repetition,
                             element.type,
                             element.converted_type,
+                            element.logicalType,
                             element.type_length,
                             leafIndex,
                             path,
@@ -209,6 +218,7 @@ final class ParquetSchema
                         element.name,
                         repetition,
                         element.converted_type,
+                        element.logicalType,
                         children,
                         definitionLevel,
                         repetitionLevel),

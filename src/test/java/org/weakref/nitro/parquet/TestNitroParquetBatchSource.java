@@ -17,9 +17,12 @@ import org.apache.parquet.format.ColumnChunk;
 import org.apache.parquet.format.ColumnMetaData;
 import org.apache.parquet.format.CompressionCodec;
 import org.apache.parquet.format.Encoding;
+import org.apache.parquet.format.LogicalType;
+import org.apache.parquet.format.MapType;
 import org.apache.parquet.format.RowGroup;
 import org.apache.parquet.format.SchemaElement;
 import org.apache.parquet.format.Statistics;
+import org.apache.parquet.format.StringType;
 import org.apache.parquet.format.Type;
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.core.type.Schema;
@@ -69,11 +72,14 @@ class TestNitroParquetBatchSource
                 new SchemaElement("code").setType(Type.INT64).setRepetition_type(org.apache.parquet.format.FieldRepetitionType.OPTIONAL),
                 new SchemaElement("attributes")
                         .setNum_children(1)
-                        .setConverted_type(org.apache.parquet.format.ConvertedType.MAP)
+                        .setLogicalType(LogicalType.MAP(new MapType()))
                         .setRepetition_type(org.apache.parquet.format.FieldRepetitionType.OPTIONAL),
                 new SchemaElement("key_value").setNum_children(2).setRepetition_type(org.apache.parquet.format.FieldRepetitionType.REPEATED),
                 new SchemaElement("key").setType(Type.INT64).setRepetition_type(org.apache.parquet.format.FieldRepetitionType.REQUIRED),
-                new SchemaElement("value").setType(Type.BYTE_ARRAY).setRepetition_type(org.apache.parquet.format.FieldRepetitionType.OPTIONAL)));
+                new SchemaElement("value")
+                        .setType(Type.BYTE_ARRAY)
+                        .setLogicalType(LogicalType.STRING(new StringType()))
+                        .setRepetition_type(org.apache.parquet.format.FieldRepetitionType.OPTIONAL)));
 
         assertEquals(3, schema.leaves().size());
         assertEquals(List.of("attributes", "key_value", "key"), schema.leaves().get(1).path());
@@ -81,6 +87,7 @@ class TestNitroParquetBatchSource
         assertEquals(2, schema.leaves().get(1).maximumDefinitionLevel());
         assertEquals(3, schema.leaves().get(2).maximumDefinitionLevel());
         assertTrue(((ParquetSchema.Group) schema.field("attributes")).isMap());
+        assertTrue(schema.leaves().get(2).string());
     }
 
     @Test
