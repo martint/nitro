@@ -108,6 +108,7 @@ import org.weakref.nitro.parquet.ParquetFilterEvaluationPolicy;
 import org.weakref.nitro.parquet.ParquetFilterWindowPolicy;
 import org.weakref.nitro.parquet.ParquetFilteredPayloadPolicy;
 import org.weakref.nitro.parquet.ParquetInput;
+import org.weakref.nitro.parquet.ParquetInputRange;
 import org.weakref.nitro.parquet.ParquetLateMaterializationPolicy;
 import org.weakref.nitro.parquet.ParquetMaterializationPolicy;
 import org.weakref.nitro.parquet.ParquetNumericDecodeAdmissionPolicy;
@@ -358,6 +359,7 @@ public class TestParquetOperator
             deferredRange = new Range(columnChunkStart(deferredMetadata), toIntExact(deferredMetadata.total_compressed_size));
         }
         List<Range> reads = new ArrayList<>();
+        List<Range> released = new ArrayList<>();
         AtomicBoolean closed = new AtomicBoolean();
         ParquetInput input = new ParquetInput()
         {
@@ -374,10 +376,13 @@ public class TestParquetOperator
             }
 
             @Override
-            public MemorySegment readRange(long offset, int length)
+            public ParquetInputRange readRange(long offset, int length)
             {
-                reads.add(new Range(offset, length));
-                return MemorySegment.ofArray(bytes).asSlice(offset, length);
+                Range range = new Range(offset, length);
+                reads.add(range);
+                return new ParquetInputRange(
+                        MemorySegment.ofArray(bytes).asSlice(offset, length),
+                        () -> released.add(range));
             }
 
             @Override
@@ -397,6 +402,7 @@ public class TestParquetOperator
                         allocator,
                         List.of(new NitroParquetBatchSource.InputSplit(input, 0, bytes.length)),
                         schema)) {
+            assertThat(released).containsAll(reads);
             SourcePoll.Ready ready = (SourcePoll.Ready) source.poll();
             assertThat(((I64Vector) ready.batch().column(0).borrow(Stream.VALUES)).values())
                     .startsWith(10L, 20L);
@@ -407,6 +413,7 @@ public class TestParquetOperator
             assertThat(reads).doesNotContain(deferredRange);
         }
         assertThat(closed).isTrue();
+        assertThat(released).containsExactlyInAnyOrderElementsOf(reads);
     }
 
     private static long columnChunkStart(ColumnMetaData metadata)

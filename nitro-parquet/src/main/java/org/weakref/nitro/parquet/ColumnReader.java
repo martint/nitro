@@ -139,6 +139,14 @@ public final class ColumnReader
             this.source = source;
         }
 
+        private Chunk(ParquetInputRange range, long baseOffset, ColumnMetaData metadata, long rowCount, DecompressedPageCache.Source source)
+        {
+            this.input = new SegmentChunkInput(range, baseOffset);
+            this.metadata = requireNonNull(metadata, "metadata is null");
+            this.rowCount = rowCount;
+            this.source = source;
+        }
+
         private Chunk(ParquetFile file, ColumnMetaData metadata, long rowCount, DecompressedPageCache.Source source)
         {
             this.metadata = requireNonNull(metadata, "metadata is null");
@@ -179,16 +187,69 @@ public final class ColumnReader
         MemorySegment segment();
 
         long baseOffset();
+
+        long length();
+
+        void retain();
+
+        void release();
     }
 
-    private record SegmentChunkInput(MemorySegment segment, long baseOffset)
+    private static final class SegmentChunkInput
             implements ChunkInput
     {
-        private SegmentChunkInput
+        private final ParquetInputRange range;
+        private final long baseOffset;
+        private final long length;
+        private int references = 1;
+
+        private SegmentChunkInput(MemorySegment segment, long baseOffset)
         {
-            requireNonNull(segment, "segment is null");
+            this(ParquetInputRange.retained(segment), baseOffset);
+        }
+
+        private SegmentChunkInput(ParquetInputRange range, long baseOffset)
+        {
+            this.range = requireNonNull(range, "range is null");
             if (baseOffset < 0) {
                 throw new IllegalArgumentException("baseOffset is negative");
+            }
+            this.baseOffset = baseOffset;
+            this.length = range.data().byteSize();
+        }
+
+        @Override
+        public MemorySegment segment()
+        {
+            checkState(references > 0, "chunk input has no readers");
+            return range.data();
+        }
+
+        @Override
+        public long baseOffset()
+        {
+            return baseOffset;
+        }
+
+        @Override
+        public long length()
+        {
+            return length;
+        }
+
+        @Override
+        public void retain()
+        {
+            references++;
+        }
+
+        @Override
+        public void release()
+        {
+            checkState(references > 0, "chunk input has no readers");
+            references--;
+            if (references == 0) {
+                range.close();
             }
         }
     }
@@ -199,7 +260,8 @@ public final class ColumnReader
         private final ParquetFile file;
         private final long baseOffset;
         private final long length;
-        private MemorySegment segment;
+        private ParquetInputRange range;
+        private int references = 1;
 
         private FileChunkInput(ParquetFile file, long baseOffset, long length)
         {
@@ -217,16 +279,40 @@ public final class ColumnReader
         @Override
         public MemorySegment segment()
         {
-            if (segment == null) {
-                segment = file.readRange(baseOffset, length);
+            checkState(references > 0, "chunk input has no readers");
+            if (range == null) {
+                range = file.readRange(baseOffset, length);
             }
-            return segment;
+            return range.data();
         }
 
         @Override
         public long baseOffset()
         {
             return baseOffset;
+        }
+
+        @Override
+        public long length()
+        {
+            return length;
+        }
+
+        @Override
+        public void retain()
+        {
+            references++;
+        }
+
+        @Override
+        public void release()
+        {
+            checkState(references > 0, "chunk input has no readers");
+            references--;
+            if (references == 0 && range != null) {
+                range.close();
+                range = null;
+            }
         }
     }
 
@@ -356,6 +442,7 @@ public final class ColumnReader
 
     // chunk / page iteration
     private int chunkIndex = -1;
+    private int firstOwnedChunk;
     private MemorySegment segment;
     private long segmentBaseOffset;
     private long pagePosition;
@@ -580,6 +667,15 @@ public final class ColumnReader
         cachedDictionarySize = Integer.MIN_VALUE;
     }
 
+    public void addChunk(ParquetInputRange range, ColumnMetaData metadata, long rowCount)
+    {
+        if (rowCount < 0) {
+            throw new IllegalArgumentException("rowCount is negative");
+        }
+        chunks.add(new Chunk(range, 0, metadata, rowCount, null));
+        cachedDictionarySize = Integer.MIN_VALUE;
+    }
+
     void addChunk(ParquetFile file, ColumnMetaData metadata, long rowCount, DecompressedPageCache.Source source)
     {
         if (rowCount < 0) {
@@ -632,6 +728,7 @@ public final class ColumnReader
                     scratchArena);
         }
         sibling.chunks.addAll(chunks);
+        sibling.chunks.forEach(chunk -> chunk.input.retain());
         return sibling;
     }
 
@@ -732,6 +829,9 @@ public final class ColumnReader
         if (decompressScratch != null) {
             decompressScratch.close();
             decompressScratch = null;
+        }
+        while (firstOwnedChunk < chunks.size()) {
+            chunks.get(firstOwnedChunk++).input.release();
         }
     }
 
@@ -1422,6 +1522,7 @@ public final class ColumnReader
     private long skipWholeChunks(long rows)
     {
         while (rows > 0 && (segment == null || pagePosition >= chunkEnd)) {
+            releaseCurrentChunk();
             int nextChunk = chunkIndex + 1;
             if (nextChunk >= chunks.size()) {
                 break;
@@ -1431,7 +1532,7 @@ public final class ColumnReader
                 break;
             }
             chunkIndex = nextChunk;
-            segment = chunk.segment();
+            segment = null;
             segmentBaseOffset = chunk.baseOffset();
             ColumnMetaData metadata = chunk.metadata();
             long start = chunkStart(chunk);
@@ -1445,6 +1546,7 @@ public final class ColumnReader
             }
             dictionarySize = 0;
             rows -= chunk.rowCount();
+            releaseCurrentChunk();
         }
         return rows;
     }
@@ -3872,6 +3974,7 @@ public final class ColumnReader
 
     private boolean advanceChunk()
     {
+        releaseCurrentChunk();
         chunkIndex++;
         if (chunkIndex >= chunks.size()) {
             return false;
@@ -3891,6 +3994,14 @@ public final class ColumnReader
         return true;
     }
 
+    private void releaseCurrentChunk()
+    {
+        if (chunkIndex >= firstOwnedChunk) {
+            chunks.get(chunkIndex).input.release();
+            firstOwnedChunk = chunkIndex + 1;
+        }
+    }
+
     /**
      * The largest per-row-group dictionary size across the column's chunks — a proxy for the column's cardinality
      * (domain size), used to estimate a dynamic filter's selectivity as {@code filterValues / cardinality}. The max
@@ -3908,12 +4019,18 @@ public final class ColumnReader
         int max = -1;
         for (int index = 0; index < chunks.size(); index++) {
             Chunk chunk = chunks.get(index);
-            ColumnMetaData metadata = chunk.metadata();
-            long start = chunkStart(chunk);
-            long limit = start + metadata.total_compressed_size;
-            readPageHeader(chunk.segment(), start, limit);
-            if (parsedPageType == PageType.DICTIONARY_PAGE.getValue()) {
-                max = Math.max(max, parsedValueCount);
+            chunk.input.retain();
+            try {
+                ColumnMetaData metadata = chunk.metadata();
+                long start = chunkStart(chunk);
+                long limit = start + metadata.total_compressed_size;
+                readPageHeader(chunk.segment(), start, limit);
+                if (parsedPageType == PageType.DICTIONARY_PAGE.getValue()) {
+                    max = Math.max(max, parsedValueCount);
+                }
+            }
+            finally {
+                chunk.input.release();
             }
         }
         cachedDictionarySize = max;
@@ -3949,14 +4066,20 @@ public final class ColumnReader
         }
         int entries = 0;
         for (Chunk chunk : chunks) {
-            ColumnMetaData metadata = chunk.metadata();
-            long start = chunkStart(chunk);
-            long limit = start + metadata.total_compressed_size;
-            readPageHeader(chunk.segment(), start, limit);
-            if (parsedPageType != PageType.DICTIONARY_PAGE.getValue() || parsedValueCount > maxEntries - entries) {
-                return Double.NaN;
+            chunk.input.retain();
+            try {
+                ColumnMetaData metadata = chunk.metadata();
+                long start = chunkStart(chunk);
+                long limit = start + metadata.total_compressed_size;
+                readPageHeader(chunk.segment(), start, limit);
+                if (parsedPageType != PageType.DICTIONARY_PAGE.getValue() || parsedValueCount > maxEntries - entries) {
+                    return Double.NaN;
+                }
+                entries += parsedValueCount;
             }
-            entries += parsedValueCount;
+            finally {
+                chunk.input.release();
+            }
         }
         if (entries == 0) {
             return Double.NaN;
@@ -3967,30 +4090,36 @@ public final class ColumnReader
         // This method is intentionally safe to call after a reader has begun consuming data.
         try (Arena inspectionArena = Arena.ofConfined()) {
             for (Chunk chunk : chunks) {
-                ColumnMetaData metadata = chunk.metadata();
-                long start = chunkStart(chunk);
-                long limit = start + metadata.total_compressed_size;
-                long bodyPosition = readPageHeader(chunk.segment(), start, limit);
-                MemorySegment body;
-                if (metadata.codec == CompressionCodec.UNCOMPRESSED) {
-                    body = chunk.segment().asSlice(bodyPosition, parsedCompressedSize);
+                chunk.input.retain();
+                try {
+                    ColumnMetaData metadata = chunk.metadata();
+                    long start = chunkStart(chunk);
+                    long limit = start + metadata.total_compressed_size;
+                    long bodyPosition = readPageHeader(chunk.segment(), start, limit);
+                    MemorySegment body;
+                    if (metadata.codec == CompressionCodec.UNCOMPRESSED) {
+                        body = chunk.segment().asSlice(bodyPosition, parsedCompressedSize);
+                    }
+                    else if (metadata.codec == CompressionCodec.SNAPPY) {
+                        body = inspectionArena.allocate(parsedUncompressedSize);
+                        snappy.decompress(
+                                chunk.segment().asSlice(bodyPosition, parsedCompressedSize),
+                                body);
+                    }
+                    else {
+                        throw new IllegalStateException("Unsupported codec for NitroParquet: " + metadata.codec);
+                    }
+                    for (int index = 0; index < parsedValueCount; index++) {
+                        long value = kind == Kind.INT
+                                ? body.get(LE_INT, (long) index * Integer.BYTES)
+                                : flbaDecimal
+                                        ? bigEndianSignedLong(body, (long) index * typeLength, typeLength)
+                                        : body.get(LE_LONG, (long) index * Long.BYTES);
+                        accepted += predicate.test(value) ? 1 : 0;
+                    }
                 }
-                else if (metadata.codec == CompressionCodec.SNAPPY) {
-                    body = inspectionArena.allocate(parsedUncompressedSize);
-                    snappy.decompress(
-                            chunk.segment().asSlice(bodyPosition, parsedCompressedSize),
-                            body);
-                }
-                else {
-                    throw new IllegalStateException("Unsupported codec for NitroParquet: " + metadata.codec);
-                }
-                for (int index = 0; index < parsedValueCount; index++) {
-                    long value = kind == Kind.INT
-                            ? body.get(LE_INT, (long) index * Integer.BYTES)
-                            : flbaDecimal
-                                    ? bigEndianSignedLong(body, (long) index * typeLength, typeLength)
-                                    : body.get(LE_LONG, (long) index * Long.BYTES);
-                    accepted += predicate.test(value) ? 1 : 0;
+                finally {
+                    chunk.input.release();
                 }
             }
         }
@@ -4043,27 +4172,33 @@ public final class ColumnReader
         if (!isOnlyDictionaryEncoded(metadata)) {
             return true;
         }
-        long start = chunkStart(chunk);
-        long limit = start + metadata.total_compressed_size;
-        long bodyPosition = readPageHeader(chunk.segment(), start, limit);
-        if (parsedPageType != PageType.DICTIONARY_PAGE.getValue() || parsedValueCount > maxDictionaryValues) {
-            return true;
-        }
-        MemorySegment body = decompress(
-                chunk,
-                bodyPosition,
-                parsedCompressedSize,
-                parsedUncompressedSize,
-                metadata.codec);
-        for (int dictionaryIndex = 0; dictionaryIndex < parsedValueCount; dictionaryIndex++) {
-            long value = kind == Kind.INT
-                    ? body.get(LE_INT, (long) dictionaryIndex * Integer.BYTES)
-                    : body.get(LE_LONG, (long) dictionaryIndex * Long.BYTES);
-            if (domain.test(value)) {
+        chunk.input.retain();
+        try {
+            long start = chunkStart(chunk);
+            long limit = start + metadata.total_compressed_size;
+            long bodyPosition = readPageHeader(chunk.segment(), start, limit);
+            if (parsedPageType != PageType.DICTIONARY_PAGE.getValue() || parsedValueCount > maxDictionaryValues) {
                 return true;
             }
+            MemorySegment body = decompress(
+                    chunk,
+                    bodyPosition,
+                    parsedCompressedSize,
+                    parsedUncompressedSize,
+                    metadata.codec);
+            for (int dictionaryIndex = 0; dictionaryIndex < parsedValueCount; dictionaryIndex++) {
+                long value = kind == Kind.INT
+                        ? body.get(LE_INT, (long) dictionaryIndex * Integer.BYTES)
+                        : body.get(LE_LONG, (long) dictionaryIndex * Long.BYTES);
+                if (domain.test(value)) {
+                    return true;
+                }
+            }
+            return false;
         }
-        return false;
+        finally {
+            chunk.input.release();
+        }
     }
 
     private static boolean isOnlyDictionaryEncoded(ColumnMetaData metadata)
@@ -4095,7 +4230,7 @@ public final class ColumnReader
         ColumnMetaData metadata = chunk.metadata();
         long physicalStart = physicalStart(metadata);
         long localStart = physicalStart - chunk.baseOffset();
-        if (localStart < 0 || metadata.total_compressed_size > chunk.segment().byteSize() - localStart) {
+        if (localStart < 0 || metadata.total_compressed_size > chunk.input.length() - localStart) {
             throw new IllegalArgumentException("Column chunk is outside its input range");
         }
         return localStart;
@@ -4130,35 +4265,41 @@ public final class ColumnReader
             return false;
         }
         for (Chunk chunk : chunks) {
-            ColumnMetaData metadata = chunk.metadata();
-            long start = chunkStart(chunk);
-            long limit = start + metadata.total_compressed_size;
-            long bodyPosition = readPageHeader(chunk.segment(), start, limit);
-            if (parsedPageType != PageType.DICTIONARY_PAGE.getValue()) {
-                return false;
-            }
-            MemorySegment body = decompress(
-                    chunk,
-                    bodyPosition,
-                    parsedCompressedSize,
-                    parsedUncompressedSize,
-                    metadata.codec);
-            for (int index = 0; index < parsedValueCount; index++) {
-                long value;
-                if (kind == Kind.INT) {
-                    value = body.get(LE_INT, (long) index * Integer.BYTES);
-                }
-                else if (kind == Kind.LONG) {
-                    value = flbaDecimal
-                            ? bigEndianSignedLong(body, (long) index * typeLength, typeLength)
-                            : body.get(LE_LONG, (long) index * Long.BYTES);
-                }
-                else {
-                    throw new AssertionError("Unsupported dictionary coverage kind: " + kind);
-                }
-                if (!predicate.test(value)) {
+            chunk.input.retain();
+            try {
+                ColumnMetaData metadata = chunk.metadata();
+                long start = chunkStart(chunk);
+                long limit = start + metadata.total_compressed_size;
+                long bodyPosition = readPageHeader(chunk.segment(), start, limit);
+                if (parsedPageType != PageType.DICTIONARY_PAGE.getValue()) {
                     return false;
                 }
+                MemorySegment body = decompress(
+                        chunk,
+                        bodyPosition,
+                        parsedCompressedSize,
+                        parsedUncompressedSize,
+                        metadata.codec);
+                for (int index = 0; index < parsedValueCount; index++) {
+                    long value;
+                    if (kind == Kind.INT) {
+                        value = body.get(LE_INT, (long) index * Integer.BYTES);
+                    }
+                    else if (kind == Kind.LONG) {
+                        value = flbaDecimal
+                                ? bigEndianSignedLong(body, (long) index * typeLength, typeLength)
+                                : body.get(LE_LONG, (long) index * Long.BYTES);
+                    }
+                    else {
+                        throw new AssertionError("Unsupported dictionary coverage kind: " + kind);
+                    }
+                    if (!predicate.test(value)) {
+                        return false;
+                    }
+                }
+            }
+            finally {
+                chunk.input.release();
             }
         }
         return !chunks.isEmpty();

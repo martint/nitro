@@ -14,15 +14,15 @@
 package org.weakref.nitro.parquet;
 
 import java.io.IOException;
-import java.lang.foreign.MemorySegment;
 
 /**
  * Seekable Parquet input supplied by the embedding connector.
  *
- * <p>Returned ranges remain valid until this input is closed. Implementations may return zero-copy slices of a
- * local mapping, storage-cache leases, or connector-owned buffers populated by object-store range reads. Nitro owns
- * the input after handing it to a scan and never assumes that it has a local filesystem path. Closing an input must
- * be idempotent so partially constructed scans can release every transferred input.
+ * <p>Returned ranges remain valid until the range or this input is closed. Implementations may return zero-copy
+ * slices of a local mapping, storage-cache leases, or connector-owned buffers populated by object-store range reads.
+ * Nitro closes ranges as soon as their metadata or column chunk is no longer needed. Nitro owns the input after
+ * handing it to a scan and never assumes that it has a local filesystem path. Closing an input must be idempotent so
+ * partially constructed scans can release every transferred input.
  */
 public interface ParquetInput
         extends AutoCloseable
@@ -31,7 +31,7 @@ public interface ParquetInput
 
     long size();
 
-    MemorySegment readRange(long offset, int length)
+    ParquetInputRange readRange(long offset, int length)
             throws IOException;
 
     @Override

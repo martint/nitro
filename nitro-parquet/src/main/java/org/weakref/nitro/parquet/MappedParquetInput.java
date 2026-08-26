@@ -62,12 +62,12 @@ final class MappedParquetInput
     }
 
     @Override
-    public MemorySegment readRange(long offset, int length)
+    public ParquetInputRange readRange(long offset, int length)
     {
         if (offset < 0 || length < 0 || offset > data.byteSize() - length) {
             throw new IndexOutOfBoundsException("Invalid Parquet range: offset=" + offset + ", length=" + length + ", size=" + data.byteSize());
         }
-        return data.asSlice(offset, length);
+        return ParquetInputRange.retained(data.asSlice(offset, length));
     }
 
     @Override

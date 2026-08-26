@@ -173,17 +173,20 @@ public final class ParquetFile
         if (size < 8) {
             throw new IOException("Not a Parquet file (bad magic)");
         }
-        MemorySegment tail = input.readRange(size - 8, 8);
-        if (tail.get(LE_INT, 4) != MAGIC) {
-            throw new IOException("Not a Parquet file (bad magic)");
+        int footerLength;
+        try (ParquetInputRange tailRange = input.readRange(size - 8, 8)) {
+            MemorySegment tail = tailRange.data();
+            if (tail.get(LE_INT, 4) != MAGIC) {
+                throw new IOException("Not a Parquet file (bad magic)");
+            }
+            footerLength = tail.get(LE_INT, 0);
         }
-        int footerLength = tail.get(LE_INT, 0);
         long footerStart = size - 8 - footerLength;
         if (footerLength < 0 || footerStart < 0) {
             throw new IOException("Invalid Parquet footer length: " + footerLength);
         }
-        MemorySegment footerData = input.readRange(footerStart, footerLength);
-        try (InputStream in = new SegmentInputStream(footerData, 0, footerLength)) {
+        try (ParquetInputRange footerRange = input.readRange(footerStart, footerLength);
+                InputStream in = new SegmentInputStream(footerRange.data(), 0, footerLength)) {
             FileMetaData footer = Util.readFileMetaData(in);
 
             // Flat schema: schema[0] is the root; schema[1..] are leaf columns in column-chunk order.
@@ -291,7 +294,7 @@ public final class ParquetFile
         return rowGroup.columns.get(column.leafIndex());
     }
 
-    public MemorySegment readRange(long offset, long length)
+    public ParquetInputRange readRange(long offset, long length)
     {
         if (offset < 0) {
             throw new IllegalArgumentException("Parquet range offset is negative: " + offset);

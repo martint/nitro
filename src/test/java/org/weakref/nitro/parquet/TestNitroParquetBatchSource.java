@@ -104,6 +104,34 @@ class TestNitroParquetBatchSource
     }
 
     @Test
+    void testWholeChunkSkipReleasesRangeBeforeReaderClose()
+    {
+        ColumnMetaData metadata = new ColumnMetaData(
+                Type.INT32,
+                List.of(Encoding.PLAIN),
+                List.of("value"),
+                CompressionCodec.UNCOMPRESSED,
+                100,
+                400,
+                400,
+                0);
+        AtomicBoolean firstReleased = new AtomicBoolean();
+        AtomicBoolean secondReleased = new AtomicBoolean();
+
+        try (PrimitiveArrayPool arrays = new PrimitiveArrayPool(0, 0);
+                ColumnReader reader = new ColumnReader(Type.INT32, false, 0, false, null, arrays, ParquetReaderPolicy.defaults())) {
+            reader.addChunk(new ParquetInputRange(MemorySegment.ofArray(new byte[400]), () -> firstReleased.set(true)), metadata, 100);
+            reader.addChunk(new ParquetInputRange(MemorySegment.ofArray(new byte[400]), () -> secondReleased.set(true)), metadata, 100);
+
+            reader.skip(100);
+
+            assertTrue(firstReleased.get());
+            assertFalse(secondReleased.get());
+        }
+        assertTrue(secondReleased.get());
+    }
+
+    @Test
     void testInputIsClosedWhenSourceConstructionFails()
     {
         AtomicBoolean closed = new AtomicBoolean();
@@ -122,9 +150,9 @@ class TestNitroParquetBatchSource
             }
 
             @Override
-            public MemorySegment readRange(long offset, int length)
+            public ParquetInputRange readRange(long offset, int length)
             {
-                return MemorySegment.ofArray(new byte[length]);
+                return ParquetInputRange.retained(MemorySegment.ofArray(new byte[length]));
             }
 
             @Override
