@@ -33,6 +33,7 @@ final class NestedPageDecoder
 {
     private final int maximumRepetitionLevel;
     private final int maximumDefinitionLevel;
+    private final boolean decodeRepetitionLevels;
     private final PrimitiveArrayPool arrayPool;
     private final RleReader repetitionReader;
     private final RleReader definitionReader;
@@ -52,8 +53,19 @@ final class NestedPageDecoder
             RleReaderPolicy rlePolicy,
             PrimitiveArrayPool arrayPool)
     {
+        this(maximumRepetitionLevel, maximumDefinitionLevel, rlePolicy, arrayPool, true);
+    }
+
+    NestedPageDecoder(
+            int maximumRepetitionLevel,
+            int maximumDefinitionLevel,
+            RleReaderPolicy rlePolicy,
+            PrimitiveArrayPool arrayPool,
+            boolean decodeRepetitionLevels)
+    {
         this.maximumRepetitionLevel = maximumRepetitionLevel;
         this.maximumDefinitionLevel = maximumDefinitionLevel;
+        this.decodeRepetitionLevels = decodeRepetitionLevels;
         this.arrayPool = requireNonNull(arrayPool, "arrayPool is null");
         this.repetitionReader = new RleReader(rlePolicy);
         this.definitionReader = new RleReader(rlePolicy);
@@ -97,7 +109,9 @@ final class NestedPageDecoder
     {
         requireNonNull(body, "body is null");
         eventCount = valueCount;
-        repetitionLevels = grow(repetitionLevels, valueCount);
+        if (decodeRepetitionLevels) {
+            repetitionLevels = grow(repetitionLevels, valueCount);
+        }
         definitionLevels = grow(definitionLevels, valueCount);
         if (decodeValueOrdinals) {
             valueOrdinals = grow(valueOrdinals, valueCount);
@@ -105,13 +119,17 @@ final class NestedPageDecoder
 
         long offset = 0;
         if (maximumRepetitionLevel == 0) {
-            Arrays.fill(repetitionLevels, 0, valueCount, 0);
+            if (decodeRepetitionLevels) {
+                Arrays.fill(repetitionLevels, 0, valueCount, 0);
+            }
         }
         else {
             int length = levelStreamLength(body, offset, "repetition");
             offset += Integer.BYTES;
-            repetitionReader.init(body.asSlice(0, offset + length), offset, bitWidth(maximumRepetitionLevel));
-            repetitionReader.read(repetitionLevels, 0, valueCount);
+            if (decodeRepetitionLevels) {
+                repetitionReader.init(body.asSlice(0, offset + length), offset, bitWidth(maximumRepetitionLevel));
+                repetitionReader.read(repetitionLevels, 0, valueCount);
+            }
             offset += length;
         }
 
@@ -143,6 +161,9 @@ final class NestedPageDecoder
 
     int repetitionLevel(int event)
     {
+        if (!decodeRepetitionLevels) {
+            throw new IllegalStateException("Repetition levels are supplied by the shared nested structure");
+        }
         return repetitionLevels[event];
     }
 
@@ -205,6 +226,11 @@ final class NestedPageDecoder
                 dictionaryEncoded ? dictionaryIds : null,
                 eventOffset,
                 eventCount - eventOffset);
+    }
+
+    boolean hasRepetitionLevels()
+    {
+        return decodeRepetitionLevels;
     }
 
     private static int levelStreamLength(MemorySegment body, long offset, String kind)

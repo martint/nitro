@@ -16,6 +16,11 @@ package org.weakref.nitro.parquet;
 interface NestedLeafEventSource
         extends NestedLeafCursor
 {
+    default boolean hasRepetitionLevels()
+    {
+        return true;
+    }
+
     NestedEventWindow eventWindow();
 
     void advanceEvents(int count);

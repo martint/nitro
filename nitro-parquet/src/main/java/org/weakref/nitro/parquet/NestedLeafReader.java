@@ -66,12 +66,23 @@ final class NestedLeafReader
 
     NestedLeafReader(ParquetSchema.Primitive leaf, RleReaderPolicy rlePolicy, PrimitiveArrayPool arrayPool, boolean decodeValues)
     {
+        this(leaf, rlePolicy, arrayPool, decodeValues, true);
+    }
+
+    NestedLeafReader(
+            ParquetSchema.Primitive leaf,
+            RleReaderPolicy rlePolicy,
+            PrimitiveArrayPool arrayPool,
+            boolean decodeValues,
+            boolean decodeRepetitionLevels)
+    {
         this.leaf = requireNonNull(leaf, "leaf is null");
         this.decoder = new NestedPageDecoder(
                 leaf.maximumRepetitionLevel(),
                 leaf.maximumDefinitionLevel(),
                 requireNonNull(rlePolicy, "rlePolicy is null"),
-                requireNonNull(arrayPool, "arrayPool is null"));
+                requireNonNull(arrayPool, "arrayPool is null"),
+                decodeRepetitionLevels);
         this.valueDecoder = PhysicalValueDecoders.create(leaf, requireNonNull(arrayPool, "arrayPool is null"));
         this.decodeValues = decodeValues;
     }
@@ -130,6 +141,12 @@ final class NestedLeafReader
         decoder.resetWindow(eventWindow, valueDecoder, eventIndex);
         currentEvent = -1;
         return eventWindow;
+    }
+
+    @Override
+    public boolean hasRepetitionLevels()
+    {
+        return decoder.hasRepetitionLevels();
     }
 
     @Override

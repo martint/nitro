@@ -93,7 +93,7 @@ final class NestedMapReader
                 ? new NestedLeafReader(key, rlePolicy, requireNonNull(arrayPool, "arrayPool is null"))
                 : keyCursor;
         this.valueReader = valueCursor == null
-                ? new NestedLeafReader(value, rlePolicy, requireNonNull(arrayPool, "arrayPool is null"))
+                ? new NestedLeafReader(value, rlePolicy, requireNonNull(arrayPool, "arrayPool is null"), true, false)
                 : valueCursor;
         this.keyValues = NestedValueAccumulators.create(key);
         this.values = NestedValueAccumulators.create(value);
@@ -225,7 +225,7 @@ final class NestedMapReader
             int valueOffset = valueWindow.offset();
             int[] keyRepetitionLevels = keyWindow.repetitionLevels();
             int[] valueRepetitionLevels = valueWindow.repetitionLevels();
-            if (Arrays.mismatch(
+            if (valueSource.hasRepetitionLevels() && Arrays.mismatch(
                     keyRepetitionLevels,
                     keyOffset,
                     keyOffset + windowLength,
@@ -322,7 +322,7 @@ final class NestedMapReader
             int valueOffset = valueWindow.offset();
             int[] keyRepetitionLevels = keyWindow.repetitionLevels();
             int[] valueRepetitionLevels = valueWindow.repetitionLevels();
-            if (Arrays.mismatch(
+            if (valueSource.hasRepetitionLevels() && Arrays.mismatch(
                     keyRepetitionLevels,
                     keyOffset,
                     keyOffset + windowLength,
@@ -443,7 +443,8 @@ final class NestedMapReader
 
     private void requireAlignedEvents()
     {
-        if (keyReader.repetitionLevel() != valueReader.repetitionLevel()) {
+        boolean compareRepetitionLevels = !(valueReader instanceof NestedLeafEventSource valueSource) || valueSource.hasRepetitionLevels();
+        if (compareRepetitionLevels && keyReader.repetitionLevel() != valueReader.repetitionLevel()) {
             throw new IllegalArgumentException("Nested MAP key/value repetition levels differ");
         }
         boolean keyEntry = keyReader.definitionLevel() >= entries.maximumDefinitionLevel();

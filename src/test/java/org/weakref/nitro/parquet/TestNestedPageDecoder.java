@@ -28,6 +28,32 @@ import static org.assertj.core.api.Assertions.assertThat;
 class TestNestedPageDecoder
 {
     @Test
+    void testSkipsSharedRepetitionLevelMaterialization()
+    {
+        NestedPageDecoder decoder = new NestedPageDecoder(
+                1,
+                2,
+                RleReaderPolicy.defaults(),
+                new PrimitiveArrayPool(0, 0),
+                false);
+        LongPhysicalValueDecoder values = new LongPhysicalValueDecoder(Type.INT64, new PrimitiveArrayPool(0, 0));
+        values.decodeDictionary(longs(10, 20), 2, Encoding.PLAIN);
+        decodeDictionaryPage(
+                decoder,
+                values,
+                new int[] {0, 1, 0, 1},
+                1,
+                new int[] {2, 2, 2, 2},
+                2,
+                new int[] {0, 1, 1, 0},
+                1);
+
+        assertThat(decoder.hasRepetitionLevels()).isFalse();
+        assertThat(decoder.definitionLevel(3)).isEqualTo(2);
+        assertThat(longValue(decoder, values, 2)).isEqualTo(20);
+    }
+
+    @Test
     void testDictionaryLongPagePreservesMapEvents()
     {
         NestedPageDecoder decoder = new NestedPageDecoder(
