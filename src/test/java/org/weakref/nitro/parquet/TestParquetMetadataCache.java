@@ -14,6 +14,7 @@
 package org.weakref.nitro.parquet;
 
 import org.apache.parquet.format.FileMetaData;
+import org.apache.parquet.format.SchemaElement;
 import org.junit.jupiter.api.Test;
 
 import java.nio.file.Path;
@@ -59,6 +60,10 @@ class TestParquetMetadataCache
     private static ParquetFile.Metadata metadata(int rows)
     {
         FileMetaData footer = new FileMetaData(1, List.of(), rows, List.of());
-        return new ParquetFile.Metadata(footer, List.of(), Map.of());
+        return new ParquetFile.Metadata(
+                footer,
+                ParquetSchema.parse(List.of(new SchemaElement("root").setNum_children(0))),
+                List.of(),
+                Map.of());
     }
 }

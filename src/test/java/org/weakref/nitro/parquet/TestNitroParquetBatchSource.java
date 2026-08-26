@@ -18,6 +18,7 @@ import org.apache.parquet.format.ColumnMetaData;
 import org.apache.parquet.format.CompressionCodec;
 import org.apache.parquet.format.Encoding;
 import org.apache.parquet.format.RowGroup;
+import org.apache.parquet.format.SchemaElement;
 import org.apache.parquet.format.Statistics;
 import org.apache.parquet.format.Type;
 import org.junit.jupiter.api.Test;
@@ -35,12 +36,66 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class TestNitroParquetBatchSource
 {
+    @Test
+    void testNestedSchemaFailsAtNativeReaderAdmission()
+    {
+        List<SchemaElement> schema = List.of(
+                new SchemaElement("root").setNum_children(2),
+                new SchemaElement("code").setType(Type.INT64).setRepetition_type(org.apache.parquet.format.FieldRepetitionType.OPTIONAL),
+                new SchemaElement("attributes").setNum_children(1).setRepetition_type(org.apache.parquet.format.FieldRepetitionType.OPTIONAL),
+                new SchemaElement("key_value").setNum_children(2).setRepetition_type(org.apache.parquet.format.FieldRepetitionType.REPEATED),
+                new SchemaElement("key").setType(Type.INT64).setRepetition_type(org.apache.parquet.format.FieldRepetitionType.REQUIRED),
+                new SchemaElement("value").setType(Type.BYTE_ARRAY).setRepetition_type(org.apache.parquet.format.FieldRepetitionType.OPTIONAL));
+
+        UnsupportedParquetFeatureException failure = assertThrows(
+                UnsupportedParquetFeatureException.class,
+                () -> ParquetFile.parseFlatSchema(schema));
+
+        assertEquals("Native Nitro Parquet reader does not yet support nested field 'attributes'", failure.getMessage());
+    }
+
+    @Test
+    void testNestedSchemaTracksPhysicalLeavesAndLevels()
+    {
+        ParquetSchema schema = ParquetSchema.parse(List.of(
+                new SchemaElement("root").setNum_children(2),
+                new SchemaElement("code").setType(Type.INT64).setRepetition_type(org.apache.parquet.format.FieldRepetitionType.OPTIONAL),
+                new SchemaElement("attributes")
+                        .setNum_children(1)
+                        .setConverted_type(org.apache.parquet.format.ConvertedType.MAP)
+                        .setRepetition_type(org.apache.parquet.format.FieldRepetitionType.OPTIONAL),
+                new SchemaElement("key_value").setNum_children(2).setRepetition_type(org.apache.parquet.format.FieldRepetitionType.REPEATED),
+                new SchemaElement("key").setType(Type.INT64).setRepetition_type(org.apache.parquet.format.FieldRepetitionType.REQUIRED),
+                new SchemaElement("value").setType(Type.BYTE_ARRAY).setRepetition_type(org.apache.parquet.format.FieldRepetitionType.OPTIONAL)));
+
+        assertEquals(3, schema.leaves().size());
+        assertEquals(List.of("attributes", "key_value", "key"), schema.leaves().get(1).path());
+        assertEquals(1, schema.leaves().get(1).maximumRepetitionLevel());
+        assertEquals(2, schema.leaves().get(1).maximumDefinitionLevel());
+        assertEquals(3, schema.leaves().get(2).maximumDefinitionLevel());
+        assertTrue(((ParquetSchema.Group) schema.field("attributes")).isMap());
+    }
+
+    @Test
+    void testFlatSchemaKeepsPhysicalLeafOrdinals()
+    {
+        ParquetFile.SchemaColumns schema = ParquetFile.parseFlatSchema(List.of(
+                new SchemaElement("root").setNum_children(2),
+                new SchemaElement("first").setType(Type.INT64).setRepetition_type(org.apache.parquet.format.FieldRepetitionType.REQUIRED),
+                new SchemaElement("second").setType(Type.BYTE_ARRAY).setRepetition_type(org.apache.parquet.format.FieldRepetitionType.OPTIONAL)));
+
+        assertEquals(0, schema.columns().get(0).leafIndex());
+        assertEquals(1, schema.columns().get(1).leafIndex());
+        assertEquals(1, schema.columnIndexByName().get("second"));
+    }
+
     @Test
     void testFragmentedNumericSkipAdmissionBoundaries()
     {

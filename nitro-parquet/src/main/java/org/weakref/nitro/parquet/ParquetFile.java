@@ -14,7 +14,6 @@
 package org.weakref.nitro.parquet;
 
 import org.apache.parquet.format.ColumnChunk;
-import org.apache.parquet.format.ConvertedType;
 import org.apache.parquet.format.FieldRepetitionType;
 import org.apache.parquet.format.FileMetaData;
 import org.apache.parquet.format.RowGroup;
@@ -60,6 +59,7 @@ public final class ParquetFile
 
     private final ParquetInput input;
     private final FileMetaData footer;
+    private final ParquetSchema schema;
     private final List<Column> columns;
     private final Map<String, Integer> columnIndexByName;
 
@@ -70,11 +70,12 @@ public final class ParquetFile
      */
     public record Column(String name, Type type, boolean optional, int leafIndex, int typeLength, boolean decimal) {}
 
-    record Metadata(FileMetaData footer, List<Column> columns, Map<String, Integer> columnIndexByName)
+    record Metadata(FileMetaData footer, ParquetSchema schema, List<Column> columns, Map<String, Integer> columnIndexByName)
     {
         Metadata
         {
             footer = requireNonNull(footer, "footer is null");
+            schema = requireNonNull(schema, "schema is null");
             columns = List.copyOf(columns);
             columnIndexByName = Map.copyOf(columnIndexByName);
         }
@@ -189,27 +190,61 @@ public final class ParquetFile
                 InputStream in = new SegmentInputStream(footerRange.data(), 0, footerLength)) {
             FileMetaData footer = Util.readFileMetaData(in);
 
-            // Flat schema: schema[0] is the root; schema[1..] are leaf columns in column-chunk order.
-            List<SchemaElement> schema = footer.schema;
-            List<Column> columns = new ArrayList<>();
-            Map<String, Integer> columnIndexByName = new HashMap<>();
-            for (int i = 1; i < schema.size(); i++) {
-                SchemaElement element = schema.get(i);
-                boolean optional = element.repetition_type == FieldRepetitionType.OPTIONAL;
-                int leafIndex = i - 1;
-                boolean decimal = element.converted_type == ConvertedType.DECIMAL
-                        || (element.logicalType != null && element.logicalType.isSetDECIMAL());
-                columnIndexByName.put(element.name, columns.size());
-                columns.add(new Column(element.name, element.type, optional, leafIndex, element.type_length, decimal));
-            }
-            return new Metadata(footer, columns, columnIndexByName);
+            ParquetSchema parquetSchema = ParquetSchema.parse(footer.schema);
+            SchemaColumns flatSchema = flatColumns(parquetSchema);
+            return new Metadata(footer, parquetSchema, flatSchema.columns(), flatSchema.columnIndexByName());
         }
+    }
+
+    record SchemaColumns(List<Column> columns, Map<String, Integer> columnIndexByName) {}
+
+    /**
+     * Parses the flat schema currently admitted by the native reader.
+     *
+     * <p>A group must never be mistaken for a physical leaf. Doing so shifts every later leaf ordinal and can route
+     * the wrong column chunk into a decoder. Nested support is added by extending the native schema/level model; until
+     * then the file is rejected here with the exact unsupported field instead of falling through to another reader.
+     */
+    static SchemaColumns parseFlatSchema(List<SchemaElement> schema)
+    {
+        return flatColumns(ParquetSchema.parse(schema));
+    }
+
+    private static SchemaColumns flatColumns(ParquetSchema schema)
+    {
+        List<Column> columns = new ArrayList<>(schema.fields().size());
+        Map<String, Integer> columnIndexByName = new HashMap<>();
+        for (ParquetSchema.Node field : schema.fields()) {
+            if (!(field instanceof ParquetSchema.Primitive primitive)) {
+                throw new UnsupportedParquetFeatureException(
+                        "Native Nitro Parquet reader does not yet support nested field '" + field.name() + "'");
+            }
+            if (primitive.repetition() == FieldRepetitionType.REPEATED) {
+                throw new UnsupportedParquetFeatureException(
+                        "Native Nitro Parquet reader does not yet support repeated field '" + primitive.name() + "'");
+            }
+            boolean optional = primitive.repetition() == FieldRepetitionType.OPTIONAL;
+            boolean decimal = primitive.decimal();
+            Integer previous = columnIndexByName.put(primitive.name(), columns.size());
+            if (previous != null) {
+                throw new UnsupportedParquetFeatureException("Duplicate top-level Parquet field '" + primitive.name() + "'");
+            }
+            columns.add(new Column(
+                    primitive.name(),
+                    primitive.type(),
+                    optional,
+                    primitive.leafIndex(),
+                    primitive.typeLength(),
+                    decimal));
+        }
+        return new SchemaColumns(List.copyOf(columns), Map.copyOf(columnIndexByName));
     }
 
     private ParquetFile(ParquetInput input, Metadata metadata)
     {
         this.input = requireNonNull(input, "input is null");
         this.footer = metadata.footer();
+        this.schema = metadata.schema();
         this.columns = metadata.columns();
         this.columnIndexByName = metadata.columnIndexByName();
     }
@@ -217,6 +252,11 @@ public final class ParquetFile
     public long numRows()
     {
         return footer.num_rows;
+    }
+
+    ParquetSchema schema()
+    {
+        return schema;
     }
 
     public List<RowGroup> rowGroups()
