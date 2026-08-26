@@ -20,6 +20,8 @@ import org.weakref.nitro.core.source.SourceCapability;
 import org.weakref.nitro.core.source.SourceColumnHandle;
 import org.weakref.nitro.core.source.SourceMetrics;
 import org.weakref.nitro.core.source.SourceMetricsProtocol;
+import org.weakref.nitro.core.source.SourceOutputDemand;
+import org.weakref.nitro.core.source.SourceOutputDemandProtocol;
 import org.weakref.nitro.core.source.SourcePoll;
 import org.weakref.nitro.core.source.SourceProtocol;
 import org.weakref.nitro.core.type.Schema;
@@ -36,6 +38,7 @@ import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.StructVector;
+import org.weakref.nitro.data.ValueDemand;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorBatchScope;
 import org.weakref.nitro.data.VectorColumnGeneration;
@@ -43,6 +46,7 @@ import org.weakref.nitro.data.VectorSourceBatch;
 
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Set;
@@ -61,6 +65,13 @@ final class NestedNitroParquetBatchSource
         void addRowGroup(ParquetFile file, RowGroup rowGroup);
 
         Streams read(Allocator allocator, Allocator.Context context, int rowCount, Mask mask);
+
+        default void setValueDemand(ValueDemand demand)
+        {
+            if (demand != ValueDemand.FULL) {
+                throw new UnsupportedOperationException("Reader does not support reduced value demand");
+            }
+        }
 
         default boolean supportsIndependentNulls()
         {
@@ -361,8 +372,10 @@ final class NestedNitroParquetBatchSource
             implements ProjectedReader
     {
         private final NestedMapReader reader;
+        private final NestedRepeatedShapeReader shapeReader;
         private final TypeBinding outputType;
         private final boolean nullable;
+        private ValueDemand valueDemand = ValueDemand.FULL;
 
         private MapProjectedReader(
                 ParquetSchema.Group map,
@@ -371,6 +384,13 @@ final class NestedNitroParquetBatchSource
                 PrimitiveArrayPool arrayPool)
         {
             this.reader = new NestedMapReader(map, rlePolicy, arrayPool);
+            ParquetSchema.Group entries = (ParquetSchema.Group) map.children().getFirst();
+            this.shapeReader = new NestedRepeatedShapeReader(
+                    map,
+                    entries,
+                    (ParquetSchema.Primitive) entries.children().getFirst(),
+                    rlePolicy,
+                    arrayPool);
             this.outputType = requireNonNull(outputType, "outputType is null");
             this.nullable = map.repetition() != org.apache.parquet.format.FieldRepetitionType.REQUIRED;
         }
@@ -379,13 +399,31 @@ final class NestedNitroParquetBatchSource
         public void addRowGroup(ParquetFile file, RowGroup rowGroup)
         {
             reader.addRowGroup(file, rowGroup);
+            shapeReader.addRowGroup(file, rowGroup);
+        }
+
+        @Override
+        public void setValueDemand(ValueDemand demand)
+        {
+            this.valueDemand = requireNonNull(demand, "demand is null");
         }
 
         @Override
         public Streams read(Allocator allocator, Allocator.Context context, int rowCount, Mask mask)
         {
-            Streams streams = reader.read(allocator, context, rowCount, mask);
-            if (!outputType.supportsVector(streams.values())) {
+            Streams streams;
+            if (valueDemand == ValueDemand.STRUCTURE) {
+                MapVector maps = allocator.allocateMap(context, rowCount);
+                BooleanVector nulls = nullable
+                        ? allocator.allocate(context, BooleanVector.class, rowCount, BooleanVector::new)
+                        : null;
+                shapeReader.read(maps.offsets(), nulls == null ? null : nulls.values(), rowCount, mask);
+                streams = nulls == null ? Streams.ofValues(maps) : Streams.ofValuesAndNulls(maps, nulls);
+            }
+            else {
+                streams = reader.read(allocator, context, rowCount, mask);
+            }
+            if (valueDemand == ValueDemand.FULL && !outputType.supportsVector(streams.values())) {
                 throw new UnsupportedParquetFeatureException(
                         "Native Parquet MAP representation does not match output type " + outputType.identity());
             }
@@ -395,13 +433,18 @@ final class NestedNitroParquetBatchSource
         @Override
         public void skip(long rowCount)
         {
-            reader.skip(rowCount);
+            if (valueDemand == ValueDemand.STRUCTURE) {
+                shapeReader.skip(rowCount);
+            }
+            else {
+                reader.skip(rowCount);
+            }
         }
 
         @Override
         public long consumedPageBytes()
         {
-            return reader.consumedPageBytes();
+            return valueDemand == ValueDemand.STRUCTURE ? shapeReader.consumedPageBytes() : reader.consumedPageBytes();
         }
 
         @Override
@@ -413,7 +456,9 @@ final class NestedNitroParquetBatchSource
         @Override
         public void close()
         {
-            reader.close();
+            try (reader; shapeReader) {
+                // Closing releases the selected and dormant reader resources.
+            }
         }
     }
 
@@ -421,8 +466,10 @@ final class NestedNitroParquetBatchSource
             implements ProjectedReader
     {
         private final NestedArrayReader reader;
+        private final NestedRepeatedShapeReader shapeReader;
         private final TypeBinding outputType;
         private final boolean nullable;
+        private ValueDemand valueDemand = ValueDemand.FULL;
 
         private ArrayProjectedReader(
                 ParquetSchema.Group list,
@@ -431,6 +478,15 @@ final class NestedNitroParquetBatchSource
                 PrimitiveArrayPool arrayPool)
         {
             this.reader = new NestedArrayReader(list, rlePolicy, arrayPool);
+            ParquetSchema.Group repeatedValues = list.isList()
+                    ? (ParquetSchema.Group) list.children().getFirst()
+                    : list;
+            this.shapeReader = new NestedRepeatedShapeReader(
+                    list,
+                    repeatedValues,
+                    (ParquetSchema.Primitive) repeatedValues.children().getFirst(),
+                    rlePolicy,
+                    arrayPool);
             this.outputType = requireNonNull(outputType, "outputType is null");
             this.nullable = list.repetition() != org.apache.parquet.format.FieldRepetitionType.REQUIRED;
         }
@@ -439,13 +495,31 @@ final class NestedNitroParquetBatchSource
         public void addRowGroup(ParquetFile file, RowGroup rowGroup)
         {
             reader.addRowGroup(file, rowGroup);
+            shapeReader.addRowGroup(file, rowGroup);
+        }
+
+        @Override
+        public void setValueDemand(ValueDemand demand)
+        {
+            this.valueDemand = requireNonNull(demand, "demand is null");
         }
 
         @Override
         public Streams read(Allocator allocator, Allocator.Context context, int rowCount, Mask mask)
         {
-            Streams streams = reader.read(allocator, context, rowCount, mask);
-            if (!outputType.supportsVector(streams.values())) {
+            Streams streams;
+            if (valueDemand == ValueDemand.STRUCTURE) {
+                ArrayVector arrays = allocator.allocateArray(context, rowCount);
+                BooleanVector nulls = nullable
+                        ? allocator.allocate(context, BooleanVector.class, rowCount, BooleanVector::new)
+                        : null;
+                shapeReader.read(arrays.offsets(), nulls == null ? null : nulls.values(), rowCount, mask);
+                streams = nulls == null ? Streams.ofValues(arrays) : Streams.ofValuesAndNulls(arrays, nulls);
+            }
+            else {
+                streams = reader.read(allocator, context, rowCount, mask);
+            }
+            if (valueDemand == ValueDemand.FULL && !outputType.supportsVector(streams.values())) {
                 throw new UnsupportedParquetFeatureException(
                         "Native Parquet LIST representation does not match output type " + outputType.identity());
             }
@@ -455,13 +529,18 @@ final class NestedNitroParquetBatchSource
         @Override
         public void skip(long rowCount)
         {
-            reader.skip(rowCount);
+            if (valueDemand == ValueDemand.STRUCTURE) {
+                shapeReader.skip(rowCount);
+            }
+            else {
+                reader.skip(rowCount);
+            }
         }
 
         @Override
         public long consumedPageBytes()
         {
-            return reader.consumedPageBytes();
+            return valueDemand == ValueDemand.STRUCTURE ? shapeReader.consumedPageBytes() : reader.consumedPageBytes();
         }
 
         @Override
@@ -473,7 +552,9 @@ final class NestedNitroParquetBatchSource
         @Override
         public void close()
         {
-            reader.close();
+            try (reader; shapeReader) {
+                // Closing releases the selected and dormant reader resources.
+            }
         }
     }
 
@@ -588,6 +669,7 @@ final class NestedNitroParquetBatchSource
     private final ParquetFile[] files;
     private final ProjectedReader[] readers;
     private final SourceColumnHandle[] sourceColumns;
+    private final ValueDemand[] outputDemands;
     private final long[] pendingRows;
     private final long[] pendingNullRows;
     private final VectorBatchScope batchScope;
@@ -656,6 +738,8 @@ final class NestedNitroParquetBatchSource
         }
         this.readers = new ProjectedReader[schema.size()];
         this.sourceColumns = new SourceColumnHandle[schema.size()];
+        this.outputDemands = new ValueDemand[schema.size()];
+        java.util.Arrays.fill(outputDemands, ValueDemand.FULL);
         this.pendingRows = new long[schema.size()];
         this.pendingNullRows = new long[schema.size()];
         for (int column = 0; column < schema.size(); column++) {
@@ -825,6 +909,10 @@ final class NestedNitroParquetBatchSource
     @Override
     public <T> Optional<T> protocol(SourceProtocol<T> protocol)
     {
+        if (protocol == SourceOutputDemandProtocol.OUTPUT_DEMAND) {
+            SourceOutputDemand demand = this::retainOutputs;
+            return Optional.of(protocol.valueType().cast(demand));
+        }
         if (protocol == SourceMetricsProtocol.METRICS) {
             SourceMetrics metrics = new SourceMetrics()
             {
@@ -849,6 +937,40 @@ final class NestedNitroParquetBatchSource
             return Optional.of(protocol.valueType().cast(metrics));
         }
         return Optional.empty();
+    }
+
+    private void retainOutputs(Map<SourceColumnHandle, ValueDemand> outputs)
+    {
+        checkOpen();
+        if (nextRow != 0 || currentBatch != null) {
+            throw new IllegalStateException("output demand must be declared before polling");
+        }
+        requireNonNull(outputs, "outputs is null");
+        java.util.Arrays.fill(outputDemands, null);
+        for (Map.Entry<SourceColumnHandle, ValueDemand> entry : outputs.entrySet()) {
+            int column = columnIndex(requireNonNull(entry.getKey(), "output is null"));
+            if (column < 0) {
+                throw new IllegalArgumentException("output belongs to another source");
+            }
+            ValueDemand demand = requireNonNull(entry.getValue(), "value demand is null");
+            readers[column].setValueDemand(demand);
+            outputDemands[column] = demand;
+        }
+    }
+
+    private int columnIndex(SourceColumnHandle output)
+    {
+        if (output instanceof OrdinalSourceColumnHandle ordinal &&
+                ordinal.ordinal() >= 0 && ordinal.ordinal() < sourceColumns.length &&
+                sourceColumns[ordinal.ordinal()] == output) {
+            return ordinal.ordinal();
+        }
+        for (int column = 0; column < sourceColumns.length; column++) {
+            if (sourceColumns[column].equals(output)) {
+                return column;
+            }
+        }
+        return -1;
     }
 
     private long consumedPageBytes()
@@ -907,6 +1029,9 @@ final class NestedNitroParquetBatchSource
 
         private Vector resolve(int column, Stream stream)
         {
+            if (outputDemands[column] == null) {
+                throw new IllegalStateException("source output was not declared before polling: " + column);
+            }
             if (resolved[column] != null && resolved[column].has(stream)) {
                 return resolved[column].get(stream);
             }

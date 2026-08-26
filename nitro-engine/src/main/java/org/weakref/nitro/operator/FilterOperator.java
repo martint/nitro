@@ -20,6 +20,7 @@ import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
+import org.weakref.nitro.data.ValueDemand;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.evaluator.EvaluatorFunctionCallSite;
 import org.weakref.nitro.operator.evaluator.PlanEvaluator;
@@ -39,6 +40,7 @@ import org.weakref.nitro.operator.evaluator.ir.ReferenceMask;
 import org.weakref.nitro.operator.evaluator.ir.Variable;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -492,12 +494,13 @@ public class FilterOperator
     }
 
     @Override
-    public Optional<Set<Integer>> sourceOutputDemand(Set<Integer> demandedOutputs)
+    public Optional<Map<Integer, ValueDemand>> sourceOutputDemand(Map<Integer, ValueDemand> demandedOutputs)
     {
         requireNonNull(demandedOutputs, "demandedOutputs is null");
-        java.util.HashSet<Integer> required = new java.util.HashSet<>(demandedOutputs);
-        required.addAll(InputDependencies.inputs(evaluationPlan, effectivePredicateMask()));
-        return source.sourceOutputDemand(Set.copyOf(required));
+        java.util.HashMap<Integer, ValueDemand> required = new java.util.HashMap<>(demandedOutputs);
+        InputDependencies.valueDemands(evaluationPlan, primitiveRegistry, effectivePredicateMask())
+                .forEach((input, demand) -> required.merge(input, demand, ValueDemand::merge));
+        return source.sourceOutputDemand(Map.copyOf(required));
     }
 
     @Override

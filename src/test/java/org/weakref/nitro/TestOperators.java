@@ -46,12 +46,14 @@ import org.weakref.nitro.data.Row;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.StructVector;
+import org.weakref.nitro.data.ValueDemand;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.data.VectorAllocator;
 import org.weakref.nitro.execution.EngineResources;
 import org.weakref.nitro.function.scalar.PrimitiveExecutionContext;
 import org.weakref.nitro.function.scalar.PrimitiveFunction;
+import org.weakref.nitro.function.scalar.builtin.Cardinality;
 import org.weakref.nitro.function.scalar.builtin.CastI64ToI64;
 import org.weakref.nitro.jit.FusedProjectionCompiler;
 import org.weakref.nitro.operator.AggregationOperator;
@@ -4013,6 +4015,33 @@ public class TestOperators
         assertThat(filterProjectSourceDemand(false)).containsExactlyInAnyOrder(0, 1);
     }
 
+    @Test
+    void testProjectionPropagatesFunctionStructuralValueDemand()
+    {
+        PrimitiveRegistry primitiveRegistry = new PrimitiveRegistry();
+        primitiveRegistry.register("cardinality", new Cardinality());
+        Variable cardinality = new Variable(0);
+        EvaluationPlan projectionPlan = new EvaluationPlan(
+                List.of(new Assignment(
+                        cardinality,
+                        new Call("cardinality", List.of(new Reference(new Input(0), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(new Reference(cardinality, Stream.VALUES)));
+        ConstantTableOperator source = new ConstantTableOperator(allocator, 1, List.of())
+        {
+            @Override
+            public Optional<Map<Integer, ValueDemand>> sourceOutputDemand(Map<Integer, ValueDemand> demandedOutputs)
+            {
+                return Optional.of(Map.copyOf(demandedOutputs));
+            }
+        };
+
+        try (ProjectOperator project = new ProjectOperator(allocator, projectionPlan, primitiveRegistry, source)) {
+            assertThat(project.sourceOutputDemand(Map.of(0, ValueDemand.FULL)).orElseThrow())
+                    .containsExactlyEntriesOf(Map.of(0, ValueDemand.STRUCTURE));
+        }
+    }
+
     private Set<Integer> filterProjectSourceDemand(boolean enforceFilter)
     {
         PrimitiveRegistry primitiveRegistry = primitiveRegistry();
@@ -4037,9 +4066,9 @@ public class TestOperators
             }
 
             @Override
-            public Optional<Set<Integer>> sourceOutputDemand(Set<Integer> demandedOutputs)
+            public Optional<Map<Integer, ValueDemand>> sourceOutputDemand(Map<Integer, ValueDemand> demandedOutputs)
             {
-                return Optional.of(Set.copyOf(demandedOutputs));
+                return Optional.of(Map.copyOf(demandedOutputs));
             }
         };
         FilterOperator filter = new FilterOperator(

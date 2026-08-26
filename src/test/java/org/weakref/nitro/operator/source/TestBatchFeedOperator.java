@@ -31,6 +31,7 @@ import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.ValueDemand;
 import org.weakref.nitro.execution.EngineResources;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.DynamicFilter;
@@ -39,6 +40,7 @@ import org.weakref.nitro.operator.Output;
 import org.weakref.nitro.operator.StaticFilterEnforcement;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -203,7 +205,7 @@ class TestBatchFeedOperator
     void testAppliesRetainedDynamicFiltersThroughIngress()
     {
         AtomicReference<RuntimeFilter> applied = new AtomicReference<>();
-        AtomicReference<Set<SourceColumnHandle>> retainedOutputs = new AtomicReference<>();
+        AtomicReference<Map<SourceColumnHandle, ValueDemand>> retainedOutputs = new AtomicReference<>();
         SourceColumnHandle column = () -> SCHEMA.field(0).type();
         SourceOperatorIngress ingress = new SourceOperatorIngress()
         {
@@ -342,7 +344,7 @@ class TestBatchFeedOperator
         try (BatchFeedOperator feed = new BatchFeedOperator(SCHEMA, ingress)) {
             feed.pushStaticFilter(DynamicFilter.fromRange(0, 20, 22));
             feed.applyDynamicFilters(source);
-            feed.applySourceOutputDemand(source, feed.sourceOutputDemand(Set.of()));
+            feed.applySourceOutputDemand(source, feed.sourceOutputDemand(Map.of()));
             assertThat(retainedOutputs.get()).isEmpty();
         }
     }

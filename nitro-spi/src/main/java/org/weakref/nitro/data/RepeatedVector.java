@@ -34,4 +34,15 @@ public interface RepeatedVector
     int repeatedOutputCount();
 
     Streams repeatedOutput(int output);
+
+    /** Returns whether this vector intentionally carries only row offsets and no child values. */
+    default boolean structureOnly()
+    {
+        for (int output = 0; output < repeatedOutputCount(); output++) {
+            if (repeatedOutput(output).hasValues()) {
+                return false;
+            }
+        }
+        return true;
+    }
 }

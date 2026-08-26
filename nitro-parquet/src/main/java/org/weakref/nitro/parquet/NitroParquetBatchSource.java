@@ -44,6 +44,7 @@ import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.StructVector;
+import org.weakref.nitro.data.ValueDemand;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorBatchScope;
 import org.weakref.nitro.data.VectorColumnGeneration;
@@ -926,7 +927,7 @@ public final class NitroParquetBatchSource
         return Optional.empty();
     }
 
-    private void retainOutputs(Set<SourceColumnHandle> outputs)
+    private void retainOutputs(java.util.Map<SourceColumnHandle, ValueDemand> outputs)
     {
         checkOpen();
         if (nextRow != 0 || currentBatch != null) {
@@ -934,7 +935,7 @@ public final class NitroParquetBatchSource
         }
         requireNonNull(outputs, "outputs is null");
         java.util.Arrays.fill(outputRequired, false);
-        for (SourceColumnHandle output : outputs) {
+        for (SourceColumnHandle output : outputs.keySet()) {
             int column = columnIndex(requireNonNull(output, "output is null"));
             if (column < 0) {
                 throw new IllegalArgumentException("output belongs to another source");

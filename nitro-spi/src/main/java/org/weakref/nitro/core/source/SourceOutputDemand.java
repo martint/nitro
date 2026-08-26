@@ -13,9 +13,11 @@
  */
 package org.weakref.nitro.core.source;
 
-import java.util.Set;
+import org.weakref.nitro.data.ValueDemand;
 
-/// Optional pre-poll declaration of source outputs that the consumer may borrow.
+import java.util.Map;
+
+/// Optional pre-poll declaration of source outputs and physical value content that the consumer may borrow.
 ///
 /// A source may use this declaration to avoid materializing fields that exist only to enforce an accepted source
 /// predicate. Undeclared fields remain part of the logical schema but must not be borrowed by the consumer. The
@@ -23,5 +25,5 @@ import java.util.Set;
 @FunctionalInterface
 public interface SourceOutputDemand
 {
-    void retainOutputs(Set<SourceColumnHandle> outputs);
+    void retainOutputs(Map<SourceColumnHandle, ValueDemand> outputs);
 }

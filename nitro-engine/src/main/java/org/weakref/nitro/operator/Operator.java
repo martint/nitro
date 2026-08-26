@@ -15,7 +15,9 @@ package org.weakref.nitro.operator;
 
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.ValueDemand;
 
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -37,6 +39,18 @@ import java.util.Set;
 public interface Operator
         extends AutoCloseable
 {
+    static Map<Integer, ValueDemand> fullOutputDemand(int outputCount)
+    {
+        if (outputCount < 0) {
+            throw new IllegalArgumentException("outputCount is negative");
+        }
+        java.util.HashMap<Integer, ValueDemand> demands = new java.util.HashMap<>(outputCount);
+        for (int output = 0; output < outputCount; output++) {
+            demands.put(output, ValueDemand.FULL);
+        }
+        return Map.copyOf(demands);
+    }
+
     /**
      * Returns the number of logical outputs this operator exposes in each batch.
      */
@@ -77,6 +91,14 @@ public interface Operator
     /// source to retain its conservative all-output default. Pass-through and expression operators may override it
     /// so a source can avoid materializing values used only by predicates it has accepted for exact enforcement.
     default Optional<Set<Integer>> sourceOutputDemand(Set<Integer> demandedOutputs)
+    {
+        java.util.HashMap<Integer, ValueDemand> demands = new java.util.HashMap<>();
+        demandedOutputs.forEach(output -> demands.put(output, ValueDemand.FULL));
+        return sourceOutputDemand(Map.copyOf(demands)).map(Map::keySet);
+    }
+
+    /// Rich form of {@link #sourceOutputDemand(Set)} which also propagates the required physical value content.
+    default Optional<Map<Integer, ValueDemand>> sourceOutputDemand(Map<Integer, ValueDemand> demandedOutputs)
     {
         return Optional.empty();
     }

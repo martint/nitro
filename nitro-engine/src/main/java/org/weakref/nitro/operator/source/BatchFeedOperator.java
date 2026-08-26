@@ -20,6 +20,7 @@ import org.weakref.nitro.core.source.SourceCapability;
 import org.weakref.nitro.core.source.SourceOutputDemandProtocol;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.ValueDemand;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.DynamicFilter;
 import org.weakref.nitro.operator.Operator;
@@ -27,6 +28,7 @@ import org.weakref.nitro.operator.StaticFilterEnforcement;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -183,15 +185,15 @@ public final class BatchFeedOperator
     }
 
     @Override
-    public Optional<Set<Integer>> sourceOutputDemand(Set<Integer> demandedOutputs)
+    public Optional<Map<Integer, ValueDemand>> sourceOutputDemand(Map<Integer, ValueDemand> demandedOutputs)
     {
         requireNonNull(demandedOutputs, "demandedOutputs is null");
-        for (int output : demandedOutputs) {
+        for (int output : demandedOutputs.keySet()) {
             if (output < 0 || output >= schema.size()) {
                 throw new IllegalArgumentException("demanded output is outside source schema: " + output);
             }
         }
-        return Optional.of(Set.copyOf(demandedOutputs));
+        return Optional.of(Map.copyOf(demandedOutputs));
     }
 
     @Override
@@ -271,7 +273,7 @@ public final class BatchFeedOperator
     }
 
     /// Applies the leaf-output demand derived by the complete operator pipeline after static-filter acceptance.
-    public void applySourceOutputDemand(BatchSource source, Optional<Set<Integer>> demandedOutputs)
+    public void applySourceOutputDemand(BatchSource source, Optional<Map<Integer, ValueDemand>> demandedOutputs)
     {
         checkOpen();
         requireNonNull(source, "source is null");
@@ -279,11 +281,12 @@ public final class BatchFeedOperator
         if (demandedOutputs.isEmpty()) {
             return;
         }
-        Set<Integer> outputs = demandedOutputs.orElseThrow();
+        Map<Integer, ValueDemand> outputs = demandedOutputs.orElseThrow();
         source.protocol(SourceOutputDemandProtocol.OUTPUT_DEMAND)
-                .ifPresent(demand -> demand.retainOutputs(outputs.stream()
-                        .map(source::column)
-                        .collect(java.util.stream.Collectors.toUnmodifiableSet())));
+                .ifPresent(demand -> demand.retainOutputs(outputs.entrySet().stream()
+                        .collect(java.util.stream.Collectors.toUnmodifiableMap(
+                                entry -> source.column(entry.getKey()),
+                                Map.Entry::getValue))));
     }
 
     private record PushedFilter(DynamicFilter filter, StaticFilterEnforcement enforcement) {}

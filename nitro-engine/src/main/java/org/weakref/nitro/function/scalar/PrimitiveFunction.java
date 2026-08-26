@@ -17,6 +17,7 @@ import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
+import org.weakref.nitro.data.ValueDemand;
 
 import java.util.List;
 import java.util.Set;
@@ -52,6 +53,17 @@ public interface PrimitiveFunction
     default Set<Stream> requiredMaskInputStreams(int inputIndex)
     {
         return VALUES_INPUT_STREAMS;
+    }
+
+    /**
+     * Returns the physical value content needed from an argument to produce the requested output content.
+     *
+     * <p>The conservative default requires the full value. Structural functions may request only repeated offsets
+     * and row nullability; sources which do not support that representation remain free to return full values.
+     */
+    default ValueDemand requiredInputValueDemand(int inputIndex, ValueDemand requestedOutputDemand)
+    {
+        return ValueDemand.FULL;
     }
 
     default boolean deterministic()

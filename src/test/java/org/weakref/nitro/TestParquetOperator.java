@@ -27,6 +27,7 @@ import org.weakref.nitro.core.source.RuntimeFilter;
 import org.weakref.nitro.core.source.RuntimeFilterAcceptance;
 import org.weakref.nitro.core.source.SourceMetrics;
 import org.weakref.nitro.core.source.SourceMetricsProtocol;
+import org.weakref.nitro.core.source.SourceOutputDemandProtocol;
 import org.weakref.nitro.core.source.SourcePoll;
 import org.weakref.nitro.core.source.TypedDomain;
 import org.weakref.nitro.core.type.Field;
@@ -50,6 +51,7 @@ import org.weakref.nitro.data.Row;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.StructVector;
+import org.weakref.nitro.data.ValueDemand;
 import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.execution.EngineResources;
 import org.weakref.nitro.function.scalar.PrimitiveExecutionContext;
@@ -556,6 +558,66 @@ public class TestParquetOperator
                 assertThat(utf8(keys, 1)).isEqualTo("beta");
                 assertThat(values.values()).containsExactly(1L, 0L);
                 assertThat(valueNulls.values()).containsExactly(false, true);
+            }
+            assertThat(source.poll()).isSameAs(SourcePoll.Finished.FINISHED);
+        }
+    }
+
+    @Test
+    void testNativeNestedMapSourceCanReadOnlyRepeatedStructure()
+            throws IOException
+    {
+        java.nio.file.Path file = writeOptionalMapParquetFile("native-map-shape.parquet", List.of(
+                new MapParquetRow(null),
+                new MapParquetRow(Map.of()),
+                new MapParquetRow(orderedMap("alpha", 1L, "beta", null)),
+                new MapParquetRow(orderedMap("gamma", 3L))));
+        byte[] bytes = Files.readAllBytes(file);
+        ParquetInput input = new ParquetInput()
+        {
+            @Override
+            public String id()
+            {
+                return "native-map-shape";
+            }
+
+            @Override
+            public long size()
+            {
+                return bytes.length;
+            }
+
+            @Override
+            public ParquetInputRange readRange(long offset, int length)
+            {
+                return ParquetInputRange.retained(MemorySegment.ofArray(bytes).asSlice(offset, length));
+            }
+
+            @Override
+            public void close() {}
+        };
+        Schema schema = new Schema(List.of(new Field("items", VARCHAR_BIGINT_MAP, true)));
+
+        try (NitroParquetScanResources resources = NitroParquetScanResources.createDefault();
+                AllocationResources allocationResources = AllocationResources.createDefault();
+                Allocator allocator = new Allocator(allocationResources);
+                BatchSource source = NitroParquetBatchSource.forInputs(
+                        resources,
+                        allocator,
+                        List.of(new NitroParquetBatchSource.InputSplit(input, 0, bytes.length)),
+                        schema)) {
+            source.protocol(SourceOutputDemandProtocol.OUTPUT_DEMAND)
+                    .orElseThrow()
+                    .retainOutputs(Map.of(source.column(0), ValueDemand.STRUCTURE));
+            try (var batch = ((SourcePoll.Ready) source.poll()).batch()) {
+                batch.select(new org.weakref.nitro.data.MaskSelection(Mask.sparse(new int[] {2}, 4)));
+                MapVector maps = (MapVector) batch.column(0).borrow(Stream.VALUES);
+                BooleanVector nulls = (BooleanVector) batch.column(0).borrow(Stream.NULLS);
+
+                assertThat(maps.offsets()).containsExactly(0, 0, 0, 2, 2);
+                assertThat(maps.keys().hasValues()).isFalse();
+                assertThat(maps.values().hasValues()).isFalse();
+                assertThat(nulls.values()[2]).isFalse();
             }
             assertThat(source.poll()).isSameAs(SourcePoll.Finished.FINISHED);
         }

@@ -13,6 +13,9 @@
  */
 package org.weakref.nitro.operator.evaluator.ir;
 
+import org.weakref.nitro.data.ValueDemand;
+import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
+
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -38,6 +41,28 @@ public final class InputDependencies
         Visitor visitor = new Visitor(plan);
         visitor.mask(root);
         return Set.copyOf(visitor.inputs);
+    }
+
+    /** Derives leaf input demands while preserving function-declared physical value requirements. */
+    public static Map<Integer, ValueDemand> valueDemands(
+            EvaluationPlan plan,
+            PrimitiveRegistry primitiveRegistry,
+            Map<Reference, ValueDemand> roots)
+    {
+        DemandVisitor visitor = new DemandVisitor(plan, primitiveRegistry);
+        roots.forEach(visitor::reference);
+        return Map.copyOf(visitor.inputs);
+    }
+
+    /** Derives the full leaf input demands of a predicate mask. */
+    public static Map<Integer, ValueDemand> valueDemands(
+            EvaluationPlan plan,
+            PrimitiveRegistry primitiveRegistry,
+            MaskExpression root)
+    {
+        DemandVisitor visitor = new DemandVisitor(plan, primitiveRegistry);
+        visitor.mask(root);
+        return Map.copyOf(visitor.inputs);
     }
 
     private static final class Visitor
@@ -123,6 +148,108 @@ public final class InputDependencies
                     range.remainingTerms().forEach(this::mask);
                 }
                 case ReferenceMask referenceMask -> reference(referenceMask.reference());
+            }
+        }
+    }
+
+    private static final class DemandVisitor
+    {
+        private final EvaluationPlan plan;
+        private final PrimitiveRegistry primitiveRegistry;
+        private final Map<Variable, Assignment> assignments = new HashMap<>();
+        private final Map<Reference, ValueDemand> visitedReferences = new HashMap<>();
+        private final Set<MaskExpression> visitedMasks = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+        private final Map<Integer, ValueDemand> inputs = new HashMap<>();
+
+        private DemandVisitor(EvaluationPlan plan, PrimitiveRegistry primitiveRegistry)
+        {
+            this.plan = requireNonNull(plan, "plan is null");
+            this.primitiveRegistry = requireNonNull(primitiveRegistry, "primitiveRegistry is null");
+            for (Assignment assignment : plan.assignments()) {
+                assignments.put(assignment.output(), assignment);
+            }
+        }
+
+        private void reference(Reference reference, ValueDemand demand)
+        {
+            requireNonNull(reference, "reference is null");
+            requireNonNull(demand, "demand is null");
+            ValueDemand previous = visitedReferences.putIfAbsent(reference, demand);
+            if (previous != null) {
+                ValueDemand merged = previous.merge(demand);
+                if (merged == previous) {
+                    return;
+                }
+                visitedReferences.put(reference, merged);
+                demand = merged;
+            }
+            switch (reference.producer()) {
+                case Input(int input) -> inputs.merge(input, demand, ValueDemand::merge);
+                case Variable variable -> {
+                    Assignment assignment = assignments.get(variable);
+                    if (assignment == null) {
+                        throw new IllegalArgumentException("Missing assignment for " + variable);
+                    }
+                    operation(assignment.operation(), demand);
+                    mask(assignment.mask());
+                }
+            }
+            MaskExpression referenceMask = plan.maskPlans().get(reference);
+            if (referenceMask != null) {
+                mask(referenceMask);
+            }
+        }
+
+        private void operation(Operation operation, ValueDemand demand)
+        {
+            switch (operation) {
+                case Call call -> {
+                    var function = primitiveRegistry.get(call.name());
+                    for (int index = 0; index < call.arguments().size(); index++) {
+                        reference(call.arguments().get(index), function.requiredInputValueDemand(index, demand));
+                    }
+                }
+                case Coalesce coalesce -> {
+                    reference(coalesce.first(), demand);
+                    reference(coalesce.second(), demand);
+                }
+                case Conditional conditional -> {
+                    reference(conditional.condition(), ValueDemand.FULL);
+                    reference(conditional.whenTrue(), demand);
+                    reference(conditional.whenFalse(), demand);
+                }
+                case Construct construct -> construct.arguments().forEach(argument -> reference(argument, ValueDemand.FULL));
+                case Copy copy -> reference(copy.source(), demand);
+                case Literal _ -> {}
+                case Merge merge -> {
+                    mask(merge.condition());
+                    reference(merge.whenTrue(), demand);
+                    reference(merge.whenFalse(), demand);
+                }
+                case Sequence sequence -> {
+                    reference(sequence.first(), ValueDemand.FULL);
+                    reference(sequence.result(), demand);
+                }
+                case StructField structField -> reference(structField.source(), ValueDemand.FULL);
+            }
+        }
+
+        private void mask(MaskExpression expression)
+        {
+            if (!visitedMasks.add(requireNonNull(expression, "expression is null"))) {
+                return;
+            }
+            switch (expression) {
+                case AllMask _ -> {}
+                case AndMask and -> and.terms().forEach(this::mask);
+                case LongDomainMask domain -> reference(domain.input(), ValueDemand.FULL);
+                case NotMask not -> mask(not.source());
+                case OrMask or -> or.terms().forEach(this::mask);
+                case RangeConstrainedAndMask range -> {
+                    reference(range.input(), ValueDemand.FULL);
+                    range.remainingTerms().forEach(this::mask);
+                }
+                case ReferenceMask referenceMask -> reference(referenceMask.reference(), ValueDemand.FULL);
             }
         }
     }

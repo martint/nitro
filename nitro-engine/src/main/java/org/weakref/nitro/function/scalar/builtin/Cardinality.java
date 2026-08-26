@@ -14,14 +14,14 @@
 package org.weakref.nitro.function.scalar.builtin;
 
 import org.weakref.nitro.data.Allocator;
-import org.weakref.nitro.data.ArrayVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I64Vector;
-import org.weakref.nitro.data.MapVector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.RepeatedVector;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
+import org.weakref.nitro.data.ValueDemand;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.function.scalar.PrimitiveExecutionContext;
@@ -49,6 +49,12 @@ public final class Cardinality
     public Set<Stream> requiredInputStreams(int inputIndex, Set<Stream> requestedOutputStreams)
     {
         return PrimitiveFunction.valuesAlwaysNullsWhenRequested(requestedOutputStreams);
+    }
+
+    @Override
+    public ValueDemand requiredInputValueDemand(int inputIndex, ValueDemand requestedOutputDemand)
+    {
+        return ValueDemand.STRUCTURE;
     }
 
     @Override
@@ -85,49 +91,30 @@ public final class Cardinality
 
     private static void apply(Vector values, Vector inputNulls, Mask mask, I64Vector output)
     {
-        if (values instanceof ArrayVector arrayValues) {
-            applyFlat(arrayValues, inputNulls, mask, output);
-            return;
-        }
-        if (values instanceof MapVector mapValues) {
-            applyFlat(mapValues, inputNulls, mask, output);
+        if (values instanceof RepeatedVector repeatedValues) {
+            applyFlat(repeatedValues, inputNulls, mask, output);
             return;
         }
         if (values instanceof DictionaryVector dictionaryValues) {
-            checkArgument(dictionaryValues.values() instanceof ArrayVector || dictionaryValues.values() instanceof MapVector, "cardinality requires ArrayVector or MapVector dictionary values");
+            checkArgument(dictionaryValues.values() instanceof RepeatedVector, "cardinality requires repeated dictionary values");
             applyDictionary(dictionaryValues.values(), dictionaryValues.ids(), inputNulls, mask, output);
             return;
         }
         throw new IllegalArgumentException("Unsupported cardinality vector type: " + values.getClass().getSimpleName());
     }
 
-    private static void applyFlat(ArrayVector values, Vector inputNulls, Mask mask, I64Vector output)
+    private static void applyFlat(RepeatedVector values, Vector inputNulls, Mask mask, I64Vector output)
     {
         VectorAccess.BooleanValues inputNullValues = VectorAccess.booleanValues(inputNulls);
         long[] outputValues = output.values();
         if (mask.all()) {
             for (int position = 0; position < mask.size(); position++) {
-                outputValues[position] = inputNullValues.value(position) ? 0 : values.length(position);
+                outputValues[position] = inputNullValues.value(position) ? 0 : values.repeatedLength(position);
             }
             return;
         }
         for (int position : mask) {
-            outputValues[position] = inputNullValues.value(position) ? 0 : values.length(position);
-        }
-    }
-
-    private static void applyFlat(MapVector values, Vector inputNulls, Mask mask, I64Vector output)
-    {
-        VectorAccess.BooleanValues inputNullValues = VectorAccess.booleanValues(inputNulls);
-        long[] outputValues = output.values();
-        if (mask.all()) {
-            for (int position = 0; position < mask.size(); position++) {
-                outputValues[position] = inputNullValues.value(position) ? 0 : values.length(position);
-            }
-            return;
-        }
-        for (int position : mask) {
-            outputValues[position] = inputNullValues.value(position) ? 0 : values.length(position);
+            outputValues[position] = inputNullValues.value(position) ? 0 : values.repeatedLength(position);
         }
     }
 
@@ -163,10 +150,9 @@ public final class Cardinality
 
     private static int cardinalityLength(Vector values, int position)
     {
-        return switch (values) {
-            case ArrayVector vector -> vector.length(position);
-            case MapVector vector -> vector.length(position);
-            default -> throw new IllegalArgumentException("Unsupported cardinality vector type: " + values.getClass().getSimpleName());
-        };
+        if (values instanceof RepeatedVector repeated) {
+            return repeated.repeatedLength(position);
+        }
+        throw new IllegalArgumentException("Unsupported cardinality vector type: " + values.getClass().getSimpleName());
     }
 }

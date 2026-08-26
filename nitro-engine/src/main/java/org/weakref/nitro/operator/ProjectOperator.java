@@ -26,6 +26,7 @@ import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
+import org.weakref.nitro.data.ValueDemand;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.execution.EngineResources;
@@ -286,17 +287,18 @@ public class ProjectOperator
     }
 
     @Override
-    public java.util.Optional<Set<Integer>> sourceOutputDemand(Set<Integer> demandedOutputs)
+    public java.util.Optional<Map<Integer, ValueDemand>> sourceOutputDemand(Map<Integer, ValueDemand> demandedOutputs)
     {
         requireNonNull(demandedOutputs, "demandedOutputs is null");
-        java.util.ArrayList<Reference> demandedReferences = new java.util.ArrayList<>(demandedOutputs.size());
-        for (int output : demandedOutputs) {
+        java.util.HashMap<Reference, ValueDemand> demandedReferences = new java.util.HashMap<>();
+        for (Map.Entry<Integer, ValueDemand> entry : demandedOutputs.entrySet()) {
+            int output = entry.getKey();
             if (output < 0 || output >= outputReferences.size()) {
                 throw new IllegalArgumentException("demanded output is outside projection schema: " + output);
             }
-            demandedReferences.add(outputReferences.get(output));
+            demandedReferences.merge(outputReferences.get(output), entry.getValue(), ValueDemand::merge);
         }
-        return source.sourceOutputDemand(InputDependencies.inputs(evaluationPlan, demandedReferences));
+        return source.sourceOutputDemand(InputDependencies.valueDemands(evaluationPlan, primitiveRegistry, demandedReferences));
     }
 
     @Override

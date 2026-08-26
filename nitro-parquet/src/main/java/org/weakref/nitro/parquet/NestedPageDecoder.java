@@ -62,7 +62,7 @@ final class NestedPageDecoder
 
     long decodeDataPageV1(MemorySegment body, int valueCount, Encoding encoding, int dictionarySize)
     {
-        long offset = decodeLevels(body, valueCount);
+        long offset = decodeLevels(body, valueCount, true);
 
         dictionaryEncoded = encoding == Encoding.RLE_DICTIONARY || encoding == Encoding.PLAIN_DICTIONARY;
         if (dictionaryEncoded) {
@@ -89,17 +89,19 @@ final class NestedPageDecoder
 
     void decodeLevelsDataPageV1(MemorySegment body, int valueCount)
     {
-        decodeLevels(body, valueCount);
+        decodeLevels(body, valueCount, false);
         dictionaryEncoded = false;
     }
 
-    private long decodeLevels(MemorySegment body, int valueCount)
+    private long decodeLevels(MemorySegment body, int valueCount, boolean decodeValueOrdinals)
     {
         requireNonNull(body, "body is null");
         eventCount = valueCount;
         repetitionLevels = grow(repetitionLevels, valueCount);
         definitionLevels = grow(definitionLevels, valueCount);
-        valueOrdinals = grow(valueOrdinals, valueCount);
+        if (decodeValueOrdinals) {
+            valueOrdinals = grow(valueOrdinals, valueCount);
+        }
 
         long offset = 0;
         if (maximumRepetitionLevel == 0) {
@@ -125,8 +127,10 @@ final class NestedPageDecoder
         }
 
         physicalValueCount = 0;
-        for (int event = 0; event < valueCount; event++) {
-            valueOrdinals[event] = definitionLevels[event] == maximumDefinitionLevel ? physicalValueCount++ : -1;
+        if (decodeValueOrdinals) {
+            for (int event = 0; event < valueCount; event++) {
+                valueOrdinals[event] = definitionLevels[event] == maximumDefinitionLevel ? physicalValueCount++ : -1;
+            }
         }
 
         return offset;

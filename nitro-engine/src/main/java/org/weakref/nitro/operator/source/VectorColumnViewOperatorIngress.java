@@ -18,6 +18,7 @@ import org.weakref.nitro.core.type.Field;
 import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.RepeatedVector;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
@@ -171,11 +172,21 @@ public final class VectorColumnViewOperatorIngress
         private Vector validate(Stream stream, Vector vector, String nullMessage)
         {
             vector = requireNonNull(vector, nullMessage);
-            if (stream == Stream.VALUES && !type.supportsVector(vector)) {
+            if (stream == Stream.VALUES && !supportsBoundaryVector(vector)) {
                 throw new IllegalArgumentException("Source returned %s for logical type %s; supported boundary classes are %s"
                         .formatted(vector.getClass().getName(), type.identity(), type.supportedVectorTypes()));
             }
             return vector;
+        }
+
+        private boolean supportsBoundaryVector(Vector vector)
+        {
+            if (vector instanceof RepeatedVector repeated &&
+                    repeated.structureOnly() &&
+                    type.supportedVectorTypes().contains(vector.getClass())) {
+                return true;
+            }
+            return type.supportsVector(vector);
         }
     }
 }
