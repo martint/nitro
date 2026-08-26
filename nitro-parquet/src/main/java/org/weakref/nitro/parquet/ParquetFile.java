@@ -14,6 +14,7 @@
 package org.weakref.nitro.parquet;
 
 import org.apache.parquet.format.ColumnChunk;
+import org.apache.parquet.format.ConvertedType;
 import org.apache.parquet.format.FieldRepetitionType;
 import org.apache.parquet.format.FileMetaData;
 import org.apache.parquet.format.RowGroup;
@@ -69,6 +70,19 @@ public final class ParquetFile
      * a DECIMAL logical type (short decimals decode to an unscaled long).
      */
     public record Column(String name, Type type, boolean optional, int leafIndex, int typeLength, boolean decimal) {}
+
+    public record PrimitiveField(
+            String name,
+            Type type,
+            boolean optional,
+            boolean string,
+            boolean date,
+            boolean decimal,
+            int precision,
+            int scale,
+            boolean integer,
+            int integerBitWidth,
+            boolean integerSigned) {}
 
     record Metadata(FileMetaData footer, ParquetSchema schema, List<Column> columns, Map<String, Integer> columnIndexByName)
     {
@@ -265,6 +279,55 @@ public final class ParquetFile
     ParquetSchema schema()
     {
         return schema;
+    }
+
+    public List<String> fieldNames()
+    {
+        return schema.fields().stream().map(ParquetSchema.Node::name).toList();
+    }
+
+    public PrimitiveField primitiveField(String name)
+    {
+        ParquetSchema.Node node = schema.field(name);
+        if (!(node instanceof ParquetSchema.Primitive primitive)) {
+            throw new UnsupportedParquetFeatureException("Parquet field '" + name + "' is nested");
+        }
+        boolean date = primitive.convertedType() == ConvertedType.DATE ||
+                (primitive.logicalType() != null && primitive.logicalType().isSetDATE());
+        boolean integer = primitive.logicalType() != null && primitive.logicalType().isSetINTEGER();
+        int integerBitWidth = integer ? primitive.logicalType().getINTEGER().bitWidth : convertedIntegerBitWidth(primitive.convertedType());
+        boolean integerSigned = integer ? primitive.logicalType().getINTEGER().isSigned : convertedIntegerSigned(primitive.convertedType());
+        return new PrimitiveField(
+                primitive.name(),
+                primitive.type(),
+                primitive.repetition() == FieldRepetitionType.OPTIONAL,
+                primitive.string(),
+                date,
+                primitive.decimal(),
+                primitive.precision(),
+                primitive.scale(),
+                integer || integerBitWidth != 0,
+                integerBitWidth,
+                integerSigned);
+    }
+
+    private static int convertedIntegerBitWidth(ConvertedType type)
+    {
+        if (type == null) {
+            return 0;
+        }
+        return switch (type) {
+            case INT_8, UINT_8 -> 8;
+            case INT_16, UINT_16 -> 16;
+            case INT_32, UINT_32 -> 32;
+            case INT_64, UINT_64 -> 64;
+            default -> 0;
+        };
+    }
+
+    private static boolean convertedIntegerSigned(ConvertedType type)
+    {
+        return type == ConvertedType.INT_8 || type == ConvertedType.INT_16 || type == ConvertedType.INT_32 || type == ConvertedType.INT_64;
     }
 
     public List<RowGroup> rowGroups()

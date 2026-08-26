@@ -84,7 +84,7 @@ class TestNestedArrayReader
     private static NestedArrayReader reader()
     {
         ParquetSchema.Primitive element = new ParquetSchema.Primitive(
-                "element", FieldRepetitionType.OPTIONAL, Type.INT64, null, null, 0, 0,
+                "element", FieldRepetitionType.OPTIONAL, Type.INT64, null, null, 0, 0, 0, 0,
                 List.of("items", "list", "element"), 3, 1);
         ParquetSchema.Group repeatedValues = new ParquetSchema.Group(
                 "list", FieldRepetitionType.REPEATED, null, null, List.of(element), 2, 1);

@@ -13,15 +13,6 @@
  */
 package org.weakref.nitro.clickbench;
 
-import org.apache.parquet.example.data.Group;
-import org.apache.parquet.example.data.simple.SimpleGroupFactory;
-import org.apache.parquet.hadoop.ParquetFileReader;
-import org.apache.parquet.hadoop.ParquetWriter;
-import org.apache.parquet.hadoop.example.ExampleParquetWriter;
-import org.apache.parquet.io.LocalInputFile;
-import org.apache.parquet.io.LocalOutputFile;
-import org.apache.parquet.schema.MessageType;
-import org.apache.parquet.schema.Types;
 import org.weakref.nitro.benchmark.BenchmarkSchemaRegistry;
 import org.weakref.nitro.benchmark.BenchmarkTypeRegistry;
 import org.weakref.nitro.core.source.BatchSource;
@@ -88,6 +79,7 @@ import org.weakref.nitro.operator.source.compatibility.parquet.NitroParquetScanO
 import org.weakref.nitro.parquet.NitroParquetBatchSource;
 import org.weakref.nitro.parquet.NitroParquetScanResources;
 import org.weakref.nitro.parquet.ParquetArenaPolicy;
+import org.weakref.nitro.parquet.ParquetFile;
 import org.weakref.nitro.parquet.ParquetScanBatchPolicy;
 import org.weakref.nitro.tpcds.OperatorCpuProfile;
 
@@ -104,10 +96,10 @@ import java.util.Set;
 import java.util.function.Supplier;
 
 import static java.lang.Math.toIntExact;
-import static org.apache.parquet.schema.LogicalTypeAnnotation.stringType;
-import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.BINARY;
-import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.INT32;
-import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.INT64;
+import static org.weakref.nitro.parquet.NativeParquetTestFileWriter.Column.requiredBinary;
+import static org.weakref.nitro.parquet.NativeParquetTestFileWriter.Column.requiredInt32;
+import static org.weakref.nitro.parquet.NativeParquetTestFileWriter.Column.requiredInt64;
+import static org.weakref.nitro.parquet.NativeParquetTestFileWriter.write;
 
 public final class ClickBenchHitsSupport
 {
@@ -187,69 +179,37 @@ public final class ClickBenchHitsSupport
     public static Path writeHitsFixture(Path file, int rowCount)
             throws IOException
     {
-        MessageType schema = Types.buildMessage()
-                .required(INT64).named("WatchID")
-                .required(BINARY).as(stringType()).named("Title")
-                .required(INT64).named("EventTime")
-                .required(INT32).named("EventDate")
-                .required(INT32).named("CounterID")
-                .required(INT32).named("ClientIP")
-                .required(INT32).named("RegionID")
-                .required(INT64).named("UserID")
-                .required(BINARY).as(stringType()).named("URL")
-                .required(BINARY).as(stringType()).named("Referer")
-                .required(INT32).named("IsRefresh")
-                .required(INT32).named("AdvEngineID")
-                .required(INT32).named("ResolutionWidth")
-                .required(INT32).named("MobilePhone")
-                .required(BINARY).as(stringType()).named("MobilePhoneModel")
-                .required(INT32).named("TraficSourceID")
-                .required(INT32).named("SearchEngineID")
-                .required(BINARY).as(stringType()).named("SearchPhrase")
-                .required(INT32).named("WindowClientWidth")
-                .required(INT32).named("WindowClientHeight")
-                .required(INT32).named("IsLink")
-                .required(INT32).named("IsDownload")
-                .required(INT32).named("DontCountHits")
-                .required(INT64).named("RefererHash")
-                .required(INT64).named("URLHash")
-                .named("hits");
-
-        SimpleGroupFactory groups = new SimpleGroupFactory(schema);
         List<HitRow> templateRows = templateRows();
-        try (ParquetWriter<Group> writer = ExampleParquetWriter.builder(new LocalOutputFile(file))
-                .withType(schema)
-                .build()) {
-            for (int rowIndex = 0; rowIndex < rowCount; rowIndex++) {
-                HitRow row = templateRows.get(rowIndex % templateRows.size()).vary(rowIndex / templateRows.size());
-                writer.write(groups.newGroup()
-                        .append("WatchID", row.watchId())
-                        .append("Title", row.title())
-                        .append("EventTime", row.eventTime())
-                        .append("EventDate", (int) row.eventDate())
-                        .append("CounterID", (int) row.counterId())
-                        .append("ClientIP", (int) row.clientIp())
-                        .append("RegionID", (int) row.regionId())
-                        .append("UserID", row.userId())
-                        .append("URL", row.url())
-                        .append("Referer", row.referer())
-                        .append("IsRefresh", (int) row.isRefresh())
-                        .append("AdvEngineID", (int) row.advEngineId())
-                        .append("ResolutionWidth", (int) row.resolutionWidth())
-                        .append("MobilePhone", (int) row.mobilePhone())
-                        .append("MobilePhoneModel", row.mobilePhoneModel())
-                        .append("TraficSourceID", (int) row.traficSourceId())
-                        .append("SearchEngineID", (int) row.searchEngineId())
-                        .append("SearchPhrase", row.searchPhrase())
-                        .append("WindowClientWidth", (int) row.windowClientWidth())
-                        .append("WindowClientHeight", (int) row.windowClientHeight())
-                        .append("IsLink", (int) row.isLink())
-                        .append("IsDownload", (int) row.isDownload())
-                        .append("DontCountHits", (int) row.dontCountHits())
-                        .append("RefererHash", row.refererHash())
-                        .append("URLHash", row.urlHash()));
-            }
+        List<HitRow> rows = new ArrayList<>(rowCount);
+        for (int rowIndex = 0; rowIndex < rowCount; rowIndex++) {
+            rows.add(templateRows.get(rowIndex % templateRows.size()).vary(rowIndex / templateRows.size()));
         }
+        write(file, "hits", List.of(
+                requiredInt64("WatchID", rows.stream().map(HitRow::watchId).toList()),
+                requiredBinary("Title", rows.stream().map(HitRow::title).toList()).asUtf8(),
+                requiredInt64("EventTime", rows.stream().map(HitRow::eventTime).toList()),
+                requiredInt32("EventDate", rows.stream().map(HitRow::eventDate).toList()),
+                requiredInt32("CounterID", rows.stream().map(HitRow::counterId).toList()),
+                requiredInt32("ClientIP", rows.stream().map(HitRow::clientIp).toList()),
+                requiredInt32("RegionID", rows.stream().map(HitRow::regionId).toList()),
+                requiredInt64("UserID", rows.stream().map(HitRow::userId).toList()),
+                requiredBinary("URL", rows.stream().map(HitRow::url).toList()).asUtf8(),
+                requiredBinary("Referer", rows.stream().map(HitRow::referer).toList()).asUtf8(),
+                requiredInt32("IsRefresh", rows.stream().map(HitRow::isRefresh).toList()),
+                requiredInt32("AdvEngineID", rows.stream().map(HitRow::advEngineId).toList()),
+                requiredInt32("ResolutionWidth", rows.stream().map(HitRow::resolutionWidth).toList()),
+                requiredInt32("MobilePhone", rows.stream().map(HitRow::mobilePhone).toList()),
+                requiredBinary("MobilePhoneModel", rows.stream().map(HitRow::mobilePhoneModel).toList()).asUtf8(),
+                requiredInt32("TraficSourceID", rows.stream().map(HitRow::traficSourceId).toList()),
+                requiredInt32("SearchEngineID", rows.stream().map(HitRow::searchEngineId).toList()),
+                requiredBinary("SearchPhrase", rows.stream().map(HitRow::searchPhrase).toList()).asUtf8(),
+                requiredInt32("WindowClientWidth", rows.stream().map(HitRow::windowClientWidth).toList()),
+                requiredInt32("WindowClientHeight", rows.stream().map(HitRow::windowClientHeight).toList()),
+                requiredInt32("IsLink", rows.stream().map(HitRow::isLink).toList()),
+                requiredInt32("IsDownload", rows.stream().map(HitRow::isDownload).toList()),
+                requiredInt32("DontCountHits", rows.stream().map(HitRow::dontCountHits).toList()),
+                requiredInt64("RefererHash", rows.stream().map(HitRow::refererHash).toList()),
+                requiredInt64("URLHash", rows.stream().map(HitRow::urlHash).toList())), true);
         return file;
     }
 
@@ -1052,13 +1012,8 @@ public final class ClickBenchHitsSupport
                 throw new UncheckedIOException("Unable to list ClickBench parquet files in " + file, exception);
             }
         }
-        try (ParquetFileReader reader = ParquetFileReader.open(new LocalInputFile(file))) {
-            return reader.getFooter().getFileMetaData().getSchema().getFields().stream()
-                    .map(field -> field.getName())
-                    .toList();
-        }
-        catch (IOException exception) {
-            throw new UncheckedIOException("Unable to inspect ClickBench schema for " + file, exception);
+        try (ParquetFile parquet = ParquetFile.open(file)) {
+            return parquet.fieldNames();
         }
     }
 
@@ -1632,14 +1587,9 @@ public final class ClickBenchHitsSupport
                 throw new UncheckedIOException("Unable to list ClickBench parquet files in " + file, exception);
             }
         }
-        try (ParquetFileReader reader = ParquetFileReader.open(new LocalInputFile(file))) {
-            var field = reader.getFooter().getFileMetaData().getSchema().getType("EventDate").asPrimitiveType();
-            return field.getLogicalTypeAnnotation() instanceof org.apache.parquet.schema.LogicalTypeAnnotation.IntLogicalTypeAnnotation logicalType
-                    && !logicalType.isSigned()
-                    && logicalType.getBitWidth() == 16;
-        }
-        catch (IOException exception) {
-            throw new UncheckedIOException("Unable to inspect ClickBench EventDate encoding for " + file, exception);
+        try (ParquetFile parquet = ParquetFile.open(file)) {
+            ParquetFile.PrimitiveField field = parquet.primitiveField("EventDate");
+            return field.integer() && !field.integerSigned() && field.integerBitWidth() == 16;
         }
     }
 

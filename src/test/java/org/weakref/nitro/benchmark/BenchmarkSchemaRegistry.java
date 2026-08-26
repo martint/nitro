@@ -17,21 +17,13 @@ import io.trino.tpcds.Table;
 import io.trino.tpcds.column.ColumnType;
 import io.trino.tpch.TpchColumnType;
 import io.trino.tpch.TpchTable;
-import org.apache.parquet.hadoop.ParquetFileReader;
-import org.apache.parquet.io.LocalInputFile;
-import org.apache.parquet.schema.LogicalTypeAnnotation.DateLogicalTypeAnnotation;
-import org.apache.parquet.schema.LogicalTypeAnnotation.DecimalLogicalTypeAnnotation;
-import org.apache.parquet.schema.LogicalTypeAnnotation.StringLogicalTypeAnnotation;
-import org.apache.parquet.schema.MessageType;
-import org.apache.parquet.schema.PrimitiveType;
 import org.weakref.nitro.core.type.Field;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.core.type.TypeIdentity;
 import org.weakref.nitro.core.type.TypeRegistry;
+import org.weakref.nitro.parquet.ParquetFile;
 
-import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -107,20 +99,13 @@ public final class BenchmarkSchemaRegistry
 
     private Schema loadParquet(Path file, List<String> columnNames)
     {
-        try (ParquetFileReader reader = ParquetFileReader.open(new LocalInputFile(file))) {
-            MessageType parquetSchema = reader.getFileMetaData().getSchema();
+        try (ParquetFile parquet = ParquetFile.open(file)) {
             List<Field> fields = new ArrayList<>(columnNames.size());
             for (String name : columnNames) {
-                org.apache.parquet.schema.Type field = parquetSchema.getType(name);
-                if (!field.isPrimitive()) {
-                    throw new IllegalArgumentException("Nested benchmark column requires an explicit logical catalog binding: " + name);
-                }
-                fields.add(new Field(name, parquetType(field.asPrimitiveType()), field.isRepetition(org.apache.parquet.schema.Type.Repetition.OPTIONAL)));
+                ParquetFile.PrimitiveField field = parquet.primitiveField(name);
+                fields.add(new Field(name, parquetType(field), field.optional()));
             }
             return schema(fields);
-        }
-        catch (IOException exception) {
-            throw new UncheckedIOException("Unable to inspect benchmark schema from " + file, exception);
         }
     }
 
@@ -153,23 +138,23 @@ public final class BenchmarkSchemaRegistry
         };
     }
 
-    private TypeBinding parquetType(PrimitiveType type)
+    private TypeBinding parquetType(ParquetFile.PrimitiveField field)
     {
-        if (type.getLogicalTypeAnnotation() instanceof StringLogicalTypeAnnotation) {
+        if (field.string()) {
             return type(VARCHAR);
         }
-        if (type.getLogicalTypeAnnotation() instanceof DateLogicalTypeAnnotation) {
+        if (field.date()) {
             return type(DATE);
         }
-        if (type.getLogicalTypeAnnotation() instanceof DecimalLogicalTypeAnnotation decimal) {
-            return type("benchmark:decimal(" + decimal.getPrecision() + "," + decimal.getScale() + ")");
+        if (field.decimal()) {
+            return type("benchmark:decimal(" + field.precision() + "," + field.scale() + ")");
         }
-        return switch (type.getPrimitiveTypeName()) {
+        return switch (field.type()) {
             case BOOLEAN -> type(BOOLEAN);
             case INT32 -> type(INTEGER);
             case INT64 -> type(BIGINT);
             case FLOAT, DOUBLE -> type(DOUBLE);
-            case BINARY, FIXED_LEN_BYTE_ARRAY -> type(VARCHAR);
+            case BYTE_ARRAY, FIXED_LEN_BYTE_ARRAY -> type(VARCHAR);
             case INT96 -> throw new IllegalArgumentException("INT96 requires an explicit logical catalog binding");
         };
     }

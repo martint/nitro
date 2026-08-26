@@ -94,10 +94,10 @@ class TestNestedMapReader
     private static NestedMapReader reader()
     {
         ParquetSchema.Primitive key = new ParquetSchema.Primitive(
-                "key", FieldRepetitionType.REQUIRED, Type.INT64, null, null, 0, 0,
+                "key", FieldRepetitionType.REQUIRED, Type.INT64, null, null, 0, 0, 0, 0,
                 List.of("attributes", "key_value", "key"), 2, 1);
         ParquetSchema.Primitive value = new ParquetSchema.Primitive(
-                "value", FieldRepetitionType.OPTIONAL, Type.BYTE_ARRAY, ConvertedType.UTF8, null, 0, 1,
+                "value", FieldRepetitionType.OPTIONAL, Type.BYTE_ARRAY, ConvertedType.UTF8, null, 0, 0, 0, 1,
                 List.of("attributes", "key_value", "value"), 3, 1);
         ParquetSchema.Group entries = new ParquetSchema.Group(
                 "key_value", FieldRepetitionType.REPEATED, null, null, List.of(key, value), 2, 1);

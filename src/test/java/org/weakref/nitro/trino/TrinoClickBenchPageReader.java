@@ -29,14 +29,13 @@ import io.trino.parquet.reader.RowGroupInfo;
 import io.trino.spi.Page;
 import io.trino.spi.connector.SourcePage;
 import org.apache.parquet.column.ColumnDescriptor;
-import org.apache.parquet.hadoop.ParquetFileReader;
-import org.apache.parquet.io.LocalInputFile;
 import org.apache.parquet.schema.LogicalTypeAnnotation.DateLogicalTypeAnnotation;
 import org.apache.parquet.schema.LogicalTypeAnnotation.DecimalLogicalTypeAnnotation;
 import org.apache.parquet.schema.MessageType;
 import org.apache.parquet.schema.PrimitiveType;
 import org.apache.parquet.schema.Type;
 import org.joda.time.DateTimeZone;
+import org.weakref.nitro.parquet.ParquetFile;
 
 import java.io.File;
 import java.io.FileNotFoundException;
@@ -129,27 +128,18 @@ public final class TrinoClickBenchPageReader
     public static List<String> allColumns(Path input)
     {
         Path file = resolveFiles(input).getFirst();
-        try (ParquetFileReader reader = ParquetFileReader.open(new LocalInputFile(file))) {
-            return reader.getFileMetaData().getSchema().getFields().stream()
-                    .map(Type::getName)
-                    .toList();
-        }
-        catch (IOException exception) {
-            throw new UncheckedIOException("Unable to inspect ClickBench schema from " + file, exception);
+        try (ParquetFile parquet = ParquetFile.open(file)) {
+            return parquet.fieldNames();
         }
     }
 
     public static List<io.trino.spi.type.Type> columnTypes(Path input, List<String> columnNames)
     {
         Path file = resolveFiles(input).getFirst();
-        try (ParquetFileReader reader = ParquetFileReader.open(new LocalInputFile(file))) {
-            MessageType schema = reader.getFileMetaData().getSchema();
+        try (ParquetFile parquet = ParquetFile.open(file)) {
             return columnNames.stream()
-                    .map(name -> parquetType(findField(schema, name).asPrimitiveType()))
+                    .map(name -> parquetType(parquet.primitiveField(name)))
                     .toList();
-        }
-        catch (IOException exception) {
-            throw new UncheckedIOException("Unable to inspect ClickBench schema from " + file, exception);
         }
     }
 
@@ -389,6 +379,29 @@ public final class TrinoClickBenchPageReader
                     ? io.trino.spi.type.VarcharType.VARCHAR
                     : io.trino.spi.type.VarbinaryType.VARBINARY;
             default -> throw new IllegalArgumentException("Unsupported Trino Parquet primitive type: " + primitive.getPrimitiveTypeName());
+        };
+    }
+
+    private static io.trino.spi.type.Type parquetType(ParquetFile.PrimitiveField field)
+    {
+        if (field.decimal()) {
+            checkArgument(field.precision() <= 18, "Only short decimals are supported by Trino comparison harness: %s", field);
+            return createDecimalType(field.precision(), field.scale());
+        }
+        if (field.string()) {
+            return io.trino.spi.type.VarcharType.VARCHAR;
+        }
+        if (field.date()) {
+            return io.trino.spi.type.DateType.DATE;
+        }
+        return switch (field.type()) {
+            case INT32 -> io.trino.spi.type.IntegerType.INTEGER;
+            case INT64 -> io.trino.spi.type.BigintType.BIGINT;
+            case FLOAT -> io.trino.spi.type.RealType.REAL;
+            case DOUBLE -> io.trino.spi.type.DoubleType.DOUBLE;
+            case BOOLEAN -> io.trino.spi.type.BooleanType.BOOLEAN;
+            case BYTE_ARRAY, FIXED_LEN_BYTE_ARRAY -> io.trino.spi.type.VarbinaryType.VARBINARY;
+            case INT96 -> throw new IllegalArgumentException("Unsupported Trino Parquet primitive type: INT96");
         };
     }
 

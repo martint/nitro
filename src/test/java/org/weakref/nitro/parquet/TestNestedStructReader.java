@@ -88,10 +88,10 @@ class TestNestedStructReader
     private static NestedStructReader reader()
     {
         ParquetSchema.Primitive id = new ParquetSchema.Primitive(
-                "id", FieldRepetitionType.REQUIRED, Type.INT64, null, null, 0, 0,
+                "id", FieldRepetitionType.REQUIRED, Type.INT64, null, null, 0, 0, 0, 0,
                 List.of("person", "id"), 1, 0);
         ParquetSchema.Primitive name = new ParquetSchema.Primitive(
-                "name", FieldRepetitionType.OPTIONAL, Type.BYTE_ARRAY, ConvertedType.UTF8, null, 0, 1,
+                "name", FieldRepetitionType.OPTIONAL, Type.BYTE_ARRAY, ConvertedType.UTF8, null, 0, 0, 0, 1,
                 List.of("person", "name"), 2, 0);
         ParquetSchema.Group person = new ParquetSchema.Group(
                 "person", FieldRepetitionType.OPTIONAL, null, null, List.of(id, name), 1, 0);

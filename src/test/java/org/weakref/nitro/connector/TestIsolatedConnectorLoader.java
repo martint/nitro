@@ -14,14 +14,7 @@
 package org.weakref.nitro.connector;
 
 import io.airlift.compress.v3.Decompressor;
-import org.apache.parquet.example.data.Group;
-import org.apache.parquet.example.data.simple.SimpleGroupFactory;
 import org.apache.parquet.format.RowGroup;
-import org.apache.parquet.hadoop.ParquetWriter;
-import org.apache.parquet.hadoop.example.ExampleParquetWriter;
-import org.apache.parquet.io.LocalOutputFile;
-import org.apache.parquet.schema.MessageType;
-import org.apache.parquet.schema.Types;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.weakref.nitro.core.connector.Connector;
@@ -46,9 +39,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.INT64;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.weakref.nitro.parquet.NativeParquetTestFileWriter.Column.requiredInt64;
+import static org.weakref.nitro.parquet.NativeParquetTestFileWriter.write;
 
 class TestIsolatedConnectorLoader
 {
@@ -99,16 +93,7 @@ class TestIsolatedConnectorLoader
             throws IOException
     {
         Path file = tempDirectory.resolve("isolated.parquet");
-        MessageType schema = Types.buildMessage()
-                .required(INT64).named("x")
-                .named("isolated");
-        SimpleGroupFactory groups = new SimpleGroupFactory(schema);
-        try (ParquetWriter<Group> writer = ExampleParquetWriter.builder(new LocalOutputFile(file))
-                .withType(schema)
-                .build()) {
-            writer.write(groups.newGroup().append("x", 41L));
-            writer.write(groups.newGroup().append("x", 42L));
-        }
+        write(file, "isolated", List.of(requiredInt64("x", List.of(41L, 42L))), false);
         return file;
     }
 

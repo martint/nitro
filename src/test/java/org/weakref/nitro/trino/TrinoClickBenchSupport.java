@@ -46,11 +46,8 @@ import io.trino.testing.PageConsumerOperator;
 import io.trino.testing.TestingSession;
 import io.trino.testing.TestingTaskContext;
 import io.trino.type.LikePattern;
-import org.apache.parquet.hadoop.ParquetFileReader;
-import org.apache.parquet.io.LocalInputFile;
+import org.weakref.nitro.parquet.ParquetFile;
 
-import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.nio.file.Path;
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -1546,14 +1543,9 @@ public final class TrinoClickBenchSupport
     private static boolean eventDateUsesEpochDays(Path file)
     {
         Path schemaFile = TrinoClickBenchPageReader.resolveFiles(file).getFirst();
-        try (ParquetFileReader reader = ParquetFileReader.open(new LocalInputFile(schemaFile))) {
-            var field = reader.getFooter().getFileMetaData().getSchema().getType("EventDate").asPrimitiveType();
-            return field.getLogicalTypeAnnotation() instanceof org.apache.parquet.schema.LogicalTypeAnnotation.IntLogicalTypeAnnotation logicalType
-                    && !logicalType.isSigned()
-                    && logicalType.getBitWidth() == 16;
-        }
-        catch (IOException exception) {
-            throw new UncheckedIOException("Unable to inspect ClickBench EventDate encoding for " + schemaFile, exception);
+        try (ParquetFile parquet = ParquetFile.open(schemaFile)) {
+            ParquetFile.PrimitiveField field = parquet.primitiveField("EventDate");
+            return field.integer() && !field.integerSigned() && field.integerBitWidth() == 16;
         }
     }
 
