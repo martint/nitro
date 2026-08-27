@@ -17,6 +17,7 @@ import it.unimi.dsi.fastutil.longs.LongArrayList;
 import it.unimi.dsi.fastutil.longs.LongList;
 import it.unimi.dsi.fastutil.longs.LongLists;
 import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
 
@@ -95,11 +96,22 @@ final class StructuralHashJoinIndex
             SingleLongList[] singleMatches)
     {
         DictionaryVector mapping = alignedDictionaryMapping(values, nulls, hasNulls);
-        if (mapping == null) {
-            super.matchRows(values, nulls, hasNulls, positions, positionCount, matches, singleMatches);
+        if (mapping != null) {
+            matchDictionaryRows(mapping, positions, positionCount, matches);
             return;
         }
 
+        if (alignedSingleRunValues(values, nulls, hasNulls)) {
+            LongList match = matchesNoNulls(probeDomainValues, 0);
+            java.util.Arrays.fill(matches, 0, positionCount, match);
+            return;
+        }
+
+        super.matchRows(values, nulls, hasNulls, positions, positionCount, matches, singleMatches);
+    }
+
+    private void matchDictionaryRows(DictionaryVector mapping, int[] positions, int positionCount, LongList[] matches)
+    {
         int domainSize = mapping.values().length();
         if (probeDomainMatches.length < domainSize) {
             probeDomainMatches = new LongList[domainSize];
@@ -112,6 +124,30 @@ final class StructuralHashJoinIndex
         for (int index = 0; index < positionCount; index++) {
             matches[index] = probeDomainMatches[ids[positions[index]]];
         }
+    }
+
+    private boolean alignedSingleRunValues(Vector[] values, Vector[] nulls, boolean hasNulls)
+    {
+        if (values.length == 0 || !(values[0] instanceof RleVector first) || first.counts().length != 1) {
+            return false;
+        }
+        if (hasNulls) {
+            for (Vector nullVector : nulls) {
+                if (!VectorAccess.isAllFalseNulls(nullVector)) {
+                    return false;
+                }
+            }
+        }
+        probeDomainValues[0] = first.values();
+        for (int keyIndex = 1; keyIndex < values.length; keyIndex++) {
+            if (!(values[keyIndex] instanceof RleVector rle) ||
+                    rle.counts().length != 1 ||
+                    rle.length() != first.length()) {
+                return false;
+            }
+            probeDomainValues[keyIndex] = rle.values();
+        }
+        return true;
     }
 
     /**

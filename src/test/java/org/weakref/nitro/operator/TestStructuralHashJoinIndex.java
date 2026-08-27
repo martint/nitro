@@ -17,6 +17,7 @@ import it.unimi.dsi.fastutil.longs.LongList;
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I64Vector;
+import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
 
@@ -64,6 +65,38 @@ class TestStructuralHashJoinIndex
                 new long[] {200});
         assertThat(firstHashCalls).hasValue(2);
         assertThat(secondHashCalls).hasValue(2);
+    }
+
+    @Test
+    void testAlignedSingleRunKeysAreProbedOnce()
+    {
+        AtomicInteger firstHashCalls = new AtomicInteger();
+        AtomicInteger secondHashCalls = new AtomicInteger();
+        StructuralHashJoinIndex index = new StructuralHashJoinIndex(new StructuralKeyKernel[] {
+                countingLongKernel(firstHashCalls),
+                countingLongKernel(secondHashCalls)});
+        Vector[] build = {
+                new I64Vector(new long[] {11}),
+                new I64Vector(new long[] {110})};
+        index.add(build, new Vector[0], 0, 100);
+        firstHashCalls.set(0);
+        secondHashCalls.set(0);
+
+        RleVector first = new RleVector(new int[] {5}, new I64Vector(new long[] {11}));
+        RleVector second = new RleVector(new int[] {5}, new I64Vector(new long[] {110}));
+        LongList[] matches = new LongList[5];
+        index.matchRows(
+                new Vector[] {first, second},
+                new Vector[0],
+                false,
+                new int[] {0, 1, 2, 3, 4},
+                5,
+                matches,
+                new SingleLongList[5]);
+
+        assertThat(matches).extracting(LongList::toLongArray).containsOnly(new long[] {100});
+        assertThat(firstHashCalls).hasValue(1);
+        assertThat(secondHashCalls).hasValue(1);
     }
 
     @Test
