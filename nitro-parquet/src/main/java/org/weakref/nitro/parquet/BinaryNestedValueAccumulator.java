@@ -50,6 +50,7 @@ final class BinaryNestedValueAccumulator
     private int dictionaryBytes;
     private int size;
     private int bytes;
+    private boolean hasNulls;
 
     BinaryNestedValueAccumulator(boolean utf8, boolean nullable)
     {
@@ -71,6 +72,7 @@ final class BinaryNestedValueAccumulator
         dictionaryBytes = 0;
         size = 0;
         bytes = 0;
+        hasNulls = false;
     }
 
     @Override
@@ -143,6 +145,7 @@ final class BinaryNestedValueAccumulator
         if (!nullable) {
             throw new IllegalArgumentException("Required nested value is missing");
         }
+        hasNulls = true;
         ensurePositionCapacity(size + 1);
         if (dictionaryCandidate) {
             dictionaryIds[size] = -1;
@@ -224,7 +227,7 @@ final class BinaryNestedValueAccumulator
         if (!dictionaryCandidate || dictionaryGeneration < 0) {
             return false;
         }
-        int outputDictionarySize = dictionarySize + (nullable ? 1 : 0);
+        int outputDictionarySize = dictionarySize + (hasNulls ? 1 : 0);
         Arrays.fill(dictionaryFrequencies, 0, dictionarySize, 0);
         long logicalBytes = 0;
         for (int position = 0; position < size; position++) {
@@ -238,31 +241,31 @@ final class BinaryNestedValueAccumulator
         }
         long dictionaryFootprint = dictionaryBytes +
                 (long) Integer.BYTES * (dictionarySize + 1L + size + outputDictionarySize) +
-                (nullable ? outputDictionarySize : 0);
+                (hasNulls ? outputDictionarySize : 0);
         long flatFootprint = logicalBytes + (long) Integer.BYTES * (size + 1L) + (nullable ? size : 0);
         return dictionaryFootprint < flatFootprint;
     }
 
     private Streams materializeDictionary(Allocator allocator, Allocator.Context context)
     {
-        int outputDictionarySize = dictionarySize + (nullable ? 1 : 0);
+        int outputDictionarySize = dictionarySize + (hasNulls ? 1 : 0);
         int nullId = outputDictionarySize - 1;
         I32Vector ids = I32Vector.allocate(allocator, context, size);
         I32Vector frequencies = I32Vector.allocate(allocator, context, outputDictionarySize);
         System.arraycopy(dictionaryFrequencies, 0, frequencies.values(), 0, dictionarySize);
-        if (nullable) {
+        if (hasNulls) {
             frequencies.values()[nullId] = 0;
         }
         for (int position = 0; position < size; position++) {
             int id = dictionaryIds[position] < 0 ? nullId : dictionaryIds[position];
             ids.values()[position] = id;
-            if (id == nullId && nullable) {
+            if (id == nullId && hasNulls) {
                 frequencies.values()[nullId]++;
             }
         }
         BinaryVector dictionary = BinaryVector.allocate(allocator, context, outputDictionarySize, dictionaryBytes);
         System.arraycopy(dictionaryOffsets, 0, dictionary.offsets(), 0, dictionarySize + 1);
-        if (nullable) {
+        if (hasNulls) {
             dictionary.offsets()[outputDictionarySize] = dictionaryBytes;
         }
         System.arraycopy(dictionaryData, 0, dictionary.data(), 0, dictionaryBytes);
@@ -274,8 +277,17 @@ final class BinaryNestedValueAccumulator
                 size,
                 dictionary.freezeContent(),
                 frequencies);
-        if (!nullable) {
-            return Streams.ofValues(result);
+        if (!hasNulls) {
+            if (!nullable) {
+                return Streams.ofValues(result);
+            }
+            BooleanVector resultNulls = allocator.allocate(
+                    context,
+                    BooleanVector.class,
+                    size,
+                    BooleanVector::new);
+            Arrays.fill(resultNulls.values(), 0, size, false);
+            return Streams.ofValuesAndNulls(result, resultNulls);
         }
         BooleanVector dictionaryNulls = allocator.allocate(
                 context,

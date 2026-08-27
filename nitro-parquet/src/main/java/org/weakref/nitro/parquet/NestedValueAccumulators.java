@@ -33,6 +33,7 @@ final class NestedValueAccumulators
             case FLOAT -> new LongNestedValueAccumulator(false, nullable);
             case INT64 -> new LongNestedValueAccumulator(false, nullable);
             case BYTE_ARRAY -> new BinaryNestedValueAccumulator(leaf.string(), nullable);
+            case INT96 -> new BinaryNestedValueAccumulator(false, nullable);
             case FIXED_LEN_BYTE_ARRAY -> createFixedDecimal(leaf, nullable);
             default -> throw new UnsupportedParquetFeatureException(
                     "Native nested Parquet output does not support physical type " + leaf.type() + " at '" + String.join(".", leaf.path()) + "'");

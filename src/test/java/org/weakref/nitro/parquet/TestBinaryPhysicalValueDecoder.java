@@ -25,6 +25,19 @@ import static org.assertj.core.api.Assertions.assertThat;
 class TestBinaryPhysicalValueDecoder
 {
     @Test
+    void testDecodesFixedWidthValues()
+    {
+        try (BinaryPhysicalValueDecoder decoder = new BinaryPhysicalValueDecoder(3, new PrimitiveArrayPool(0, 0))) {
+            decoder.decodeDictionary(MemorySegment.ofArray(new byte[] {1, 2, 3, 4, 5, 6}), 2, Encoding.PLAIN);
+            decoder.decodePlain(MemorySegment.ofArray(new byte[] {9, 8, 7, 6, 5, 4, 3}), 1, 2);
+
+            assertThat(bytes(decoder, 0, -1)).containsExactly(8, 7, 6);
+            assertThat(bytes(decoder, 1, -1)).containsExactly(5, 4, 3);
+            assertThat(bytes(decoder, 0, 1)).containsExactly(4, 5, 6);
+        }
+    }
+
+    @Test
     void testDeltaLengthConstantLengths()
     {
         // block size 128, four mini-blocks, three values, first length 1;
@@ -68,5 +81,12 @@ class TestBinaryPhysicalValueDecoder
         byte[] output = new byte[decoder.length(ordinal, -1)];
         decoder.copy(ordinal, -1, output, 0);
         return new String(output, StandardCharsets.UTF_8);
+    }
+
+    private static byte[] bytes(BinaryPhysicalValueDecoder decoder, int ordinal, int dictionaryId)
+    {
+        byte[] output = new byte[decoder.length(ordinal, dictionaryId)];
+        decoder.copy(ordinal, dictionaryId, output, 0);
+        return output;
     }
 }

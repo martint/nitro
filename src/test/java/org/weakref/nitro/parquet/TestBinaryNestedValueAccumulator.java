@@ -34,6 +34,27 @@ import static org.assertj.core.api.Assertions.assertThat;
 class TestBinaryNestedValueAccumulator
 {
     @Test
+    void testAllNonNullNullableDictionaryOmitsSyntheticNullValue()
+    {
+        PrimitiveArrayPool arrays = new PrimitiveArrayPool(0, 0);
+        try (BinaryPhysicalValueDecoder decoder = new BinaryPhysicalValueDecoder(3, arrays);
+                Allocator allocator = new Allocator(EngineResources.createDefault())) {
+            decoder.decodeDictionary(MemorySegment.ofArray(new byte[] {1, 2, 3, 4, 5, 6}), 2, Encoding.PLAIN);
+            BinaryNestedValueAccumulator accumulator = new BinaryNestedValueAccumulator(false, true);
+            accumulator.reset(allocator);
+            for (int position = 0; position < 1_000; position++) {
+                accumulator.append(decoder, 0, position & 1);
+            }
+
+            Streams streams = accumulator.materialize(allocator, new Allocator.Context("test"));
+            assertThat(streams.values()).isInstanceOf(DictionaryVector.class);
+            assertThat(((DictionaryVector) streams.values()).values().length()).isEqualTo(2);
+            assertThat(streams.get(Stream.NULLS).length()).isEqualTo(1_000);
+            assertThat(VectorAccess.booleanValues(streams.get(Stream.NULLS)).value(0)).isFalse();
+        }
+    }
+
+    @Test
     void testPreservesContiguousDictionaryRun()
     {
         PrimitiveArrayPool arrays = new PrimitiveArrayPool(0, 0);

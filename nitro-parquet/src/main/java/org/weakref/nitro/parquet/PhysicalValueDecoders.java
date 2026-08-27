@@ -30,6 +30,7 @@ final class PhysicalValueDecoders
             case DOUBLE -> new DoublePhysicalValueDecoder(arrayPool);
             case INT32, INT64, FLOAT -> new LongPhysicalValueDecoder(leaf.type(), arrayPool);
             case BYTE_ARRAY -> new BinaryPhysicalValueDecoder(arrayPool);
+            case INT96 -> new BinaryPhysicalValueDecoder(12, arrayPool);
             case FIXED_LEN_BYTE_ARRAY -> createFixedDecimal(leaf, arrayPool);
             default -> throw new UnsupportedParquetFeatureException(
                     "Native nested Parquet reader does not support physical type " + leaf.type() + " at '" + String.join(".", leaf.path()) + "'");

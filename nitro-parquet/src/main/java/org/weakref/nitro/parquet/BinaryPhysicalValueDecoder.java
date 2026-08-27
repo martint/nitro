@@ -22,7 +22,7 @@ import java.lang.foreign.ValueLayout;
 import static java.util.Objects.requireNonNull;
 import static org.weakref.nitro.parquet.ParquetFile.LE_INT;
 
-/** Physical BYTE_ARRAY decoder. UTF-8 and binary logical semantics are intentionally outside this layer. */
+/** Physical variable- or fixed-width binary decoder. Logical semantics are intentionally outside this layer. */
 final class BinaryPhysicalValueDecoder
         implements BinaryValueDecoder
 {
@@ -30,6 +30,7 @@ final class BinaryPhysicalValueDecoder
     private static final byte[] EMPTY_BYTES = new byte[0];
 
     private final PrimitiveArrayPool arrayPool;
+    private final int fixedWidth;
     private final DeltaBinaryPackedIntDecoder deltaLengthDecoder = new DeltaBinaryPackedIntDecoder();
     private int[] dictionaryOffsets = EMPTY_INTS;
     private byte[] dictionaryData = EMPTY_BYTES;
@@ -40,6 +41,15 @@ final class BinaryPhysicalValueDecoder
 
     BinaryPhysicalValueDecoder(PrimitiveArrayPool arrayPool)
     {
+        this(0, arrayPool);
+    }
+
+    BinaryPhysicalValueDecoder(int fixedWidth, PrimitiveArrayPool arrayPool)
+    {
+        if (fixedWidth < 0) {
+            throw new IllegalArgumentException("fixedWidth is negative");
+        }
+        this.fixedWidth = fixedWidth;
         this.arrayPool = requireNonNull(arrayPool, "arrayPool is null");
     }
 
@@ -69,6 +79,9 @@ final class BinaryPhysicalValueDecoder
         if (encoding == Encoding.PLAIN) {
             decodePlain(body, offset, valueCount);
             return;
+        }
+        if (fixedWidth != 0) {
+            throw new UnsupportedParquetFeatureException("Native Parquet fixed-width binary reader does not support encoding " + encoding);
         }
         if (encoding != Encoding.DELTA_LENGTH_BYTE_ARRAY) {
             throw new UnsupportedParquetFeatureException("Native Parquet binary reader does not support encoding " + encoding);
@@ -146,6 +159,18 @@ final class BinaryPhysicalValueDecoder
 
     private byte[] decode(MemorySegment body, long offset, int valueCount, int[] offsets, byte[] data)
     {
+        if (fixedWidth != 0) {
+            int bytes = Math.multiplyExact(valueCount, fixedWidth);
+            if (offset < 0 || offset > body.byteSize() - bytes) {
+                throw new IllegalArgumentException("Truncated Parquet fixed-width binary payload");
+            }
+            for (int index = 0; index <= valueCount; index++) {
+                offsets[index] = index * fixedWidth;
+            }
+            data = grow(data, bytes);
+            MemorySegment.copy(body, ValueLayout.JAVA_BYTE, offset, data, 0, bytes);
+            return data;
+        }
         long cursor = offset;
         int bytes = 0;
         for (int index = 0; index < valueCount; index++) {
