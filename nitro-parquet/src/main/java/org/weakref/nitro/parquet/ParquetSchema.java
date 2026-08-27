@@ -113,6 +113,11 @@ final class ParquetSchema
         {
             return convertedType == ConvertedType.UTF8 || (logicalType != null && logicalType.isSetSTRING());
         }
+
+        ParquetPrimitiveDescriptor descriptor()
+        {
+            return new ParquetPrimitiveDescriptor(type, convertedType, logicalType, typeLength, precision, scale);
+        }
     }
 
     private record Parsed(Node node, int nextSchemaIndex, int nextLeafIndex) {}

@@ -23,6 +23,7 @@ import org.apache.parquet.format.DictionaryPageHeader;
 import org.apache.parquet.format.Encoding;
 import org.apache.parquet.format.FieldRepetitionType;
 import org.apache.parquet.format.FileMetaData;
+import org.apache.parquet.format.LogicalType;
 import org.apache.parquet.format.PageHeader;
 import org.apache.parquet.format.PageType;
 import org.apache.parquet.format.RowGroup;
@@ -56,7 +57,7 @@ public final class NativeParquetTestFileWriter
 
     public record LongStringStruct(long id, String name) {}
 
-    public record Column(String name, Type type, boolean optional, boolean utf8, List<?> values)
+    public record Column(String name, Type type, boolean optional, boolean utf8, LogicalType logicalType, List<?> values)
     {
         public Column
         {
@@ -70,12 +71,12 @@ public final class NativeParquetTestFileWriter
 
         public static Column required(String name, Type type, List<?> values)
         {
-            return new Column(name, type, false, false, values);
+            return new Column(name, type, false, false, null, values);
         }
 
         public static Column optional(String name, Type type, List<?> values)
         {
-            return new Column(name, type, true, false, values);
+            return new Column(name, type, true, false, null, values);
         }
 
         public static Column requiredInt32(String name, List<?> values)
@@ -118,7 +119,12 @@ public final class NativeParquetTestFileWriter
             if (type != Type.BYTE_ARRAY) {
                 throw new IllegalStateException("UTF-8 annotation requires BYTE_ARRAY");
             }
-            return new Column(name, type, optional, true, values);
+            return new Column(name, type, optional, true, logicalType, values);
+        }
+
+        public Column asLogicalType(LogicalType logicalType)
+        {
+            return new Column(name, type, optional, utf8, requireNonNull(logicalType, "logicalType is null"), values);
         }
     }
 
@@ -166,6 +172,9 @@ public final class NativeParquetTestFileWriter
                     .setRepetition_type(column.optional() ? FieldRepetitionType.OPTIONAL : FieldRepetitionType.REQUIRED);
             if (column.utf8()) {
                 field.setConverted_type(ConvertedType.UTF8);
+            }
+            if (column.logicalType() != null) {
+                field.setLogicalType(column.logicalType());
             }
             schema.add(field);
         }

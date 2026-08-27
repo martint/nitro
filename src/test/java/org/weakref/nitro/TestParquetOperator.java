@@ -16,6 +16,10 @@ package org.weakref.nitro;
 import org.apache.parquet.format.ColumnMetaData;
 import org.apache.parquet.format.CompressionCodec;
 import org.apache.parquet.format.Encoding;
+import org.apache.parquet.format.LogicalType;
+import org.apache.parquet.format.MicroSeconds;
+import org.apache.parquet.format.TimeType;
+import org.apache.parquet.format.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.weakref.nitro.clickbench.ClickBenchHitsSupport;
@@ -92,6 +96,7 @@ import org.weakref.nitro.parquet.ParquetMaterializationPolicy;
 import org.weakref.nitro.parquet.ParquetNumericDecodeAdmissionPolicy;
 import org.weakref.nitro.parquet.ParquetNumericDecodePolicy;
 import org.weakref.nitro.parquet.ParquetPageNavigationPolicy;
+import org.weakref.nitro.parquet.ParquetPrimitiveValueBinding;
 import org.weakref.nitro.parquet.ParquetProgressiveFilterCompactionPolicy;
 import org.weakref.nitro.parquet.ParquetReaderDiagnostics;
 import org.weakref.nitro.parquet.ParquetReaderPolicy;
@@ -1596,6 +1601,70 @@ public class TestParquetOperator
                         .isInstanceOf(I64Vector.class);
                 assertThat(((I64Vector) batch.column(0).borrow(Stream.VALUES)).values())
                         .startsWith(1L, -20L, 300L);
+            }
+            assertThat(source.poll()).isSameAs(SourcePoll.Finished.FINISHED);
+        }
+    }
+
+    @Test
+    void testNitroParquetSourceAppliesConnectorLogicalValueBinding()
+            throws IOException
+    {
+        java.nio.file.Path file = tempDirectory.resolve("nitro-time-micros.parquet");
+        write(
+                file,
+                "nitro_time_micros",
+                List.of(requiredInt64("value", List.of(0L, 1L, 1_234L))
+                        .asLogicalType(LogicalType.TIME(new TimeType(false, TimeUnit.MICROS(new MicroSeconds()))))),
+                false);
+        TypeBinding timeBinding = new VectorTypeBinding(
+                new TypeIdentity("testing:time"),
+                long.class,
+                Set.of(I64Vector.class));
+        Schema schema = new Schema(List.of(new Field("value", timeBinding, false)));
+        ParquetPrimitiveValueBinding binding = (source, outputType) -> {
+            assertThat(source.physicalType()).isEqualTo(org.apache.parquet.format.Type.INT64);
+            assertThat(source.logicalType()).isNotNull();
+            assertThat(source.logicalType().getTIME().unit.isSetMICROS()).isTrue();
+            assertThat(outputType).isSameAs(timeBinding);
+            return new ParquetPrimitiveValueBinding.Bound()
+            {
+                @Override
+                public Class<? extends org.weakref.nitro.data.Vector> decodedVectorType()
+                {
+                    return I64Vector.class;
+                }
+
+                @Override
+                public org.weakref.nitro.data.Vector convert(
+                        Allocator allocator,
+                        Allocator.Context context,
+                        org.weakref.nitro.data.Vector decoded)
+                {
+                    I64Vector input = (I64Vector) decoded;
+                    I64Vector output = I64Vector.allocate(allocator, context, input.length());
+                    for (int position = 0; position < input.length(); position++) {
+                        output.values()[position] = input.values()[position] * 1_000_000;
+                    }
+                    return output;
+                }
+            };
+        };
+
+        try (AllocationResources allocationResources = AllocationResources.createDefault();
+                Allocator allocator = new Allocator(allocationResources);
+                NitroParquetBatchSource source = NitroParquetBatchSource.forSplits(
+                        NitroParquetScanResources.createDefault(),
+                        allocator,
+                        List.of(NitroParquetBatchSource.Split.wholeFile(file)),
+                        schema,
+                        ParquetColumnNameMatching.EXACT,
+                        Map.of(0, binding))) {
+            assertThat(source.supportsRuntimeFilter(source.column(0))).isFalse();
+            SourcePoll.Ready ready = (SourcePoll.Ready) source.poll();
+            try (var batch = ready.batch()) {
+                assertThat(((I64Vector) batch.column(0).borrow(Stream.VALUES)).values())
+                        .startsWith(0L, 1_000_000L, 1_234_000_000L);
             }
             assertThat(source.poll()).isSameAs(SourcePoll.Finished.FINISHED);
         }

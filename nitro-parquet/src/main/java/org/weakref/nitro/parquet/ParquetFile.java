@@ -70,7 +70,15 @@ public final class ParquetFile
      * DECIMAL or STRING logical semantics. Physical BYTE_ARRAY alone is not sufficient to distinguish VARCHAR
      * from VARBINARY.
      */
-    public record Column(String name, Type type, boolean optional, int leafIndex, int typeLength, boolean decimal, boolean string) {}
+    public record Column(
+            String name,
+            Type type,
+            boolean optional,
+            int leafIndex,
+            int typeLength,
+            boolean decimal,
+            boolean string,
+            ParquetPrimitiveDescriptor descriptor) {}
 
     public record PrimitiveField(
             String name,
@@ -259,7 +267,8 @@ public final class ParquetFile
                     primitive.leafIndex(),
                     primitive.typeLength(),
                     decimal,
-                    primitive.string()));
+                    primitive.string(),
+                    primitive.descriptor()));
         }
         return new SchemaColumns(List.copyOf(columns), Map.copyOf(columnIndexByName));
     }
@@ -439,7 +448,8 @@ public final class ParquetFile
                 primitive.leafIndex(),
                 primitive.typeLength(),
                 primitive.decimal(),
-                primitive.string());
+                primitive.string(),
+                primitive.descriptor());
     }
 
     /** The column chunk for {@code column} within {@code rowGroup}. */

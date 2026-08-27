@@ -106,13 +106,20 @@ final class NestedNitroParquetBatchSource
         private final ParquetSchema.Primitive leaf;
         private final ColumnReader reader;
         private final TypeBinding outputType;
+        private final ParquetPrimitiveValueBinding.Bound logicalValueBinding;
         private final boolean intOutputAsLong;
         private long[] doubleScratch = EMPTY_LONGS;
 
-        private PrimitiveProjectedReader(ParquetSchema.Primitive leaf, TypeBinding outputType)
+        private PrimitiveProjectedReader(
+                ParquetSchema.Primitive leaf,
+                TypeBinding outputType,
+                ParquetPrimitiveValueBinding logicalValueBinding)
         {
             this.leaf = leaf;
             this.outputType = outputType;
+            this.logicalValueBinding = logicalValueBinding == null
+                    ? null
+                    : requireNonNull(logicalValueBinding.bind(leaf.descriptor(), outputType), "logical value binding returned null");
             if (leaf.maximumRepetitionLevel() != 0) {
                 throw new UnsupportedParquetFeatureException(
                         "Direct primitive projection does not support repeated path '" + String.join(".", leaf.path()) + "'");
@@ -134,7 +141,8 @@ final class NestedNitroParquetBatchSource
                     resources.decodeScratchPool());
             Set<Class<? extends Vector>> vectors = outputType.supportedVectorTypes();
             this.intOutputAsLong = reader.kind() == ColumnReader.Kind.INT &&
-                    !vectors.contains(I32Vector.class) && vectors.contains(I64Vector.class);
+                    ((this.logicalValueBinding != null && this.logicalValueBinding.decodedVectorType() == I64Vector.class) ||
+                            (!vectors.contains(I32Vector.class) && vectors.contains(I64Vector.class)));
         }
 
         @Override
@@ -155,6 +163,9 @@ final class NestedNitroParquetBatchSource
                 case LONG -> readLong(allocator, context, nullValues, rowCount);
                 case BINARY -> reader.readBinary(allocator, context, nullValues, rowCount);
             };
+            if (logicalValueBinding != null) {
+                values = logicalValueBinding.convert(allocator, context, values);
+            }
             if (!outputType.supportsVector(values)) {
                 throw new UnsupportedParquetFeatureException(
                         "Native Parquet representation " + values.getClass().getSimpleName() +
@@ -220,11 +231,13 @@ final class NestedNitroParquetBatchSource
         private final NestedLeafReader reader;
         private final NestedValueAccumulator values;
         private final TypeBinding outputType;
+        private final ParquetPrimitiveValueBinding.Bound logicalValueBinding;
         private final boolean nullable;
 
         private NestedPrimitiveProjectedReader(
                 ParquetSchema.Primitive leaf,
                 TypeBinding outputType,
+                ParquetPrimitiveValueBinding logicalValueBinding,
                 RleReaderPolicy rlePolicy,
                 PrimitiveArrayPool arrayPool)
         {
@@ -234,6 +247,9 @@ final class NestedNitroParquetBatchSource
                         "Direct primitive projection does not support repeated path '" + String.join(".", leaf.path()) + "'");
             }
             this.outputType = requireNonNull(outputType, "outputType is null");
+            this.logicalValueBinding = logicalValueBinding == null
+                    ? null
+                    : requireNonNull(logicalValueBinding.bind(leaf.descriptor(), outputType), "logical value binding returned null");
             this.nullable = leaf.maximumDefinitionLevel() != 0;
             this.reader = new NestedLeafReader(leaf, rlePolicy, arrayPool);
             this.values = NestedValueAccumulators.create(leaf, nullable);
@@ -310,6 +326,9 @@ final class NestedNitroParquetBatchSource
         private Streams materialize(Allocator allocator, Allocator.Context context)
         {
             Streams streams = values.materialize(allocator, context);
+            if (logicalValueBinding != null) {
+                streams = streams.with(Stream.VALUES, logicalValueBinding.convert(allocator, context, streams.values()));
+            }
             if (!outputType.supportsVector(streams.values())) {
                 throw new UnsupportedParquetFeatureException(
                         "Native nested primitive representation does not match output type " + outputType.identity());
@@ -690,7 +709,19 @@ final class NestedNitroParquetBatchSource
             ParquetColumnNameMatching columnNameMatching,
             List<Integer> sourceOrdinals)
     {
-        this(resources, allocator, splits, schema, columnNameMatching, sourceOrdinals, null, false);
+        this(resources, allocator, splits, schema, columnNameMatching, sourceOrdinals, null, false, Map.of());
+    }
+
+    NestedNitroParquetBatchSource(
+            NitroParquetScanResources resources,
+            Allocator allocator,
+            List<NitroParquetBatchSource.InputSplit> splits,
+            Schema schema,
+            ParquetColumnNameMatching columnNameMatching,
+            List<Integer> sourceOrdinals,
+            Map<Integer, ParquetPrimitiveValueBinding> logicalValueBindings)
+    {
+        this(resources, allocator, splits, schema, columnNameMatching, sourceOrdinals, null, false, logicalValueBindings);
     }
 
     NestedNitroParquetBatchSource(
@@ -702,7 +733,20 @@ final class NestedNitroParquetBatchSource
             List<NitroParquetBatchSource.ColumnProjection> projections,
             boolean projectionsByName)
     {
-        this(resources, allocator, splits, schema, columnNameMatching, null, projections, projectionsByName);
+        this(resources, allocator, splits, schema, columnNameMatching, null, projections, projectionsByName, Map.of());
+    }
+
+    NestedNitroParquetBatchSource(
+            NitroParquetScanResources resources,
+            Allocator allocator,
+            List<NitroParquetBatchSource.InputSplit> splits,
+            Schema schema,
+            ParquetColumnNameMatching columnNameMatching,
+            List<NitroParquetBatchSource.ColumnProjection> projections,
+            boolean projectionsByName,
+            Map<Integer, ParquetPrimitiveValueBinding> logicalValueBindings)
+    {
+        this(resources, allocator, splits, schema, columnNameMatching, null, projections, projectionsByName, logicalValueBindings);
     }
 
     private NestedNitroParquetBatchSource(
@@ -713,12 +757,14 @@ final class NestedNitroParquetBatchSource
             ParquetColumnNameMatching columnNameMatching,
             List<Integer> sourceOrdinals,
             List<NitroParquetBatchSource.ColumnProjection> projections,
-            boolean projectionsByName)
+            boolean projectionsByName,
+            Map<Integer, ParquetPrimitiveValueBinding> logicalValueBindings)
     {
         this.resources = requireNonNull(resources, "resources is null");
         this.allocator = requireNonNull(allocator, "allocator is null");
         this.schema = requireNonNull(schema, "schema is null");
         requireNonNull(columnNameMatching, "columnNameMatching is null");
+        logicalValueBindings = Map.copyOf(requireNonNull(logicalValueBindings, "logicalValueBindings is null"));
         splits = List.copyOf(splits);
         if (splits.isEmpty()) {
             throw new IllegalArgumentException("splits is empty");
@@ -751,7 +797,7 @@ final class NestedNitroParquetBatchSource
             ParquetSchema.Node node = projections == null
                     ? resolveNode(files[0].schema(), name, columnNameMatching, sourceOrdinals, column)
                     : resolveProjection(files[0].schema(), columnNameMatching, projections.get(column), projectionsByName);
-            readers[column] = createReader(node, schema.field(column).type());
+            readers[column] = createReader(node, schema.field(column).type(), logicalValueBindings.get(column));
             sourceColumns[column] = new OrdinalSourceColumnHandle(column, schema.field(column).type());
         }
 
@@ -773,17 +819,22 @@ final class NestedNitroParquetBatchSource
         this.allocationContext = batchScope.context();
     }
 
-    private ProjectedReader createReader(ParquetSchema.Node node, TypeBinding outputType)
+    private ProjectedReader createReader(
+            ParquetSchema.Node node,
+            TypeBinding outputType,
+            ParquetPrimitiveValueBinding logicalValueBinding)
     {
         return switch (node) {
             case ParquetSchema.Primitive primitive when primitive.maximumDefinitionLevel() > 1 ->
                     new NestedPrimitiveProjectedReader(
                             primitive,
                             outputType,
+                            logicalValueBinding,
                             resources.readerPolicy().rle(),
                             allocator.primitiveArrays());
-            case ParquetSchema.Primitive primitive -> new PrimitiveProjectedReader(primitive, outputType);
+            case ParquetSchema.Primitive primitive -> new PrimitiveProjectedReader(primitive, outputType, logicalValueBinding);
             case ParquetSchema.Group group when group.isMap() -> {
+                rejectPrimitiveBinding(group, logicalValueBinding);
                 if (!outputType.supportedVectorTypes().contains(MapVector.class)) {
                     throw new UnsupportedParquetFeatureException(
                             "Parquet MAP field '" + group.name() + "' has no MapVector output representation");
@@ -793,17 +844,28 @@ final class NestedNitroParquetBatchSource
             case ParquetSchema.Group group when group.isList() ||
                     (group.repetition() == org.apache.parquet.format.FieldRepetitionType.REPEATED &&
                             outputType.supportedVectorTypes().contains(ArrayVector.class)) -> {
+                rejectPrimitiveBinding(group, logicalValueBinding);
                 if (!outputType.supportedVectorTypes().contains(ArrayVector.class)) {
                     throw new UnsupportedParquetFeatureException(
                             "Parquet LIST field '" + group.name() + "' has no ArrayVector output representation");
                 }
                 yield new ArrayProjectedReader(group, outputType, resources.readerPolicy().rle(), allocator.primitiveArrays());
             }
-            case ParquetSchema.Group group when outputType.supportedVectorTypes().contains(StructVector.class) ->
-                    new StructProjectedReader(group, outputType, resources.readerPolicy().rle(), allocator.primitiveArrays());
+            case ParquetSchema.Group group when outputType.supportedVectorTypes().contains(StructVector.class) -> {
+                rejectPrimitiveBinding(group, logicalValueBinding);
+                yield new StructProjectedReader(group, outputType, resources.readerPolicy().rle(), allocator.primitiveArrays());
+            }
             case ParquetSchema.Group group -> throw new UnsupportedParquetFeatureException(
                     "Native Nitro Parquet reader does not support nested field '" + group.name() + "' with this logical layout");
         };
+    }
+
+    private static void rejectPrimitiveBinding(ParquetSchema.Group group, ParquetPrimitiveValueBinding binding)
+    {
+        if (binding != null) {
+            throw new UnsupportedParquetFeatureException(
+                    "Primitive logical value binding cannot be applied to nested field '" + group.name() + "'");
+        }
     }
 
     private static ParquetSchema.Primitive firstPrimitive(ParquetSchema.Node node)

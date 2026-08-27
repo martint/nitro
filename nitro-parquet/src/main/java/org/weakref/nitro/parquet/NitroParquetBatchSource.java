@@ -55,6 +55,7 @@ import java.lang.foreign.Arena;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Set;
@@ -315,6 +316,8 @@ public final class NitroParquetBatchSource
     private long[] doubleDecodeScratch;
     private final Vector[] currentValues;
     private final Vector[] currentNulls;
+    private final ParquetPrimitiveValueBinding.Bound[] logicalValueBindings;
+    private final Vector[] adaptedValues;
     private final ScanOutputResolver[] outputResolvers;
     private boolean lazyOutputResolution;
     private boolean deferredFilteredPayload;
@@ -391,7 +394,25 @@ public final class NitroParquetBatchSource
             Schema schema,
             ParquetColumnNameMatching columnNameMatching)
     {
-        return new NitroParquetBatchSource(resources, allocator, new Splits(splits.stream().map(SourceSplit::path).toList()), schema, columnNameMatching, null);
+        return new NitroParquetBatchSource(resources, allocator, new Splits(splits.stream().map(SourceSplit::path).toList()), schema, columnNameMatching, null, Map.of());
+    }
+
+    public static NitroParquetBatchSource forSplits(
+            NitroParquetScanResources resources,
+            Allocator allocator,
+            List<Split> splits,
+            Schema schema,
+            ParquetColumnNameMatching columnNameMatching,
+            Map<Integer, ParquetPrimitiveValueBinding> logicalValueBindings)
+    {
+        return new NitroParquetBatchSource(
+                resources,
+                allocator,
+                new Splits(splits.stream().map(SourceSplit::path).toList()),
+                schema,
+                columnNameMatching,
+                null,
+                logicalValueBindings);
     }
 
     public static NitroParquetBatchSource forSplitsByOrdinal(
@@ -407,7 +428,8 @@ public final class NitroParquetBatchSource
                 new Splits(splits.stream().map(SourceSplit::path).toList()),
                 schema,
                 ParquetColumnNameMatching.EXACT,
-                List.copyOf(sourceOrdinals));
+                List.copyOf(sourceOrdinals),
+                Map.of());
     }
 
     public static BatchSource forInputs(
@@ -426,7 +448,18 @@ public final class NitroParquetBatchSource
             Schema schema,
             ParquetColumnNameMatching columnNameMatching)
     {
-        return forInputs(resources, allocator, splits, schema, columnNameMatching, null);
+        return forInputs(resources, allocator, splits, schema, columnNameMatching, null, Map.of());
+    }
+
+    public static BatchSource forInputs(
+            NitroParquetScanResources resources,
+            Allocator allocator,
+            List<InputSplit> splits,
+            Schema schema,
+            ParquetColumnNameMatching columnNameMatching,
+            Map<Integer, ParquetPrimitiveValueBinding> logicalValueBindings)
+    {
+        return forInputs(resources, allocator, splits, schema, columnNameMatching, null, logicalValueBindings);
     }
 
     public static BatchSource forInputsByOrdinal(
@@ -436,7 +469,25 @@ public final class NitroParquetBatchSource
             Schema schema,
             List<Integer> sourceOrdinals)
     {
-        return forInputs(resources, allocator, splits, schema, ParquetColumnNameMatching.EXACT, List.copyOf(sourceOrdinals));
+        return forInputs(resources, allocator, splits, schema, ParquetColumnNameMatching.EXACT, List.copyOf(sourceOrdinals), Map.of());
+    }
+
+    public static BatchSource forInputsByOrdinal(
+            NitroParquetScanResources resources,
+            Allocator allocator,
+            List<InputSplit> splits,
+            Schema schema,
+            List<Integer> sourceOrdinals,
+            Map<Integer, ParquetPrimitiveValueBinding> logicalValueBindings)
+    {
+        return forInputs(
+                resources,
+                allocator,
+                splits,
+                schema,
+                ParquetColumnNameMatching.EXACT,
+                List.copyOf(sourceOrdinals),
+                logicalValueBindings);
     }
 
     public static BatchSource forProjectedInputsByName(
@@ -450,6 +501,18 @@ public final class NitroParquetBatchSource
         return forProjectedInputs(resources, allocator, splits, schema, columnNameMatching, projections, true);
     }
 
+    public static BatchSource forProjectedInputsByName(
+            NitroParquetScanResources resources,
+            Allocator allocator,
+            List<InputSplit> splits,
+            Schema schema,
+            ParquetColumnNameMatching columnNameMatching,
+            List<ColumnProjection> projections,
+            Map<Integer, ParquetPrimitiveValueBinding> logicalValueBindings)
+    {
+        return forProjectedInputs(resources, allocator, splits, schema, columnNameMatching, projections, true, logicalValueBindings);
+    }
+
     public static BatchSource forProjectedInputsByOrdinal(
             NitroParquetScanResources resources,
             Allocator allocator,
@@ -458,6 +521,25 @@ public final class NitroParquetBatchSource
             List<ColumnProjection> projections)
     {
         return forProjectedInputs(resources, allocator, splits, schema, ParquetColumnNameMatching.EXACT, projections, false);
+    }
+
+    public static BatchSource forProjectedInputsByOrdinal(
+            NitroParquetScanResources resources,
+            Allocator allocator,
+            List<InputSplit> splits,
+            Schema schema,
+            List<ColumnProjection> projections,
+            Map<Integer, ParquetPrimitiveValueBinding> logicalValueBindings)
+    {
+        return forProjectedInputs(
+                resources,
+                allocator,
+                splits,
+                schema,
+                ParquetColumnNameMatching.EXACT,
+                projections,
+                false,
+                logicalValueBindings);
     }
 
     private static BatchSource forProjectedInputs(
@@ -469,7 +551,21 @@ public final class NitroParquetBatchSource
             List<ColumnProjection> projections,
             boolean byName)
     {
+        return forProjectedInputs(resources, allocator, splits, schema, columnNameMatching, projections, byName, Map.of());
+    }
+
+    private static BatchSource forProjectedInputs(
+            NitroParquetScanResources resources,
+            Allocator allocator,
+            List<InputSplit> splits,
+            Schema schema,
+            ParquetColumnNameMatching columnNameMatching,
+            List<ColumnProjection> projections,
+            boolean byName,
+            Map<Integer, ParquetPrimitiveValueBinding> logicalValueBindings)
+    {
         splits = List.copyOf(splits);
+        logicalValueBindings = Map.copyOf(requireNonNull(logicalValueBindings, "logicalValueBindings is null"));
         try {
             return new NestedNitroParquetBatchSource(
                     resources,
@@ -478,7 +574,8 @@ public final class NitroParquetBatchSource
                     schema,
                     columnNameMatching,
                     List.copyOf(projections),
-                    byName);
+                    byName,
+                    logicalValueBindings);
         }
         catch (RuntimeException | Error failure) {
             for (InputSplit split : splits) {
@@ -499,9 +596,11 @@ public final class NitroParquetBatchSource
             List<InputSplit> splits,
             Schema schema,
             ParquetColumnNameMatching columnNameMatching,
-            List<Integer> sourceOrdinals)
+            List<Integer> sourceOrdinals,
+            Map<Integer, ParquetPrimitiveValueBinding> logicalValueBindings)
     {
         splits = List.copyOf(splits);
+        logicalValueBindings = Map.copyOf(requireNonNull(logicalValueBindings, "logicalValueBindings is null"));
         try {
             if (schema.fields().stream().anyMatch(field -> {
                 Set<Class<? extends Vector>> vectors = field.type().supportedVectorTypes();
@@ -515,7 +614,8 @@ public final class NitroParquetBatchSource
                         splits,
                         schema,
                         columnNameMatching,
-                        sourceOrdinals);
+                        sourceOrdinals,
+                        logicalValueBindings);
             }
             return new NitroParquetBatchSource(
                     resources,
@@ -523,7 +623,8 @@ public final class NitroParquetBatchSource
                     new Splits(splits.stream().map(SourceSplit::input).toList()),
                     schema,
                     columnNameMatching,
-                    sourceOrdinals);
+                    sourceOrdinals,
+                    logicalValueBindings);
         }
         catch (RuntimeException | Error failure) {
             for (InputSplit split : splits) {
@@ -544,7 +645,7 @@ public final class NitroParquetBatchSource
             Splits splits,
             Schema schema)
     {
-        this(resources, allocator, splits, schema, ParquetColumnNameMatching.EXACT, null);
+        this(resources, allocator, splits, schema, ParquetColumnNameMatching.EXACT, null, Map.of());
     }
 
     private NitroParquetBatchSource(
@@ -553,7 +654,8 @@ public final class NitroParquetBatchSource
             Splits splits,
             Schema schema,
             ParquetColumnNameMatching columnNameMatching,
-            List<Integer> sourceOrdinals)
+            List<Integer> sourceOrdinals,
+            Map<Integer, ParquetPrimitiveValueBinding> logicalValueBindings)
     {
         this(
                 allocator,
@@ -562,6 +664,7 @@ public final class NitroParquetBatchSource
                 schema,
                 requireNonNull(columnNameMatching, "columnNameMatching is null"),
                 sourceOrdinals,
+                logicalValueBindings,
                 requireNonNull(resources, "resources is null").batchBufferPool(),
                 resources,
                 resources.directNumericBatchDecodeAdmission(),
@@ -587,6 +690,7 @@ public final class NitroParquetBatchSource
             Schema schema,
             ParquetColumnNameMatching columnNameMatching,
             List<Integer> sourceOrdinals,
+            Map<Integer, ParquetPrimitiveValueBinding> logicalValueBindings,
             Object batchBufferPoolKey,
             NitroParquetScanResources resources,
             Object directNumericBatchDecodeAdmissionKey,
@@ -632,6 +736,12 @@ public final class NitroParquetBatchSource
         this.directNumericBatchDecodeAdmission = directNumericBatchDecodeLease.value();
         this.columnNames = List.copyOf(columns);
         this.outputSchema = requireNonNull(schema, "schema is null");
+        logicalValueBindings = Map.copyOf(requireNonNull(logicalValueBindings, "logicalValueBindings is null"));
+        for (int output : logicalValueBindings.keySet()) {
+            if (output < 0 || output >= schema.size()) {
+                throw new IllegalArgumentException("logical value binding output is out of range: " + output);
+            }
+        }
         if (schema.size() != this.columnNames.size()) {
             throw new IllegalArgumentException("schema size does not match projected columns");
         }
@@ -674,6 +784,8 @@ public final class NitroParquetBatchSource
         this.intOutputAsLong = new boolean[columnCount];
         this.currentValues = new Vector[columnCount];
         this.currentNulls = new Vector[columnCount];
+        this.logicalValueBindings = new ParquetPrimitiveValueBinding.Bound[columnCount];
+        this.adaptedValues = new Vector[columnCount];
         this.outputResolvers = new ScanOutputResolver[columnCount];
         this.directNullScratch = new boolean[columnCount][];
         this.directNullResolved = new boolean[columnCount];
@@ -681,6 +793,12 @@ public final class NitroParquetBatchSource
 
         for (int c = 0; c < columnCount; c++) {
             ParquetFile.Column first = resolveColumn(files[0], c, columns, columnNameMatching, sourceOrdinals);
+            ParquetPrimitiveValueBinding logicalBinding = logicalValueBindings.get(c);
+            if (logicalBinding != null) {
+                this.logicalValueBindings[c] = requireNonNull(
+                        logicalBinding.bind(first.descriptor(), schema.field(c).type()),
+                        "logical value binding returned null");
+            }
             readers[c] = new ColumnReader(
                     first.type(),
                     first.optional(),
@@ -694,7 +812,16 @@ public final class NitroParquetBatchSource
             nullable[c] = first.optional();
             if (readers[c].kind() == ColumnReader.Kind.INT) {
                 Set<Class<? extends Vector>> supportedVectors = schema.field(c).type().supportedVectorTypes();
-                if (supportedVectors.isEmpty() || supportedVectors.contains(I32Vector.class)) {
+                Class<? extends Vector> decodedVectorType = this.logicalValueBindings[c] == null
+                        ? null
+                        : this.logicalValueBindings[c].decodedVectorType();
+                if (decodedVectorType == I64Vector.class) {
+                    intOutputAsLong[c] = true;
+                }
+                else if (decodedVectorType != null && decodedVectorType != I32Vector.class) {
+                    throw new IllegalArgumentException("INT32 Parquet logical binding requires unsupported decoded vector " + decodedVectorType.getSimpleName());
+                }
+                else if (supportedVectors.isEmpty() || supportedVectors.contains(I32Vector.class)) {
                     intOutputAsLong[c] = false;
                 }
                 else if (supportedVectors.contains(I64Vector.class)) {
@@ -718,6 +845,12 @@ public final class NitroParquetBatchSource
             rowGroups.forEach(rowGroup -> rowsByGroup.add(rowGroup.num_rows));
             for (int c = 0; c < columnCount; c++) {
                 ParquetFile.Column column = resolveColumn(file, c, columns, columnNameMatching, sourceOrdinals);
+                ParquetPrimitiveValueBinding logicalBinding = logicalValueBindings.get(c);
+                if (logicalBinding != null && fileIndex != 0 &&
+                        !column.descriptor().equals(resolveColumn(files[0], c, columns, columnNameMatching, sourceOrdinals).descriptor())) {
+                    throw new UnsupportedParquetFeatureException(
+                            "Parquet physical/logical representation differs across splits for output " + c);
+                }
                 DecompressedPageCache.Source source = decompressedPages == null
                         ? null
                         : new DecompressedPageCache.Source(splits.get(fileIndex).id(), column.name());
@@ -1013,7 +1146,10 @@ public final class NitroParquetBatchSource
     public boolean supportsRuntimeFilter(SourceColumnHandle column)
     {
         int index = columnIndex(requireNonNull(column, "column is null"));
-        return index >= 0 && readers[index].kind() != ColumnReader.Kind.BINARY && !readers[index].isDouble();
+        return index >= 0 &&
+                (logicalValueBindings[index] == null || logicalValueBindings[index].preservesLongDomain()) &&
+                readers[index].kind() != ColumnReader.Kind.BINARY &&
+                !readers[index].isDouble();
     }
 
     /** Reject mixed-payload row groups from numeric min/max metadata before any column page is visited. */
@@ -2580,12 +2716,34 @@ public final class NitroParquetBatchSource
             else if (lazyOutputResolution) {
                 resolveLazyColumn(column);
             }
+            if (stream == Stream.VALUES) {
+                adaptCurrentValue(column);
+            }
             return switch (stream) {
                 case VALUES -> requireNonNull(currentValues[column], "VALUES stream is absent");
                 case NULLS -> requireNonNull(currentNulls[column], "NULLS stream is absent");
                 default -> throw new IllegalArgumentException("Output does not expose stream: " + stream);
             };
         }
+    }
+
+    private void adaptCurrentValue(int column)
+    {
+        ParquetPrimitiveValueBinding.Bound binding = logicalValueBindings[column];
+        Vector decoded = currentValues[column];
+        if (binding == null || decoded == adaptedValues[column]) {
+            return;
+        }
+        Vector adapted = requireNonNull(
+                binding.convert(allocator, allocationContext, requireNonNull(decoded, "VALUES stream is absent")),
+                "logical value binding returned null");
+        if (!outputSchema.field(column).type().supportsVector(adapted)) {
+            throw new UnsupportedParquetFeatureException(
+                    "Logical Parquet representation " + adapted.getClass().getSimpleName() +
+                            " is not supported by output type " + outputSchema.field(column).type().identity());
+        }
+        currentValues[column] = adapted;
+        adaptedValues[column] = adapted;
     }
 
     /** Materialize one already-filtered window column only when a downstream operator actually borrows it. */
@@ -3283,6 +3441,7 @@ public final class NitroParquetBatchSource
         if (currentValues != null) {
             for (int c = 0; c < currentValues.length; c++) {
                 currentValues[c] = null;
+                adaptedValues[c] = null;
             }
         }
         if (currentNulls != null) {
