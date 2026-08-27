@@ -119,6 +119,87 @@ class TestRegisteredAggregationWindowFunction
         assertThat(peers.copyResultCalls).isZero();
     }
 
+    @Test
+    void evaluatesProviderAggregateForBoundedFramesAcrossSourcePages()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        TableOperator source = new TableOperator(
+                3,
+                List.of(
+                        TableOperator.Page.values(
+                                3,
+                                new Vector[] {
+                                        new I64Vector(new long[] {1, 1, 2}),
+                                        new I64Vector(new long[] {1, 3, 1}),
+                                        new I64Vector(new long[] {2, 4, 10})},
+                                Mask.all(3)),
+                        TableOperator.Page.values(
+                                2,
+                                new Vector[] {
+                                        new I64Vector(new long[] {1, 2}),
+                                        new I64Vector(new long[] {2, 2}),
+                                        new I64Vector(new long[] {3, 20})},
+                                Mask.all(2))));
+        NullableSum bounded = new NullableSum(false);
+        WindowFrame frame = (partition, outputPosition, bounds) -> bounds.set(
+                Math.max(0, outputPosition - 1),
+                Math.min(partition.size(), outputPosition + 2));
+
+        try (Operator operator = new WindowOperator(
+                allocator,
+                source,
+                new int[] {0},
+                new int[] {1},
+                new boolean[] {false},
+                List.of(new RegisteredAggregationWindowFunction(
+                        bounded,
+                        source.outputSchema(),
+                        new int[] {2},
+                        frame)))) {
+            assertThat(OperatorAssertions.OperatorAssert.toRows(operator))
+                    .containsExactly(
+                            row(1L, 1L, 2L, 5L),
+                            row(1L, 2L, 3L, 9L),
+                            row(1L, 3L, 4L, 7L),
+                            row(2L, 1L, 10L, 30L),
+                            row(2L, 2L, 20L, 30L));
+        }
+        assertThat(bounded.copyResultCalls).isZero();
+        assertThat(bounded.boundPositionCalls).isZero();
+    }
+
+    @Test
+    void evaluatesEmptyBoundedFrameUsingAggregateIdentity()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        ConstantTableOperator source = new ConstantTableOperator(
+                allocator,
+                1,
+                List.of(row(2L), row(3L)));
+        WindowFrame frame = (_, outputPosition, bounds) -> {
+            if (outputPosition == 1) {
+                bounds.set(0, 1);
+            }
+        };
+
+        try (Operator operator = new WindowOperator(
+                allocator,
+                source,
+                new int[0],
+                new int[0],
+                new boolean[0],
+                List.of(new RegisteredAggregationWindowFunction(
+                        new NullableSum(true),
+                        source.outputSchema(),
+                        new int[] {0},
+                        frame)))) {
+            assertThat(OperatorAssertions.OperatorAssert.toRows(operator))
+                    .containsExactly(
+                            row(2L, null),
+                            row(3L, 2L));
+        }
+    }
+
     private static final class NullableSum
             implements AggregationImplementation
     {

@@ -1846,6 +1846,14 @@ public final class WindowOperator
             return pagePosition(rowReferences[absolutePosition]);
         }
 
+        @Override
+        public boolean sharesSource(int leftPosition, int rightPosition)
+        {
+            int leftAbsolutePosition = absolutePosition(leftPosition);
+            int rightAbsolutePosition = absolutePosition(rightPosition);
+            return singlePage || pageIndex(rowReferences[leftAbsolutePosition]) == pageIndex(rowReferences[rightAbsolutePosition]);
+        }
+
         private int absolutePosition(int position)
         {
             if (position < 0 || position >= size()) {

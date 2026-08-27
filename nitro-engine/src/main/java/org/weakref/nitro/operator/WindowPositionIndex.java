@@ -27,6 +27,12 @@ public interface WindowPositionIndex
 
     int sourcePosition(int position);
 
+    /**
+     * Returns whether two partition positions are backed by the same physical source vectors. Consumers may use
+     * this to retain vector-bound accessors until a frame crosses a retained-page boundary.
+     */
+    boolean sharesSource(int leftPosition, int rightPosition);
+
     default boolean isNull(int column, int position)
     {
         return OperatorVectorSupport.isNull(column(column, position).getOrNull(Stream.NULLS), sourcePosition(position));

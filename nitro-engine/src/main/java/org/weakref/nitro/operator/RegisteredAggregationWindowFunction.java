@@ -40,9 +40,12 @@ public final class RegisteredAggregationWindowFunction
     private final Schema inputSchema;
     private final int[] inputColumns;
     private final Frame frame;
+    private final WindowFrame positionFrame;
     private final int[] orderingColumns;
     private final StructuralComparisonKernel[] orderingKernels;
     private final int[] activePosition = new int[1];
+    private final WindowFrame.Bounds positionBounds = new WindowFrame.Bounds();
+    private final Streams[] framedSourceColumns;
 
     private Object state;
     private Streams result;
@@ -52,6 +55,8 @@ public final class RegisteredAggregationWindowFunction
     private Streams[] previousColumns;
     private int previousPosition;
     private int peerStartOutputPosition;
+    private WindowPositionIndex boundPartition;
+    private int boundPartitionPosition = -1;
 
     public RegisteredAggregationWindowFunction(
             AggregationImplementation implementation,
@@ -69,10 +74,32 @@ public final class RegisteredAggregationWindowFunction
             Frame frame,
             int[] orderingColumns)
     {
+        this(implementation, inputSchema, inputColumns, requireNonNull(frame, "frame is null"), null, orderingColumns);
+    }
+
+    public RegisteredAggregationWindowFunction(
+            AggregationImplementation implementation,
+            Schema inputSchema,
+            int[] inputColumns,
+            WindowFrame frame)
+    {
+        this(implementation, inputSchema, inputColumns, null, requireNonNull(frame, "frame is null"), new int[0]);
+    }
+
+    private RegisteredAggregationWindowFunction(
+            AggregationImplementation implementation,
+            Schema inputSchema,
+            int[] inputColumns,
+            Frame frame,
+            WindowFrame positionFrame,
+            int[] orderingColumns)
+    {
         this.implementation = requireNonNull(implementation, "implementation is null");
         this.inputSchema = requireNonNull(inputSchema, "inputSchema is null");
         this.inputColumns = requireNonNull(inputColumns, "inputColumns is null").clone();
-        this.frame = requireNonNull(frame, "frame is null");
+        this.frame = frame;
+        this.positionFrame = positionFrame;
+        this.framedSourceColumns = new Streams[inputSchema.size()];
         this.orderingColumns = requireNonNull(orderingColumns, "orderingColumns is null").clone();
         if (Arrays.stream(this.inputColumns).anyMatch(column -> column < 0 || column >= inputSchema.size())) {
             throw new IllegalArgumentException("aggregate input column is outside the input schema");
@@ -116,6 +143,8 @@ public final class RegisteredAggregationWindowFunction
         previousColumns = null;
         previousPosition = -1;
         peerStartOutputPosition = -1;
+        boundPartition = null;
+        boundPartitionPosition = -1;
     }
 
     @Override
@@ -128,6 +157,9 @@ public final class RegisteredAggregationWindowFunction
             int outputPosition,
             int outputSize)
     {
+        if (positionFrame != null) {
+            return output;
+        }
         if (frame == Frame.RUNNING_PEERS) {
             if (previousColumns == null) {
                 peerStartOutputPosition = outputPosition;
@@ -143,24 +175,7 @@ public final class RegisteredAggregationWindowFunction
                 peerStartOutputPosition = outputPosition;
             }
         }
-        bindInput(sourceColumns);
-        if (boundPositionAccumulator != null) {
-            boundPositionAccumulator.add(inputPosition);
-        }
-        else {
-            activePosition[0] = inputPosition;
-            Mask activeMask = allocator.allocateSparseMask(
-                    allocationContext,
-                    activePosition,
-                    1,
-                    inputSize(sourceColumns, inputPosition));
-            try {
-                implementation.addRawInput(state, 0, activeMask, boundInput);
-            }
-            finally {
-                allocator.release(allocationContext, activeMask);
-            }
-        }
+        addPosition(allocator, allocationContext, sourceColumns, inputPosition);
         if (frame == Frame.RUNNING_ROWS) {
             Streams direct = implementation.copyResultPosition(
                     0,
@@ -182,11 +197,42 @@ public final class RegisteredAggregationWindowFunction
         return output;
     }
 
+    private void addPosition(
+            Allocator allocator,
+            Allocator.Context allocationContext,
+            Streams[] sourceColumns,
+            int inputPosition)
+    {
+        bindInput(sourceColumns);
+        if (boundPositionAccumulator != null) {
+            boundPositionAccumulator.add(inputPosition);
+        }
+        else {
+            activePosition[0] = inputPosition;
+            Mask activeMask = allocator.allocateSparseMask(
+                    allocationContext,
+                    activePosition,
+                    1,
+                    inputSize(sourceColumns, inputPosition));
+            try {
+                implementation.addRawInput(state, 0, activeMask, boundInput);
+            }
+            finally {
+                allocator.release(allocationContext, activeMask);
+            }
+        }
+    }
+
     private void bindInput(Streams[] sourceColumns)
     {
         if (sourceColumns == boundSourceColumns) {
             return;
         }
+        rebindInput(sourceColumns);
+    }
+
+    private void rebindInput(Streams[] sourceColumns)
+    {
         boundSourceColumns = sourceColumns;
         boundInput = (argument, stream) -> {
             if (argument < 0 || argument >= inputColumns.length) {
@@ -220,6 +266,68 @@ public final class RegisteredAggregationWindowFunction
         }
         result = implementation.result(0, state, result, allocator, allocationContext);
         return copyResultRange(allocator, allocationContext, result, output, partitionStart, partitionEnd, outputSize);
+    }
+
+    @Override
+    public Streams finishPartition(
+            Allocator allocator,
+            Allocator.Context allocationContext,
+            Streams output,
+            WindowPositionIndex partition,
+            int partitionStart,
+            int outputSize)
+    {
+        if (positionFrame == null) {
+            return RunningWindowFunction.super.finishPartition(
+                    allocator,
+                    allocationContext,
+                    output,
+                    partition,
+                    partitionStart,
+                    outputSize);
+        }
+
+        for (int outputPosition = 0; outputPosition < partition.size(); outputPosition++) {
+            implementation.initialize(state, 0, 1);
+            positionBounds.clear();
+            positionFrame.resolve(partition, outputPosition, positionBounds);
+            if (positionBounds.present()) {
+                for (int position = positionBounds.start(); position < positionBounds.end(); position++) {
+                    if (boundPartition != partition || boundPartitionPosition < 0 || !partition.sharesSource(boundPartitionPosition, position)) {
+                        for (int column : inputColumns) {
+                            framedSourceColumns[column] = partition.column(column, position);
+                        }
+                        rebindInput(framedSourceColumns);
+                    }
+                    boundPartition = partition;
+                    boundPartitionPosition = position;
+                    addPosition(allocator, allocationContext, framedSourceColumns, partition.sourcePosition(position));
+                }
+            }
+            Streams direct = implementation.copyResultPosition(
+                    0,
+                    0,
+                    state,
+                    output,
+                    partitionStart + outputPosition,
+                    outputSize,
+                    allocator,
+                    allocationContext);
+            if (direct != null) {
+                output = direct;
+            }
+            else {
+                result = implementation.result(0, state, result, allocator, allocationContext);
+                output = copyResultPosition(
+                        allocator,
+                        allocationContext,
+                        result,
+                        output,
+                        partitionStart + outputPosition,
+                        outputSize);
+            }
+        }
+        return output;
     }
 
     private Streams copyCurrentResultRange(
@@ -274,7 +382,7 @@ public final class RegisteredAggregationWindowFunction
     private static int inputSize(Streams[] sourceColumns, int inputPosition)
     {
         for (Streams column : sourceColumns) {
-            if (column.vectorCount() > 0) {
+            if (column != null && column.vectorCount() > 0) {
                 return column.vectorAt(0).length();
             }
         }
