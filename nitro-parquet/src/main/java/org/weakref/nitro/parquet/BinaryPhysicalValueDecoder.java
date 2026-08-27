@@ -30,6 +30,7 @@ final class BinaryPhysicalValueDecoder
     private static final byte[] EMPTY_BYTES = new byte[0];
 
     private final PrimitiveArrayPool arrayPool;
+    private final DeltaBinaryPackedIntDecoder deltaLengthDecoder = new DeltaBinaryPackedIntDecoder();
     private int[] dictionaryOffsets = EMPTY_INTS;
     private byte[] dictionaryData = EMPTY_BYTES;
     private int[] offsets = EMPTY_INTS;
@@ -60,6 +61,39 @@ final class BinaryPhysicalValueDecoder
     {
         offsets = grow(offsets, valueCount + 1);
         data = decode(body, offset, valueCount, offsets, data);
+    }
+
+    @Override
+    public void decodeData(MemorySegment body, long offset, int valueCount, Encoding encoding)
+    {
+        if (encoding == Encoding.PLAIN) {
+            decodePlain(body, offset, valueCount);
+            return;
+        }
+        if (encoding != Encoding.DELTA_LENGTH_BYTE_ARRAY) {
+            throw new UnsupportedParquetFeatureException("Native Parquet binary reader does not support encoding " + encoding);
+        }
+
+        offsets = grow(offsets, valueCount + 1);
+        deltaLengthDecoder.reset(body, offset);
+        deltaLengthDecoder.decode(offsets, valueCount);
+        long dataOffset = deltaLengthDecoder.position();
+
+        int bytes = 0;
+        for (int index = 0; index < valueCount; index++) {
+            int length = offsets[index];
+            if (length < 0 || bytes > Integer.MAX_VALUE - length) {
+                throw new IllegalArgumentException("Invalid Parquet binary length: " + length);
+            }
+            offsets[index] = bytes;
+            bytes += length;
+        }
+        offsets[valueCount] = bytes;
+        if (dataOffset > body.byteSize() - bytes) {
+            throw new IllegalArgumentException("Truncated Parquet delta-length binary payload");
+        }
+        data = grow(data, bytes);
+        MemorySegment.copy(body, ValueLayout.JAVA_BYTE, dataOffset, data, 0, bytes);
     }
 
     @Override

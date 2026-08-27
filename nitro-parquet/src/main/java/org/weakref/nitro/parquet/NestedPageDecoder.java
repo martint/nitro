@@ -93,9 +93,6 @@ final class NestedPageDecoder
             validateDictionaryIds(dictionaryIds, physicalValueCount, dictionarySize);
             return -1;
         }
-        if (encoding != Encoding.PLAIN) {
-            throw new UnsupportedParquetFeatureException("Native nested Parquet reader does not support data encoding " + encoding);
-        }
         return offset;
     }
 

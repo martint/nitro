@@ -28,6 +28,14 @@ interface PhysicalValueDecoder
 
     void decodePlain(MemorySegment body, long offset, int valueCount);
 
+    default void decodeData(MemorySegment body, long offset, int valueCount, Encoding encoding)
+    {
+        if (encoding != Encoding.PLAIN) {
+            throw new UnsupportedParquetFeatureException("Native Parquet reader does not support physical encoding " + encoding);
+        }
+        decodePlain(body, offset, valueCount);
+    }
+
     void resetDictionary();
 
     int dictionarySize();

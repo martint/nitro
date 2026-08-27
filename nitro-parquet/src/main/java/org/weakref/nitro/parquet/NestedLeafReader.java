@@ -229,13 +229,18 @@ final class NestedLeafReader
                     decoder.decodeLevelsDataPageV1(body, header.valueCount());
                     return true;
                 }
+                Encoding encoding = Encoding.findByValue(header.encoding());
                 long valueOffset = decoder.decodeDataPageV1(
                         body,
                         header.valueCount(),
-                        Encoding.findByValue(header.encoding()),
+                        encoding,
                         valueDecoder.dictionarySize());
                 if (valueOffset >= 0) {
-                    valueDecoder.decodePlain(body, valueOffset, decoder.physicalValueCount());
+                    valueDecoder.decodeData(
+                            body,
+                            valueOffset,
+                            decoder.physicalValueCount(),
+                            encoding);
                 }
                 return true;
             }
