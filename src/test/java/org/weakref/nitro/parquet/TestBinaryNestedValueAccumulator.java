@@ -133,6 +133,32 @@ class TestBinaryNestedValueAccumulator
         }
     }
 
+    @Test
+    void testRecoversRepeatedDomainFromPlainValues()
+    {
+        PrimitiveArrayPool arrays = new PrimitiveArrayPool(0, 0);
+        try (Allocator allocator = new Allocator(EngineResources.createDefault());
+                BinaryPhysicalValueDecoder decoder = new BinaryPhysicalValueDecoder(arrays);
+                BinaryNestedValueAccumulator accumulator = new BinaryNestedValueAccumulator(true, true)) {
+            String[] input = new String[1_024];
+            for (int position = 0; position < input.length; position++) {
+                input[position] = "repeated-value-" + (position & 3);
+            }
+            decoder.decodePlain(binary(input), 0, input.length);
+            accumulator.reset(allocator);
+            accumulator.appendPlainRun(decoder, 0, input.length);
+
+            Streams streams = accumulator.materialize(allocator, new Allocator.Context("test"));
+            assertThat(streams.values()).isInstanceOf(DictionaryVector.class);
+            DictionaryVector dictionary = (DictionaryVector) streams.values();
+            assertThat(dictionary.values().length()).isEqualTo(4);
+            assertThat(dictionary.hasDomainFrequencies()).isTrue();
+            assertThat(dictionary.domainFrequency(0)).isEqualTo(256);
+            assertThat(utf8(VectorAccess.binaryValues(dictionary), 1_023)).isEqualTo("repeated-value-3");
+            assertThat(VectorAccess.isAllFalseNulls(streams.get(Stream.NULLS))).isTrue();
+        }
+    }
+
     private static String utf8(VectorAccess.BinaryValues values, int position)
     {
         VectorAccess.BinarySlice value = values.value(position);

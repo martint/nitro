@@ -37,12 +37,15 @@ final class LongNestedValueAccumulator
 
     private final boolean outputInt32;
     private final boolean nullable;
+    private final ParquetMaterializationPolicy materializationPolicy;
     private PrimitiveArrayPool arrayPool;
     private long[] values = EMPTY_LONGS;
     private long[] dictionary = EMPTY_LONGS;
     private int[] dictionaryIds = EMPTY_INTS;
     private int[] dictionaryFrequencies = EMPTY_INTS;
     private boolean[] nulls = EMPTY_BOOLEANS;
+    private long[] recoveryKeys = EMPTY_LONGS;
+    private int[] recoverySlots = EMPTY_INTS;
     private Vector directValues;
     private BooleanVector directNulls;
     private boolean dictionaryCandidate;
@@ -52,8 +55,17 @@ final class LongNestedValueAccumulator
 
     LongNestedValueAccumulator(boolean outputInt32, boolean nullable)
     {
+        this(outputInt32, nullable, ParquetMaterializationPolicy.defaults());
+    }
+
+    LongNestedValueAccumulator(
+            boolean outputInt32,
+            boolean nullable,
+            ParquetMaterializationPolicy materializationPolicy)
+    {
         this.outputInt32 = outputInt32;
         this.nullable = nullable;
+        this.materializationPolicy = requireNonNull(materializationPolicy, "materializationPolicy is null");
     }
 
     @Override
@@ -206,6 +218,10 @@ final class LongNestedValueAccumulator
             return materializeDictionary(allocator, context);
         }
         ensureFlat();
+        Streams recovered = materializeRecoveredDictionary(allocator, context);
+        if (recovered != null) {
+            return recovered;
+        }
         if (directValues != null) {
             Vector result = directValues;
             BooleanVector resultNulls = directNulls;
@@ -232,6 +248,116 @@ final class LongNestedValueAccumulator
         BooleanVector resultNulls = allocator.allocate(context, BooleanVector.class, size, BooleanVector::new);
         System.arraycopy(nulls, 0, resultNulls.values(), 0, size);
         return Streams.ofValuesAndNulls(result, resultNulls);
+    }
+
+    /**
+     * Recovers a small repeated physical domain when a writer abandoned dictionary encoding for a plain page.
+     * The decision is representation- and cost-based: it is disabled for compact INT32 output, bounded by the
+     * injected materialization policy, and requires both exact average reuse and a smaller encoded footprint.
+     */
+    private Streams materializeRecoveredDictionary(Allocator allocator, Allocator.Context context)
+    {
+        if (outputInt32 || !materializationPolicy.numericDictionary() || size == 0) {
+            return null;
+        }
+        int maxEntries = materializationPolicy.dictionaryDomainFrequencyMaxEntries();
+        int minRowsPerEntry = materializationPolicy.dictionaryDomainFrequencyMinRowsPerEntry();
+        if (maxEntries == 0 || minRowsPerEntry == 0 || size < minRowsPerEntry) {
+            return null;
+        }
+        if ((long) maxEntries * 2 > (1L << 30)) {
+            return null;
+        }
+        if (nullable) {
+            boolean[] nullValues = nullValues();
+            for (int position = 0; position < size; position++) {
+                if (nullValues[position]) {
+                    return null;
+                }
+            }
+        }
+
+        int tableSize = 1;
+        while (tableSize < maxEntries * 2) {
+            tableSize <<= 1;
+        }
+        recoveryKeys = grow(recoveryKeys, tableSize);
+        recoverySlots = grow(recoverySlots, tableSize);
+        Arrays.fill(recoverySlots, 0, tableSize, 0);
+        dictionary = grow(dictionary, maxEntries);
+        dictionaryFrequencies = grow(dictionaryFrequencies, maxEntries);
+        if (dictionaryIds.length < size) {
+            int[] replacement = arrayPool.borrowInts(size);
+            arrayPool.release(dictionaryIds);
+            dictionaryIds = replacement;
+        }
+        Arrays.fill(dictionaryFrequencies, 0, maxEntries, 0);
+
+        long[] flatValues = directValues instanceof I64Vector longs ? longs.values() : values;
+        int distinct = 0;
+        int mask = tableSize - 1;
+        for (int position = 0; position < size; position++) {
+            long value = flatValues[position];
+            int slot = mix(value) & mask;
+            int entry;
+            while ((entry = recoverySlots[slot]) != 0 && recoveryKeys[slot] != value) {
+                slot = (slot + 1) & mask;
+            }
+            int id;
+            if (entry == 0) {
+                if (distinct == maxEntries || (long) (distinct + 1) * minRowsPerEntry > size) {
+                    return null;
+                }
+                id = distinct++;
+                recoveryKeys[slot] = value;
+                recoverySlots[slot] = id + 1;
+                dictionary[id] = value;
+            }
+            else {
+                id = entry - 1;
+            }
+            dictionaryIds[position] = id;
+            dictionaryFrequencies[id]++;
+        }
+
+        long dictionaryFootprint = (long) Long.BYTES * distinct +
+                (long) Integer.BYTES * (size + distinct);
+        if (dictionaryFootprint >= (long) Long.BYTES * size) {
+            return null;
+        }
+
+        I32Vector ids = I32Vector.allocate(allocator, context, size);
+        System.arraycopy(dictionaryIds, 0, ids.values(), 0, size);
+        I32Vector frequencies = I32Vector.allocate(allocator, context, distinct);
+        System.arraycopy(dictionaryFrequencies, 0, frequencies.values(), 0, distinct);
+        I64Vector domain = I64Vector.allocate(allocator, context, distinct);
+        System.arraycopy(dictionary, 0, domain.values(), 0, distinct);
+        DictionaryVector encoded = DictionaryVector.wrapOwnedIdsWithDomainFrequencies(
+                ids,
+                size,
+                domain.freezeContent(),
+                frequencies);
+
+        if (directValues != null) {
+            allocator.release(context, directValues);
+            directValues = null;
+        }
+        BooleanVector resultNulls = directNulls;
+        if (nullable && resultNulls == null) {
+            resultNulls = allocator.allocate(context, BooleanVector.class, size, BooleanVector::new);
+        }
+        directNulls = null;
+        return resultNulls == null ? Streams.ofValues(encoded) : Streams.ofValuesAndNulls(encoded, resultNulls);
+    }
+
+    private static int mix(long value)
+    {
+        value ^= value >>> 33;
+        value *= 0xff51afd7ed558ccdL;
+        value ^= value >>> 33;
+        value *= 0xc4ceb9fe1a85ec53L;
+        value ^= value >>> 33;
+        return (int) value;
     }
 
     private boolean appendDictionaryId(LongValueDecoder decoder, int dictionaryId)
@@ -413,11 +539,15 @@ final class LongNestedValueAccumulator
             arrayPool.release(dictionaryIds);
             arrayPool.release(dictionaryFrequencies);
             arrayPool.release(nulls);
+            arrayPool.release(recoveryKeys);
+            arrayPool.release(recoverySlots);
             values = EMPTY_LONGS;
             dictionary = EMPTY_LONGS;
             dictionaryIds = EMPTY_INTS;
             dictionaryFrequencies = EMPTY_INTS;
             nulls = EMPTY_BOOLEANS;
+            recoveryKeys = EMPTY_LONGS;
+            recoverySlots = EMPTY_INTS;
             arrayPool = null;
             dictionaryCandidate = false;
             dictionaryGeneration = -1;

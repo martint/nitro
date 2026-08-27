@@ -23,20 +23,28 @@ final class NestedValueAccumulators
     static NestedValueAccumulator create(ParquetSchema.Primitive leaf)
     {
         boolean nullable = leaf.repetition() == org.apache.parquet.format.FieldRepetitionType.OPTIONAL;
-        return create(leaf, nullable);
+        return create(leaf, nullable, ParquetMaterializationPolicy.defaults());
     }
 
     static NestedValueAccumulator create(ParquetSchema.Primitive leaf, boolean nullable)
     {
+        return create(leaf, nullable, ParquetMaterializationPolicy.defaults());
+    }
+
+    static NestedValueAccumulator create(
+            ParquetSchema.Primitive leaf,
+            boolean nullable,
+            ParquetMaterializationPolicy materializationPolicy)
+    {
         return switch (leaf.type()) {
             case BOOLEAN -> new BooleanNestedValueAccumulator(nullable);
             case DOUBLE -> new DoubleNestedValueAccumulator(nullable);
-            case INT32 -> new LongNestedValueAccumulator(true, nullable);
-            case FLOAT -> new LongNestedValueAccumulator(false, nullable);
-            case INT64 -> new LongNestedValueAccumulator(false, nullable);
-            case BYTE_ARRAY -> new BinaryNestedValueAccumulator(leaf.string(), nullable);
-            case INT96 -> new BinaryNestedValueAccumulator(false, nullable);
-            case FIXED_LEN_BYTE_ARRAY -> createFixedDecimal(leaf, nullable);
+            case INT32 -> new LongNestedValueAccumulator(true, nullable, materializationPolicy);
+            case FLOAT -> new LongNestedValueAccumulator(false, nullable, materializationPolicy);
+            case INT64 -> new LongNestedValueAccumulator(false, nullable, materializationPolicy);
+            case BYTE_ARRAY -> new BinaryNestedValueAccumulator(leaf.string(), nullable, materializationPolicy);
+            case INT96 -> new BinaryNestedValueAccumulator(false, nullable, materializationPolicy);
+            case FIXED_LEN_BYTE_ARRAY -> createFixedDecimal(leaf, nullable, materializationPolicy);
             default -> throw new UnsupportedParquetFeatureException(
                     "Native nested Parquet output does not support physical type " + leaf.type() + " at '" + String.join(".", leaf.path()) + "'");
         };
@@ -48,15 +56,30 @@ final class NestedValueAccumulators
             TypeBinding outputType,
             ParquetPrimitiveValueBinding binding)
     {
-        return new LogicalNestedValueAccumulator(create(leaf, nullable), leaf, outputType, binding);
+        return new LogicalNestedValueAccumulator(
+                create(leaf, nullable, ParquetMaterializationPolicy.defaults()), leaf, outputType, binding);
     }
 
-    private static NestedValueAccumulator createFixedDecimal(ParquetSchema.Primitive leaf, boolean nullable)
+    static NestedValueAccumulator create(
+            ParquetSchema.Primitive leaf,
+            boolean nullable,
+            TypeBinding outputType,
+            ParquetPrimitiveValueBinding binding,
+            ParquetMaterializationPolicy materializationPolicy)
+    {
+        return new LogicalNestedValueAccumulator(
+                create(leaf, nullable, materializationPolicy), leaf, outputType, binding);
+    }
+
+    private static NestedValueAccumulator createFixedDecimal(
+            ParquetSchema.Primitive leaf,
+            boolean nullable,
+            ParquetMaterializationPolicy materializationPolicy)
     {
         if (!leaf.decimal() || leaf.typeLength() > Long.BYTES) {
             throw new UnsupportedParquetFeatureException(
                     "Native nested Parquet output does not support fixed-width field '" + String.join(".", leaf.path()) + "'");
         }
-        return new LongNestedValueAccumulator(false, nullable);
+        return new LongNestedValueAccumulator(false, nullable, materializationPolicy);
     }
 }

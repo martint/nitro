@@ -42,7 +42,16 @@ final class NestedArrayReader
 
     NestedArrayReader(ParquetSchema.Group list, RleReaderPolicy rlePolicy, PrimitiveArrayPool arrayPool)
     {
-        this(list, rlePolicy, arrayPool, null, null, null);
+        this(list, rlePolicy, ParquetMaterializationPolicy.defaults(), arrayPool, null, null, null);
+    }
+
+    NestedArrayReader(
+            ParquetSchema.Group list,
+            RleReaderPolicy rlePolicy,
+            ParquetMaterializationPolicy materializationPolicy,
+            PrimitiveArrayPool arrayPool)
+    {
+        this(list, rlePolicy, materializationPolicy, arrayPool, null, null, null);
     }
 
     NestedArrayReader(
@@ -52,17 +61,28 @@ final class NestedArrayReader
             TypeBinding outputType,
             ParquetValueBinding.Group logicalBinding)
     {
-        this(list, rlePolicy, arrayPool, null, outputType, logicalBinding);
+        this(list, rlePolicy, ParquetMaterializationPolicy.defaults(), arrayPool, null, outputType, logicalBinding);
+    }
+
+    NestedArrayReader(
+            ParquetSchema.Group list,
+            RleReaderPolicy rlePolicy,
+            ParquetMaterializationPolicy materializationPolicy,
+            PrimitiveArrayPool arrayPool,
+            TypeBinding outputType,
+            ParquetValueBinding.Group logicalBinding)
+    {
+        this(list, rlePolicy, materializationPolicy, arrayPool, null, outputType, logicalBinding);
     }
 
     NestedArrayReader(ParquetSchema.Group list, RleReaderPolicy rlePolicy, NestedLeafCursor elementCursor)
     {
-        this(list, rlePolicy, null, new NestedLeafCursor[] {elementCursor}, null, null);
+        this(list, rlePolicy, ParquetMaterializationPolicy.defaults(), null, new NestedLeafCursor[] {elementCursor}, null, null);
     }
 
     NestedArrayReader(ParquetSchema.Group list, RleReaderPolicy rlePolicy, NestedLeafCursor[] elementCursors)
     {
-        this(list, rlePolicy, null, elementCursors, null, null);
+        this(list, rlePolicy, ParquetMaterializationPolicy.defaults(), null, elementCursors, null, null);
     }
 
     NestedArrayReader(
@@ -72,12 +92,13 @@ final class NestedArrayReader
             TypeBinding outputType,
             ParquetValueBinding.Group logicalBinding)
     {
-        this(list, rlePolicy, null, elementCursors, outputType, logicalBinding);
+        this(list, rlePolicy, ParquetMaterializationPolicy.defaults(), null, elementCursors, outputType, logicalBinding);
     }
 
     private NestedArrayReader(
             ParquetSchema.Group list,
             RleReaderPolicy rlePolicy,
+            ParquetMaterializationPolicy materializationPolicy,
             PrimitiveArrayPool arrayPool,
             NestedLeafCursor[] elementCursors,
             TypeBinding outputType,
@@ -113,12 +134,14 @@ final class NestedArrayReader
             case ParquetSchema.Primitive primitive -> new PrimitiveElementReader(
                     primitive,
                     rlePolicy,
+                    materializationPolicy,
                     arrayPool,
                     elementCursors,
                     bindings == null ? null : bindings.childPrimitive(0, primitive));
             case ParquetSchema.Group group when !group.isList() && !group.isMap() -> new StructElementReader(
                     group,
                     rlePolicy,
+                    materializationPolicy,
                     arrayPool,
                     elementCursors,
                     bindings == null ? null : bindings.childGroup(0, group));
@@ -462,6 +485,7 @@ final class NestedArrayReader
         private PrimitiveElementReader(
                 ParquetSchema.Primitive element,
                 RleReaderPolicy rlePolicy,
+                ParquetMaterializationPolicy materializationPolicy,
                 PrimitiveArrayPool arrayPool,
                 NestedLeafCursor[] cursors,
                 NestedLogicalBindings.Primitive logicalBinding)
@@ -474,12 +498,16 @@ final class NestedArrayReader
                     ? new NestedLeafReader(element, rlePolicy, requireNonNull(arrayPool, "arrayPool is null"))
                     : requireNonNull(cursors[0], "cursor is null");
             this.values = logicalBinding == null
-                    ? NestedValueAccumulators.create(element)
+                    ? NestedValueAccumulators.create(
+                            element,
+                            element.repetition() == FieldRepetitionType.OPTIONAL,
+                            materializationPolicy)
                     : NestedValueAccumulators.create(
                             element,
                             element.repetition() == FieldRepetitionType.OPTIONAL,
                             logicalBinding.type(),
-                            logicalBinding.value());
+                            logicalBinding.value(),
+                            materializationPolicy);
         }
 
         @Override
@@ -577,6 +605,7 @@ final class NestedArrayReader
         private StructElementReader(
                 ParquetSchema.Group element,
                 RleReaderPolicy rlePolicy,
+                ParquetMaterializationPolicy materializationPolicy,
                 PrimitiveArrayPool arrayPool,
                 NestedLeafCursor[] cursors,
                 NestedLogicalBindings.Group logicalBinding)
@@ -606,11 +635,12 @@ final class NestedArrayReader
                         ? new NestedLeafReader(leaf, rlePolicy, requireNonNull(arrayPool, "arrayPool is null"))
                         : requireNonNull(cursors[field], "cursor is null");
                 if (bindings == null) {
-                    values[field] = NestedValueAccumulators.create(leaf, true);
+                    values[field] = NestedValueAccumulators.create(leaf, true, materializationPolicy);
                 }
                 else {
                     NestedLogicalBindings.Primitive child = bindings.childPrimitive(field, leaf);
-                    values[field] = NestedValueAccumulators.create(leaf, true, child.type(), child.value());
+                    values[field] = NestedValueAccumulators.create(
+                            leaf, true, child.type(), child.value(), materializationPolicy);
                 }
             }
         }

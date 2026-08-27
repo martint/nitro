@@ -42,7 +42,16 @@ final class NestedStructReader
 
     NestedStructReader(ParquetSchema.Group struct, RleReaderPolicy rlePolicy, PrimitiveArrayPool arrayPool)
     {
-        this(struct, rlePolicy, arrayPool, null, null, null);
+        this(struct, rlePolicy, ParquetMaterializationPolicy.defaults(), arrayPool, null, null, null);
+    }
+
+    NestedStructReader(
+            ParquetSchema.Group struct,
+            RleReaderPolicy rlePolicy,
+            ParquetMaterializationPolicy materializationPolicy,
+            PrimitiveArrayPool arrayPool)
+    {
+        this(struct, rlePolicy, materializationPolicy, arrayPool, null, null, null);
     }
 
     NestedStructReader(
@@ -52,12 +61,23 @@ final class NestedStructReader
             TypeBinding outputType,
             ParquetValueBinding.Group logicalBinding)
     {
-        this(struct, rlePolicy, arrayPool, null, outputType, logicalBinding);
+        this(struct, rlePolicy, ParquetMaterializationPolicy.defaults(), arrayPool, null, outputType, logicalBinding);
+    }
+
+    NestedStructReader(
+            ParquetSchema.Group struct,
+            RleReaderPolicy rlePolicy,
+            ParquetMaterializationPolicy materializationPolicy,
+            PrimitiveArrayPool arrayPool,
+            TypeBinding outputType,
+            ParquetValueBinding.Group logicalBinding)
+    {
+        this(struct, rlePolicy, materializationPolicy, arrayPool, null, outputType, logicalBinding);
     }
 
     NestedStructReader(ParquetSchema.Group struct, RleReaderPolicy rlePolicy, NestedLeafCursor[] cursors)
     {
-        this(struct, rlePolicy, null, cursors, null, null);
+        this(struct, rlePolicy, ParquetMaterializationPolicy.defaults(), null, cursors, null, null);
     }
 
     NestedStructReader(
@@ -67,12 +87,13 @@ final class NestedStructReader
             TypeBinding outputType,
             ParquetValueBinding.Group logicalBinding)
     {
-        this(struct, rlePolicy, null, cursors, outputType, logicalBinding);
+        this(struct, rlePolicy, ParquetMaterializationPolicy.defaults(), null, cursors, outputType, logicalBinding);
     }
 
     private NestedStructReader(
             ParquetSchema.Group struct,
             RleReaderPolicy rlePolicy,
+            ParquetMaterializationPolicy materializationPolicy,
             PrimitiveArrayPool arrayPool,
             NestedLeafCursor[] cursors,
             TypeBinding outputType,
@@ -106,11 +127,12 @@ final class NestedStructReader
                     ? new NestedLeafReader(leaf, rlePolicy, requireNonNull(arrayPool, "arrayPool is null"))
                     : requireNonNull(cursors[field], "cursor is null");
             if (bindings == null) {
-                values[field] = NestedValueAccumulators.create(leaf, true);
+                values[field] = NestedValueAccumulators.create(leaf, true, materializationPolicy);
             }
             else {
                 NestedLogicalBindings.Primitive child = bindings.childPrimitive(field, leaf);
-                values[field] = NestedValueAccumulators.create(leaf, true, child.type(), child.value());
+                values[field] = NestedValueAccumulators.create(
+                        leaf, true, child.type(), child.value(), materializationPolicy);
             }
         }
     }

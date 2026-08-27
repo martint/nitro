@@ -36,6 +36,7 @@ final class BinaryNestedValueAccumulator
 
     private final boolean utf8;
     private final boolean nullable;
+    private final ParquetMaterializationPolicy materializationPolicy;
     private PrimitiveArrayPool arrayPool;
     private int[] offsets = EMPTY_INTS;
     private byte[] data = EMPTY_BYTES;
@@ -54,8 +55,17 @@ final class BinaryNestedValueAccumulator
 
     BinaryNestedValueAccumulator(boolean utf8, boolean nullable)
     {
+        this(utf8, nullable, ParquetMaterializationPolicy.defaults());
+    }
+
+    BinaryNestedValueAccumulator(
+            boolean utf8,
+            boolean nullable,
+            ParquetMaterializationPolicy materializationPolicy)
+    {
         this.utf8 = utf8;
         this.nullable = nullable;
+        this.materializationPolicy = requireNonNull(materializationPolicy, "materializationPolicy is null");
     }
 
     @Override
@@ -172,6 +182,10 @@ final class BinaryNestedValueAccumulator
             return materializeDictionary(allocator, context);
         }
         ensureFlat();
+        Streams recovered = materializeRecoveredDictionary(allocator, context);
+        if (recovered != null) {
+            return recovered;
+        }
         BinaryVector result = BinaryVector.allocate(allocator, context, size, bytes);
         System.arraycopy(offsets, 0, result.offsets(), 0, size + 1);
         System.arraycopy(data, 0, result.data(), 0, bytes);
@@ -184,6 +198,76 @@ final class BinaryNestedValueAccumulator
         BooleanVector resultNulls = allocator.allocate(context, BooleanVector.class, size, BooleanVector::new);
         System.arraycopy(nulls, 0, resultNulls.values(), 0, size);
         return Streams.ofValuesAndNulls(result, resultNulls);
+    }
+
+    /**
+     * Recovers a small repeated physical domain when a writer abandoned dictionary encoding for a plain page.
+     * Values remain physical bytes here; any logical binding transforms the recovered domain after materialization.
+     */
+    private Streams materializeRecoveredDictionary(Allocator allocator, Allocator.Context context)
+    {
+        if (!materializationPolicy.binaryDictionary() || size == 0) {
+            return null;
+        }
+        int maxEntries = materializationPolicy.dictionaryDomainFrequencyMaxEntries();
+        int minRowsPerEntry = materializationPolicy.dictionaryDomainFrequencyMinRowsPerEntry();
+        if (maxEntries == 0 || minRowsPerEntry == 0 || size < minRowsPerEntry) {
+            return null;
+        }
+
+        dictionaryIds = grow(dictionaryIds, size);
+        dictionaryFrequencies = grow(dictionaryFrequencies, maxEntries);
+        dictionaryOffsets = grow(dictionaryOffsets, maxEntries + 1);
+        Arrays.fill(dictionaryFrequencies, 0, maxEntries, 0);
+        dictionarySize = 0;
+        dictionaryBytes = 0;
+        dictionaryOffsets[0] = 0;
+        for (int position = 0; position < size; position++) {
+            if (nullable && nulls[position]) {
+                dictionaryIds[position] = -1;
+                continue;
+            }
+            int start = offsets[position];
+            int end = offsets[position + 1];
+            int id = findDictionaryValue(start, end);
+            if (id < 0) {
+                if (dictionarySize == maxEntries || (long) (dictionarySize + 1) * minRowsPerEntry > size) {
+                    return null;
+                }
+                int length = end - start;
+                dictionaryData = grow(dictionaryData, dictionaryBytes + length);
+                System.arraycopy(data, start, dictionaryData, dictionaryBytes, length);
+                id = dictionarySize++;
+                dictionaryBytes += length;
+                dictionaryOffsets[dictionarySize] = dictionaryBytes;
+            }
+            dictionaryIds[position] = id;
+            dictionaryFrequencies[id]++;
+        }
+
+        int outputDictionarySize = dictionarySize + (hasNulls ? 1 : 0);
+        long dictionaryFootprint = dictionaryBytes +
+                (long) Integer.BYTES * (dictionarySize + 1L + size + outputDictionarySize) +
+                (hasNulls ? outputDictionarySize : 0);
+        long flatFootprint = bytes + (long) Integer.BYTES * (size + 1L) + (nullable ? size : 0);
+        if (dictionaryFootprint >= flatFootprint) {
+            return null;
+        }
+        return materializeDictionary(allocator, context);
+    }
+
+    private int findDictionaryValue(int start, int end)
+    {
+        int length = end - start;
+        for (int id = 0; id < dictionarySize; id++) {
+            int dictionaryStart = dictionaryOffsets[id];
+            int dictionaryEnd = dictionaryOffsets[id + 1];
+            if (dictionaryEnd - dictionaryStart == length &&
+                    Arrays.equals(data, start, end, dictionaryData, dictionaryStart, dictionaryEnd)) {
+                return id;
+            }
+        }
+        return -1;
     }
 
     private boolean appendDictionaryId(BinaryValueDecoder decoder, int dictionaryId)
@@ -224,7 +308,7 @@ final class BinaryNestedValueAccumulator
 
     private boolean shouldMaterializeDictionary()
     {
-        if (!dictionaryCandidate || dictionaryGeneration < 0) {
+        if (!materializationPolicy.binaryDictionary() || !dictionaryCandidate || dictionaryGeneration < 0) {
             return false;
         }
         int outputDictionarySize = dictionarySize + (hasNulls ? 1 : 0);

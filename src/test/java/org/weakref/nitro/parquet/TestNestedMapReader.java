@@ -51,7 +51,7 @@ class TestNestedMapReader
             assertThat(maps.offsets()).containsExactly(IntStream.rangeClosed(0, rowCount).toArray());
             assertThat(((I64Vector) maps.keyValues()).values())
                     .containsExactly(IntStream.range(0, rowCount).mapToLong(index -> index + 1L).toArray());
-            assertThat(((BinaryVector) maps.valueValues()).offsets()).hasSize(rowCount + 1);
+            assertThat(maps.valueValues().length()).isEqualTo(rowCount);
         }
     }
 

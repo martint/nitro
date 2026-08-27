@@ -79,6 +79,32 @@ class TestLongNestedValueAccumulator
         }
     }
 
+    @Test
+    void testRecoversRepeatedDomainFromPlainValues()
+    {
+        PrimitiveArrayPool arrays = new PrimitiveArrayPool(0, 0);
+        try (Allocator allocator = new Allocator(EngineResources.createDefault());
+                LongPhysicalValueDecoder decoder = new LongPhysicalValueDecoder(Type.INT64, arrays);
+                LongNestedValueAccumulator accumulator = new LongNestedValueAccumulator(false, true)) {
+            long[] input = new long[1_024];
+            for (int position = 0; position < input.length; position++) {
+                input[position] = 100 + (position & 3);
+            }
+            decoder.decodePlain(longs(input), 0, input.length);
+            accumulator.reset(allocator);
+            accumulator.appendPlainRun(decoder, 0, input.length);
+
+            Streams streams = accumulator.materialize(allocator, new Allocator.Context("test"));
+            assertThat(streams.values()).isInstanceOf(DictionaryVector.class);
+            DictionaryVector dictionary = (DictionaryVector) streams.values();
+            assertThat(dictionary.values().length()).isEqualTo(4);
+            assertThat(dictionary.hasDomainFrequencies()).isTrue();
+            assertThat(dictionary.domainFrequency(0)).isEqualTo(256);
+            assertThat(VectorAccess.longValues(dictionary).value(1_023)).isEqualTo(103);
+            assertThat(VectorAccess.isAllFalseNulls(streams.get(Stream.NULLS))).isTrue();
+        }
+    }
+
     private static MemorySegment longs(long... values)
     {
         ByteBuffer output = ByteBuffer.allocate(values.length * Long.BYTES).order(ByteOrder.LITTLE_ENDIAN);

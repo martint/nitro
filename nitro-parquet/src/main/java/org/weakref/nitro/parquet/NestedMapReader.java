@@ -48,7 +48,16 @@ final class NestedMapReader
 
     NestedMapReader(ParquetSchema.Group map, RleReaderPolicy rlePolicy, PrimitiveArrayPool arrayPool)
     {
-        this(map, rlePolicy, arrayPool, null, null, null, null);
+        this(map, rlePolicy, ParquetMaterializationPolicy.defaults(), arrayPool, null, null, null, null);
+    }
+
+    NestedMapReader(
+            ParquetSchema.Group map,
+            RleReaderPolicy rlePolicy,
+            ParquetMaterializationPolicy materializationPolicy,
+            PrimitiveArrayPool arrayPool)
+    {
+        this(map, rlePolicy, materializationPolicy, arrayPool, null, null, null, null);
     }
 
     NestedMapReader(
@@ -58,7 +67,18 @@ final class NestedMapReader
             TypeBinding outputType,
             ParquetValueBinding.Group logicalBinding)
     {
-        this(map, rlePolicy, arrayPool, null, null, outputType, logicalBinding);
+        this(map, rlePolicy, ParquetMaterializationPolicy.defaults(), arrayPool, null, null, outputType, logicalBinding);
+    }
+
+    NestedMapReader(
+            ParquetSchema.Group map,
+            RleReaderPolicy rlePolicy,
+            ParquetMaterializationPolicy materializationPolicy,
+            PrimitiveArrayPool arrayPool,
+            TypeBinding outputType,
+            ParquetValueBinding.Group logicalBinding)
+    {
+        this(map, rlePolicy, materializationPolicy, arrayPool, null, null, outputType, logicalBinding);
     }
 
     NestedMapReader(
@@ -67,7 +87,7 @@ final class NestedMapReader
             NestedLeafCursor keyCursor,
             NestedLeafCursor valueCursor)
     {
-        this(map, rlePolicy, null, keyCursor, valueCursor, null, null);
+        this(map, rlePolicy, ParquetMaterializationPolicy.defaults(), null, keyCursor, valueCursor, null, null);
     }
 
     NestedMapReader(
@@ -78,12 +98,13 @@ final class NestedMapReader
             TypeBinding outputType,
             ParquetValueBinding.Group logicalBinding)
     {
-        this(map, rlePolicy, null, keyCursor, valueCursor, outputType, logicalBinding);
+        this(map, rlePolicy, ParquetMaterializationPolicy.defaults(), null, keyCursor, valueCursor, outputType, logicalBinding);
     }
 
     private NestedMapReader(
             ParquetSchema.Group map,
             RleReaderPolicy rlePolicy,
+            ParquetMaterializationPolicy materializationPolicy,
             PrimitiveArrayPool arrayPool,
             NestedLeafCursor keyCursor,
             NestedLeafCursor valueCursor,
@@ -126,8 +147,10 @@ final class NestedMapReader
                 ? new NestedLeafReader(value, rlePolicy, requireNonNull(arrayPool, "arrayPool is null"), true, false)
                 : valueCursor;
         if (bindings == null) {
-            this.keyValues = NestedValueAccumulators.create(key);
-            this.values = NestedValueAccumulators.create(value);
+            this.keyValues = NestedValueAccumulators.create(
+                    key, key.repetition() == FieldRepetitionType.OPTIONAL, materializationPolicy);
+            this.values = NestedValueAccumulators.create(
+                    value, value.repetition() == FieldRepetitionType.OPTIONAL, materializationPolicy);
         }
         else {
             NestedLogicalBindings.Primitive keyBinding = bindings.childPrimitive(0, key);
@@ -136,12 +159,14 @@ final class NestedMapReader
                     key,
                     key.repetition() == FieldRepetitionType.OPTIONAL,
                     keyBinding.type(),
-                    keyBinding.value());
+                    keyBinding.value(),
+                    materializationPolicy);
             this.values = NestedValueAccumulators.create(
                     value,
                     value.repetition() == FieldRepetitionType.OPTIONAL,
                     valueBinding.type(),
-                    valueBinding.value());
+                    valueBinding.value(),
+                    materializationPolicy);
         }
     }
 

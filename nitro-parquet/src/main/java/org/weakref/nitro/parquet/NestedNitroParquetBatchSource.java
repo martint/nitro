@@ -239,6 +239,7 @@ final class NestedNitroParquetBatchSource
                 TypeBinding outputType,
                 ParquetPrimitiveValueBinding logicalValueBinding,
                 RleReaderPolicy rlePolicy,
+                ParquetMaterializationPolicy materializationPolicy,
                 PrimitiveArrayPool arrayPool)
         {
             this.leaf = requireNonNull(leaf, "leaf is null");
@@ -252,7 +253,7 @@ final class NestedNitroParquetBatchSource
                     : requireNonNull(logicalValueBinding.bind(leaf.descriptor(), outputType), "logical value binding returned null");
             this.nullable = leaf.maximumDefinitionLevel() != 0;
             this.reader = new NestedLeafReader(leaf, rlePolicy, arrayPool);
-            this.values = NestedValueAccumulators.create(leaf, nullable);
+            this.values = NestedValueAccumulators.create(leaf, nullable, materializationPolicy);
         }
 
         @Override
@@ -402,11 +403,12 @@ final class NestedNitroParquetBatchSource
                 TypeBinding outputType,
                 ParquetValueBinding.Group logicalBinding,
                 RleReaderPolicy rlePolicy,
+                ParquetMaterializationPolicy materializationPolicy,
                 PrimitiveArrayPool arrayPool)
         {
             this.reader = logicalBinding == null
-                    ? new NestedMapReader(map, rlePolicy, arrayPool)
-                    : new NestedMapReader(map, rlePolicy, arrayPool, outputType, logicalBinding);
+                    ? new NestedMapReader(map, rlePolicy, materializationPolicy, arrayPool)
+                    : new NestedMapReader(map, rlePolicy, materializationPolicy, arrayPool, outputType, logicalBinding);
             ParquetSchema.Group entries = (ParquetSchema.Group) map.children().getFirst();
             this.shapeReader = new NestedRepeatedShapeReader(
                     map,
@@ -499,11 +501,12 @@ final class NestedNitroParquetBatchSource
                 TypeBinding outputType,
                 ParquetValueBinding.Group logicalBinding,
                 RleReaderPolicy rlePolicy,
+                ParquetMaterializationPolicy materializationPolicy,
                 PrimitiveArrayPool arrayPool)
         {
             this.reader = logicalBinding == null
-                    ? new NestedArrayReader(list, rlePolicy, arrayPool)
-                    : new NestedArrayReader(list, rlePolicy, arrayPool, outputType, logicalBinding);
+                    ? new NestedArrayReader(list, rlePolicy, materializationPolicy, arrayPool)
+                    : new NestedArrayReader(list, rlePolicy, materializationPolicy, arrayPool, outputType, logicalBinding);
             ParquetSchema.Group repeatedValues = list.isList()
                     ? (ParquetSchema.Group) list.children().getFirst()
                     : list;
@@ -597,11 +600,12 @@ final class NestedNitroParquetBatchSource
                 TypeBinding outputType,
                 ParquetValueBinding.Group logicalBinding,
                 RleReaderPolicy rlePolicy,
+                ParquetMaterializationPolicy materializationPolicy,
                 PrimitiveArrayPool arrayPool)
         {
             this.reader = logicalBinding == null
-                    ? new NestedStructReader(struct, rlePolicy, arrayPool)
-                    : new NestedStructReader(struct, rlePolicy, arrayPool, outputType, logicalBinding);
+                    ? new NestedStructReader(struct, rlePolicy, materializationPolicy, arrayPool)
+                    : new NestedStructReader(struct, rlePolicy, materializationPolicy, arrayPool, outputType, logicalBinding);
             this.outputType = requireNonNull(outputType, "outputType is null");
             this.nullable = struct.repetition() != org.apache.parquet.format.FieldRepetitionType.REQUIRED;
             this.nullReader = nullable ? new NestedStructNullReader(struct, rlePolicy, arrayPool) : null;
@@ -840,6 +844,7 @@ final class NestedNitroParquetBatchSource
                             outputType,
                             primitiveBinding(primitive, logicalValueBinding),
                             resources.readerPolicy().rle(),
+                            resources.readerPolicy().materialization(),
                             allocator.primitiveArrays());
             case ParquetSchema.Primitive primitive -> new PrimitiveProjectedReader(
                     primitive, outputType, primitiveBinding(primitive, logicalValueBinding));
@@ -850,7 +855,12 @@ final class NestedNitroParquetBatchSource
                             "Parquet MAP field '" + group.name() + "' has no MapVector output representation");
                 }
                 yield new MapProjectedReader(
-                        group, outputType, groupBinding, resources.readerPolicy().rle(), allocator.primitiveArrays());
+                        group,
+                        outputType,
+                        groupBinding,
+                        resources.readerPolicy().rle(),
+                        resources.readerPolicy().materialization(),
+                        allocator.primitiveArrays());
             }
             case ParquetSchema.Group group when group.isList() ||
                     (group.repetition() == org.apache.parquet.format.FieldRepetitionType.REPEATED &&
@@ -861,12 +871,22 @@ final class NestedNitroParquetBatchSource
                             "Parquet LIST field '" + group.name() + "' has no ArrayVector output representation");
                 }
                 yield new ArrayProjectedReader(
-                        group, outputType, groupBinding, resources.readerPolicy().rle(), allocator.primitiveArrays());
+                        group,
+                        outputType,
+                        groupBinding,
+                        resources.readerPolicy().rle(),
+                        resources.readerPolicy().materialization(),
+                        allocator.primitiveArrays());
             }
             case ParquetSchema.Group group when outputType.supportedVectorTypes().contains(StructVector.class) -> {
                 ParquetValueBinding.Group groupBinding = groupBinding(group, logicalValueBinding);
                 yield new StructProjectedReader(
-                        group, outputType, groupBinding, resources.readerPolicy().rle(), allocator.primitiveArrays());
+                        group,
+                        outputType,
+                        groupBinding,
+                        resources.readerPolicy().rle(),
+                        resources.readerPolicy().materialization(),
+                        allocator.primitiveArrays());
             }
             case ParquetSchema.Group group -> throw new UnsupportedParquetFeatureException(
                     "Native Nitro Parquet reader does not support nested field '" + group.name() + "' with this logical layout");
