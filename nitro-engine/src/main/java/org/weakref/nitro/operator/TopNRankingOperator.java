@@ -58,6 +58,7 @@ public class TopNRankingOperator
     private final RankingType rankingType;
     private final int limit;
     private final int maxBatchRows;
+    private final boolean outputRanking;
     private final Schema outputSchema;
     private final StructuralComparisonKernel[] comparisonKernels;
     private final StructuralKeyKernel[] partitionKernels;
@@ -88,6 +89,7 @@ public class TopNRankingOperator
                 defaultRankingSchema(),
                 policy,
                 RankingType.RANK,
+                true,
                 EngineResources.from(allocator).operatorResources().codeGeneration().structuralTypes());
     }
 
@@ -111,6 +113,7 @@ public class TopNRankingOperator
                 rankingSchema,
                 policy,
                 RankingType.RANK,
+                true,
                 EngineResources.from(allocator).operatorResources().codeGeneration().structuralTypes());
     }
 
@@ -134,6 +137,7 @@ public class TopNRankingOperator
                 defaultRankingSchema(),
                 policy,
                 RankingType.RANK,
+                true,
                 EngineResources.from(allocator).operatorResources().codeGeneration().structuralTypes());
     }
 
@@ -158,6 +162,7 @@ public class TopNRankingOperator
                 rankingSchema,
                 policy,
                 RankingType.RANK,
+                true,
                 EngineResources.from(allocator).operatorResources().codeGeneration().structuralTypes());
     }
 
@@ -182,6 +187,7 @@ public class TopNRankingOperator
                 rankingSchema,
                 requireNonNull(resources, "resources is null").topNRankingPolicy(),
                 RankingType.RANK,
+                true,
                 resources.codeGeneration().structuralTypes());
     }
 
@@ -207,6 +213,7 @@ public class TopNRankingOperator
                 rankingSchema,
                 requireNonNull(resources, "resources is null").topNRankingPolicy(),
                 rankingType,
+                true,
                 resources.codeGeneration().structuralTypes());
     }
 
@@ -229,10 +236,38 @@ public class TopNRankingOperator
                 orderingColumns,
                 descendingByColumn,
                 nullsFirstByColumn,
+                rankingType,
+                true,
+                source,
+                rankingSchema,
+                resources);
+    }
+
+    public TopNRankingOperator(
+            Allocator allocator,
+            int limit,
+            int[] partitionColumns,
+            int[] orderingColumns,
+            boolean[] descendingByColumn,
+            boolean[] nullsFirstByColumn,
+            RankingType rankingType,
+            boolean outputRanking,
+            Operator source,
+            Schema rankingSchema,
+            OperatorResources resources)
+    {
+        this(
+                allocator,
+                limit,
+                partitionColumns,
+                orderingColumns,
+                descendingByColumn,
+                nullsFirstByColumn,
                 source,
                 rankingSchema,
                 requireNonNull(resources, "resources is null").topNRankingPolicy(),
                 rankingType,
+                outputRanking,
                 resources.codeGeneration().structuralTypes());
     }
 
@@ -247,6 +282,7 @@ public class TopNRankingOperator
             Schema rankingSchema,
             TopNRankingOperatorPolicy policy,
             RankingType rankingType,
+            boolean outputRanking,
             StructuralTypeKernelFactory structuralTypes)
     {
         if (limit <= 0) {
@@ -271,7 +307,8 @@ public class TopNRankingOperator
         this.rankingType = requireNonNull(rankingType, "rankingType is null");
         this.limit = limit;
         this.maxBatchRows = requireNonNull(policy, "policy is null").maxBatchRows();
-        this.outputSchema = outputSchema(source.outputSchema(), rankingSchema);
+        this.outputRanking = outputRanking;
+        this.outputSchema = outputSchema(source.outputSchema(), rankingSchema, outputRanking);
         this.comparisonKernels = comparisonKernels(
                 source.outputSchema(),
                 this.partitionColumns,
@@ -287,7 +324,7 @@ public class TopNRankingOperator
     @Override
     public int outputCount()
     {
-        return source.outputCount() + 1;
+        return source.outputCount() + (outputRanking ? 1 : 0);
     }
 
     @Override
@@ -302,8 +339,11 @@ public class TopNRankingOperator
         return new Schema(List.of(new Field(unspecified.type(), false)));
     }
 
-    private static Schema outputSchema(Schema sourceSchema, Schema rankingSchema)
+    private static Schema outputSchema(Schema sourceSchema, Schema rankingSchema, boolean outputRanking)
     {
+        if (!outputRanking) {
+            return sourceSchema;
+        }
         List<Field> fields = new ArrayList<>(sourceSchema.fields());
         fields.add(rankingSchema.field(0));
         return new Schema(fields);
@@ -365,12 +405,14 @@ public class TopNRankingOperator
                     (stream, vector) -> allocator.transfer(allocationContext, vector),
                     (stream, vector) -> allocator.release(allocationContext, vector));
         }
-        Streams ranksBatch = materializeRanksBatch(currentOutputPosition, batchSize);
-        outputs[source.outputCount()] = new Output(
-                ranksBatch.streams(),
-                ranksBatch::get,
-                (stream, vector) -> allocator.transfer(allocationContext, vector),
-                (stream, vector) -> allocator.release(allocationContext, vector));
+        if (outputRanking) {
+            Streams ranksBatch = materializeRanksBatch(currentOutputPosition, batchSize);
+            outputs[source.outputCount()] = new Output(
+                    ranksBatch.streams(),
+                    ranksBatch::get,
+                    (stream, vector) -> allocator.transfer(allocationContext, vector),
+                    (stream, vector) -> allocator.release(allocationContext, vector));
+        }
         currentOutputPosition += batchSize;
         Mask outputMask = allocator.allocateRangeMask(allocationContext, 0, batchSize);
         return new Batch(
@@ -410,10 +452,10 @@ public class TopNRankingOperator
 
     private void load()
     {
-        loaded = true;
-
-        pages = new ArrayList<>();
-        sourceSchema = new Streams[source.outputCount()];
+        if (pages == null) {
+            pages = new ArrayList<>();
+            sourceSchema = new Streams[source.outputCount()];
+        }
         while (source.hasNext()) {
             try (Batch batch = source.next()) {
                 Mask mask = batch.borrowMask();
@@ -459,17 +501,22 @@ public class TopNRankingOperator
         ranked.sort((left, right) -> compareRows(left.row(), right.row()));
 
         LongArrayList selected = new LongArrayList(ranked.size());
-        List<Long> selectedRanks = new ArrayList<>(ranked.size());
+        List<Long> selectedRanks = outputRanking ? new ArrayList<>(ranked.size()) : List.of();
         for (RankedRow row : ranked) {
             selected.add(row.row());
-            selectedRanks.add(row.rank());
+            if (outputRanking) {
+                selectedRanks.add(row.rank());
+            }
         }
 
         selectedRows = selected;
-        ranks = allocator.allocate(allocationContext, I64Vector.class, selectedRanks.size(), I64Vector::new);
-        for (int index = 0; index < selectedRanks.size(); index++) {
-            ranks.values()[index] = selectedRanks.get(index);
+        if (outputRanking) {
+            ranks = allocator.allocate(allocationContext, I64Vector.class, selectedRanks.size(), I64Vector::new);
+            for (int index = 0; index < selectedRanks.size(); index++) {
+                ranks.values()[index] = selectedRanks.get(index);
+            }
         }
+        loaded = true;
     }
 
     private Map<PartitionKey, LongArrayList> partitions()

@@ -806,6 +806,71 @@ public class TestOperators
     }
 
     @Test
+    void testTopNRankingOperatorResumesLoadingAfterExecutionSuspension()
+    {
+        Operator delegate = new TableOperator(
+                1,
+                List.of(
+                        TableOperator.Page.values(1, new Vector[] {new I64Vector(new long[] {2})}, Mask.all(1)),
+                        TableOperator.Page.values(1, new Vector[] {new I64Vector(new long[] {1})}, Mask.all(1))));
+        Operator suspendingSource = new Operator()
+        {
+            private int hasNextCalls;
+
+            @Override
+            public int outputCount()
+            {
+                return delegate.outputCount();
+            }
+
+            @Override
+            public Schema outputSchema()
+            {
+                return delegate.outputSchema();
+            }
+
+            @Override
+            public boolean hasNext()
+            {
+                if (++hasNextCalls == 2) {
+                    throw ExecutionSuspension.yield();
+                }
+                return delegate.hasNext();
+            }
+
+            @Override
+            public Batch next()
+            {
+                return delegate.next();
+            }
+
+            @Override
+            public void constrain(Mask mask)
+            {
+                delegate.constrain(mask);
+            }
+
+            @Override
+            public void close()
+            {
+                delegate.close();
+            }
+        };
+
+        try (Operator ranking = new TopNRankingOperator(
+                allocator,
+                2,
+                new int[0],
+                new int[] {0},
+                new boolean[] {false},
+                suspendingSource,
+                EngineResources.from(allocator).operatorResources().topNRankingPolicy())) {
+            assertThatThrownBy(ranking::next).isSameAs(ExecutionSuspension.yield());
+            assertThat(operator(ranking)).matchesExactly(List.of(row(1L, 1L), row(2L, 2L)));
+        }
+    }
+
+    @Test
     void testSortOperatorColumnarMultiKeyNullOrdering()
     {
         assertThat(operator(new SortOperator(
@@ -2466,6 +2531,18 @@ public class TestOperators
                 typedTable(sourceSchema),
                 rankSchema,
                 EngineResources.from(allocator).operatorResources().topNRankingPolicy());
+                Operator rankingWithoutOutput = new TopNRankingOperator(
+                        allocator,
+                        10,
+                        new int[0],
+                        new int[] {0},
+                        new boolean[] {false},
+                        new boolean[] {false},
+                        TopNRankingOperator.RankingType.ROW_NUMBER,
+                        false,
+                        typedTable(sourceSchema),
+                        rankSchema,
+                        EngineResources.from(allocator).operatorResources());
                 Operator window = new WindowOperator(
                         allocator,
                         typedTable(sourceSchema),
@@ -2479,6 +2556,8 @@ public class TestOperators
             assertThat(ranking.outputSchema().fields()).containsExactly(sourceField, rankField);
             assertThat(ranking.outputSchema().field(0)).isSameAs(sourceField);
             assertThat(ranking.outputSchema().field(1)).isSameAs(rankField);
+            assertThat(rankingWithoutOutput.outputSchema()).isSameAs(sourceSchema);
+            assertThat(rankingWithoutOutput.outputCount()).isEqualTo(1);
             assertThat(window.outputSchema().fields()).containsExactly(sourceField, rankField, runningField);
             assertThat(window.outputSchema().field(0)).isSameAs(sourceField);
             assertThat(window.outputSchema().field(1)).isSameAs(rankField);
