@@ -22,7 +22,8 @@ import org.weakref.nitro.data.Vector;
 /// The Parquet reader owns physical decoding. A binding validates the file annotation against the
 /// requested connector type, selects the physical vector shape to decode, and converts that vector
 /// into the registered Nitro representation. Implementations must be immutable and instance-owned.
-public interface ParquetPrimitiveValueBinding
+public non-sealed interface ParquetPrimitiveValueBinding
+        extends ParquetValueBinding
 {
     Bound bind(ParquetPrimitiveDescriptor source, TypeBinding outputType);
 

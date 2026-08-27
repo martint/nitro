@@ -15,6 +15,7 @@ package org.weakref.nitro.parquet;
 
 import org.apache.parquet.format.FieldRepetitionType;
 import org.apache.parquet.format.RowGroup;
+import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.Mask;
@@ -38,19 +39,41 @@ final class NestedStructReader
 
     NestedStructReader(ParquetSchema.Group struct, RleReaderPolicy rlePolicy, PrimitiveArrayPool arrayPool)
     {
-        this(struct, rlePolicy, arrayPool, null);
+        this(struct, rlePolicy, arrayPool, null, null, null);
+    }
+
+    NestedStructReader(
+            ParquetSchema.Group struct,
+            RleReaderPolicy rlePolicy,
+            PrimitiveArrayPool arrayPool,
+            TypeBinding outputType,
+            ParquetValueBinding.Group logicalBinding)
+    {
+        this(struct, rlePolicy, arrayPool, null, outputType, logicalBinding);
     }
 
     NestedStructReader(ParquetSchema.Group struct, RleReaderPolicy rlePolicy, NestedLeafCursor[] cursors)
     {
-        this(struct, rlePolicy, null, cursors);
+        this(struct, rlePolicy, null, cursors, null, null);
+    }
+
+    NestedStructReader(
+            ParquetSchema.Group struct,
+            RleReaderPolicy rlePolicy,
+            NestedLeafCursor[] cursors,
+            TypeBinding outputType,
+            ParquetValueBinding.Group logicalBinding)
+    {
+        this(struct, rlePolicy, null, cursors, outputType, logicalBinding);
     }
 
     private NestedStructReader(
             ParquetSchema.Group struct,
             RleReaderPolicy rlePolicy,
             PrimitiveArrayPool arrayPool,
-            NestedLeafCursor[] cursors)
+            NestedLeafCursor[] cursors,
+            TypeBinding outputType,
+            ParquetValueBinding.Group logicalBinding)
     {
         this.struct = requireNonNull(struct, "struct is null");
         if (struct.isMap() || struct.isList() || struct.repetition() == FieldRepetitionType.REPEATED) {
@@ -66,6 +89,12 @@ final class NestedStructReader
         if (cursors != null && cursors.length != fields.size()) {
             throw new IllegalArgumentException("Injected struct cursor count does not match field count");
         }
+        if ((outputType == null) != (logicalBinding == null)) {
+            throw new IllegalArgumentException("Struct output type and logical binding must be supplied together");
+        }
+        NestedLogicalBindings bindings = logicalBinding == null
+                ? null
+                : NestedLogicalBindings.require(struct.name(), outputType, logicalBinding, fields.size());
         this.readers = new NestedLeafCursor[fields.size()];
         this.values = new NestedValueAccumulator[fields.size()];
         for (int field = 0; field < fields.size(); field++) {
@@ -73,7 +102,13 @@ final class NestedStructReader
             readers[field] = cursors == null
                     ? new NestedLeafReader(leaf, rlePolicy, requireNonNull(arrayPool, "arrayPool is null"))
                     : requireNonNull(cursors[field], "cursor is null");
-            values[field] = NestedValueAccumulators.create(leaf, true);
+            if (bindings == null) {
+                values[field] = NestedValueAccumulators.create(leaf, true);
+            }
+            else {
+                NestedLogicalBindings.Primitive child = bindings.childPrimitive(field, leaf);
+                values[field] = NestedValueAccumulators.create(leaf, true, child.type(), child.value());
+            }
         }
     }
 

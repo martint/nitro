@@ -457,7 +457,7 @@ public final class NitroParquetBatchSource
             List<InputSplit> splits,
             Schema schema,
             ParquetColumnNameMatching columnNameMatching,
-            Map<Integer, ParquetPrimitiveValueBinding> logicalValueBindings)
+            Map<Integer, ? extends ParquetValueBinding> logicalValueBindings)
     {
         return forInputs(resources, allocator, splits, schema, columnNameMatching, null, logicalValueBindings);
     }
@@ -478,7 +478,7 @@ public final class NitroParquetBatchSource
             List<InputSplit> splits,
             Schema schema,
             List<Integer> sourceOrdinals,
-            Map<Integer, ParquetPrimitiveValueBinding> logicalValueBindings)
+            Map<Integer, ? extends ParquetValueBinding> logicalValueBindings)
     {
         return forInputs(
                 resources,
@@ -508,7 +508,7 @@ public final class NitroParquetBatchSource
             Schema schema,
             ParquetColumnNameMatching columnNameMatching,
             List<ColumnProjection> projections,
-            Map<Integer, ParquetPrimitiveValueBinding> logicalValueBindings)
+            Map<Integer, ? extends ParquetValueBinding> logicalValueBindings)
     {
         return forProjectedInputs(resources, allocator, splits, schema, columnNameMatching, projections, true, logicalValueBindings);
     }
@@ -529,7 +529,7 @@ public final class NitroParquetBatchSource
             List<InputSplit> splits,
             Schema schema,
             List<ColumnProjection> projections,
-            Map<Integer, ParquetPrimitiveValueBinding> logicalValueBindings)
+            Map<Integer, ? extends ParquetValueBinding> logicalValueBindings)
     {
         return forProjectedInputs(
                 resources,
@@ -562,10 +562,10 @@ public final class NitroParquetBatchSource
             ParquetColumnNameMatching columnNameMatching,
             List<ColumnProjection> projections,
             boolean byName,
-            Map<Integer, ParquetPrimitiveValueBinding> logicalValueBindings)
+            Map<Integer, ? extends ParquetValueBinding> logicalValueBindings)
     {
         splits = List.copyOf(splits);
-        logicalValueBindings = Map.copyOf(requireNonNull(logicalValueBindings, "logicalValueBindings is null"));
+        Map<Integer, ParquetValueBinding> valueBindings = copyValueBindings(logicalValueBindings);
         try {
             return new NestedNitroParquetBatchSource(
                     resources,
@@ -575,7 +575,7 @@ public final class NitroParquetBatchSource
                     columnNameMatching,
                     List.copyOf(projections),
                     byName,
-                    logicalValueBindings);
+                    valueBindings);
         }
         catch (RuntimeException | Error failure) {
             for (InputSplit split : splits) {
@@ -597,10 +597,10 @@ public final class NitroParquetBatchSource
             Schema schema,
             ParquetColumnNameMatching columnNameMatching,
             List<Integer> sourceOrdinals,
-            Map<Integer, ParquetPrimitiveValueBinding> logicalValueBindings)
+            Map<Integer, ? extends ParquetValueBinding> logicalValueBindings)
     {
         splits = List.copyOf(splits);
-        logicalValueBindings = Map.copyOf(requireNonNull(logicalValueBindings, "logicalValueBindings is null"));
+        Map<Integer, ParquetValueBinding> valueBindings = copyValueBindings(logicalValueBindings);
         try {
             if (schema.fields().stream().anyMatch(field -> {
                 Set<Class<? extends Vector>> vectors = field.type().supportedVectorTypes();
@@ -615,7 +615,7 @@ public final class NitroParquetBatchSource
                         schema,
                         columnNameMatching,
                         sourceOrdinals,
-                        logicalValueBindings);
+                        valueBindings);
             }
             return new NitroParquetBatchSource(
                     resources,
@@ -624,7 +624,7 @@ public final class NitroParquetBatchSource
                     schema,
                     columnNameMatching,
                     sourceOrdinals,
-                    logicalValueBindings);
+                    primitiveBindings(valueBindings));
         }
         catch (RuntimeException | Error failure) {
             for (InputSplit split : splits) {
@@ -637,6 +637,30 @@ public final class NitroParquetBatchSource
             }
             throw failure;
         }
+    }
+
+    private static Map<Integer, ParquetValueBinding> copyValueBindings(
+            Map<Integer, ? extends ParquetValueBinding> bindings)
+    {
+        requireNonNull(bindings, "bindings is null");
+        java.util.HashMap<Integer, ParquetValueBinding> copy = new java.util.HashMap<>();
+        copy.putAll(bindings);
+        return Map.copyOf(copy);
+    }
+
+    private static Map<Integer, ParquetPrimitiveValueBinding> primitiveBindings(
+            Map<Integer, ParquetValueBinding> bindings)
+    {
+        java.util.HashMap<Integer, ParquetPrimitiveValueBinding> primitives = new java.util.HashMap<>();
+        bindings.forEach((column, binding) -> {
+            switch (binding) {
+                case ParquetPrimitiveValueBinding primitive -> primitives.put(column, primitive);
+                case ParquetValueBinding.Direct ignored -> {}
+                case ParquetValueBinding.Group ignored -> throw new UnsupportedParquetFeatureException(
+                        "Nested logical binding was supplied for flat output column " + column);
+            }
+        });
+        return Map.copyOf(primitives);
     }
 
     private NitroParquetBatchSource(

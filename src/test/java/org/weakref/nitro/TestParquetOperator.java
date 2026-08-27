@@ -103,6 +103,7 @@ import org.weakref.nitro.parquet.ParquetReaderPolicy;
 import org.weakref.nitro.parquet.ParquetRuntimeFilterPolicy;
 import org.weakref.nitro.parquet.ParquetScanBatchPolicy;
 import org.weakref.nitro.parquet.ParquetScanDiagnostics;
+import org.weakref.nitro.parquet.ParquetValueBinding;
 import org.weakref.nitro.parquet.RleReaderPolicy;
 
 import java.io.IOException;
@@ -150,6 +151,10 @@ public class TestParquetOperator
 
     private static final TypeBinding BIGINT = new TestingTypeBinding(new TypeIdentity("testing:bigint"), long.class);
     private static final TypeBinding VARCHAR = new TestingTypeBinding(new TypeIdentity("testing:varchar"), byte[].class);
+    private static final TypeBinding STRUCT_BIGINT = new VectorTypeBinding(
+            BIGINT.identity(), BIGINT.carrierType(), Set.of(I64Vector.class, DictionaryVector.class, RleVector.class));
+    private static final TypeBinding STRUCT_VARCHAR = new VectorTypeBinding(
+            VARCHAR.identity(), VARCHAR.carrierType(), Set.of(BinaryVector.class, DictionaryVector.class, RleVector.class));
     private static final TypeBinding ENCODED_VARCHAR = new TypeBinding()
     {
         @Override
@@ -201,6 +206,12 @@ public class TestParquetOperator
         {
             return Set.of(ArrayVector.class);
         }
+
+        @Override
+        public List<TypeBinding> nestedValueTypes()
+        {
+            return List.of(STRUCT_BIGINT);
+        }
     };
     private static final TypeBinding BIGINT_VARCHAR_ROW = new TypeBinding()
     {
@@ -227,6 +238,12 @@ public class TestParquetOperator
         {
             return Set.of(StructVector.class);
         }
+
+        @Override
+        public List<TypeBinding> nestedValueTypes()
+        {
+            return List.of(STRUCT_BIGINT, STRUCT_VARCHAR);
+        }
     };
     private static final TypeBinding VARCHAR_BIGINT_MAP = new TypeBinding()
     {
@@ -252,6 +269,12 @@ public class TestParquetOperator
         public Set<Class<? extends org.weakref.nitro.data.Vector>> supportedVectorTypes()
         {
             return Set.of(MapVector.class);
+        }
+
+        @Override
+        public List<TypeBinding> nestedValueTypes()
+        {
+            return List.of(STRUCT_VARCHAR, STRUCT_BIGINT);
         }
     };
     private static final ParquetPageNavigationPolicy GENERIC_PAGE_NAVIGATION =
@@ -552,7 +575,11 @@ public class TestParquetOperator
                         resources,
                         allocator,
                         List.of(new NitroParquetBatchSource.InputSplit(input, 0, bytes.length)),
-                        schema)) {
+                        schema,
+                        ParquetColumnNameMatching.EXACT,
+                        Map.of(0, ParquetValueBinding.group(List.of(
+                                ParquetValueBinding.direct(),
+                                multiplyingLongBinding(10)))))) {
             try (var batch = ((SourcePoll.Ready) source.poll()).batch()) {
                 batch.select(new org.weakref.nitro.data.MaskSelection(Mask.sparse(new int[] {2}, 4)));
                 MapVector maps = (MapVector) batch.column(0).borrow(Stream.VALUES);
@@ -563,7 +590,7 @@ public class TestParquetOperator
                 assertThat(maps.offsets()).containsExactly(0, 0, 0, 2, 2);
                 assertThat(utf8(keys, 0)).isEqualTo("alpha");
                 assertThat(utf8(keys, 1)).isEqualTo("beta");
-                assertThat(values.values()).containsExactly(1L, 0L);
+                assertThat(values.values()).containsExactly(10L, 0L);
                 assertThat(valueNulls.values()).containsExactly(false, true);
             }
             assertThat(source.poll()).isSameAs(SourcePoll.Finished.FINISHED);
@@ -710,20 +737,22 @@ public class TestParquetOperator
                         resources,
                         allocator,
                         List.of(new NitroParquetBatchSource.InputSplit(input, 0, bytes.length)),
-                        schema);
+                        schema,
+                        ParquetColumnNameMatching.EXACT,
+                        Map.of(0, ParquetValueBinding.group(List.of(multiplyingLongBinding(10)))));
                 var batch = ((SourcePoll.Ready) source.poll()).batch()) {
             ArrayVector arrays = (ArrayVector) batch.column(0).borrow(Stream.VALUES);
             I64Vector values = (I64Vector) arrays.elementValues();
             BooleanVector nulls = arrays.elementNulls();
 
             assertThat(arrays.offsets()).containsExactly(0, 3, 3, 4);
-            assertThat(values.values()).containsExactly(10, 0, 20, 30);
+            assertThat(values.values()).containsExactly(100, 0, 200, 300);
             assertThat(nulls.values()).containsExactly(false, true, false, false);
         }
     }
 
     @Test
-    void testNitroParquetSourceReadsOptionalStructNatively()
+    void testNitroParquetSourceAppliesLogicalBindingInsideOptionalStruct()
             throws Exception
     {
         java.nio.file.Path file = writeOptionalSimpleStructParquetFile("native-struct.parquet");
@@ -760,7 +789,11 @@ public class TestParquetOperator
                         resources,
                         allocator,
                         List.of(new NitroParquetBatchSource.InputSplit(input, 0, bytes.length)),
-                        schema);
+                        schema,
+                        ParquetColumnNameMatching.EXACT,
+                        Map.of(0, ParquetValueBinding.group(List.of(
+                                multiplyingLongBinding(10),
+                                ParquetValueBinding.direct()))));
                 var executor = java.util.concurrent.Executors.newSingleThreadExecutor();
                 var batch = executor.submit(() -> ((SourcePoll.Ready) source.poll()).batch()).get()) {
             SourceMetrics metrics = source.protocol(SourceMetricsProtocol.METRICS).orElseThrow();
@@ -771,12 +804,38 @@ public class TestParquetOperator
             BinaryVector names = (BinaryVector) rows.fieldValues("name");
 
             assertThat(rowNulls.values()).containsExactly(false, true, false);
-            assertThat(ids.values()).containsExactly(11, 0, 12);
+            assertThat(ids.values()).containsExactly(110, 0, 120);
             assertThat(utf8(names, 0)).isEqualTo("alice");
             assertThat(((BooleanVector) rows.field("name").get(Stream.NULLS)).values())
                     .containsExactly(false, true, true);
             assertThat(nullOnlyBytes).isLessThan(metrics.completedBytes().orElseThrow());
         }
+    }
+
+    private static ParquetPrimitiveValueBinding multiplyingLongBinding(long factor)
+    {
+        return (source, outputType) -> new ParquetPrimitiveValueBinding.Bound()
+        {
+            @Override
+            public Class<? extends org.weakref.nitro.data.Vector> decodedVectorType()
+            {
+                return I64Vector.class;
+            }
+
+            @Override
+            public org.weakref.nitro.data.Vector convert(
+                    Allocator allocator,
+                    Allocator.Context context,
+                    org.weakref.nitro.data.Vector decoded)
+            {
+                I64Vector input = (I64Vector) decoded;
+                I64Vector output = I64Vector.allocate(allocator, context, input.length());
+                for (int position = 0; position < input.length(); position++) {
+                    output.values()[position] = input.values()[position] * factor;
+                }
+                return output;
+            }
+        };
     }
 
     @Test

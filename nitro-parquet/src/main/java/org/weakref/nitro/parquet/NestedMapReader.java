@@ -15,6 +15,7 @@ package org.weakref.nitro.parquet;
 
 import org.apache.parquet.format.FieldRepetitionType;
 import org.apache.parquet.format.RowGroup;
+import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.MapVector;
@@ -47,7 +48,17 @@ final class NestedMapReader
 
     NestedMapReader(ParquetSchema.Group map, RleReaderPolicy rlePolicy, PrimitiveArrayPool arrayPool)
     {
-        this(map, rlePolicy, arrayPool, null, null);
+        this(map, rlePolicy, arrayPool, null, null, null, null);
+    }
+
+    NestedMapReader(
+            ParquetSchema.Group map,
+            RleReaderPolicy rlePolicy,
+            PrimitiveArrayPool arrayPool,
+            TypeBinding outputType,
+            ParquetValueBinding.Group logicalBinding)
+    {
+        this(map, rlePolicy, arrayPool, null, null, outputType, logicalBinding);
     }
 
     NestedMapReader(
@@ -56,7 +67,18 @@ final class NestedMapReader
             NestedLeafCursor keyCursor,
             NestedLeafCursor valueCursor)
     {
-        this(map, rlePolicy, null, keyCursor, valueCursor);
+        this(map, rlePolicy, null, keyCursor, valueCursor, null, null);
+    }
+
+    NestedMapReader(
+            ParquetSchema.Group map,
+            RleReaderPolicy rlePolicy,
+            NestedLeafCursor keyCursor,
+            NestedLeafCursor valueCursor,
+            TypeBinding outputType,
+            ParquetValueBinding.Group logicalBinding)
+    {
+        this(map, rlePolicy, null, keyCursor, valueCursor, outputType, logicalBinding);
     }
 
     private NestedMapReader(
@@ -64,7 +86,9 @@ final class NestedMapReader
             RleReaderPolicy rlePolicy,
             PrimitiveArrayPool arrayPool,
             NestedLeafCursor keyCursor,
-            NestedLeafCursor valueCursor)
+            NestedLeafCursor valueCursor,
+            TypeBinding outputType,
+            ParquetValueBinding.Group logicalBinding)
     {
         this.map = requireNonNull(map, "map is null");
         if (!map.isMap()) {
@@ -89,14 +113,36 @@ final class NestedMapReader
         if (value.repetition() == FieldRepetitionType.REPEATED) {
             throw unsupported("MAP value cannot be repeated");
         }
+        if ((outputType == null) != (logicalBinding == null)) {
+            throw new IllegalArgumentException("MAP output type and logical binding must be supplied together");
+        }
+        NestedLogicalBindings bindings = logicalBinding == null
+                ? null
+                : NestedLogicalBindings.require(map.name(), outputType, logicalBinding, 2);
         this.keyReader = keyCursor == null
                 ? new NestedLeafReader(key, rlePolicy, requireNonNull(arrayPool, "arrayPool is null"))
                 : keyCursor;
         this.valueReader = valueCursor == null
                 ? new NestedLeafReader(value, rlePolicy, requireNonNull(arrayPool, "arrayPool is null"), true, false)
                 : valueCursor;
-        this.keyValues = NestedValueAccumulators.create(key);
-        this.values = NestedValueAccumulators.create(value);
+        if (bindings == null) {
+            this.keyValues = NestedValueAccumulators.create(key);
+            this.values = NestedValueAccumulators.create(value);
+        }
+        else {
+            NestedLogicalBindings.Primitive keyBinding = bindings.childPrimitive(0, key);
+            NestedLogicalBindings.Primitive valueBinding = bindings.childPrimitive(1, value);
+            this.keyValues = NestedValueAccumulators.create(
+                    key,
+                    key.repetition() == FieldRepetitionType.OPTIONAL,
+                    keyBinding.type(),
+                    keyBinding.value());
+            this.values = NestedValueAccumulators.create(
+                    value,
+                    value.repetition() == FieldRepetitionType.OPTIONAL,
+                    valueBinding.type(),
+                    valueBinding.value());
+        }
     }
 
     void addRowGroup(ParquetFile file, RowGroup rowGroup)

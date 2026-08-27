@@ -15,6 +15,7 @@ package org.weakref.nitro.parquet;
 
 import org.apache.parquet.format.FieldRepetitionType;
 import org.apache.parquet.format.RowGroup;
+import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.ArrayVector;
 import org.weakref.nitro.data.BooleanVector;
@@ -41,24 +42,46 @@ final class NestedArrayReader
 
     NestedArrayReader(ParquetSchema.Group list, RleReaderPolicy rlePolicy, PrimitiveArrayPool arrayPool)
     {
-        this(list, rlePolicy, arrayPool, null);
+        this(list, rlePolicy, arrayPool, null, null, null);
+    }
+
+    NestedArrayReader(
+            ParquetSchema.Group list,
+            RleReaderPolicy rlePolicy,
+            PrimitiveArrayPool arrayPool,
+            TypeBinding outputType,
+            ParquetValueBinding.Group logicalBinding)
+    {
+        this(list, rlePolicy, arrayPool, null, outputType, logicalBinding);
     }
 
     NestedArrayReader(ParquetSchema.Group list, RleReaderPolicy rlePolicy, NestedLeafCursor elementCursor)
     {
-        this(list, rlePolicy, null, new NestedLeafCursor[] {elementCursor});
+        this(list, rlePolicy, null, new NestedLeafCursor[] {elementCursor}, null, null);
     }
 
     NestedArrayReader(ParquetSchema.Group list, RleReaderPolicy rlePolicy, NestedLeafCursor[] elementCursors)
     {
-        this(list, rlePolicy, null, elementCursors);
+        this(list, rlePolicy, null, elementCursors, null, null);
+    }
+
+    NestedArrayReader(
+            ParquetSchema.Group list,
+            RleReaderPolicy rlePolicy,
+            NestedLeafCursor[] elementCursors,
+            TypeBinding outputType,
+            ParquetValueBinding.Group logicalBinding)
+    {
+        this(list, rlePolicy, null, elementCursors, outputType, logicalBinding);
     }
 
     private NestedArrayReader(
             ParquetSchema.Group list,
             RleReaderPolicy rlePolicy,
             PrimitiveArrayPool arrayPool,
-            NestedLeafCursor[] elementCursors)
+            NestedLeafCursor[] elementCursors,
+            TypeBinding outputType,
+            ParquetValueBinding.Group logicalBinding)
     {
         this.list = requireNonNull(list, "list is null");
         if (list.isList()) {
@@ -80,17 +103,25 @@ final class NestedArrayReader
         if (element.repetition() == FieldRepetitionType.REPEATED) {
             throw unsupported("LIST element cannot be repeated");
         }
+        if ((outputType == null) != (logicalBinding == null)) {
+            throw new IllegalArgumentException("LIST output type and logical binding must be supplied together");
+        }
+        NestedLogicalBindings bindings = logicalBinding == null
+                ? null
+                : NestedLogicalBindings.require(list.name(), outputType, logicalBinding, 1);
         this.elements = switch (element) {
             case ParquetSchema.Primitive primitive -> new PrimitiveElementReader(
                     primitive,
                     rlePolicy,
                     arrayPool,
-                    elementCursors);
+                    elementCursors,
+                    bindings == null ? null : bindings.childPrimitive(0, primitive));
             case ParquetSchema.Group group when !group.isList() && !group.isMap() -> new StructElementReader(
                     group,
                     rlePolicy,
                     arrayPool,
-                    elementCursors);
+                    elementCursors,
+                    bindings == null ? null : bindings.childGroup(0, group));
             case ParquetSchema.Group group -> throw unsupported(
                     "nested " + (group.isList() ? "LIST" : "MAP") + " elements are not implemented yet");
         };
@@ -432,7 +463,8 @@ final class NestedArrayReader
                 ParquetSchema.Primitive element,
                 RleReaderPolicy rlePolicy,
                 PrimitiveArrayPool arrayPool,
-                NestedLeafCursor[] cursors)
+                NestedLeafCursor[] cursors,
+                NestedLogicalBindings.Primitive logicalBinding)
         {
             this.element = requireNonNull(element, "element is null");
             if (cursors != null && cursors.length != 1) {
@@ -441,7 +473,13 @@ final class NestedArrayReader
             this.reader = cursors == null
                     ? new NestedLeafReader(element, rlePolicy, requireNonNull(arrayPool, "arrayPool is null"))
                     : requireNonNull(cursors[0], "cursor is null");
-            this.values = NestedValueAccumulators.create(element);
+            this.values = logicalBinding == null
+                    ? NestedValueAccumulators.create(element)
+                    : NestedValueAccumulators.create(
+                            element,
+                            element.repetition() == FieldRepetitionType.OPTIONAL,
+                            logicalBinding.type(),
+                            logicalBinding.value());
         }
 
         @Override
@@ -540,7 +578,8 @@ final class NestedArrayReader
                 ParquetSchema.Group element,
                 RleReaderPolicy rlePolicy,
                 PrimitiveArrayPool arrayPool,
-                NestedLeafCursor[] cursors)
+                NestedLeafCursor[] cursors,
+                NestedLogicalBindings.Group logicalBinding)
         {
             this.element = requireNonNull(element, "element is null");
             if (element.children().stream().anyMatch(child -> !(child instanceof ParquetSchema.Primitive))) {
@@ -555,6 +594,10 @@ final class NestedArrayReader
             if (cursors != null && cursors.length != fields.size()) {
                 throw new IllegalArgumentException("LIST struct element cursor count does not match field count");
             }
+            NestedLogicalBindings bindings = logicalBinding == null
+                    ? null
+                    : NestedLogicalBindings.require(
+                            element.name(), logicalBinding.type(), logicalBinding.value(), fields.size());
             this.readers = new NestedLeafCursor[fields.size()];
             this.values = new NestedValueAccumulator[fields.size()];
             for (int field = 0; field < fields.size(); field++) {
@@ -562,7 +605,13 @@ final class NestedArrayReader
                 readers[field] = cursors == null
                         ? new NestedLeafReader(leaf, rlePolicy, requireNonNull(arrayPool, "arrayPool is null"))
                         : requireNonNull(cursors[field], "cursor is null");
-                values[field] = NestedValueAccumulators.create(leaf, true);
+                if (bindings == null) {
+                    values[field] = NestedValueAccumulators.create(leaf, true);
+                }
+                else {
+                    NestedLogicalBindings.Primitive child = bindings.childPrimitive(field, leaf);
+                    values[field] = NestedValueAccumulators.create(leaf, true, child.type(), child.value());
+                }
             }
         }
 

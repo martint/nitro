@@ -13,6 +13,8 @@
  */
 package org.weakref.nitro.parquet;
 
+import org.weakref.nitro.core.type.TypeBinding;
+
 /** Isolates schema-to-Nitro carrier selection from nested logical reconstruction. */
 final class NestedValueAccumulators
 {
@@ -38,6 +40,15 @@ final class NestedValueAccumulators
             default -> throw new UnsupportedParquetFeatureException(
                     "Native nested Parquet output does not support physical type " + leaf.type() + " at '" + String.join(".", leaf.path()) + "'");
         };
+    }
+
+    static NestedValueAccumulator create(
+            ParquetSchema.Primitive leaf,
+            boolean nullable,
+            TypeBinding outputType,
+            ParquetPrimitiveValueBinding binding)
+    {
+        return new LogicalNestedValueAccumulator(create(leaf, nullable), leaf, outputType, binding);
     }
 
     private static NestedValueAccumulator createFixedDecimal(ParquetSchema.Primitive leaf, boolean nullable)
