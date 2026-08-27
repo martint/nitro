@@ -68,9 +68,9 @@ final class NestedNitroParquetBatchSource
 
         default void setValueDemand(ValueDemand demand)
         {
-            if (demand != ValueDemand.FULL) {
-                throw new UnsupportedOperationException("Reader does not support reduced value demand");
-            }
+            requireNonNull(demand, "demand is null");
+            // ValueDemand is an optimization request. Readers which cannot expose the requested physical
+            // representation conservatively retain their ordinary full-value output.
         }
 
         default boolean supportsIndependentNulls()
@@ -149,6 +149,12 @@ final class NestedNitroParquetBatchSource
         public void addRowGroup(ParquetFile file, RowGroup rowGroup)
         {
             reader.addChunk(file, file.columnChunk(rowGroup, leaf).meta_data, rowGroup.num_rows, null);
+        }
+
+        @Override
+        public void setValueDemand(ValueDemand demand)
+        {
+            reader.setDictionaryDomainMetadataDemand(requireNonNull(demand, "demand is null"));
         }
 
         @Override
@@ -430,7 +436,9 @@ final class NestedNitroParquetBatchSource
         @Override
         public void setValueDemand(ValueDemand demand)
         {
-            this.valueDemand = requireNonNull(demand, "demand is null");
+            this.valueDemand = requireNonNull(demand, "demand is null") == ValueDemand.STRUCTURE
+                    ? ValueDemand.STRUCTURE
+                    : ValueDemand.FULL;
         }
 
         @Override
@@ -530,7 +538,9 @@ final class NestedNitroParquetBatchSource
         @Override
         public void setValueDemand(ValueDemand demand)
         {
-            this.valueDemand = requireNonNull(demand, "demand is null");
+            this.valueDemand = requireNonNull(demand, "demand is null") == ValueDemand.STRUCTURE
+                    ? ValueDemand.STRUCTURE
+                    : ValueDemand.FULL;
         }
 
         @Override

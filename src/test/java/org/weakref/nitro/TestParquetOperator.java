@@ -881,7 +881,7 @@ public class TestParquetOperator
         try (NitroParquetScanResources resources = NitroParquetScanResources.createDefault();
                 AllocationResources allocationResources = AllocationResources.createDefault();
                 Allocator allocator = new Allocator(allocationResources);
-                BatchSource source = byName
+                BatchSource source = retainDomainCounts(byName
                         ? NitroParquetBatchSource.forProjectedInputsByName(
                                 resources,
                                 allocator,
@@ -894,7 +894,7 @@ public class TestParquetOperator
                                 allocator,
                                 List.of(new NitroParquetBatchSource.InputSplit(input, 0, bytes.length)),
                                 schema,
-                                projections);
+                                projections));
                 var executor = java.util.concurrent.Executors.newSingleThreadExecutor();
                 var batch = executor.submit(() -> ((SourcePoll.Ready) source.poll()).batch()).get()) {
             VectorAccess.BinaryValues names = VectorAccess.binaryValues(batch.column(0).borrow(Stream.VALUES));
@@ -905,6 +905,14 @@ public class TestParquetOperator
                     .isEqualTo("alice");
             assertThat(nulls.values()).containsExactly(false, true, true);
         }
+    }
+
+    private static BatchSource retainDomainCounts(BatchSource source)
+    {
+        source.protocol(SourceOutputDemandProtocol.OUTPUT_DEMAND)
+                .orElseThrow()
+                .retainOutputs(Map.of(source.column(0), ValueDemand.FULL_WITH_DOMAIN_COUNTS));
+        return source;
     }
 
     @Test
