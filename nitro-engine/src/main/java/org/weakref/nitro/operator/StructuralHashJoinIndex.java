@@ -16,7 +16,9 @@ package org.weakref.nitro.operator;
 import it.unimi.dsi.fastutil.longs.LongArrayList;
 import it.unimi.dsi.fastutil.longs.LongList;
 import it.unimi.dsi.fastutil.longs.LongLists;
+import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.data.VectorAccess;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -27,6 +29,8 @@ final class StructuralHashJoinIndex
     private final Map<StructuralHashRowKey, LongArrayList> rowsByKey;
     private final StructuralKeyKernel[] kernels;
     private final StructuralHashRowKey reusableProbeKey;
+    private final Vector[] probeDomainValues;
+    private LongList[] probeDomainMatches = new LongList[0];
     private final boolean ownsStorage;
 
     StructuralHashJoinIndex(StructuralKeyKernel[] kernels)
@@ -34,6 +38,7 @@ final class StructuralHashJoinIndex
         this.kernels = kernels;
         this.rowsByKey = new HashMap<>();
         this.reusableProbeKey = new StructuralHashRowKey(kernels);
+        this.probeDomainValues = new Vector[kernels.length];
         this.ownsStorage = true;
     }
 
@@ -42,6 +47,7 @@ final class StructuralHashJoinIndex
         this.kernels = prepared.kernels;
         this.rowsByKey = prepared.rowsByKey;
         this.reusableProbeKey = new StructuralHashRowKey(kernels);
+        this.probeDomainValues = new Vector[kernels.length];
         this.ownsStorage = false;
     }
 
@@ -76,6 +82,64 @@ final class StructuralHashJoinIndex
         reusableProbeKey.set(values, nulls, position);
         LongArrayList rows = rowsByKey.get(reusableProbeKey);
         return rows == null ? LongLists.emptyList() : rows;
+    }
+
+    @Override
+    void matchRows(
+            Vector[] values,
+            Vector[] nulls,
+            boolean hasNulls,
+            int[] positions,
+            int positionCount,
+            LongList[] matches,
+            SingleLongList[] singleMatches)
+    {
+        DictionaryVector mapping = alignedDictionaryMapping(values, nulls, hasNulls);
+        if (mapping == null) {
+            super.matchRows(values, nulls, hasNulls, positions, positionCount, matches, singleMatches);
+            return;
+        }
+
+        int domainSize = mapping.values().length();
+        if (probeDomainMatches.length < domainSize) {
+            probeDomainMatches = new LongList[domainSize];
+        }
+        for (int domainPosition = 0; domainPosition < domainSize; domainPosition++) {
+            probeDomainMatches[domainPosition] = matchesNoNulls(probeDomainValues, domainPosition);
+        }
+
+        int[] ids = mapping.ids();
+        for (int index = 0; index < positionCount; index++) {
+            matches[index] = probeDomainMatches[ids[positions[index]]];
+        }
+    }
+
+    /**
+     * Resolves an arbitrary number of join keys over one shared physical row mapping. The logical types and the
+     * shape of each domain remain the responsibility of the registered structural kernels; the index only observes
+     * that hashing the same physical key tuple once is equivalent to hashing every repeated logical row.
+     */
+    private DictionaryVector alignedDictionaryMapping(Vector[] values, Vector[] nulls, boolean hasNulls)
+    {
+        if (values.length == 0 || !(values[0] instanceof DictionaryVector mapping)) {
+            return null;
+        }
+        if (hasNulls) {
+            for (Vector nullVector : nulls) {
+                if (!VectorAccess.isAllFalseNulls(nullVector)) {
+                    return null;
+                }
+            }
+        }
+        probeDomainValues[0] = mapping.values();
+        for (int keyIndex = 1; keyIndex < values.length; keyIndex++) {
+            if (!(values[keyIndex] instanceof DictionaryVector dictionary) ||
+                    !mapping.hasSameRowMapping(dictionary)) {
+                return null;
+            }
+            probeDomainValues[keyIndex] = dictionary.values();
+        }
+        return mapping;
     }
 
     @Override

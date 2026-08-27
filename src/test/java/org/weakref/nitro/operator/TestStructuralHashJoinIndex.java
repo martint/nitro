@@ -13,15 +13,59 @@
  */
 package org.weakref.nitro.operator;
 
+import it.unimi.dsi.fastutil.longs.LongList;
 import org.junit.jupiter.api.Test;
+import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
+
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 class TestStructuralHashJoinIndex
 {
+    @Test
+    void testAlignedDictionaryKeysAreProbedOncePerPhysicalTuple()
+    {
+        AtomicInteger firstHashCalls = new AtomicInteger();
+        AtomicInteger secondHashCalls = new AtomicInteger();
+        StructuralHashJoinIndex index = new StructuralHashJoinIndex(new StructuralKeyKernel[] {
+                countingLongKernel(firstHashCalls),
+                countingLongKernel(secondHashCalls)});
+        Vector[] build = {
+                new I64Vector(new long[] {11, 22}),
+                new I64Vector(new long[] {110, 220})};
+        index.add(build, new Vector[0], 0, 100);
+        index.add(build, new Vector[0], 1, 200);
+        firstHashCalls.set(0);
+        secondHashCalls.set(0);
+
+        DictionaryVector first = new DictionaryVector(
+                new int[] {0, 1, 0, 0, 1},
+                new I64Vector(new long[] {11, 22}));
+        DictionaryVector second = first.sharedMappingWithValues(new I64Vector(new long[] {110, 220}));
+        LongList[] matches = new LongList[5];
+        index.matchRows(
+                new Vector[] {first, second},
+                new Vector[0],
+                false,
+                new int[] {0, 1, 2, 3, 4},
+                5,
+                matches,
+                new SingleLongList[5]);
+
+        assertThat(matches).extracting(LongList::toLongArray).containsExactly(
+                new long[] {100},
+                new long[] {200},
+                new long[] {100},
+                new long[] {100},
+                new long[] {200});
+        assertThat(firstHashCalls).hasValue(2);
+        assertThat(secondHashCalls).hasValue(2);
+    }
+
     @Test
     void testProbeViewsShareImmutableRowsWithIndependentProbeKeys()
     {
@@ -69,5 +113,31 @@ class TestStructuralHashJoinIndex
         assertThat(owner.matches(firstProbe, new Vector[0], 0).toLongArray()).containsExactly(100, 300);
         owner.releaseBuffers();
         assertThat(owner.isEmpty()).isTrue();
+    }
+
+    private static StructuralKeyKernel countingLongKernel(AtomicInteger hashCalls)
+    {
+        return new StructuralKeyKernel()
+        {
+            @Override
+            public boolean identical(
+                    Vector leftValues,
+                    Vector leftNulls,
+                    int leftPosition,
+                    Vector rightValues,
+                    Vector rightNulls,
+                    int rightPosition)
+            {
+                return VectorAccess.longValues(leftValues).value(leftPosition) ==
+                        VectorAccess.longValues(rightValues).value(rightPosition);
+            }
+
+            @Override
+            public long hash(Vector values, Vector nulls, int position)
+            {
+                hashCalls.incrementAndGet();
+                return Long.hashCode(VectorAccess.longValues(values).value(position));
+            }
+        };
     }
 }
