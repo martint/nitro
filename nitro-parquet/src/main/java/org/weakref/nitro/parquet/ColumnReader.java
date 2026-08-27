@@ -31,6 +31,7 @@ import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.PrimitiveArrayPool;
+import org.weakref.nitro.data.ValueDemand;
 import org.weakref.nitro.data.Vector;
 
 import java.io.IOException;
@@ -340,6 +341,7 @@ public final class ColumnReader
     private final ParquetReaderDiagnostics diagnostics;
     private final ParquetMaterializationPolicy materializationPolicy;
     private boolean dictionaryDomainCountsDemanded;
+    private boolean dictionaryDomainMembershipDemanded;
     private final ParquetNumericDecodePolicy numericDecodePolicy;
     private final ParquetDictionaryFilterPolicy dictionaryFilterPolicy;
     private final ParquetArenaPolicy arenaPolicy;
@@ -803,12 +805,16 @@ public final class ColumnReader
         sibling.chunks.addAll(chunks);
         sibling.chunks.forEach(chunk -> chunk.input.retain());
         sibling.dictionaryDomainCountsDemanded = dictionaryDomainCountsDemanded;
+        sibling.dictionaryDomainMembershipDemanded = dictionaryDomainMembershipDemanded;
         return sibling;
     }
 
-    public void setDictionaryDomainCountsDemanded(boolean demanded)
+    public void setDictionaryDomainMetadataDemand(ValueDemand demand)
     {
-        dictionaryDomainCountsDemanded = demanded;
+        requireNonNull(demand, "demand is null");
+        dictionaryDomainMembershipDemanded = demand == ValueDemand.FULL_WITH_DOMAIN_MEMBERSHIP ||
+                demand == ValueDemand.FULL_WITH_DOMAIN_COUNTS;
+        dictionaryDomainCountsDemanded = demand == ValueDemand.FULL_WITH_DOMAIN_COUNTS;
     }
 
     public Kind kind()
@@ -2895,20 +2901,29 @@ public final class ColumnReader
             Vector dictionary)
     {
         int entries = dictionary.length();
-        if (!dictionaryDomainCountsDemanded ||
-                !materializationPolicy.dictionaryDomainFrequencies() ||
-                entries > materializationPolicy.dictionaryDomainFrequencyMaxEntries() ||
-                (long) entries * materializationPolicy.dictionaryDomainFrequencyMinRowsPerEntry() > count) {
-            return DictionaryVector.wrapOwnedIds(ids, count, dictionary);
+        if (dictionaryDomainCountsDemanded &&
+                materializationPolicy.dictionaryDomainFrequencies() &&
+                entries <= materializationPolicy.dictionaryDomainFrequencyMaxEntries() &&
+                (long) entries * materializationPolicy.dictionaryDomainFrequencyMinRowsPerEntry() <= count) {
+            I32Vector frequencies = I32Vector.allocate(allocator, allocationContext, entries);
+            Arrays.fill(frequencies.values(), 0, entries, 0);
+            int[] rawIds = ids.values();
+            for (int position = 0; position < count; position++) {
+                frequencies.values()[rawIds[position]]++;
+            }
+            return DictionaryVector.wrapOwnedIdsWithDomainFrequencies(ids, count, dictionary, frequencies);
         }
 
-        I32Vector frequencies = I32Vector.allocate(allocator, allocationContext, entries);
-        Arrays.fill(frequencies.values(), 0, entries, 0);
-        int[] rawIds = ids.values();
-        for (int position = 0; position < count; position++) {
-            frequencies.values()[rawIds[position]]++;
+        if (dictionaryDomainMembershipDemanded && entries <= Long.SIZE) {
+            long allEntries = entries == Long.SIZE ? -1L : (1L << entries) - 1;
+            long presentEntries = 0;
+            int[] rawIds = ids.values();
+            for (int position = 0; position < count && presentEntries != allEntries; position++) {
+                presentEntries |= 1L << rawIds[position];
+            }
+            return DictionaryVector.wrapOwnedIdsWithDomainPresence(ids, count, dictionary, presentEntries);
         }
-        return DictionaryVector.wrapOwnedIdsWithDomainFrequencies(ids, count, dictionary, frequencies);
+        return DictionaryVector.wrapOwnedIds(ids, count, dictionary);
     }
 
     private BinaryVector escapedDictionary(int generation)

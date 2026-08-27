@@ -1075,12 +1075,11 @@ public final class NitroParquetBatchSource
                 throw new IllegalArgumentException("output belongs to another source");
             }
             outputRequired[column] = true;
-            readers[column].setDictionaryDomainCountsDemanded(
-                    requireNonNull(output.getValue(), "output demand is null") == ValueDemand.FULL_WITH_DOMAIN_COUNTS);
+            readers[column].setDictionaryDomainMetadataDemand(requireNonNull(output.getValue(), "output demand is null"));
         }
         for (int column = 0; column < readers.length; column++) {
             if (!outputRequired[column]) {
-                readers[column].setDictionaryDomainCountsDemanded(false);
+                readers[column].setDictionaryDomainMetadataDemand(ValueDemand.FULL);
             }
         }
     }

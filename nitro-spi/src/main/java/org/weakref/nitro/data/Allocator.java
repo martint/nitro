@@ -176,6 +176,22 @@ public class Allocator
         return vector;
     }
 
+    public DictionaryVector allocateDictionaryWithDomainPresence(
+            Context context,
+            int[] ids,
+            int length,
+            Vector values,
+            long domainPresenceBits)
+    {
+        DictionaryVector vector = DictionaryVector.ofTrustedIdsWithDomainPresence(
+                ids,
+                length,
+                values,
+                domainPresenceBits);
+        state(context).trackVector(vector, false);
+        return vector;
+    }
+
     public DictionaryVector allocateDictionaryWithDomainFrequencies(
             Context context,
             int[] ids,

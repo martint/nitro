@@ -901,6 +901,43 @@ public class TestParquetOperator
     }
 
     @Test
+    void testNitroParquetSourceProducesDemandedDictionaryDomainPresence()
+            throws IOException
+    {
+        List<ParquetRow> rows = new ArrayList<>();
+        for (int position = 0; position < 2_048; position++) {
+            rows.add(new ParquetRow((position % 3) * 10, true, 0L));
+        }
+        java.nio.file.Path file = writeParquetFile("nitro-native-numeric-domain-presence.parquet", true, rows);
+        assertDictionaryEncoding(file, "x");
+        Schema schema = new Schema(List.of(new Field("x", BIGINT, false)));
+
+        try (AllocationResources allocationResources = AllocationResources.createDefault();
+                Allocator allocator = new Allocator(allocationResources);
+                NitroParquetBatchSource source = new NitroParquetBatchSource(
+                        NitroParquetScanResources.createDefault(),
+                        allocator,
+                        List.of(file),
+                        schema)) {
+            source.protocol(SourceOutputDemandProtocol.OUTPUT_DEMAND)
+                    .orElseThrow()
+                    .retainOutputs(Map.of(source.column(0), ValueDemand.FULL_WITH_DOMAIN_MEMBERSHIP));
+            try (var batch = ((SourcePoll.Ready) source.poll()).batch()) {
+                DictionaryVector values = (DictionaryVector) batch.column(0).borrow(Stream.VALUES);
+                List<Long> present = new ArrayList<>();
+
+                assertThat(values.hasDomainPresence()).isTrue();
+                assertThat(values.hasDomainFrequencies()).isFalse();
+                assertThat(values.visitSelectedDomain(Mask.all(values.length()), dictionaryId -> {
+                    present.add(((I64Vector) values.values()).values()[dictionaryId]);
+                    return true;
+                })).isTrue();
+                assertThat(present).containsExactlyInAnyOrder(0L, 10L, 20L);
+            }
+        }
+    }
+
+    @Test
     void testNitroParquetSourceReportsOnlyConsumedLazyColumnPages()
             throws IOException
     {

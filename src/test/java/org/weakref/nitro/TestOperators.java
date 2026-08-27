@@ -476,6 +476,56 @@ public class TestOperators
     }
 
     @Test
+    void testDictionaryDomainPresenceContract()
+    {
+        DictionaryVector dictionary = DictionaryVector.wrapOwnedIdsWithDomainPresence(
+                new I32Vector(new int[] {2, 0, 2, 0}),
+                4,
+                new I64Vector(new long[] {10, 20, 30}),
+                0b101);
+        List<Integer> visited = new ArrayList<>();
+
+        assertThat(dictionary.hasDomainPresence()).isTrue();
+        assertThat(dictionary.hasDomainFrequencies()).isFalse();
+        assertThat(dictionary.visitSelectedDomain(Mask.all(4), dictionaryId -> {
+            visited.add(dictionaryId);
+            return true;
+        })).isTrue();
+        assertThat(visited).containsExactly(0, 2);
+
+        DictionaryVector view = dictionary.sharedMappingView();
+        assertThat(view.hasDomainPresence()).isTrue();
+        assertThat(view.visitSelectedDomain(Mask.all(4), _ -> true)).isTrue();
+
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        Allocator.Context allocationContext = new Allocator.Context("dictionary-presence-copy");
+        DictionaryVector copy = (DictionaryVector) dictionary.copy(allocator, allocationContext);
+        visited.clear();
+        assertThat(copy.ids()).isNotSameAs(dictionary.ids());
+        assertThat(copy.hasDomainPresence()).isTrue();
+        assertThat(copy.hasDomainFrequencies()).isFalse();
+        assertThat(copy.visitSelectedDomain(Mask.all(4), dictionaryId -> {
+            visited.add(dictionaryId);
+            return true;
+        })).isTrue();
+        assertThat(visited).containsExactly(0, 2);
+        allocator.release(allocationContext, copy);
+
+        assertThatThrownBy(() -> DictionaryVector.wrapOwnedIdsWithDomainPresence(
+                        new I32Vector(new int[] {0}),
+                        1,
+                        new I64Vector(new long[] {10}),
+                        0))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> DictionaryVector.wrapOwnedIdsWithDomainPresence(
+                        new I32Vector(new int[] {0}),
+                        1,
+                        new I64Vector(new long[] {10}),
+                        0b10))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
     void testProjectOperatorSupportsNestedDictionaryIntegerDispatch()
     {
         PrimitiveRegistry primitiveRegistry = primitiveRegistry();

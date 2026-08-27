@@ -29,6 +29,8 @@ public final class DictionaryVector
     private final int length;
     private final Vector values;
     private final Object mappingIdentity;
+    private final long domainPresenceBits;
+    private final boolean hasDomainPresence;
     private final int[] domainFrequencies;
     private final boolean ownsDomainFrequencies;
     private I32Vector ownedDomainFrequencies;
@@ -37,7 +39,7 @@ public final class DictionaryVector
 
     public DictionaryVector(int[] ids, Vector values)
     {
-        this(ids, null, ids.length, values, true, true, true, null, null, false);
+        this(ids, null, ids.length, values, true, true, true, null, 0, false, null, false);
     }
 
     /**
@@ -52,7 +54,30 @@ public final class DictionaryVector
 
     public static DictionaryVector ofTrustedIds(int[] ids, int length, Vector values)
     {
-        return new DictionaryVector(ids, null, length, values, true, true, false, null, null, false);
+        return new DictionaryVector(ids, null, length, values, true, true, false, null, 0, false, null, false);
+    }
+
+    /** Builds a self-contained dictionary with exact physical-domain membership. */
+    public static DictionaryVector ofTrustedIdsWithDomainPresence(
+            int[] ids,
+            int length,
+            Vector values,
+            long domainPresenceBits)
+    {
+        validateDomainPresence(length, values, domainPresenceBits);
+        return new DictionaryVector(
+                ids,
+                null,
+                length,
+                values,
+                true,
+                true,
+                false,
+                null,
+                domainPresenceBits,
+                true,
+                null,
+                false);
     }
 
     /**
@@ -75,6 +100,8 @@ public final class DictionaryVector
                 true,
                 false,
                 null,
+                0,
+                false,
                 domainFrequencies,
                 true);
     }
@@ -101,7 +128,7 @@ public final class DictionaryVector
      */
     public static DictionaryVector wrapNested(int[] ids, int length, Vector values)
     {
-        return new DictionaryVector(ids, null, length, values, false, false, false, null, null, false);
+        return new DictionaryVector(ids, null, length, values, false, false, false, null, 0, false, null, false);
     }
 
     /**
@@ -111,7 +138,7 @@ public final class DictionaryVector
     public static DictionaryVector wrapWithDomainFrequencies(int[] ids, int length, Vector values, int[] domainFrequencies)
     {
         validateDomainFrequencies(length, values, domainFrequencies);
-        return new DictionaryVector(ids, null, length, values, false, false, false, null, domainFrequencies, true);
+        return new DictionaryVector(ids, null, length, values, false, false, false, null, 0, false, domainFrequencies, true);
     }
 
     /**
@@ -125,7 +152,31 @@ public final class DictionaryVector
     public static DictionaryVector wrapOwnedIds(I32Vector ids, int length, Vector values)
     {
         checkArgument(ids != null, "ids is null");
-        return new DictionaryVector(ids.values(), ids, length, values, false, false, false, null, null, false);
+        return new DictionaryVector(ids.values(), ids, length, values, false, false, false, null, 0, false, null, false);
+    }
+
+    /** Wraps allocator-owned dictionary ids and exact physical-domain membership. */
+    public static DictionaryVector wrapOwnedIdsWithDomainPresence(
+            I32Vector ids,
+            int length,
+            Vector values,
+            long domainPresenceBits)
+    {
+        checkArgument(ids != null, "ids is null");
+        validateDomainPresence(length, values, domainPresenceBits);
+        return new DictionaryVector(
+                ids.values(),
+                ids,
+                length,
+                values,
+                false,
+                false,
+                false,
+                null,
+                domainPresenceBits,
+                true,
+                null,
+                false);
     }
 
     /**
@@ -150,6 +201,8 @@ public final class DictionaryVector
                 false,
                 false,
                 null,
+                0,
+                false,
                 domainFrequencies.values(),
                 false);
         vector.ownedDomainFrequencies = domainFrequencies;
@@ -173,10 +226,10 @@ public final class DictionaryVector
                 baseValues = nestedDictionary.values();
             }
             // composed ids are derived from already-validated id arrays, so bounds are guaranteed
-            return new DictionaryVector(composedIds, null, composedIds.length, baseValues, false, true, false, null, null, false);
+            return new DictionaryVector(composedIds, null, composedIds.length, baseValues, false, true, false, null, 0, false, null, false);
         }
         // callers of wrap are expected to supply bounds-valid ids; skip validation in the hot path
-        return new DictionaryVector(ids, null, length, values, copyIds, copyIds, false, null, null, false);
+        return new DictionaryVector(ids, null, length, values, copyIds, copyIds, false, null, 0, false, null, false);
     }
 
     private DictionaryVector(
@@ -188,6 +241,8 @@ public final class DictionaryVector
             boolean ownsRawIds,
             boolean validate,
             Object mappingIdentity,
+            long domainPresenceBits,
+            boolean hasDomainPresence,
             int[] domainFrequencies,
             boolean ownsDomainFrequencies)
     {
@@ -199,6 +254,8 @@ public final class DictionaryVector
         this.length = length;
         this.values = values;
         this.mappingIdentity = mappingIdentity == null ? this : mappingIdentity;
+        this.domainPresenceBits = domainPresenceBits;
+        this.hasDomainPresence = hasDomainPresence;
         this.domainFrequencies = domainFrequencies;
         this.ownsDomainFrequencies = ownsDomainFrequencies;
         if (validate) {
@@ -221,6 +278,11 @@ public final class DictionaryVector
         return domainFrequencies != null;
     }
 
+    public boolean hasDomainPresence()
+    {
+        return hasDomainPresence || domainFrequencies != null;
+    }
+
     public int domainFrequency(int dictionaryId)
     {
         checkArgument(domainFrequencies != null, "Dictionary does not carry domain frequencies");
@@ -233,9 +295,8 @@ public final class DictionaryVector
      * visitor when this vector and mask do not carry enough metadata to prove the selected physical domain; callers
      * must then use the ordinary logical-row path.
      * <p>
-     * This contract is cardinality-independent when the vector carries exact domain frequencies. Compact
-     * dictionary-domain masks currently cover domains of at most 64 entries, matching {@link Mask}'s encoded mask
-     * representation.
+     * Exact frequencies support arbitrary domain cardinality. Membership-only metadata and compact selected-domain
+     * masks currently cover domains of at most 64 entries, matching {@link Mask}'s encoded mask representation.
      */
     public boolean visitSelectedDomain(Mask mask, IntPredicate visitor)
     {
@@ -259,7 +320,18 @@ public final class DictionaryVector
             return true;
         }
         if (!mask.all() || domainFrequencies == null) {
-            return false;
+            if (!mask.all() || !hasDomainPresence) {
+                return false;
+            }
+            long present = domainPresenceBits;
+            while (present != 0) {
+                int dictionaryId = Long.numberOfTrailingZeros(present);
+                present &= present - 1;
+                if (!visitor.test(dictionaryId)) {
+                    break;
+                }
+            }
+            return true;
         }
         for (int dictionaryId = 0; dictionaryId < domainFrequencies.length; dictionaryId++) {
             if (domainFrequencies[dictionaryId] > 0 && !visitor.test(dictionaryId)) {
@@ -317,13 +389,13 @@ public final class DictionaryVector
      */
     public DictionaryVector sharedMappingView()
     {
-        return new DictionaryVector(ids, null, length, values, false, false, false, mappingIdentity, domainFrequencies, false);
+        return new DictionaryVector(ids, null, length, values, false, false, false, mappingIdentity, domainPresenceBits, hasDomainPresence, domainFrequencies, false);
     }
 
     /** Creates a non-owning sibling value stream over this vector's exact row mapping. */
     public DictionaryVector sharedMappingWithValues(Vector siblingValues)
     {
-        return new DictionaryVector(ids, null, length, siblingValues, false, false, false, mappingIdentity, domainFrequencies, false);
+        return new DictionaryVector(ids, null, length, siblingValues, false, false, false, mappingIdentity, domainPresenceBits, hasDomainPresence, domainFrequencies, false);
     }
 
     public boolean hasSameRowMapping(DictionaryVector other)
@@ -464,6 +536,14 @@ public final class DictionaryVector
                     length,
                     values.copy(allocator, allocationContext),
                     Arrays.copyOf(domainFrequencies, domainFrequencies.length));
+        }
+        if (hasDomainPresence()) {
+            return allocator.allocateDictionaryWithDomainPresence(
+                    allocationContext,
+                    ids,
+                    length,
+                    values.copy(allocator, allocationContext),
+                    domainPresenceBits);
         }
         return allocator.allocateDictionary(allocationContext, Arrays.copyOf(ids, length), values.copy(allocator, allocationContext));
     }
@@ -642,5 +722,13 @@ public final class DictionaryVector
             frequencyTotal += frequency;
         }
         checkArgument(frequencyTotal == length, "Dictionary frequencies do not cover the logical length");
+    }
+
+    private static void validateDomainPresence(int length, Vector values, long domainPresenceBits)
+    {
+        checkArgument(values.length() <= Long.SIZE, "Dictionary domain presence exceeds 64 entries");
+        long domainBits = values.length() == Long.SIZE ? -1L : (1L << values.length()) - 1;
+        checkArgument((domainPresenceBits & ~domainBits) == 0, "Dictionary domain presence is out of bounds");
+        checkArgument(length == 0 || domainPresenceBits != 0, "Non-empty dictionary has no present domain entries");
     }
 }
