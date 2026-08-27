@@ -400,7 +400,7 @@ public class BenchmarkOperators
         }
 
         BinaryVector values = new BinaryVector(rowCount, byteCapacity);
-        values.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        values.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         values.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         BooleanVector nulls = null;
         for (int position = 0; position < rowCount; position++) {

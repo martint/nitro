@@ -96,7 +96,7 @@ public final class ConcatUtf8
                     requiredLength,
                     totalBytes);
             outputValues.clearTraits();
-            outputValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+            outputValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
             if (isAsciiOnly(leftValues) && isAsciiOnly(rightValues)) {
                 outputValues.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
             }

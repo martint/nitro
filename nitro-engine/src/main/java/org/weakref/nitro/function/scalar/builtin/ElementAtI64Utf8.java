@@ -191,7 +191,6 @@ public final class ElementAtI64Utf8
     {
         checkArgument(vector instanceof BinaryVector, "%s requires BinaryVector inputs", functionName);
         BinaryVector values = (BinaryVector) vector;
-        checkArgument(values.hasTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING), "%s requires UTF8_STRING inputs", functionName);
         return values;
     }
 

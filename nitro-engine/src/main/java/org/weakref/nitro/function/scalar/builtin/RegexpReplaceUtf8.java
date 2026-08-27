@@ -166,7 +166,7 @@ public final class RegexpReplaceUtf8
                 requiredLength,
                 totalBytes);
         outputValues.clearTraits();
-        outputValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        outputValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         if (asciiOnly) {
             outputValues.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         }

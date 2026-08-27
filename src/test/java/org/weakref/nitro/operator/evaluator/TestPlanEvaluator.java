@@ -984,7 +984,7 @@ public class TestPlanEvaluator
                         new Reference(contains, Stream.VALUES), new StreamPlan(MaterializationPolicy.MATERIALIZE, MemoizationPolicy.MEMOIZE)));
 
         BinaryVector input = new BinaryVector(3, 16);
-        input.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        input.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         input.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         input.setBytes(0, "google".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         input.setBytes(1, "bing".getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -1020,7 +1020,7 @@ public class TestPlanEvaluator
                 List.of(new Reference(contains, Stream.VALUES)));
 
         BinaryVector dictionary = new BinaryVector(3, 64);
-        dictionary.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        dictionary.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         dictionary.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         dictionary.setBytes(0, "google.com".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         dictionary.setBytes(1, "example.com".getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -1056,7 +1056,7 @@ public class TestPlanEvaluator
                         new Reference(new Input(0), Stream.VALUES)));
 
         BinaryVector inputValues = new BinaryVector(2, 16);
-        inputValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        inputValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         inputValues.setBytes(0, "alpha".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         inputValues.setNull(1);
         BooleanVector inputNulls = new BooleanVector(new boolean[] {false, true});
@@ -1123,7 +1123,7 @@ public class TestPlanEvaluator
                 Map.of(new Reference(contains, Stream.VALUES), new StreamPlan(MaterializationPolicy.MATERIALIZE, MemoizationPolicy.MEMOIZE)));
 
         BinaryVector input = new BinaryVector(6, 512);
-        input.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        input.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         input.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         input.setBytes(0, ("x".repeat(31) + "aaab" + "tail").getBytes(java.nio.charset.StandardCharsets.UTF_8));
         input.setBytes(1, ("x".repeat(63) + "aaab").getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -1157,7 +1157,7 @@ public class TestPlanEvaluator
                         new Reference(host, Stream.NULLS)));
 
         BinaryVector dictionaryValues = new BinaryVector(6, 256);
-        dictionaryValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        dictionaryValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         dictionaryValues.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         dictionaryValues.setBytes(0, "https://www.google.com/search".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         dictionaryValues.setBytes(1, "http://news.ycombinator.com/item".getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -1189,7 +1189,7 @@ public class TestPlanEvaluator
         assertThat(utf8(extractedValues, 3)).isEqualTo("https://www.example.com");
         assertThat(utf8(extractedValues, 4)).isEqualTo("ftp://www.example.com/path");
         assertThat(utf8(extractedValues, 5)).isEqualTo("www.");
-        assertThat(extractedValues.hasTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING)).isTrue();
+        assertThat(extractedValues.hasTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID)).isTrue();
         assertThat(extractedValues.hasTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY)).isTrue();
     }
 
@@ -1298,7 +1298,7 @@ public class TestPlanEvaluator
                 List.of(new Reference(host, Stream.VALUES)));
 
         BinaryVector values = new BinaryVector(5, 200);
-        values.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        values.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         values.setBytes(0, "https://www.google.com/search".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         values.setBytes(1, "http://news.ycombinator.com/item".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         values.setBytes(2, "https://example.com/page".getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -1333,13 +1333,13 @@ public class TestPlanEvaluator
                 List.of(new Reference(selected, Stream.VALUES)));
 
         BinaryVector trueValues = new BinaryVector(4, 64);
-        trueValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        trueValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         trueValues.setBytes(0, "alpha".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         trueValues.setBytes(1, "bravo".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         trueValues.setBytes(2, "charlie".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         trueValues.setBytes(3, "delta".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         BinaryVector falseValues = new BinaryVector(4, 64);
-        falseValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        falseValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         falseValues.setBytes(0, "w".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         falseValues.setBytes(1, "x".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         falseValues.setBytes(2, "y".getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -1377,14 +1377,14 @@ public class TestPlanEvaluator
                 2,
                 new int[] {0, 5, 5},
                 "alpha".getBytes(java.nio.charset.StandardCharsets.UTF_8));
-        trueValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        trueValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         // Bytes under a null position are semantically undefined. A lazy producer is therefore allowed to leave
         // offsets that cannot be used as a value; IF must inspect the selected null stream before sizing its output.
         BinaryVector falseValues = new BinaryVector(
                 2,
                 new int[] {0, 5, 0},
                 new byte[5]);
-        falseValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        falseValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
 
         PlanEvaluator evaluator = planEvaluator(
                 plan,
@@ -1413,7 +1413,7 @@ public class TestPlanEvaluator
                 List.of(new Reference(host, Stream.VALUES)));
 
         BinaryVector values = new BinaryVector(4, 160);
-        values.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        values.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         values.setBytes(0, "https://www.google.com/search".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         values.setBytes(1, "http://news.ycombinator.com/item".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         values.setBytes(2, "https://example.com/page".getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -1451,7 +1451,7 @@ public class TestPlanEvaluator
                 List.of(new Reference(host, Stream.VALUES)));
 
         BinaryVector dictionaryValues = new BinaryVector(4, 160);
-        dictionaryValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        dictionaryValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         dictionaryValues.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         dictionaryValues.setBytes(0, "https://www.google.com/search".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         dictionaryValues.setBytes(1, "http://news.ycombinator.com/item".getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -1509,7 +1509,7 @@ public class TestPlanEvaluator
                 "http://www./path",
         };
         BinaryVector dictionaryValues = new BinaryVector(inputs.length, 512);
-        dictionaryValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        dictionaryValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         for (int position = 0; position < inputs.length; position++) {
             dictionaryValues.setBytes(position, inputs[position].getBytes(java.nio.charset.StandardCharsets.UTF_8));
         }
@@ -1552,7 +1552,7 @@ public class TestPlanEvaluator
                         new Reference(upper, Stream.NULLS)));
 
         BinaryVector input = new BinaryVector(3, 32);
-        input.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        input.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         input.setBytes(0, "mixed".getBytes(UTF_8));
         input.setBytes(1, "mañana".getBytes(UTF_8));
         input.setNull(2);
@@ -1675,7 +1675,7 @@ public class TestPlanEvaluator
         maps.offsets()[4] = 4;
 
         BinaryVector mapKeys = new BinaryVector(4, 19);
-        mapKeys.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        mapKeys.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         mapKeys.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         mapKeys.setBytes(0, "alpha".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         mapKeys.setBytes(1, "beta".getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -1687,7 +1687,7 @@ public class TestPlanEvaluator
         maps.setEntries(Streams.ofValues(mapKeys), Streams.ofValues(mapValues).with(Stream.NULLS, mapValueNulls));
 
         BinaryVector lookupKeys = new BinaryVector(4, 20);
-        lookupKeys.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        lookupKeys.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         lookupKeys.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         lookupKeys.setBytes(0, "alpha".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         lookupKeys.setBytes(1, "alpha".getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -1730,12 +1730,12 @@ public class TestPlanEvaluator
 
         MapVector maps = new MapVector(3);
         BinaryVector mapKeys = new BinaryVector(0, 0);
-        mapKeys.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        mapKeys.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         mapKeys.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         maps.setEntries(Streams.ofValues(mapKeys), Streams.ofValues(new I64Vector(new long[0])));
 
         BinaryVector lookupKeys = new BinaryVector(3, 3);
-        lookupKeys.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        lookupKeys.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         lookupKeys.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         lookupKeys.setBytes(0, "a".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         lookupKeys.setBytes(1, "b".getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -1783,7 +1783,7 @@ public class TestPlanEvaluator
         maps.offsets()[4] = 4;
 
         BinaryVector mapKeys = new BinaryVector(4, 19);
-        mapKeys.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        mapKeys.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         mapKeys.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         mapKeys.setBytes(0, "alpha".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         mapKeys.setBytes(1, "beta".getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -1792,7 +1792,7 @@ public class TestPlanEvaluator
         maps.setEntries(Streams.ofValues(mapKeys), Streams.ofValues(new I64Vector(new long[] {10, 20, 30, 40})));
 
         BinaryVector lookupKeys = new BinaryVector(4, 22);
-        lookupKeys.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        lookupKeys.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         lookupKeys.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         lookupKeys.setBytes(0, "alpha".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         lookupKeys.setBytes(1, "alpha".getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -3123,7 +3123,7 @@ public class TestPlanEvaluator
                 List.of());
 
         BinaryVector haystack = new BinaryVector(5, 64);
-        haystack.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        haystack.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         haystack.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         haystack.setBytes(0, "google".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         haystack.setBytes(1, "bing".getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -3133,7 +3133,7 @@ public class TestPlanEvaluator
 
         BooleanVector haystackNulls = new BooleanVector(new boolean[] {false, false, false, true, false});
         BinaryVector needle = new BinaryVector(1, 16);
-        needle.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        needle.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         needle.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         needle.setBytes(0, "google".getBytes(java.nio.charset.StandardCharsets.UTF_8));
 
@@ -3885,7 +3885,7 @@ public class TestPlanEvaluator
                 List.of());
 
         BinaryVector dictionary = new BinaryVector(3, 32);
-        dictionary.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        dictionary.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         dictionary.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         dictionary.setBytes(0, "".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         dictionary.setBytes(1, "iphone".getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -3925,7 +3925,7 @@ public class TestPlanEvaluator
                 List.of());
 
         BinaryVector dictionary = new BinaryVector(3, 32);
-        dictionary.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        dictionary.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         dictionary.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         dictionary.setBytes(0, "".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         dictionary.setBytes(1, "iphone".getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -4017,7 +4017,7 @@ public class TestPlanEvaluator
                 List.of(new Reference(lessThan, Stream.VALUES)));
 
         BinaryVector dictionary = new BinaryVector(3, 32);
-        dictionary.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        dictionary.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         dictionary.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         dictionary.setBytes(0, "android".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         dictionary.setBytes(1, "iphone".getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -4144,7 +4144,7 @@ public class TestPlanEvaluator
                 List.of(new Reference(lessThanOrEqual, Stream.VALUES)));
 
         BinaryVector dictionary = new BinaryVector(3, 32);
-        dictionary.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        dictionary.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         dictionary.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         dictionary.setBytes(0, "iphone".getBytes(UTF_8));
         dictionary.setBytes(1, "z".getBytes(UTF_8));
@@ -4183,7 +4183,7 @@ public class TestPlanEvaluator
                 List.of());
 
         BinaryVector dictionary = new BinaryVector(8, 48);
-        dictionary.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        dictionary.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         dictionary.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         dictionary.setBytes(0, "apple".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         dictionary.setBytes(1, "pixel".getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -4224,7 +4224,7 @@ public class TestPlanEvaluator
         EvaluationPlan plan = new EvaluationPlan(assignments, List.of(new Reference(matches, Stream.VALUES)));
 
         BinaryVector values = new BinaryVector(7, 14);
-        values.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        values.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         values.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         values.setBytes(0, "10".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         values.setBytes(1, "16".getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -4289,7 +4289,7 @@ public class TestPlanEvaluator
                 List.of());
 
         BinaryVector dictionary = new BinaryVector(4, 48);
-        dictionary.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        dictionary.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         dictionary.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         dictionary.setBytes(0, "80348-1234".getBytes(UTF_8));
         dictionary.setBytes(1, "99999-1234".getBytes(UTF_8));
@@ -4423,7 +4423,7 @@ public class TestPlanEvaluator
                 List.of());
 
         BinaryVector dictionary = new BinaryVector(3, 32);
-        dictionary.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        dictionary.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         dictionary.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         dictionary.setBytes(0, "80348-1234".getBytes(UTF_8));
         dictionary.setBytes(1, "99999-1234".getBytes(UTF_8));
@@ -4479,7 +4479,7 @@ public class TestPlanEvaluator
                 List.of());
 
         BinaryVector base = new BinaryVector(3, 48);
-        base.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        base.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         base.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         base.setBytes(0, "11111-0000".getBytes(UTF_8));
         base.setBytes(1, "22222-0000".getBytes(UTF_8));
@@ -4532,7 +4532,7 @@ public class TestPlanEvaluator
                 List.of());
 
         BinaryVector dictionary = new BinaryVector(2, 16);
-        dictionary.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        dictionary.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         dictionary.setBytes(0, "éclair".getBytes(UTF_8));
         dictionary.setBytes(1, "ecole".getBytes(UTF_8));
 
@@ -4571,7 +4571,7 @@ public class TestPlanEvaluator
                 List.of(new Reference(substring, Stream.VALUES)));
 
         BinaryVector dictionary = new BinaryVector(4, 32);
-        dictionary.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        dictionary.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         dictionary.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         dictionary.setBytes(0, "70000".getBytes(UTF_8));
         dictionary.setBytes(1, "81111".getBytes(UTF_8));
@@ -4614,7 +4614,7 @@ public class TestPlanEvaluator
                 List.of(new Reference(substring, Stream.VALUES)));
 
         BinaryVector dictionary = new BinaryVector(4, 32);
-        dictionary.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        dictionary.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         dictionary.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         dictionary.setBytes(0, "70000".getBytes(UTF_8));
         dictionary.setBytes(1, "81111".getBytes(UTF_8));
@@ -4656,7 +4656,7 @@ public class TestPlanEvaluator
                 List.of(new Reference(substring, Stream.VALUES)));
 
         BinaryVector dictionary = new BinaryVector(50, 512);
-        dictionary.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        dictionary.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         dictionary.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         for (int position = 0; position < 50; position++) {
             dictionary.setBytes(position, ("9" + position + "000").getBytes(UTF_8));
@@ -4700,7 +4700,7 @@ public class TestPlanEvaluator
                 List.of(new Reference(substring, Stream.VALUES)));
 
         BinaryVector runValues = new BinaryVector(2, 16);
-        runValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        runValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         runValues.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         runValues.setBytes(0, "70000".getBytes(UTF_8));
         runValues.setBytes(1, "81111".getBytes(UTF_8));
@@ -5009,7 +5009,7 @@ public class TestPlanEvaluator
         maps.offsets()[4] = 5;
 
         BinaryVector keys = new BinaryVector(5, 26);
-        keys.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        keys.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         keys.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         keys.setBytes(0, "alpha".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         keys.setBytes(1, "beta".getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -5033,7 +5033,7 @@ public class TestPlanEvaluator
         }
 
         BinaryVector vector = new BinaryVector(values.length, totalBytes);
-        vector.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        vector.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         vector.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         for (int index = 0; index < values.length; index++) {
             vector.setBytes(index, encoded[index]);

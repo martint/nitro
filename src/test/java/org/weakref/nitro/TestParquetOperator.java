@@ -2680,8 +2680,8 @@ public class TestParquetOperator
                 try {
                     BinaryVector requiredDictionary = binaryValues(requiredValues);
                     BinaryVector optionalDictionary = binaryValues(optionalValues);
-                    assertThat(requiredDictionary.hasTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING)).isTrue();
-                    assertThat(optionalDictionary.hasTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING)).isFalse();
+                    assertThat(requiredDictionary.hasTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID)).isTrue();
+                    assertThat(optionalDictionary.hasTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID)).isFalse();
                     for (int index = 0; index < batchSize; index++) {
                         int position = consumed + index;
                         int requiredPosition = requiredValues instanceof DictionaryVector dictionary ? dictionary.ids()[index] : index;
@@ -2812,7 +2812,7 @@ public class TestParquetOperator
     void testEqualUtf8SupportsDictionaryAgainstSingleLiteral()
     {
         BinaryVector dictionaryValues = new BinaryVector(3, 32);
-        dictionaryValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        dictionaryValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         dictionaryValues.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         dictionaryValues.setBytes(0, "".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         dictionaryValues.setBytes(1, "iphone".getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -2822,7 +2822,7 @@ public class TestParquetOperator
         BooleanVector leftNulls = new BooleanVector(new boolean[] {false, false, true, false, false});
 
         BinaryVector literal = new BinaryVector(1, 1);
-        literal.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        literal.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         literal.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         literal.setBytes(0, "".getBytes(java.nio.charset.StandardCharsets.UTF_8));
 
@@ -2856,7 +2856,7 @@ public class TestParquetOperator
     void testEqualUtf8PreservesExistingValuesWhenLiteralIsNull()
     {
         BinaryVector dictionaryValues = new BinaryVector(2, 16);
-        dictionaryValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        dictionaryValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         dictionaryValues.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         dictionaryValues.setBytes(0, "".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         dictionaryValues.setBytes(1, "iphone".getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -2865,7 +2865,7 @@ public class TestParquetOperator
         BooleanVector existingValues = new BooleanVector(new boolean[] {true, false, true, false});
 
         BinaryVector literal = new BinaryVector(1, 1);
-        literal.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        literal.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         literal.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         literal.setBytes(0, "".getBytes(java.nio.charset.StandardCharsets.UTF_8));
 

@@ -541,7 +541,7 @@ public class TestOperatorBatches
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());
         BinaryVector cities = new BinaryVector(5, 10);
-        cities.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        cities.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         cities.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         cities.setBytes(0, "LA".getBytes(UTF_8));
         cities.setBytes(1, "NY".getBytes(UTF_8));
@@ -550,7 +550,7 @@ public class TestOperatorBatches
         cities.setBytes(4, "NA".getBytes(UTF_8));
 
         BinaryVector zips = new BinaryVector(5, 25);
-        zips.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        zips.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         zips.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         zips.setBytes(0, "90001".getBytes(UTF_8));
         zips.setBytes(1, "10001".getBytes(UTF_8));
@@ -2015,7 +2015,7 @@ public class TestOperatorBatches
         BinaryVector keys = (BinaryVector) batch.output(0).borrow(Stream.VALUES);
         I64Vector counts = (I64Vector) batch.output(1).borrow(Stream.VALUES);
 
-        assertThat(keys.hasTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING)).isTrue();
+        assertThat(keys.hasTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID)).isTrue();
         assertThat(utf8(keys, 0)).isEqualTo("alpha");
         assertThat(utf8(keys, 1)).isEqualTo("beta");
         assertThat(Arrays.copyOf(counts.values(), rowCount)).containsExactly(2L, 1L);
@@ -3630,7 +3630,7 @@ public class TestOperatorBatches
     void testTopNOperatorPreservesBinaryOutputColumn()
     {
         BinaryVector names = new BinaryVector(4, 19);
-        names.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        names.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         names.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         names.setBytes(0, "alpha".getBytes(UTF_8));
         names.setBytes(1, "beta".getBytes(UTF_8));
@@ -3656,7 +3656,7 @@ public class TestOperatorBatches
         BinaryVector resultNames = (BinaryVector) batch.output(1).borrow(Stream.VALUES);
 
         assertThat(Arrays.copyOf(ranks.values(), batch.borrowMask().count())).containsExactly(5L, 4L);
-        assertThat(resultNames.hasTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING)).isTrue();
+        assertThat(resultNames.hasTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID)).isTrue();
         assertThat(resultNames.hasTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY)).isTrue();
         assertThat(utf8(resultNames, 0)).isEqualTo("beta");
         assertThat(utf8(resultNames, 1)).isEqualTo("delta");
@@ -4281,7 +4281,7 @@ public class TestOperatorBatches
     void testTopNOperatorMaterializesOnlyConstrainedPayloadRows()
     {
         BinaryVector payloads = new BinaryVector(3, 16);
-        payloads.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        payloads.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         payloads.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         payloads.setBytes(0, "ccc".getBytes(UTF_8));
         payloads.setBytes(1, "bb".getBytes(UTF_8));
@@ -4475,7 +4475,7 @@ public class TestOperatorBatches
     void testNestedLoopJoinOperatorPreservesBinaryPayloadColumn()
     {
         BinaryVector names = new BinaryVector(2, 9);
-        names.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        names.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         names.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         names.setBytes(0, "red".getBytes(UTF_8));
         names.setBytes(1, "blue".getBytes(UTF_8));
@@ -4501,7 +4501,7 @@ public class TestOperatorBatches
         BinaryVector payload = (BinaryVector) batch.output(1).borrow(Stream.VALUES);
 
         assertThat(Arrays.copyOf(ids.values(), rowCount)).containsExactly(1L, 2L);
-        assertThat(payload.hasTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING)).isTrue();
+        assertThat(payload.hasTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID)).isTrue();
         assertThat(payload.hasTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY)).isTrue();
         assertThat(utf8(payload, 0)).isEqualTo("red");
         assertThat(utf8(payload, 1)).isEqualTo("red");
@@ -4738,7 +4738,7 @@ public class TestOperatorBatches
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());
         BinaryVector payloadValues = new BinaryVector(2, "alpha".length() + "beta".length());
-        payloadValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        payloadValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         payloadValues.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         payloadValues.setBytes(0, "alpha".getBytes(UTF_8));
         payloadValues.setBytes(1, "beta".getBytes(UTF_8));
@@ -4837,13 +4837,13 @@ public class TestOperatorBatches
     void testHashJoinOperatorSupportsMultipleOuterPages()
     {
         BinaryVector firstPageKeys = new BinaryVector(2, 4);
-        firstPageKeys.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        firstPageKeys.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         firstPageKeys.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         firstPageKeys.setBytes(0, "aa".getBytes(UTF_8));
         firstPageKeys.setBytes(1, "bb".getBytes(UTF_8));
 
         BinaryVector secondPageKeys = new BinaryVector(2, 4);
-        secondPageKeys.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        secondPageKeys.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         secondPageKeys.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         secondPageKeys.setBytes(0, "aa".getBytes(UTF_8));
         secondPageKeys.setBytes(1, "bb".getBytes(UTF_8));

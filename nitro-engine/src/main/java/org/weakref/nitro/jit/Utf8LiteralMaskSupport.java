@@ -18,7 +18,6 @@ import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Streams;
-import org.weakref.nitro.data.Utf8Traits;
 import org.weakref.nitro.data.Vector;
 
 /**
@@ -42,7 +41,7 @@ final class Utf8LiteralMaskSupport
     boolean evaluate(Streams input, Mask mask, boolean selectMatches)
     {
         Vector values = input.values();
-        if (!hasUtf8Trait(values)) {
+        if (!hasBinaryShape(values)) {
             return false;
         }
         return switch (values) {
@@ -225,12 +224,12 @@ final class Utf8LiteralMaskSupport
         mask.finishRetain(retained);
     }
 
-    private static boolean hasUtf8Trait(Vector vector)
+    private static boolean hasBinaryShape(Vector vector)
     {
         return switch (vector) {
-            case BinaryVector binary -> binary.hasTrait(Utf8Traits.UTF8_STRING);
-            case DictionaryVector dictionary -> hasUtf8Trait(dictionary.values());
-            case RleVector rle -> hasUtf8Trait(rle.values());
+            case BinaryVector _ -> true;
+            case DictionaryVector dictionary -> hasBinaryShape(dictionary.values());
+            case RleVector rle -> hasBinaryShape(rle.values());
             default -> false;
         };
     }

@@ -2867,7 +2867,7 @@ public final class ColumnReader
     private void markUtf8(BinaryVector vector)
     {
         if (utf8) {
-            vector.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+            vector.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         }
     }
 

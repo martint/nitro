@@ -497,7 +497,7 @@ public class TestBatchRuntime
         Allocator.Context context = new Allocator.Context("BinaryCopyMasked");
 
         BinaryVector values = new BinaryVector(5, 64);
-        values.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        values.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         values.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         values.setBytes(0, "zero".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         values.setBytes(1, "one".getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -519,14 +519,14 @@ public class TestBatchRuntime
         Allocator.Context context = new Allocator.Context("VariableWidthMaskedMerge");
 
         BinaryVector trueValues = new BinaryVector(5, 32);
-        trueValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        trueValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         trueValues.setBytes(0, "zero".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         trueValues.setBytes(1, "one".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         trueValues.setBytes(2, "two".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         trueValues.setBytes(3, "three".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         trueValues.setBytes(4, "four".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         BinaryVector empty = new BinaryVector(1, 0);
-        empty.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        empty.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         RleVector falseValues = new RleVector(new int[] {4}, empty);
 
         Vector merged = trueValues.copyMasked(
@@ -548,7 +548,7 @@ public class TestBatchRuntime
         assertThat(new String(result.copyBytes(4), java.nio.charset.StandardCharsets.UTF_8)).isEqualTo("four");
 
         BinaryVector dictionaryValues = new BinaryVector(2, 8);
-        dictionaryValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        dictionaryValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         dictionaryValues.setBytes(0, "unused".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         dictionaryValues.setBytes(1, new byte[0]);
         DictionaryVector dictionary = new DictionaryVector(new int[] {1, 0, 1, 0}, dictionaryValues);
@@ -646,7 +646,7 @@ public class TestBatchRuntime
         Allocator.Context context = new Allocator.Context("BinaryCopySingleSparse");
 
         BinaryVector values = new BinaryVector(3, 32);
-        values.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        values.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         values.setBytes(0, "alpha".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         values.setBytes(1, "beta".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         values.setBytes(2, "gamma".getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -668,14 +668,14 @@ public class TestBatchRuntime
         Allocator.Context context = new Allocator.Context("BinaryCopyAppend");
 
         BinaryVector first = new BinaryVector(4, 32);
-        first.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        first.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         first.setBytes(0, "alpha".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         first.setBytes(1, "bravo".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         first.setBytes(2, "charlie".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         first.setBytes(3, "delta".getBytes(java.nio.charset.StandardCharsets.UTF_8));
 
         BinaryVector second = new BinaryVector(4, 32);
-        second.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        second.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         second.setBytes(0, "echo".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         second.setBytes(1, "foxtrot".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         second.setBytes(2, "golf".getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -698,13 +698,13 @@ public class TestBatchRuntime
         Allocator.Context context = new Allocator.Context("BinaryCopyLargeAppend");
 
         BinaryVector first = new BinaryVector(10_000, 200_000);
-        first.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        first.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         for (int position = 0; position < 10_000; position++) {
             first.setBytes(position, ("left-" + position).getBytes(java.nio.charset.StandardCharsets.UTF_8));
         }
 
         BinaryVector second = new BinaryVector(10_000, 200_000);
-        second.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        second.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         for (int position = 0; position < 10_000; position++) {
             second.setBytes(position, ("right-" + position).getBytes(java.nio.charset.StandardCharsets.UTF_8));
         }

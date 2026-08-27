@@ -129,7 +129,7 @@ public final class Types
             int id = (int) slots[i];
             vector.setBytes(i, id >= 0 && id < dictionary.length ? dictionary[id] : NO_BYTES);
         }
-        vector.addTrait(Utf8Traits.UTF8_STRING);
+        vector.addTrait(Utf8Traits.UTF8_VALID);
         return vector;
     }
 

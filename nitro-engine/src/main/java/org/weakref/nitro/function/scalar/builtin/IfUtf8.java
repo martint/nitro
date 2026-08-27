@@ -97,7 +97,7 @@ public final class IfUtf8
                     output != null && output.has(Stream.VALUES) && output.values() instanceof BinaryVector vector ? vector : null,
                     requiredLength,
                     totalBytes);
-            outputValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+            outputValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
             applyValues(conditionValues, conditionNulls, trueBranchValues, falseBranchValues, trueNulls, falseNulls, mask, outputValues, outputNulls);
             result = result.with(Stream.VALUES, outputValues);
             return result;

@@ -184,7 +184,7 @@ public class ConstantTableOperator
         }
 
         BinaryVector values = BinaryVector.allocate(allocator, ALLOCATION_CONTEXT, rows.size(), byteCapacity);
-        values.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        values.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         if (asciiOnly) {
             values.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         }

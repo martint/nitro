@@ -218,10 +218,9 @@ public final class Utf8BinaryDispatch
             result = result.with(Stream.NULLS, outputNulls);
         }
         if (requestedStreams.contains(Stream.VALUES)) {
-            // Validate the UTF8_STRING trait once per batch here rather than per row inside the comparison kernels: the
-            // trait is a property of the vector, constant across the batch, and the per-row Set.contains check was ~13%
-            // of a dictionary-vs-dictionary string equality (TPC-DS q24).
-            requireUtf8Traits(functionName, left, right);
+            // Logical UTF-8 semantics are established by the registry binding. Runtime traits describe narrower
+            // value properties, such as ASCII-only content; they are not a second type-admission mechanism.
+            requireBinaryVectors(functionName, left, right);
             Vector outputValues = tryApplySpecializedValues(
                     functionName,
                     allocationContext,
@@ -305,7 +304,7 @@ public final class Utf8BinaryDispatch
 
         Vector left = inputs.get(0).values();
         Vector right = inputs.get(1).values();
-        if (!hasUtf8Traits(left) || !hasUtf8Traits(right)) {
+        if (!hasBinaryShape(left) || !hasBinaryShape(right)) {
             return false;
         }
         VectorAccess.BooleanValues leftNulls = VectorAccess.booleanValues(inputs.get(0).getOrNull(Stream.NULLS));
@@ -351,7 +350,7 @@ public final class Utf8BinaryDispatch
         checkArgument(inputs.size() == 2, "Unexpected argument count for %s", functionName);
         Vector left = inputs.get(0).values();
         Vector right = inputs.get(1).values();
-        requireUtf8Traits(functionName, left, right);
+        requireBinaryVectors(functionName, left, right);
         Vector leftNullVector = inputs.get(0).getOrNull(Stream.NULLS);
         Vector rightNullVector = inputs.get(1).getOrNull(Stream.NULLS);
         VectorAccess.BooleanValues leftNulls = VectorAccess.booleanValues(leftNullVector);
@@ -628,7 +627,7 @@ public final class Utf8BinaryDispatch
 
     private void applyGeneric(String functionName, Operation operation, Vector left, Vector right, VectorAccess.BooleanValues leftNulls, VectorAccess.BooleanValues rightNulls, Mask mask, BooleanVector output)
     {
-        requireUtf8Traits(functionName, left, right);
+        requireBinaryVectors(functionName, left, right);
         VectorAccess.BinaryValues leftValues = VectorAccess.binaryValues(left);
         VectorAccess.BinaryValues rightValues = VectorAccess.binaryValues(right);
         boolean[] outputValues = output.values();
@@ -662,7 +661,7 @@ public final class Utf8BinaryDispatch
     private void applyContainsFlatSingleNeedle(String functionName, BinaryVector left, RleVector rightRle, VectorAccess.BooleanValues leftNulls, VectorAccess.BooleanValues rightNulls, boolean leftNullFree, Mask mask, BooleanVector output)
     {
         BinaryVector right = requireBinaryRle(functionName, rightRle);
-        requireUtf8Traits(functionName, left, right);
+        requireBinaryVectors(functionName, left, right);
 
         ContainsNeedle needle = compileContainsNeedle(right, 0);
         boolean needleNull = isNull(rightNulls, 0);
@@ -690,7 +689,7 @@ public final class Utf8BinaryDispatch
     {
         BinaryVector left = requireBinaryDictionary(functionName, leftDictionary);
         BinaryVector right = requireBinaryRle(functionName, rightRle);
-        requireUtf8Traits(functionName, left, right);
+        requireBinaryVectors(functionName, left, right);
 
         ContainsNeedle needle = compileContainsNeedle(right, 0);
         boolean needleNull = isNull(rightNulls, 0);
@@ -728,7 +727,7 @@ public final class Utf8BinaryDispatch
     {
         BinaryVector left = requireBinaryDictionary(functionName, leftDictionary);
         BinaryVector right = requireBinaryRle(functionName, rightRle);
-        requireUtf8Traits(functionName, left, right);
+        requireBinaryVectors(functionName, left, right);
 
         boolean literalNull = isNull(rightNulls, 0);
         int[] leftIds = leftDictionary.ids();
@@ -753,7 +752,7 @@ public final class Utf8BinaryDispatch
     {
         BinaryVector left = requireBinaryDictionary(functionName, leftDictionary);
         BinaryVector right = requireBinaryRle(functionName, rightRle);
-        requireUtf8Traits(functionName, left, right);
+        requireBinaryVectors(functionName, left, right);
 
         if (isNull(rightNulls, 0)) {
             return context.allocator().allocateEmptyMask(allocationContext, mask.size());
@@ -786,7 +785,7 @@ public final class Utf8BinaryDispatch
     {
         BinaryVector left = requireBinaryRle(functionName, leftRle);
         BinaryVector right = requireBinaryDictionary(functionName, rightDictionary);
-        requireUtf8Traits(functionName, left, right);
+        requireBinaryVectors(functionName, left, right);
 
         boolean literalNull = isNull(leftNulls, 0);
         int[] rightIds = rightDictionary.ids();
@@ -811,7 +810,7 @@ public final class Utf8BinaryDispatch
     {
         BinaryVector left = requireBinaryRle(functionName, leftRle);
         BinaryVector right = requireBinaryDictionary(functionName, rightDictionary);
-        requireUtf8Traits(functionName, left, right);
+        requireBinaryVectors(functionName, left, right);
 
         if (isNull(leftNulls, 0)) {
             return context.allocator().allocateEmptyMask(allocationContext, mask.size());
@@ -1507,7 +1506,7 @@ public final class Utf8BinaryDispatch
         for (int index = 0; index < literalInputs.size(); index++) {
             RleVector rle = (RleVector) literalInputs.get(index).values();
             literals[index] = requireBinaryRle(functionName, rle);
-            requireUtf8Traits(functionName, literals[index], literals[index]);
+            requireBinaryVectors(functionName, literals[index], literals[index]);
         }
         return literals;
     }
@@ -1730,7 +1729,7 @@ public final class Utf8BinaryDispatch
         };
     }
 
-    // The per-row compare kernels no longer re-check the UTF8_STRING trait: apply() validates it once per batch.
+    // Logical type admission happens when the registry binds this implementation; row kernels only inspect bytes.
     private boolean compareEquals(String functionName, BinaryVector left, int leftPosition, BinaryVector right, int rightPosition)
     {
         return binaryEquals(left, leftPosition, right, rightPosition);
@@ -1830,8 +1829,8 @@ public final class Utf8BinaryDispatch
     {
         switch (source) {
             case BinaryVector values -> {
-                if (values.hasTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING)) {
-                    target.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+                if (values.hasTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID)) {
+                    target.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
                 }
                 if (values.hasTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY)) {
                     target.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
@@ -1843,29 +1842,30 @@ public final class Utf8BinaryDispatch
         }
     }
 
-    private void requireUtf8Traits(String functionName, Vector left, Vector right)
+    private void requireBinaryVectors(String functionName, Vector left, Vector right)
     {
-        checkArgument(hasUtf8Traits(left) && hasUtf8Traits(right), "%s requires UTF8_STRING inputs", functionName);
+        checkArgument(hasBinaryShape(left) && hasBinaryShape(right), "%s requires binary-backed inputs", functionName);
     }
 
-    private void requireUtf8Traits(String functionName, BinaryVector left, BinaryVector right)
+    private void requireBinaryVectors(String functionName, BinaryVector left, BinaryVector right)
     {
-        checkArgument(hasUtf8Traits(left) && hasUtf8Traits(right), "%s requires UTF8_STRING inputs", functionName);
+        requireNonNull(left, "left is null");
+        requireNonNull(right, "right is null");
     }
 
-    private boolean hasUtf8Traits(Vector vector)
+    private boolean hasBinaryShape(Vector vector)
     {
         return switch (vector) {
-            case BinaryVector values -> hasUtf8Traits(values);
-            case DictionaryVector values -> hasUtf8Traits(values.values());
-            case RleVector values -> hasUtf8Traits(values.values());
+            case BinaryVector values -> hasBinaryShape(values);
+            case DictionaryVector values -> hasBinaryShape(values.values());
+            case RleVector values -> hasBinaryShape(values.values());
             default -> false;
         };
     }
 
-    private boolean hasUtf8Traits(BinaryVector vector)
+    private boolean hasBinaryShape(BinaryVector vector)
     {
-        return vector.hasTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        return true;
     }
 
     private boolean isNull(VectorAccess.BooleanValues nulls, int position)

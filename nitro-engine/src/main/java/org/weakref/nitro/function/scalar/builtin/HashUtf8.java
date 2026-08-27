@@ -97,7 +97,7 @@ public final class HashUtf8
 
     private static void applyFlat(BinaryVector values, Vector inputNulls, Mask mask, I64Vector output)
     {
-        boolean ascii = requireUtf8AndCheckAscii(values);
+        boolean ascii = isAscii(values);
         VectorAccess.BooleanValues nulls = VectorAccess.booleanValues(inputNulls);
         long[] outputValues = output.values();
         if (mask.all()) {
@@ -115,7 +115,7 @@ public final class HashUtf8
     {
         checkArgument(dictionaryValues.values() instanceof BinaryVector, "hash_utf8 requires BinaryVector dictionary values");
         BinaryVector values = (BinaryVector) dictionaryValues.values();
-        boolean ascii = requireUtf8AndCheckAscii(values);
+        boolean ascii = isAscii(values);
         VectorAccess.BooleanValues nulls = VectorAccess.booleanValues(inputNulls);
         int[] ids = dictionaryValues.ids();
         long[] outputValues = output.values();
@@ -145,9 +145,9 @@ public final class HashUtf8
         }
     }
 
-    private static boolean requireUtf8AndCheckAscii(BinaryVector vector)
+    private static boolean isAscii(BinaryVector vector)
     {
-        checkArgument(vector.hasTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING), "hash_utf8 requires UTF8_STRING inputs");
+        // The registry binding establishes VARCHAR semantics. The trait only selects the narrower ASCII loop.
         return vector.hasTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
     }
 

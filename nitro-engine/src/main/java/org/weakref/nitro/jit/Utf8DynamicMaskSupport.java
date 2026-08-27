@@ -19,7 +19,6 @@ import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
-import org.weakref.nitro.data.Utf8Traits;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
 
@@ -50,7 +49,7 @@ final class Utf8DynamicMaskSupport
     {
         Vector left = leftInput.values();
         Vector right = rightInput.values();
-        if (!hasUtf8Trait(left) || !hasUtf8Trait(right)) {
+        if (!hasBinaryShape(left) || !hasBinaryShape(right)) {
             return false;
         }
         Vector leftNullVector = leftInput.getOrNull(Stream.NULLS);
@@ -258,12 +257,12 @@ final class Utf8DynamicMaskSupport
         });
     }
 
-    private static boolean hasUtf8Trait(Vector vector)
+    private static boolean hasBinaryShape(Vector vector)
     {
         return switch (vector) {
-            case BinaryVector binary -> binary.hasTrait(Utf8Traits.UTF8_STRING);
-            case DictionaryVector dictionary -> hasUtf8Trait(dictionary.values());
-            case org.weakref.nitro.data.RleVector rle -> hasUtf8Trait(rle.values());
+            case BinaryVector _ -> true;
+            case DictionaryVector dictionary -> hasBinaryShape(dictionary.values());
+            case org.weakref.nitro.data.RleVector rle -> hasBinaryShape(rle.values());
             default -> false;
         };
     }

@@ -676,7 +676,7 @@ class TestFusedGroupedAggregation
     {
         int totalBytes = Arrays.stream(values).mapToInt(String::length).sum();
         BinaryVector vector = new BinaryVector(values.length, totalBytes);
-        vector.addTrait(Utf8Traits.UTF8_STRING);
+        vector.addTrait(Utf8Traits.UTF8_VALID);
         vector.addTrait(Utf8Traits.ASCII_ONLY);
         for (int index = 0; index < values.length; index++) {
             vector.setBytes(index, values[index].getBytes(StandardCharsets.UTF_8));

@@ -100,7 +100,7 @@ public class TestSemiJoinDictionaryKey
             totalBytes += encoded[index].length;
         }
         BinaryVector vector = new BinaryVector(values.length, totalBytes);
-        vector.addTrait(Utf8Traits.UTF8_STRING);
+        vector.addTrait(Utf8Traits.UTF8_VALID);
         vector.addTrait(Utf8Traits.ASCII_ONLY);
         for (int index = 0; index < values.length; index++) {
             vector.setBytes(index, encoded[index]);

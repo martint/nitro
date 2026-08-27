@@ -3618,7 +3618,7 @@ public class TestOperators
         expected.put("score", 7L);
 
         BinaryVector names = new BinaryVector(1, 5);
-        names.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        names.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         names.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         names.setBytes(0, "alpha".getBytes(java.nio.charset.StandardCharsets.UTF_8));
 
@@ -3644,12 +3644,12 @@ public class TestOperators
     {
         BinaryVector values = new BinaryVector(1, 5);
         Set<BinaryVector.Trait> callerTraits = new java.util.LinkedHashSet<>();
-        callerTraits.add(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        callerTraits.add(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
 
         values.addTraits(callerTraits);
         callerTraits.add(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
 
-        assertThat(values.hasTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING)).isTrue();
+        assertThat(values.hasTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID)).isTrue();
         assertThat(values.hasTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY)).isFalse();
         assertThatThrownBy(() -> values.traits().add(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY))
                 .isInstanceOf(UnsupportedOperationException.class);
@@ -5933,20 +5933,20 @@ public class TestOperators
     void testHashJoinBinaryDictionaryProbeCacheTracksBaseIdentityAndNulls()
     {
         BinaryVector buildKeys = new BinaryVector(3, 14);
-        buildKeys.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        buildKeys.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         buildKeys.setBytes(0, "alpha".getBytes(UTF_8));
         buildKeys.setBytes(1, "beta".getBytes(UTF_8));
         buildKeys.setBytes(2, "gamma".getBytes(UTF_8));
 
         BinaryVector firstBase = new BinaryVector(3, 17);
-        firstBase.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        firstBase.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         firstBase.setBytes(0, "gamma".getBytes(UTF_8));
         firstBase.setBytes(1, "alpha".getBytes(UTF_8));
         firstBase.setBytes(2, "missing".getBytes(UTF_8));
         DictionaryVector firstProbe = DictionaryVector.wrap(new int[] {1, 0, 2, 1, 0, 2, 1, 0}, firstBase);
 
         BinaryVector secondBase = new BinaryVector(3, 16);
-        secondBase.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        secondBase.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         secondBase.setBytes(0, "beta".getBytes(UTF_8));
         secondBase.setBytes(1, "absent".getBytes(UTF_8));
         secondBase.setBytes(2, "alpha".getBytes(UTF_8));

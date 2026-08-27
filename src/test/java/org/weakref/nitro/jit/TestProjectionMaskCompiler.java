@@ -350,7 +350,7 @@ class TestProjectionMaskCompiler
             offset += bytes.length;
         }
         BinaryVector vector = new BinaryVector(values.length, offsets, data);
-        vector.addTrait(Utf8Traits.UTF8_STRING);
+        vector.addTrait(Utf8Traits.UTF8_VALID);
         return vector;
     }
 }

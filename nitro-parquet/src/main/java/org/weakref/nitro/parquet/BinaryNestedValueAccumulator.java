@@ -24,7 +24,7 @@ import org.weakref.nitro.data.Streams;
 import java.util.Arrays;
 
 import static java.util.Objects.requireNonNull;
-import static org.weakref.nitro.data.Utf8Traits.UTF8_STRING;
+import static org.weakref.nitro.data.Utf8Traits.UTF8_VALID;
 
 /** Reusable accumulation for BYTE_ARRAY leaves, preserving the schema's UTF-8 annotation. */
 final class BinaryNestedValueAccumulator
@@ -173,7 +173,7 @@ final class BinaryNestedValueAccumulator
         System.arraycopy(offsets, 0, result.offsets(), 0, size + 1);
         System.arraycopy(data, 0, result.data(), 0, bytes);
         if (utf8) {
-            result.addTrait(UTF8_STRING);
+            result.addTrait(UTF8_VALID);
         }
         if (!nullable) {
             return Streams.ofValues(result);
@@ -267,7 +267,7 @@ final class BinaryNestedValueAccumulator
         }
         System.arraycopy(dictionaryData, 0, dictionary.data(), 0, dictionaryBytes);
         if (utf8) {
-            dictionary.addTrait(UTF8_STRING);
+            dictionary.addTrait(UTF8_VALID);
         }
         DictionaryVector result = DictionaryVector.wrapOwnedIdsWithDomainFrequencies(
                 ids,

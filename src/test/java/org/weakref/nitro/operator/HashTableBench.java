@@ -132,7 +132,7 @@ public final class HashTableBench
                 bytes += keys[start + i].length;
             }
             BinaryVector vector = BinaryVector.allocate(allocator, context, count, bytes);
-            vector.addTrait(Utf8Traits.UTF8_STRING);
+            vector.addTrait(Utf8Traits.UTF8_VALID);
             vector.addTrait(Utf8Traits.ASCII_ONLY);
             for (int i = 0; i < count; i++) {
                 vector.setBytes(i, keys[start + i]);

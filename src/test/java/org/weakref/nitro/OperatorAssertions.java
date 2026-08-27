@@ -159,7 +159,7 @@ public class OperatorAssertions
                 case I64Vector vector -> vector.values()[position];
                 case BooleanVector vector -> vector.values()[position] ? 1L : 0L;
                 case F64Vector vector -> vector.values()[position];
-                case BinaryVector vector -> vector.hasTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING) ? new String(vector.copyBytes(position), UTF_8) : vector.copyBytes(position);
+                case BinaryVector vector -> vector.hasTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID) ? new String(vector.copyBytes(position), UTF_8) : vector.copyBytes(position);
                 case ArrayVector vector -> decodeArray(vector, position);
                 case MapVector vector -> decodeMap(vector, position);
                 case StructVector vector -> decodeStruct(vector, position);

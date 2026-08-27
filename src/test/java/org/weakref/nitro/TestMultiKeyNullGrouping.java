@@ -144,7 +144,7 @@ public class TestMultiKeyNullGrouping
             totalBytes += encoded[index].length;
         }
         org.weakref.nitro.data.BinaryVector vector = new org.weakref.nitro.data.BinaryVector(values.length, totalBytes);
-        vector.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        vector.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         vector.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         for (int index = 0; index < values.length; index++) {
             vector.setBytes(index, encoded[index]);

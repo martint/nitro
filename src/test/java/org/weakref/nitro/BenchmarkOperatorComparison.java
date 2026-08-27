@@ -356,7 +356,7 @@ public class BenchmarkOperatorComparison
                 byteCapacity += keys[(start + index) % distinctKeys].length;
             }
             BinaryVector keyVector = new BinaryVector(rows, byteCapacity);
-            keyVector.addTrait(Utf8Traits.UTF8_STRING);
+            keyVector.addTrait(Utf8Traits.UTF8_VALID);
             keyVector.addTrait(Utf8Traits.ASCII_ONLY);
             long[] payload = new long[rows];
             for (int index = 0; index < rows; index++) {
@@ -379,7 +379,7 @@ public class BenchmarkOperatorComparison
         // One dictionary base, shared by reference across every batch, so the grouping table binds the dictionary
         // identity once and compares by id instead of re-hashing/comparing the underlying bytes per row.
         BinaryVector base = new BinaryVector(distinctKeys, byteCapacity);
-        base.addTrait(Utf8Traits.UTF8_STRING);
+        base.addTrait(Utf8Traits.UTF8_VALID);
         base.addTrait(Utf8Traits.ASCII_ONLY);
         for (int key = 0; key < distinctKeys; key++) {
             base.setBytes(key, keyBytes[key]);

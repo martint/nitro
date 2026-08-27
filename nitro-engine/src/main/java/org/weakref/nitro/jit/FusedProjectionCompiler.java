@@ -659,7 +659,7 @@ public final class FusedProjectionCompiler
             else if (outputType[output] == PhysicalType.UTF8) {
                 out.append("    BinaryVector out").append(output).append(" = BinaryVector.allocate("
                         + "context.allocator(), context.allocationContext(\"FusedProjection\"), required, bytes").append(output).append(");\n");
-                out.append("    out").append(output).append(".addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);\n");
+                out.append("    out").append(output).append(".addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);\n");
                 out.append("    byte[] od").append(output).append(" = out").append(output).append(".data();\n");
                 out.append("    int[] oo").append(output).append(" = out").append(output).append(".offsets();\n");
                 out.append("    int ob").append(output).append(" = 0;\n");

@@ -93,7 +93,7 @@ public final class UpperUtf8
                     requiredLength,
                     totalBytes);
             outputValues.clearTraits();
-            outputValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+            outputValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
             applyValues(values, valueNullValues, mask, outputValues, outputNulls);
             result = result.with(Stream.VALUES, outputValues);
         }

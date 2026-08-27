@@ -132,7 +132,7 @@ public final class SubstringUtf8
                     requiredLength,
                     totalBytes);
             outputValues.clearTraits();
-            outputValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+            outputValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
             if (fixedWidthEligible && fixedWidth >= 0) {
                 outputValues.setFixedWidth(fixedWidth);
             }
@@ -254,7 +254,7 @@ public final class SubstringUtf8
         }
 
         BinaryVector outputValues = BinaryVector.allocate(context.allocator(), allocationContext, uniqueCount, totalBytes);
-        outputValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        outputValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         for (int position = 0; position < uniqueCount; position++) {
             outputValues.setBytes(position, substrings[position]);
         }
@@ -328,7 +328,7 @@ public final class SubstringUtf8
         }
 
         BinaryVector output = BinaryVector.allocate(context.allocator(), allocationContext, values.length(), totalBytes);
-        output.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        output.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         for (int position = 0; position < values.length(); position++) {
             long slice = Utf8Support.substringSlice(values.data(), values.startOffset(position), values.length(position), start, length);
             output.setBytes(position, values.data(), (int) (slice >>> 32), (int) slice);

@@ -21,7 +21,6 @@ import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
-import org.weakref.nitro.data.Utf8Traits;
 import org.weakref.nitro.execution.EngineResources;
 import org.weakref.nitro.function.scalar.PrimitiveExecutionContext;
 
@@ -80,7 +79,6 @@ class TestUtf8RleMaskEvaluation
         byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
         BinaryVector values = new BinaryVector(1, bytes.length);
         values.setBytes(0, bytes);
-        values.addTrait(Utf8Traits.UTF8_STRING);
         return new RleVector(new int[] {count}, values);
     }
 }

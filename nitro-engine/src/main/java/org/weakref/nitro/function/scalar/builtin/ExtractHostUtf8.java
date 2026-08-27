@@ -111,7 +111,7 @@ public final class ExtractHostUtf8
                 requiredLength,
                 totalBytes);
         outputValues.clearTraits();
-        outputValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        outputValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         if (values instanceof BinaryVector binaryValues && binaryValues.hasTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY)) {
             outputValues.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         }
@@ -158,7 +158,7 @@ public final class ExtractHostUtf8
                 dictionaryValues.length(),
                 totalBytes);
         extractedValues.clearTraits();
-        extractedValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        extractedValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
         if (dictionaryValues.hasTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY)) {
             extractedValues.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         }

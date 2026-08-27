@@ -15,7 +15,9 @@ package org.weakref.nitro.data;
 
 public final class Utf8Traits
 {
-    public static final BinaryVector.Trait UTF8_STRING = BinaryVector.Trait.flag("utf8_string");
+    /** The vector's byte sequences have been proven to be valid UTF-8; this does not define their logical type. */
+    public static final BinaryVector.Trait UTF8_VALID = BinaryVector.Trait.flag("utf8_valid");
+    /** Every byte in the vector is in the seven-bit ASCII subset. */
     public static final BinaryVector.Trait ASCII_ONLY = BinaryVector.Trait.flag("ascii_only");
 
     private Utf8Traits() {}
