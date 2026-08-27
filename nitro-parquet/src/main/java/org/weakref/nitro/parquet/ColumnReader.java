@@ -339,6 +339,7 @@ public final class ColumnReader
     private final ParquetPageNavigationPolicy pageNavigationPolicy;
     private final ParquetReaderDiagnostics diagnostics;
     private final ParquetMaterializationPolicy materializationPolicy;
+    private boolean dictionaryDomainCountsDemanded;
     private final ParquetNumericDecodePolicy numericDecodePolicy;
     private final ParquetDictionaryFilterPolicy dictionaryFilterPolicy;
     private final ParquetArenaPolicy arenaPolicy;
@@ -801,7 +802,13 @@ public final class ColumnReader
         }
         sibling.chunks.addAll(chunks);
         sibling.chunks.forEach(chunk -> chunk.input.retain());
+        sibling.dictionaryDomainCountsDemanded = dictionaryDomainCountsDemanded;
         return sibling;
+    }
+
+    public void setDictionaryDomainCountsDemanded(boolean demanded)
+    {
+        dictionaryDomainCountsDemanded = demanded;
     }
 
     public Kind kind()
@@ -1138,7 +1145,12 @@ public final class ColumnReader
             allocator.release(allocationContext, ownedIds);
             return flat;
         }
-        return DictionaryVector.wrapOwnedIds(ownedIds, count, numericDictionary(batchGeneration, intAsLong));
+        return wrapOwnedDictionary(
+                allocator,
+                allocationContext,
+                ownedIds,
+                count,
+                numericDictionary(batchGeneration, intAsLong));
     }
 
     private Vector readNumericFlat(Allocator allocator, Allocator.Context allocationContext, boolean[] nullsOut, int count, boolean intAsLong)
@@ -2768,13 +2780,23 @@ public final class ColumnReader
             }
             if (stagedOwnedIds != null) {
                 lastReadNullsProvenAbsent = nullsProvenAbsent;
-                return org.weakref.nitro.data.DictionaryVector.wrapOwnedIds(stagedOwnedIds, count, escapedDictionary(batchGeneration));
+                return wrapOwnedDictionary(
+                        allocator,
+                        allocationContext,
+                        stagedOwnedIds,
+                        count,
+                        escapedDictionary(batchGeneration));
             }
             if (materializationPolicy.ownedDictionaryIds()) {
                 org.weakref.nitro.data.I32Vector ids = org.weakref.nitro.data.I32Vector.allocate(allocator, allocationContext, count);
                 System.arraycopy(batchIds, 0, ids.values(), 0, count);
                 lastReadNullsProvenAbsent = nullsProvenAbsent;
-                return org.weakref.nitro.data.DictionaryVector.wrapOwnedIds(ids, count, escapedDictionary(batchGeneration));
+                return wrapOwnedDictionary(
+                        allocator,
+                        allocationContext,
+                        ids,
+                        count,
+                        escapedDictionary(batchGeneration));
             }
             lastReadNullsProvenAbsent = nullsProvenAbsent;
             return org.weakref.nitro.data.DictionaryVector.ofTrustedIds(batchIds, count, escapedDictionary(batchGeneration));
@@ -2841,7 +2863,12 @@ public final class ColumnReader
                 org.weakref.nitro.data.I32Vector ids = org.weakref.nitro.data.I32Vector.allocate(allocator, allocationContext, count);
                 System.arraycopy(binaryBatchIds, 0, ids.values(), 0, count);
                 lastReadNullsProvenAbsent = nullsProvenAbsent;
-                return org.weakref.nitro.data.DictionaryVector.wrapOwnedIds(ids, count, escapedDictionary(batchGeneration));
+                return wrapOwnedDictionary(
+                        allocator,
+                        allocationContext,
+                        ids,
+                        count,
+                        escapedDictionary(batchGeneration));
             }
             lastReadNullsProvenAbsent = nullsProvenAbsent;
             return org.weakref.nitro.data.DictionaryVector.ofTrustedIds(binaryBatchIds, count, escapedDictionary(batchGeneration));
@@ -2858,6 +2885,30 @@ public final class ColumnReader
         markUtf8(result);
         lastReadNullsProvenAbsent = nullsProvenAbsent;
         return result;
+    }
+
+    private DictionaryVector wrapOwnedDictionary(
+            Allocator allocator,
+            Allocator.Context allocationContext,
+            I32Vector ids,
+            int count,
+            Vector dictionary)
+    {
+        int entries = dictionary.length();
+        if (!dictionaryDomainCountsDemanded ||
+                !materializationPolicy.dictionaryDomainFrequencies() ||
+                entries > materializationPolicy.dictionaryDomainFrequencyMaxEntries() ||
+                (long) entries * materializationPolicy.dictionaryDomainFrequencyMinRowsPerEntry() > count) {
+            return DictionaryVector.wrapOwnedIds(ids, count, dictionary);
+        }
+
+        I32Vector frequencies = I32Vector.allocate(allocator, allocationContext, entries);
+        Arrays.fill(frequencies.values(), 0, entries, 0);
+        int[] rawIds = ids.values();
+        for (int position = 0; position < count; position++) {
+            frequencies.values()[rawIds[position]]++;
+        }
+        return DictionaryVector.wrapOwnedIdsWithDomainFrequencies(ids, count, dictionary, frequencies);
     }
 
     private BinaryVector escapedDictionary(int generation)

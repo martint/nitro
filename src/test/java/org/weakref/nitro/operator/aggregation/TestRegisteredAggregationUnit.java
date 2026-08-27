@@ -25,6 +25,7 @@ import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
+import org.weakref.nitro.data.ValueDemand;
 import org.weakref.nitro.data.Vector;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -79,6 +80,10 @@ class TestRegisteredAggregationUnit
                 new int[] {7, 2},
                 5);
         assertThat(rawIntermediate.filterInputColumn()).isEqualTo(5);
+        assertThat(rawIntermediate.inputValueDemands()).containsExactlyInAnyOrderEntriesOf(java.util.Map.of(
+                7, ValueDemand.FULL_WITH_DOMAIN_COUNTS,
+                2, ValueDemand.FULL,
+                5, ValueDemand.FULL));
         assertThat(rawIntermediate.stateCapacity(17, 32)).isEqualTo(18);
         rawIntermediate.accumulate(state, 3, mask, inputs);
         assertThat(implementation.raw).isTrue();
@@ -105,6 +110,7 @@ class TestRegisteredAggregationUnit
                 FINAL,
                 new int[] {2});
         assertThat(intermediateFinal.filterInputColumn()).isEqualTo(-1);
+        assertThat(intermediateFinal.inputValueDemands()).containsExactlyEntriesOf(java.util.Map.of(2, ValueDemand.FULL));
         intermediateFinal.accumulate(state, new I64Vector(new long[] {0}), mask, inputs);
         assertThat(implementation.intermediateInput).isTrue();
         assertThat(implementation.firstInput).isSameAs(first);
@@ -179,6 +185,12 @@ class TestRegisteredAggregationUnit
         public AggregationImplementation physicalIntermediateOutput()
         {
             return physicalIntermediate ? this : new TrackingImplementation(true);
+        }
+
+        @Override
+        public ValueDemand rawInputValueDemand(int input)
+        {
+            return input == 0 ? ValueDemand.FULL_WITH_DOMAIN_COUNTS : ValueDemand.FULL;
         }
 
         @Override

@@ -18,14 +18,18 @@ package org.weakref.nitro.data;
  *
  * <p>{@link #STRUCTURE} retains row-level nullability and the offsets of a repeated value, but does not require its
  * child values. Sources which cannot expose that representation may conservatively provide {@link #FULL} values.
+ * {@link #FULL_WITH_DOMAIN_COUNTS} additionally requests exact logical multiplicities for an encoded physical
+ * domain when the source can provide them. A source may conservatively provide ordinary {@link #FULL} values when
+ * the encoding or its admission policy cannot satisfy that request.
  */
 public enum ValueDemand
 {
     STRUCTURE,
-    FULL;
+    FULL,
+    FULL_WITH_DOMAIN_COUNTS;
 
     public ValueDemand merge(ValueDemand other)
     {
-        return this == FULL || other == FULL ? FULL : STRUCTURE;
+        return ordinal() >= other.ordinal() ? this : other;
     }
 }

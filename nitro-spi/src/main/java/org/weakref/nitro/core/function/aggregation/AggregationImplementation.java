@@ -16,6 +16,7 @@ package org.weakref.nitro.core.function.aggregation;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Streams;
+import org.weakref.nitro.data.ValueDemand;
 import org.weakref.nitro.data.Vector;
 
 /**
@@ -27,6 +28,18 @@ import org.weakref.nitro.data.Vector;
  */
 public interface AggregationImplementation
 {
+    /**
+     * Physical value content requested for one raw input.
+     *
+     * <p>Implementations which can reduce an encoded domain using exact logical multiplicities may request
+     * {@link ValueDemand#FULL_WITH_DOMAIN_COUNTS}. The engine propagates the request toward a capable source but
+     * does not require the source or an intervening expression to preserve that representation.
+     */
+    default ValueDemand rawInputValueDemand(int input)
+    {
+        return ValueDemand.FULL;
+    }
+
     /**
      * Returns an implementation that may use a provider-owned physical intermediate representation.
      *

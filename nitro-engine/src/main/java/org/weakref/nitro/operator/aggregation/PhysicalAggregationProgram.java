@@ -14,9 +14,12 @@
 package org.weakref.nitro.operator.aggregation;
 
 import org.weakref.nitro.core.type.Schema;
+import org.weakref.nitro.data.ValueDemand;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import static java.util.Objects.requireNonNull;
 
@@ -114,6 +117,16 @@ public record PhysicalAggregationProgram(List<PhysicalAggregationUnit> units, Li
             }
         }
         return false;
+    }
+
+    /** Merged physical-value demand for each input channel read by the program. */
+    public Map<Integer, ValueDemand> inputValueDemands()
+    {
+        HashMap<Integer, ValueDemand> demands = new HashMap<>();
+        for (PhysicalAggregationUnit unit : units) {
+            unit.inputValueDemands().forEach((input, demand) -> demands.merge(input, demand, ValueDemand::merge));
+        }
+        return Map.copyOf(demands);
     }
 
     public record Output(int unit, int result)

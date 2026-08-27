@@ -16,6 +16,7 @@ package org.weakref.nitro.core.function.aggregation;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Streams;
+import org.weakref.nitro.data.ValueDemand;
 import org.weakref.nitro.data.Vector;
 
 /**
@@ -27,6 +28,11 @@ import org.weakref.nitro.data.Vector;
  */
 public interface MultiAggregationImplementation
 {
+    default ValueDemand rawInputValueDemand(int input)
+    {
+        return ValueDemand.FULL;
+    }
+
     int outputCount();
 
     /**

@@ -258,7 +258,8 @@ public class TestParquetOperator
             new ParquetPageNavigationPolicy(false, 0, 101, Integer.MAX_VALUE, false, 0, Integer.MAX_VALUE, false);
     private static final ParquetMaterializationPolicy GENERIC_MATERIALIZATION =
             new ParquetMaterializationPolicy(
-                    false, false, false, false, false, false, Long.MAX_VALUE, false, 0, false, false, false, false);
+                    false, false, false, false, false, false, Long.MAX_VALUE, false, 0, false, false, false, false,
+                    false, 0, 0);
     private static final ParquetDictionaryFilterPolicy GENERIC_DICTIONARY_FILTER =
             new ParquetDictionaryFilterPolicy(
                     false,
@@ -652,11 +653,19 @@ public class TestParquetOperator
                         NitroParquetScanResources.createDefault(),
                         allocator,
                         List.of(file),
-                        schema);
-                var batch = ((SourcePoll.Ready) source.poll()).batch()) {
-            assertThat(batch.column(0).borrow(Stream.VALUES)).isInstanceOf(DictionaryVector.class);
-            BooleanVector nulls = (BooleanVector) batch.column(0).borrow(Stream.NULLS);
-            assertThat(nulls.isAllFalse()).isTrue();
+                        schema)) {
+            source.protocol(SourceOutputDemandProtocol.OUTPUT_DEMAND)
+                    .orElseThrow()
+                    .retainOutputs(Map.of(source.column(0), ValueDemand.FULL_WITH_DOMAIN_COUNTS));
+            try (var batch = ((SourcePoll.Ready) source.poll()).batch()) {
+                DictionaryVector values = (DictionaryVector) batch.column(0).borrow(Stream.VALUES);
+                assertThat(values.hasDomainFrequencies()).isTrue();
+                assertThat(java.util.stream.IntStream.range(0, values.values().length())
+                        .map(values::domainFrequency)
+                        .sum()).isEqualTo(values.length());
+                BooleanVector nulls = (BooleanVector) batch.column(0).borrow(Stream.NULLS);
+                assertThat(nulls.isAllFalse()).isTrue();
+            }
         }
     }
 
@@ -861,6 +870,11 @@ public class TestParquetOperator
                         allocator,
                         List.of(file),
                         schema)) {
+            source.protocol(SourceOutputDemandProtocol.OUTPUT_DEMAND)
+                    .orElseThrow()
+                    .retainOutputs(Map.of(
+                            source.column(0), ValueDemand.FULL_WITH_DOMAIN_COUNTS,
+                            source.column(1), ValueDemand.FULL_WITH_DOMAIN_COUNTS));
             SourcePoll.Ready ready = (SourcePoll.Ready) source.poll();
             var batch = ready.batch();
             DictionaryVector required = (DictionaryVector) batch.column(0).borrow(Stream.VALUES);
@@ -868,6 +882,14 @@ public class TestParquetOperator
 
             assertThat(required.values()).isInstanceOf(I64Vector.class);
             assertThat(optional.values()).isInstanceOf(I64Vector.class);
+            assertThat(required.hasDomainFrequencies()).isTrue();
+            assertThat(optional.hasDomainFrequencies()).isTrue();
+            assertThat(java.util.stream.IntStream.range(0, required.values().length())
+                    .map(required::domainFrequency)
+                    .sum()).isEqualTo(required.length());
+            assertThat(java.util.stream.IntStream.range(0, optional.values().length())
+                    .map(optional::domainFrequency)
+                    .sum()).isEqualTo(optional.length());
             long[] requiredValues = ((I64Vector) required.values()).values();
             long[] optionalValues = ((I64Vector) optional.values()).values();
             for (int position = 0; position < required.length(); position++) {

@@ -1069,12 +1069,19 @@ public final class NitroParquetBatchSource
         }
         requireNonNull(outputs, "outputs is null");
         java.util.Arrays.fill(outputRequired, false);
-        for (SourceColumnHandle output : outputs.keySet()) {
-            int column = columnIndex(requireNonNull(output, "output is null"));
+        for (java.util.Map.Entry<SourceColumnHandle, ValueDemand> output : outputs.entrySet()) {
+            int column = columnIndex(requireNonNull(output.getKey(), "output is null"));
             if (column < 0) {
                 throw new IllegalArgumentException("output belongs to another source");
             }
             outputRequired[column] = true;
+            readers[column].setDictionaryDomainCountsDemanded(
+                    requireNonNull(output.getValue(), "output demand is null") == ValueDemand.FULL_WITH_DOMAIN_COUNTS);
+        }
+        for (int column = 0; column < readers.length; column++) {
+            if (!outputRequired[column]) {
+                readers[column].setDictionaryDomainCountsDemanded(false);
+            }
         }
     }
 

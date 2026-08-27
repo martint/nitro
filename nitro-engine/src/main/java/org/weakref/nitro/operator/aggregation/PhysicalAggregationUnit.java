@@ -16,7 +16,10 @@ package org.weakref.nitro.operator.aggregation;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Streams;
+import org.weakref.nitro.data.ValueDemand;
 import org.weakref.nitro.data.Vector;
+
+import java.util.Map;
 
 /**
  * One execution unit in an already-lowered physical aggregation program.
@@ -28,6 +31,12 @@ import org.weakref.nitro.data.Vector;
  */
 public interface PhysicalAggregationUnit
 {
+    /** Required physical content keyed by aggregation-program input channel. */
+    default Map<Integer, ValueDemand> inputValueDemands()
+    {
+        return Map.of();
+    }
+
     /** Returns an equivalent unit whose intermediate outputs may use provider-owned physical streams. */
     default PhysicalAggregationUnit physicalIntermediateOutput()
     {

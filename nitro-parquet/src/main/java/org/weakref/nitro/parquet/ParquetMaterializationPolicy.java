@@ -29,12 +29,26 @@ public record ParquetMaterializationPolicy(
         boolean bulkSelectedNumericDictionaryIds,
         boolean bulkSelectedNumericDictionaryIdsRequirePageReuse,
         boolean binaryDictionary,
-        boolean numericDictionary)
+        boolean numericDictionary,
+        boolean dictionaryDomainFrequencies,
+        int dictionaryDomainFrequencyMaxEntries,
+        int dictionaryDomainFrequencyMinRowsPerEntry)
 {
+    public ParquetMaterializationPolicy
+    {
+        if (dictionaryDomainFrequencyMaxEntries < 0) {
+            throw new IllegalArgumentException("dictionaryDomainFrequencyMaxEntries is negative");
+        }
+        if (dictionaryDomainFrequencyMinRowsPerEntry < 0) {
+            throw new IllegalArgumentException("dictionaryDomainFrequencyMinRowsPerEntry is negative");
+        }
+    }
+
     public static ParquetMaterializationPolicy defaults()
     {
         return new ParquetMaterializationPolicy(
-                true, true, true, true, true, true, 1L << 20, true, 16, true, true, true, true);
+                true, true, true, true, true, true, 1L << 20, true, 16, true, true, true, true,
+                true, 256, 64);
     }
 
     public static ParquetMaterializationPolicy fromSystemProperties()
@@ -53,6 +67,9 @@ public record ParquetMaterializationPolicy(
                 Boolean.parseBoolean(System.getProperty(
                         "nitro.parquet.bulkSelectedNumericDictionaryIdsRequirePageReuse", "true")),
                 !Boolean.getBoolean("nitro.parquet.disableBinaryDictionary"),
-                !Boolean.getBoolean("nitro.parquet.disableNumericDictionary"));
+                !Boolean.getBoolean("nitro.parquet.disableNumericDictionary"),
+                Boolean.parseBoolean(System.getProperty("nitro.parquet.dictionaryDomainFrequencies", "true")),
+                Integer.getInteger("nitro.parquet.dictionaryDomainFrequencyMaxEntries", 256),
+                Integer.getInteger("nitro.parquet.dictionaryDomainFrequencyMinRowsPerEntry", 64));
     }
 }

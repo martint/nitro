@@ -19,10 +19,13 @@ import org.weakref.nitro.core.function.aggregation.MultiAggregationImplementatio
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Streams;
+import org.weakref.nitro.data.ValueDemand;
 import org.weakref.nitro.data.Vector;
 
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import static java.util.Objects.requireNonNull;
 
@@ -81,6 +84,22 @@ public final class RegisteredMultiAggregationUnit
     public int outputCount()
     {
         return outputModes.size();
+    }
+
+    @Override
+    public Map<Integer, ValueDemand> inputValueDemands()
+    {
+        HashMap<Integer, ValueDemand> demands = new HashMap<>();
+        for (int input = 0; input < inputColumns.length; input++) {
+            demands.merge(
+                    inputColumns[input],
+                    requireNonNull(implementation.rawInputValueDemand(input), "raw input value demand is null"),
+                    ValueDemand::merge);
+        }
+        if (filterInputColumn >= 0) {
+            demands.merge(filterInputColumn, ValueDemand.FULL, ValueDemand::merge);
+        }
+        return Map.copyOf(demands);
     }
 
     @Override

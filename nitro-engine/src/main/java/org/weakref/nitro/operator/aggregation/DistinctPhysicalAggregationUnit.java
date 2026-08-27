@@ -16,7 +16,11 @@ package org.weakref.nitro.operator.aggregation;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Streams;
+import org.weakref.nitro.data.ValueDemand;
 import org.weakref.nitro.data.Vector;
+
+import java.util.HashMap;
+import java.util.Map;
 
 import static java.util.Objects.requireNonNull;
 
@@ -43,6 +47,16 @@ public final class DistinctPhysicalAggregationUnit
     public int outputCount()
     {
         return delegate.outputCount();
+    }
+
+    @Override
+    public Map<Integer, ValueDemand> inputValueDemands()
+    {
+        HashMap<Integer, ValueDemand> demands = new HashMap<>(delegate.inputValueDemands());
+        for (int column : distinctInputColumns) {
+            demands.merge(column, ValueDemand.FULL, ValueDemand::merge);
+        }
+        return Map.copyOf(demands);
     }
 
     @Override
