@@ -214,6 +214,74 @@ class TestCoreIntegrationSlice
     }
 
     @Test
+    void testDriverResumesPullOperatorAfterMidPipelineYield()
+    {
+        AtomicBoolean yield = new AtomicBoolean();
+        TestingExecutionContext context = new TestingExecutionContext(yield);
+        Operator source = new CheckpointingOperator(context);
+        try (OperatorExecutionDriver driver = new OperatorExecutionDriver(source, new Allocator(EngineResources.createDefault()), context)) {
+            yield.set(true);
+            assertThat(driver.processNext(_ -> {})).isEqualTo(DriverResult.YIELDED);
+
+            yield.set(false);
+            AtomicInteger outputs = new AtomicInteger();
+            assertThat(driver.processNext(_ -> outputs.incrementAndGet())).isEqualTo(DriverResult.OUTPUT);
+            assertThat(outputs).hasValue(1);
+            assertThat(driver.processNext(_ -> {})).isEqualTo(DriverResult.FINISHED);
+        }
+    }
+
+    @Test
+    void testStackPreservingCheckpointContinuesCurrentPull()
+    {
+        AtomicBoolean yield = new AtomicBoolean(true);
+        AtomicInteger parks = new AtomicInteger();
+        TestingExecutionContext context = new TestingExecutionContext(yield, parks::incrementAndGet);
+        Operator source = new CheckpointingOperator(context);
+        try (OperatorExecutionDriver driver = new OperatorExecutionDriver(source, new Allocator(EngineResources.createDefault()), context)) {
+            AtomicInteger outputs = new AtomicInteger();
+            assertThat(driver.processNext(_ -> outputs.incrementAndGet())).isEqualTo(DriverResult.OUTPUT);
+            assertThat(parks).hasValue(1);
+            assertThat(outputs).hasValue(1);
+            assertThat(driver.processNext(_ -> {})).isEqualTo(DriverResult.FINISHED);
+        }
+    }
+
+    @Test
+    void testDriverExposesMidPipelineBlockedContinuation()
+    {
+        CompletableFuture<Void> continuation = new CompletableFuture<>();
+        TestingExecutionContext context = new TestingExecutionContext();
+        Operator source = new AwaitingOperator(context, continuation);
+        try (OperatorExecutionDriver driver = new OperatorExecutionDriver(source, new Allocator(EngineResources.createDefault()), context)) {
+            assertThat(driver.processNext(_ -> {})).isEqualTo(DriverResult.BLOCKED);
+            assertThat(driver.blocked()).contains(continuation);
+            assertThat(driver.processNext(_ -> {})).isEqualTo(DriverResult.BLOCKED);
+
+            continuation.complete(null);
+            assertThat(driver.processNext(_ -> {})).isEqualTo(DriverResult.OUTPUT);
+            assertThat(driver.processNext(_ -> {})).isEqualTo(DriverResult.FINISHED);
+        }
+    }
+
+    @Test
+    void testCancellationClosesBlockedPullGraph()
+    {
+        CompletableFuture<Void> continuation = new CompletableFuture<>();
+        TestingExecutionContext context = new TestingExecutionContext();
+        AwaitingOperator source = new AwaitingOperator(context, continuation);
+        try (OperatorExecutionDriver driver = new OperatorExecutionDriver(source, new Allocator(EngineResources.createDefault()), context)) {
+            assertThat(driver.processNext(_ -> {})).isEqualTo(DriverResult.BLOCKED);
+
+            context.cancel();
+            assertThatThrownBy(() -> driver.processNext(_ -> {}))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessage("execution is cancelled");
+            assertThat(source.isClosed()).isTrue();
+        }
+    }
+
+    @Test
     void testDriverExposesHostMemoryBackpressure()
     {
         CompletableFuture<Void> continuation = new CompletableFuture<>();
@@ -754,6 +822,8 @@ class TestCoreIntegrationSlice
             implements ExecutionContext
     {
         private final AtomicBoolean yield;
+        private final Runnable stackPreservingYield;
+        private boolean cancelled;
         private final MemoryReservation memory = new MemoryReservation()
         {
             private long reserved;
@@ -785,7 +855,13 @@ class TestCoreIntegrationSlice
 
         private TestingExecutionContext(AtomicBoolean yield)
         {
+            this(yield, null);
+        }
+
+        private TestingExecutionContext(AtomicBoolean yield, Runnable stackPreservingYield)
+        {
             this.yield = yield;
+            this.stackPreservingYield = stackPreservingYield;
         }
 
         @Override
@@ -815,10 +891,116 @@ class TestCoreIntegrationSlice
         @Override
         public boolean isCancelled()
         {
-            return false;
+            return cancelled;
+        }
+
+        private void cancel()
+        {
+            cancelled = true;
+        }
+
+        @Override
+        public void checkpoint()
+        {
+            if (stackPreservingYield != null && yield.compareAndSet(true, false)) {
+                stackPreservingYield.run();
+                return;
+            }
+            ExecutionContext.super.checkpoint();
         }
 
         @Override
         public void requestMemoryRevocation() {}
+    }
+
+    private static final class CheckpointingOperator
+            implements Operator
+    {
+        private final ExecutionContext context;
+        private boolean progressCommitted;
+        private boolean outputProduced;
+
+        private CheckpointingOperator(ExecutionContext context)
+        {
+            this.context = context;
+        }
+
+        @Override
+        public int outputCount()
+        {
+            return 0;
+        }
+
+        @Override
+        public boolean hasNext()
+        {
+            return !outputProduced;
+        }
+
+        @Override
+        public Batch next()
+        {
+            if (!progressCommitted) {
+                progressCommitted = true;
+                context.checkpoint();
+            }
+            outputProduced = true;
+            return new Batch(Mask.all(0), new Output[0]);
+        }
+
+        @Override
+        public void constrain(Mask mask) {}
+
+        @Override
+        public void close() {}
+    }
+
+    private static final class AwaitingOperator
+            implements Operator
+    {
+        private final ExecutionContext context;
+        private final CompletionStage<Void> continuation;
+        private boolean outputProduced;
+        private boolean closed;
+
+        private AwaitingOperator(ExecutionContext context, CompletionStage<Void> continuation)
+        {
+            this.context = context;
+            this.continuation = continuation;
+        }
+
+        @Override
+        public int outputCount()
+        {
+            return 0;
+        }
+
+        @Override
+        public boolean hasNext()
+        {
+            return !outputProduced;
+        }
+
+        @Override
+        public Batch next()
+        {
+            context.await(continuation);
+            outputProduced = true;
+            return new Batch(Mask.all(0), new Output[0]);
+        }
+
+        @Override
+        public void constrain(Mask mask) {}
+
+        @Override
+        public void close()
+        {
+            closed = true;
+        }
+
+        private boolean isClosed()
+        {
+            return closed;
+        }
     }
 }

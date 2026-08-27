@@ -14,17 +14,19 @@
 package org.weakref.nitro.execution;
 
 import org.weakref.nitro.core.execution.ExecutionContext;
+import org.weakref.nitro.core.execution.ExecutionSuspension;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.Operator;
 
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Consumer;
 
 import static java.util.Objects.requireNonNull;
 
-/// Lifecycle owner for a legacy pull-operator island.
+/// Lifecycle owner for a pull-operator island.
 ///
 /// The driver freezes allocator admission only after the complete plan has registered its
 /// allocation domains. It also establishes the cooperative yield/cancel seam needed by a host
@@ -39,6 +41,7 @@ public final class OperatorExecutionDriver
     private boolean finished;
     private boolean rootClosed;
     private boolean closed;
+    private CompletionStage<Void> suspendedContinuation;
 
     public OperatorExecutionDriver(Operator root, Allocator allocator, ExecutionContext context)
     {
@@ -54,26 +57,41 @@ public final class OperatorExecutionDriver
         if (finished) {
             return DriverResult.FINISHED;
         }
-        if (context.isCancelled()) {
-            close();
-            throw new IllegalStateException("execution is cancelled");
+        Batch batch;
+        try {
+            context.checkpoint();
+            if (suspendedContinuation != null) {
+                CompletableFuture<Void> future = suspendedContinuation.toCompletableFuture();
+                if (!future.isDone()) {
+                    return DriverResult.BLOCKED;
+                }
+                future.join();
+                suspendedContinuation = null;
+            }
+            if (allocator.memoryBlocked().isPresent()) {
+                return DriverResult.BLOCKED;
+            }
+            if (!begun) {
+                allocator.beginExecution();
+                begun = true;
+            }
+            if (!root.hasNext()) {
+                finished = true;
+                closeRoot();
+                return DriverResult.FINISHED;
+            }
+            batch = root.next();
         }
-        if (allocator.memoryBlocked().isPresent()) {
-            return DriverResult.BLOCKED;
+        catch (ExecutionSuspension suspension) {
+            return suspend(suspension);
         }
-        if (context.isYieldRequested()) {
-            return DriverResult.YIELDED;
+        catch (IllegalStateException failure) {
+            if (context.isCancelled()) {
+                close();
+            }
+            throw failure;
         }
-        if (!begun) {
-            allocator.beginExecution();
-            begun = true;
-        }
-        if (!root.hasNext()) {
-            finished = true;
-            closeRoot();
-            return DriverResult.FINISHED;
-        }
-        try (Batch batch = root.next()) {
+        try (batch) {
             outputConsumer.accept(batch);
         }
         return DriverResult.OUTPUT;
@@ -87,7 +105,18 @@ public final class OperatorExecutionDriver
     /// Host continuation for a [DriverResult#BLOCKED] result.
     public Optional<CompletionStage<Void>> blocked()
     {
-        return allocator.memoryBlocked();
+        return Optional.ofNullable(suspendedContinuation).or(allocator::memoryBlocked);
+    }
+
+    private DriverResult suspend(ExecutionSuspension suspension)
+    {
+        return switch (suspension.reason()) {
+            case YIELD -> DriverResult.YIELDED;
+            case BLOCKED -> {
+                suspendedContinuation = suspension.continuation().orElseThrow();
+                yield DriverResult.BLOCKED;
+            }
+        };
     }
 
     @Override
