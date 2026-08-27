@@ -869,6 +869,30 @@ public class TestOperators
     }
 
     @Test
+    void testWindowOperatorSupportsRowNumberFunction()
+    {
+        try (Operator window = new WindowOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 1, List.of(row(4L), row(1L), row(4L))),
+                new int[0],
+                new int[0],
+                new boolean[0],
+                List.of(new RankingWindowFunction(
+                        Schema.unspecified(1),
+                        new int[0],
+                        new boolean[0],
+                        RankingWindowFunction.RankingType.ROW_NUMBER)),
+                Schema.unspecified(1),
+                EngineResources.from(allocator).operatorResources())) {
+            assertThat(operator(window))
+                    .matchesExactly(List.of(
+                            row(4L, 1L),
+                            row(1L, 2L),
+                            row(4L, 3L)));
+        }
+    }
+
+    @Test
     void testWindowOperatorSupportsPeerDistributions()
     {
         List<Row> input = List.of(row(4L), row((Object) null), row(1L), row((Object) null), row(4L));

@@ -29,6 +29,7 @@ public class RankingWindowFunction
 {
     public enum RankingType
     {
+        ROW_NUMBER,
         RANK,
         DENSE_RANK
     }
@@ -96,6 +97,10 @@ public class RankingWindowFunction
             int outputSize)
     {
         rowNumber++;
+        if (rankingType == RankingType.ROW_NUMBER) {
+            ((I64Vector) output.values()).values()[outputPosition] = rowNumber;
+            return output;
+        }
         if (previousColumns == null || orderingChanged(previousColumns, previousPosition, sourceColumns, inputPosition)) {
             rank = rankingType == RankingType.RANK ? rowNumber : rank + 1;
         }
