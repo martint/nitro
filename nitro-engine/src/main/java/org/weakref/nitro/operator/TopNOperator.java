@@ -34,7 +34,11 @@ public class TopNOperator
     private final Operator source;
     private final TopNState state;
     private final TopNOperatorPolicy policy;
+    private final PriorityQueue<Entry> queue;
 
+    private Boolean denseOrdering;
+    private boolean firstBatch = true;
+    private Mask outputMask;
     private boolean done;
 
     public TopNOperator(Allocator allocator, int n, int column, Operator source)
@@ -142,6 +146,7 @@ public class TopNOperator
                 source.outputSchema(),
                 requireNonNull(structuralTypes, "structuralTypes is null"),
                 n);
+        queue = new PriorityQueue<>(n, (left, right) -> state.compareSlots(left.position(), right.position()));
     }
 
     @Override
@@ -159,17 +164,19 @@ public class TopNOperator
     @Override
     public boolean hasNext()
     {
+        if (!done && outputMask == null) {
+            outputMask = computeTopN();
+            if (outputMask.none()) {
+                done = true;
+            }
+        }
         return !done;
     }
 
     private Mask computeTopN()
     {
         // TODO: flat memory priority queue
-        PriorityQueue<Entry> queue = new PriorityQueue<>(n, (left, right) -> state.compareSlots(left.position(), right.position()));
-
         boolean deferSchemaBorrow = source.supportsConstrainedReborrow();
-        Boolean denseOrdering = null;
-        boolean firstBatch = true;
         while (source.hasNext()) {
             Batch batch = source.next();
             state.beginBatch();
@@ -269,7 +276,6 @@ public class TopNOperator
             state.setOrderedSlots(orderedSlots);
         }
 
-        done = true;
         return allocator.allocateRangeMask(allocationContext, 0, count);
     }
 
@@ -305,7 +311,6 @@ public class TopNOperator
             }
         }
         state.setRetainedBatchPositions(batch, orderedPositions);
-        done = true;
         return allocator.allocateRangeMask(allocationContext, 0, orderedPositions.length);
     }
 
@@ -347,7 +352,12 @@ public class TopNOperator
     @Override
     public Batch next()
     {
-        Mask batchMask = computeTopN();
+        if (!hasNext()) {
+            throw new IllegalStateException("No more rows");
+        }
+        Mask batchMask = outputMask;
+        outputMask = null;
+        done = true;
         Output[] outputs = new Output[outputCount()];
         for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
             int output = outputIndex;
@@ -390,6 +400,10 @@ public class TopNOperator
     public void close()
     {
         source.close();
+        if (outputMask != null) {
+            allocator.release(allocationContext, outputMask);
+            outputMask = null;
+        }
         allocator.release(allocationContext);
     }
 

@@ -72,12 +72,14 @@ import org.weakref.nitro.operator.GroupOperator;
 import org.weakref.nitro.operator.GroupedAggregationOperator;
 import org.weakref.nitro.operator.HashJoinExecutionPolicy;
 import org.weakref.nitro.operator.HashJoinOperator;
+import org.weakref.nitro.operator.JoinSessionOperator;
 import org.weakref.nitro.operator.LimitOperator;
 import org.weakref.nitro.operator.MarkDistinctMarkerOperator;
 import org.weakref.nitro.operator.MarkDistinctOperator;
 import org.weakref.nitro.operator.MaterializeOperator;
 import org.weakref.nitro.operator.MultiStageOperator;
 import org.weakref.nitro.operator.NestedLoopJoinOperator;
+import org.weakref.nitro.operator.NestedLoopJoinSession;
 import org.weakref.nitro.operator.OffsetOperator;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.OperatorResources;
@@ -867,6 +869,64 @@ public class TestOperators
                 EngineResources.from(allocator).operatorResources().topNRankingPolicy())) {
             assertThatThrownBy(ranking::next).isSameAs(ExecutionSuspension.yield());
             assertThat(operator(ranking)).matchesExactly(List.of(row(1L, 1L), row(2L, 2L)));
+        }
+    }
+
+    @Test
+    void testTopNOperatorResumesLoadingAfterExecutionSuspension()
+    {
+        Operator delegate = new TableOperator(
+                1,
+                List.of(
+                        TableOperator.Page.values(1, new Vector[] {new I64Vector(new long[] {1})}, Mask.all(1)),
+                        TableOperator.Page.values(1, new Vector[] {new I64Vector(new long[] {2})}, Mask.all(1))));
+        Operator suspendingSource = new Operator()
+        {
+            private int hasNextCalls;
+
+            @Override
+            public int outputCount()
+            {
+                return delegate.outputCount();
+            }
+
+            @Override
+            public Schema outputSchema()
+            {
+                return delegate.outputSchema();
+            }
+
+            @Override
+            public boolean hasNext()
+            {
+                if (++hasNextCalls == 2) {
+                    throw ExecutionSuspension.yield();
+                }
+                return delegate.hasNext();
+            }
+
+            @Override
+            public Batch next()
+            {
+                return delegate.next();
+            }
+
+            @Override
+            public void constrain(Mask mask)
+            {
+                delegate.constrain(mask);
+            }
+
+            @Override
+            public void close()
+            {
+                delegate.close();
+            }
+        };
+
+        try (Operator topN = new TopNOperator(allocator, 1, 0, true, suspendingSource)) {
+            assertThatThrownBy(topN::next).isSameAs(ExecutionSuspension.yield());
+            assertThat(operator(topN)).matchesExactly(List.of(row(2L)));
         }
     }
 
@@ -3830,6 +3890,41 @@ public class TestOperators
             }
             assertThat(closedBatches).hasValue(batchCount);
         }
+    }
+
+    @Test
+    void testJoinSessionOperatorPullsProbeBatchesLazily()
+    {
+        Schema schema = Schema.unspecified(1);
+        Operator probe = typedTable(
+                schema,
+                TableOperator.Page.values(1, new Vector[] {new I64Vector(new long[] {1})}, Mask.all(1)),
+                TableOperator.Page.values(1, new Vector[] {new I64Vector(new long[] {2})}, Mask.all(1)));
+        AtomicInteger sessions = new AtomicInteger();
+        AtomicInteger closes = new AtomicInteger();
+
+        Operator join = new JoinSessionOperator(
+                probe,
+                () -> {
+                    sessions.incrementAndGet();
+                    return new NestedLoopJoinSession(
+                            EngineResources.from(allocator).operatorResources(),
+                            allocator,
+                            schema,
+                            new ConstantTableOperator(allocator, 1, List.of(row(10L), row(20L))));
+                },
+                Schema.unspecified(2),
+                closes::incrementAndGet);
+
+        assertThat(sessions).hasValue(0);
+        assertThat(operator(join))
+                .matchesExactly(List.of(
+                        row(1L, 10L),
+                        row(1L, 20L),
+                        row(2L, 10L),
+                        row(2L, 20L)));
+        assertThat(sessions).hasValue(1);
+        assertThat(closes).hasValue(1);
     }
 
     @Test
