@@ -53,6 +53,7 @@ public final class WindowOperator
     private final Schema outputSchema;
     private final StructuralComparisonKernel[] comparisonKernels;
     private final boolean allowsLegacyOrderingShortcuts;
+    private final PartitionPositionIndex partitionPositionIndex = new PartitionPositionIndex();
 
     private Streams[] sourceSchema;
     private List<TableOperator.Page> pages;
@@ -560,9 +561,8 @@ public final class WindowOperator
             if (previousPosition >= 0 && !samePartition(columns, previousPosition, inputPosition)) {
                 for (int functionIndex = 0; functionIndex < windowFunctions.size(); functionIndex++) {
                     RunningWindowFunction function = windowFunctions.get(functionIndex);
-                    windowOutputs[functionIndex] = function.finishPartition(
-                            allocator,
-                            allocationContext,
+                    windowOutputs[functionIndex] = finishPartition(
+                            function,
                             windowOutputs[functionIndex],
                             partitionStart,
                             outputPosition,
@@ -586,9 +586,8 @@ public final class WindowOperator
         if (singlePageRowCount > 0) {
             for (int functionIndex = 0; functionIndex < windowFunctions.size(); functionIndex++) {
                 RunningWindowFunction function = windowFunctions.get(functionIndex);
-                windowOutputs[functionIndex] = function.finishPartition(
-                        allocator,
-                        allocationContext,
+                windowOutputs[functionIndex] = finishPartition(
+                        function,
                         windowOutputs[functionIndex],
                         partitionStart,
                         singlePageRowCount,
@@ -1073,7 +1072,7 @@ public final class WindowOperator
         for (int outputPosition = 0; outputPosition < singlePageRowCount; outputPosition++) {
             int inputPosition = identityOrder ? outputPosition : order[outputPosition];
             if (previousPosition >= 0 && !samePartition(columns, previousPosition, inputPosition)) {
-                output = function.finishPartition(allocator, allocationContext, output, partitionStart, outputPosition, singlePageRowCount);
+                output = finishPartition(function, output, partitionStart, outputPosition, singlePageRowCount);
                 function.reset();
                 partitionStart = outputPosition;
             }
@@ -1081,7 +1080,7 @@ public final class WindowOperator
             previousPosition = inputPosition;
         }
         if (singlePageRowCount > 0) {
-            output = function.finishPartition(allocator, allocationContext, output, partitionStart, singlePageRowCount, singlePageRowCount);
+            output = finishPartition(function, output, partitionStart, singlePageRowCount, singlePageRowCount);
         }
         return output;
     }
@@ -1123,7 +1122,7 @@ public final class WindowOperator
         for (int outputPosition = 0; outputPosition < rowReferences.length; outputPosition++) {
             long row = rowReferences[outputPosition];
             if (previous != -1 && !samePartition(previous, row)) {
-                output = function.finishPartition(allocator, allocationContext, output, partitionStart, outputPosition, rowReferences.length);
+                output = finishPartition(function, output, partitionStart, outputPosition, rowReferences.length);
                 function.reset();
                 partitionStart = outputPosition;
             }
@@ -1138,7 +1137,7 @@ public final class WindowOperator
             previous = row;
         }
         if (rowReferences.length > 0) {
-            output = function.finishPartition(allocator, allocationContext, output, partitionStart, rowReferences.length, rowReferences.length);
+            output = finishPartition(function, output, partitionStart, rowReferences.length, rowReferences.length);
         }
         return output;
     }
@@ -1163,7 +1162,7 @@ public final class WindowOperator
                 int inputPosition = mask.all() ? index : mask.position(index);
                 StructuralComparisonKernel.PositionEquality[] partitionEquality = index == 0 ? acrossPages : withinPage;
                 if (previousColumns != null && !samePartition(partitionEquality, previousPosition, inputPosition)) {
-                    output = function.finishPartition(allocator, allocationContext, output, partitionStart, outputPosition, outputSize);
+                    output = finishPartition(function, output, partitionStart, outputPosition, outputSize);
                     function.reset();
                     partitionStart = outputPosition;
                 }
@@ -1181,9 +1180,26 @@ public final class WindowOperator
             }
         }
         if (outputPosition > 0) {
-            output = function.finishPartition(allocator, allocationContext, output, partitionStart, outputPosition, outputSize);
+            output = finishPartition(function, output, partitionStart, outputPosition, outputSize);
         }
         return output;
+    }
+
+    private Streams finishPartition(
+            RunningWindowFunction function,
+            Streams output,
+            int partitionStart,
+            int partitionEnd,
+            int outputSize)
+    {
+        partitionPositionIndex.reset(partitionStart, partitionEnd);
+        return function.finishPartition(
+                allocator,
+                allocationContext,
+                output,
+                partitionPositionIndex,
+                partitionStart,
+                outputSize);
     }
 
     private StructuralComparisonKernel.PositionEquality[] bindPartitionEquality(Streams[] leftColumns, Streams[] rightColumns)
@@ -1787,6 +1803,56 @@ public final class WindowOperator
     private static int pagePosition(long rowReference)
     {
         return (int) rowReference;
+    }
+
+    private final class PartitionPositionIndex
+            implements WindowPositionIndex
+    {
+        private int start;
+        private int end;
+
+        private void reset(int start, int end)
+        {
+            if (start < 0 || start > end || end > rowCount()) {
+                throw new IndexOutOfBoundsException("Invalid partition range [%s, %s) for %s rows".formatted(start, end, rowCount()));
+            }
+            this.start = start;
+            this.end = end;
+        }
+
+        @Override
+        public int size()
+        {
+            return end - start;
+        }
+
+        @Override
+        public Streams column(int column, int position)
+        {
+            int absolutePosition = absolutePosition(position);
+            if (singlePage) {
+                return pages.getFirst().columns()[column];
+            }
+            return pages.get(pageIndex(rowReferences[absolutePosition])).columns()[column];
+        }
+
+        @Override
+        public int sourcePosition(int position)
+        {
+            int absolutePosition = absolutePosition(position);
+            if (singlePage) {
+                return singlePageIdentityOrder ? absolutePosition : singlePageOrder[absolutePosition];
+            }
+            return pagePosition(rowReferences[absolutePosition]);
+        }
+
+        private int absolutePosition(int position)
+        {
+            if (position < 0 || position >= size()) {
+                throw new IndexOutOfBoundsException(position);
+            }
+            return start + position;
+        }
     }
 
     private Streams emptyStreamsLike(Output output)

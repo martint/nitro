@@ -87,6 +87,7 @@ import org.weakref.nitro.operator.PeerDistributionWindowFunction;
 import org.weakref.nitro.operator.ProjectOperator;
 import org.weakref.nitro.operator.RankWindowFunction;
 import org.weakref.nitro.operator.RankingWindowFunction;
+import org.weakref.nitro.operator.SelectedPositionWindowFunction;
 import org.weakref.nitro.operator.SemiJoinOperator;
 import org.weakref.nitro.operator.SortOperator;
 import org.weakref.nitro.operator.StaticFilterEnforcement;
@@ -930,6 +931,47 @@ public class TestOperators
                             row(2L, 10L, 20L, 1L),
                             row(2L, 20L, null, null),
                             row(2L, 30L, 20L, 3L)));
+        }
+    }
+
+    @Test
+    void testWindowOperatorProvidesIndexedPartitionsAcrossPages()
+    {
+        Operator source = new TableOperator(
+                3,
+                List.of(
+                        TableOperator.Page.values(
+                                3,
+                                new Vector[] {
+                                        new I64Vector(new long[] {2, 1, 1}),
+                                        new I64Vector(new long[] {2, 3, 1}),
+                                        new I64Vector(new long[] {200, 130, 110})},
+                                Mask.all(3)),
+                        TableOperator.Page.values(
+                                2,
+                                new Vector[] {
+                                        new I64Vector(new long[] {2, 1}),
+                                        new I64Vector(new long[] {1, 2}),
+                                        new I64Vector(new long[] {190, 120})},
+                                Mask.all(2))));
+        SelectedPositionWindowFunction reversePartition = new SelectedPositionWindowFunction(
+                i64ValueType(),
+                (partition, outputPosition, selection) -> selection.set(2, partition.size() - outputPosition - 1));
+
+        try (Operator window = new WindowOperator(
+                allocator,
+                source,
+                new int[] {0},
+                new int[] {1},
+                new boolean[] {false},
+                List.of(reversePartition))) {
+            assertThat(operator(window))
+                    .matchesExactly(List.of(
+                            row(1L, 1L, 110L, 130L),
+                            row(1L, 2L, 120L, 120L),
+                            row(1L, 3L, 130L, 110L),
+                            row(2L, 1L, 190L, 200L),
+                            row(2L, 2L, 200L, 190L)));
         }
     }
 
@@ -6172,6 +6214,55 @@ public class TestOperators
             public Set<Class<? extends Vector>> supportedVectorTypes()
             {
                 return Set.of(I32Vector.class);
+            }
+        };
+    }
+
+    private static TypeBinding i64ValueType()
+    {
+        return new TypeBinding()
+        {
+            @Override
+            public TypeIdentity identity()
+            {
+                return new TypeIdentity("testing:i64-value");
+            }
+
+            @Override
+            public Class<?> carrierType()
+            {
+                return long.class;
+            }
+
+            @Override
+            public TypeOperators operators()
+            {
+                return TypeOperators.UNSPECIFIED;
+            }
+
+            @Override
+            public Optional<TypeVectorFactory> vectorFactory()
+            {
+                return Optional.of(new TypeVectorFactory()
+                {
+                    @Override
+                    public Vector constant(VectorAllocator allocator, Object value, int length)
+                    {
+                        throw new UnsupportedOperationException();
+                    }
+
+                    @Override
+                    public Vector nullValues(VectorAllocator allocator, int length)
+                    {
+                        return allocator.allocate(I64Vector.class, length, I64Vector::new);
+                    }
+                });
+            }
+
+            @Override
+            public Set<Class<? extends Vector>> supportedVectorTypes()
+            {
+                return Set.of(I64Vector.class);
             }
         };
     }

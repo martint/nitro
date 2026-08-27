@@ -34,4 +34,21 @@ public interface RunningWindowFunction
     {
         return output;
     }
+
+    default Streams finishPartition(
+            Allocator allocator,
+            Allocator.Context allocationContext,
+            Streams output,
+            WindowPositionIndex partition,
+            int partitionStart,
+            int outputSize)
+    {
+        return finishPartition(
+                allocator,
+                allocationContext,
+                output,
+                partitionStart,
+                partitionStart + partition.size(),
+                outputSize);
+    }
 }
