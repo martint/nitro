@@ -200,38 +200,6 @@ class TestCoreIntegrationSlice
     }
 
     @Test
-    void testDriverYieldsBeforeStartingExecution()
-    {
-        AtomicBoolean yield = new AtomicBoolean(true);
-        TestingExecutionContext context = new TestingExecutionContext(yield);
-        Operator source = new SingleBatchOperator(0, Mask.all(0), () -> new Output[0]);
-        try (OperatorExecutionDriver driver = new OperatorExecutionDriver(source, new Allocator(EngineResources.createDefault()), context)) {
-            assertThat(driver.processNext(_ -> {})).isEqualTo(DriverResult.YIELDED);
-            yield.set(false);
-            assertThat(driver.processNext(_ -> {})).isEqualTo(DriverResult.OUTPUT);
-            assertThat(driver.processNext(_ -> {})).isEqualTo(DriverResult.FINISHED);
-        }
-    }
-
-    @Test
-    void testDriverResumesPullOperatorAfterMidPipelineYield()
-    {
-        AtomicBoolean yield = new AtomicBoolean();
-        TestingExecutionContext context = new TestingExecutionContext(yield);
-        Operator source = new CheckpointingOperator(context);
-        try (OperatorExecutionDriver driver = new OperatorExecutionDriver(source, new Allocator(EngineResources.createDefault()), context)) {
-            yield.set(true);
-            assertThat(driver.processNext(_ -> {})).isEqualTo(DriverResult.YIELDED);
-
-            yield.set(false);
-            AtomicInteger outputs = new AtomicInteger();
-            assertThat(driver.processNext(_ -> outputs.incrementAndGet())).isEqualTo(DriverResult.OUTPUT);
-            assertThat(outputs).hasValue(1);
-            assertThat(driver.processNext(_ -> {})).isEqualTo(DriverResult.FINISHED);
-        }
-    }
-
-    @Test
     void testStackPreservingCheckpointContinuesCurrentPull()
     {
         AtomicBoolean yield = new AtomicBoolean(true);
@@ -248,36 +216,16 @@ class TestCoreIntegrationSlice
     }
 
     @Test
-    void testDriverExposesMidPipelineBlockedContinuation()
+    void testDriverPreservesPullStackWhileAwaiting()
     {
         CompletableFuture<Void> continuation = new CompletableFuture<>();
         TestingExecutionContext context = new TestingExecutionContext();
         Operator source = new AwaitingOperator(context, continuation);
         try (OperatorExecutionDriver driver = new OperatorExecutionDriver(source, new Allocator(EngineResources.createDefault()), context)) {
-            assertThat(driver.processNext(_ -> {})).isEqualTo(DriverResult.BLOCKED);
-            assertThat(driver.blocked()).contains(continuation);
-            assertThat(driver.processNext(_ -> {})).isEqualTo(DriverResult.BLOCKED);
-
-            continuation.complete(null);
+            Thread.ofVirtual().start(() -> continuation.complete(null));
             assertThat(driver.processNext(_ -> {})).isEqualTo(DriverResult.OUTPUT);
+            assertThat(driver.blocked()).isEmpty();
             assertThat(driver.processNext(_ -> {})).isEqualTo(DriverResult.FINISHED);
-        }
-    }
-
-    @Test
-    void testCancellationClosesBlockedPullGraph()
-    {
-        CompletableFuture<Void> continuation = new CompletableFuture<>();
-        TestingExecutionContext context = new TestingExecutionContext();
-        AwaitingOperator source = new AwaitingOperator(context, continuation);
-        try (OperatorExecutionDriver driver = new OperatorExecutionDriver(source, new Allocator(EngineResources.createDefault()), context)) {
-            assertThat(driver.processNext(_ -> {})).isEqualTo(DriverResult.BLOCKED);
-
-            context.cancel();
-            assertThatThrownBy(() -> driver.processNext(_ -> {}))
-                    .isInstanceOf(IllegalStateException.class)
-                    .hasMessage("execution is cancelled");
-            assertThat(source.isClosed()).isTrue();
         }
     }
 
@@ -894,19 +842,25 @@ class TestCoreIntegrationSlice
             return cancelled;
         }
 
-        private void cancel()
-        {
-            cancelled = true;
-        }
-
         @Override
         public void checkpoint()
         {
-            if (stackPreservingYield != null && yield.compareAndSet(true, false)) {
-                stackPreservingYield.run();
-                return;
+            if (cancelled) {
+                throw new IllegalStateException("execution is cancelled");
             }
-            ExecutionContext.super.checkpoint();
+            if (yield.compareAndSet(true, false)) {
+                if (stackPreservingYield == null) {
+                    throw new IllegalStateException("yield control is not configured");
+                }
+                stackPreservingYield.run();
+            }
+        }
+
+        @Override
+        public void await(CompletionStage<Void> continuation)
+        {
+            continuation.toCompletableFuture().join();
+            checkpoint();
         }
 
         @Override
@@ -998,9 +952,5 @@ class TestCoreIntegrationSlice
             closed = true;
         }
 
-        private boolean isClosed()
-        {
-            return closed;
-        }
     }
 }

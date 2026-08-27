@@ -18,7 +18,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.parallel.Execution;
 import org.junit.jupiter.api.parallel.ExecutionMode;
-import org.weakref.nitro.core.execution.ExecutionSuspension;
 import org.weakref.nitro.core.function.aggregation.GroupedAggregationUpdate;
 import org.weakref.nitro.core.function.aggregation.GroupedStateUpdate;
 import org.weakref.nitro.core.function.aggregation.LongStateUpdate;
@@ -750,7 +749,7 @@ public class TestOperators
     }
 
     @Test
-    void testSortOperatorResumesLoadingAfterExecutionSuspension()
+    void testSortOperatorRetainsLoadingStateAcrossInputDepletion()
     {
         Operator delegate = new TableOperator(
                 1,
@@ -777,7 +776,7 @@ public class TestOperators
             public boolean hasNext()
             {
                 if (++hasNextCalls == 2) {
-                    throw ExecutionSuspension.yield();
+                    throw InputDepleted.INSTANCE;
                 }
                 return delegate.hasNext();
             }
@@ -802,13 +801,13 @@ public class TestOperators
         };
 
         try (Operator sort = new SortOperator(allocator, new int[] {0}, new boolean[] {false}, suspendingSource)) {
-            assertThatThrownBy(sort::next).isSameAs(ExecutionSuspension.yield());
+            assertThatThrownBy(sort::next).isSameAs(InputDepleted.INSTANCE);
             assertThat(operator(sort)).matchesExactly(List.of(row(1L), row(2L)));
         }
     }
 
     @Test
-    void testTopNRankingOperatorResumesLoadingAfterExecutionSuspension()
+    void testTopNRankingOperatorRetainsLoadingStateAcrossInputDepletion()
     {
         Operator delegate = new TableOperator(
                 1,
@@ -835,7 +834,7 @@ public class TestOperators
             public boolean hasNext()
             {
                 if (++hasNextCalls == 2) {
-                    throw ExecutionSuspension.yield();
+                    throw InputDepleted.INSTANCE;
                 }
                 return delegate.hasNext();
             }
@@ -867,13 +866,13 @@ public class TestOperators
                 new boolean[] {false},
                 suspendingSource,
                 EngineResources.from(allocator).operatorResources().topNRankingPolicy())) {
-            assertThatThrownBy(ranking::next).isSameAs(ExecutionSuspension.yield());
+            assertThatThrownBy(ranking::next).isSameAs(InputDepleted.INSTANCE);
             assertThat(operator(ranking)).matchesExactly(List.of(row(1L, 1L), row(2L, 2L)));
         }
     }
 
     @Test
-    void testTopNOperatorResumesLoadingAfterExecutionSuspension()
+    void testTopNOperatorRetainsLoadingStateAcrossInputDepletion()
     {
         Operator delegate = new TableOperator(
                 1,
@@ -900,7 +899,7 @@ public class TestOperators
             public boolean hasNext()
             {
                 if (++hasNextCalls == 2) {
-                    throw ExecutionSuspension.yield();
+                    throw InputDepleted.INSTANCE;
                 }
                 return delegate.hasNext();
             }
@@ -925,7 +924,7 @@ public class TestOperators
         };
 
         try (Operator topN = new TopNOperator(allocator, 1, 0, true, suspendingSource)) {
-            assertThatThrownBy(topN::next).isSameAs(ExecutionSuspension.yield());
+            assertThatThrownBy(topN::next).isSameAs(InputDepleted.INSTANCE);
             assertThat(operator(topN)).matchesExactly(List.of(row(2L)));
         }
     }
@@ -7977,6 +7976,17 @@ public class TestOperators
      * Test-only physical unit with shared state and two results. Its identity is deliberately
      * opaque to the operators; only the program's unit/result bindings describe the output shape.
      */
+    private static final class InputDepleted
+            extends RuntimeException
+    {
+        private static final InputDepleted INSTANCE = new InputDepleted();
+
+        private InputDepleted()
+        {
+            super(null, null, false, false);
+        }
+    }
+
     private static final class SumAndCountUnit
             implements GeneratedGroupedAggregationUnit
     {

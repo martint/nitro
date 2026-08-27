@@ -18,6 +18,5 @@ public enum DriverResult
 {
     OUTPUT,
     BLOCKED,
-    YIELDED,
     FINISHED
 }

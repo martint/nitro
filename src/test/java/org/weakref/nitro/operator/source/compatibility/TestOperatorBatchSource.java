@@ -46,38 +46,52 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static java.lang.Math.toIntExact;
+import static java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class TestOperatorBatchSource
 {
     @Test
-    void testBlockedSourceSuspendsWithoutRepolling()
+    void testBlockedSourceAwaitsWithoutRepolling()
+            throws Exception
     {
         CompletableFuture<Void> inputReady = new CompletableFuture<>();
         AtomicInteger polls = new AtomicInteger();
         AtomicBoolean closed = new AtomicBoolean();
         SourceBatch batch = emptySourceBatch();
         BatchSource batchSource = testingSource(polls, closed, inputReady, batch);
-        TestingExecutionContext context = new TestingExecutionContext();
+        CountDownLatch awaiting = new CountDownLatch(1);
+        TestingExecutionContext context = new TestingExecutionContext()
+        {
+            @Override
+            public void await(CompletionStage<Void> continuation)
+            {
+                awaiting.countDown();
+                super.await(continuation);
+            }
+        };
         Allocator allocator = new Allocator(EngineResources.createDefault());
 
         try (OperatorExecutionDriver driver = new OperatorExecutionDriver(
                 new BatchSourceOperator(batchSource, emptyIngress(), context),
                 allocator,
                 context)) {
-            assertThat(driver.processNext(_ -> {})).isEqualTo(DriverResult.BLOCKED);
-            assertThat(polls).hasValue(1);
-            assertThat(driver.blocked()).contains(inputReady);
+            try (ExecutorService virtualThreads = newVirtualThreadPerTaskExecutor()) {
+                var result = virtualThreads.submit(() -> driver.processNext(_ -> {}));
+                assertThat(awaiting.await(10, TimeUnit.SECONDS)).isTrue();
+                assertThat(result).isNotDone();
+                assertThat(polls).hasValue(1);
 
-            assertThat(driver.processNext(_ -> {})).isEqualTo(DriverResult.BLOCKED);
-            assertThat(polls).hasValue(1);
-
-            inputReady.complete(null);
-            assertThat(driver.processNext(_ -> {})).isEqualTo(DriverResult.OUTPUT);
+                inputReady.complete(null);
+                assertThat(result.get(10, TimeUnit.SECONDS)).isEqualTo(DriverResult.OUTPUT);
+            }
             assertThat(polls).hasValue(2);
             assertThat(context.inputBatches).hasValue(1);
             assertThat(context.inputPositions).hasValue(0);
@@ -537,6 +551,15 @@ class TestOperatorBatchSource
         public boolean isCancelled()
         {
             return false;
+        }
+
+        @Override
+        public void checkpoint() {}
+
+        @Override
+        public void await(CompletionStage<Void> continuation)
+        {
+            continuation.toCompletableFuture().join();
         }
 
         @Override
