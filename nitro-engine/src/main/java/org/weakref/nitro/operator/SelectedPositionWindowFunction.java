@@ -24,16 +24,30 @@ public final class SelectedPositionWindowFunction
         implements RunningWindowFunction
 {
     private final TypeVectorFactory vectorFactory;
-    private final PositionSelector selector;
+    private final WindowFrame frame;
+    private final FramedPositionSelector selector;
+    private final WindowFrame.Bounds frameBounds = new WindowFrame.Bounds();
     private final Selection selection = new Selection();
     private boolean outputValuesInitialized;
 
     public SelectedPositionWindowFunction(TypeBinding outputType, PositionSelector selector)
     {
+        this(outputType, WindowFrame.fullPartition(), unframed(selector));
+    }
+
+    public SelectedPositionWindowFunction(TypeBinding outputType, WindowFrame frame, FramedPositionSelector selector)
+    {
         requireNonNull(outputType, "outputType is null");
         this.vectorFactory = outputType.vectorFactory()
                 .orElseThrow(() -> new IllegalArgumentException("outputType has no vector factory"));
+        this.frame = requireNonNull(frame, "frame is null");
         this.selector = requireNonNull(selector, "selector is null");
+    }
+
+    private static FramedPositionSelector unframed(PositionSelector selector)
+    {
+        requireNonNull(selector, "selector is null");
+        return (partition, _, outputPosition, selection) -> selector.select(partition, outputPosition, selection);
     }
 
     @Override
@@ -69,8 +83,13 @@ public final class SelectedPositionWindowFunction
             int outputSize)
     {
         for (int position = 0; position < partition.size(); position++) {
+            frameBounds.clear();
+            frame.resolve(partition, position, frameBounds);
+            if (!frameBounds.present()) {
+                continue;
+            }
             selection.clear();
-            selector.select(partition, position, selection);
+            selector.select(partition, frameBounds, position, selection);
             if (!selection.present()) {
                 continue;
             }
@@ -98,6 +117,13 @@ public final class SelectedPositionWindowFunction
     {
         /** Leaves {@code selection} unset to produce null. */
         void select(WindowPositionIndex partition, int outputPosition, Selection selection);
+    }
+
+    @FunctionalInterface
+    public interface FramedPositionSelector
+    {
+        /** Leaves {@code selection} unset to produce null. */
+        void select(WindowPositionIndex partition, WindowFrame.Bounds frame, int outputPosition, Selection selection);
     }
 
     public static final class Selection

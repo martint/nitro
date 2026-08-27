@@ -976,6 +976,36 @@ public class TestOperators
     }
 
     @Test
+    void testSelectedPositionWindowUsesPerRowFrames()
+    {
+        SelectedPositionWindowFunction frameStart = new SelectedPositionWindowFunction(
+                i64ValueType(),
+                (partition, outputPosition, bounds) -> bounds.set(
+                        Math.max(0, outputPosition - 1),
+                        Math.min(partition.size(), outputPosition + 2)),
+                (partition, frame, _, selection) -> selection.set(1, frame.start()));
+
+        try (Operator window = new WindowOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 2, List.of(
+                        row(1L, 30L),
+                        row(1L, 10L),
+                        row(1L, 20L),
+                        row(2L, 50L))),
+                new int[] {0},
+                new int[] {1},
+                new boolean[] {false},
+                List.of(frameStart))) {
+            assertThat(operator(window))
+                    .matchesExactly(List.of(
+                            row(1L, 10L, 10L),
+                            row(1L, 20L, 10L),
+                            row(1L, 30L, 20L),
+                            row(2L, 50L, 50L)));
+        }
+    }
+
+    @Test
     void testPeerDistributionsResetAtPartitionBoundaries()
     {
         try (Operator window = new WindowOperator(
