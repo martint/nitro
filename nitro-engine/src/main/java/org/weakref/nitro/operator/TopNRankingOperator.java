@@ -53,6 +53,7 @@ public class TopNRankingOperator
     private final Operator source;
     private final int[] orderingColumns;
     private final boolean[] descendingByColumn;
+    private final boolean[] nullsFirstByColumn;
     private final int[] partitionColumns;
     private final RankingType rankingType;
     private final int limit;
@@ -82,6 +83,7 @@ public class TopNRankingOperator
                 new int[0],
                 orderingColumns,
                 descendingByColumn,
+                new boolean[orderingColumns.length],
                 source,
                 defaultRankingSchema(),
                 policy,
@@ -104,6 +106,7 @@ public class TopNRankingOperator
                 new int[0],
                 orderingColumns,
                 descendingByColumn,
+                new boolean[orderingColumns.length],
                 source,
                 rankingSchema,
                 policy,
@@ -126,6 +129,7 @@ public class TopNRankingOperator
                 partitionColumns,
                 orderingColumns,
                 descendingByColumn,
+                new boolean[orderingColumns.length],
                 source,
                 defaultRankingSchema(),
                 policy,
@@ -149,6 +153,7 @@ public class TopNRankingOperator
                 partitionColumns,
                 orderingColumns,
                 descendingByColumn,
+                new boolean[orderingColumns.length],
                 source,
                 rankingSchema,
                 policy,
@@ -172,6 +177,7 @@ public class TopNRankingOperator
                 partitionColumns,
                 orderingColumns,
                 descendingByColumn,
+                new boolean[orderingColumns.length],
                 source,
                 rankingSchema,
                 requireNonNull(resources, "resources is null").topNRankingPolicy(),
@@ -196,6 +202,33 @@ public class TopNRankingOperator
                 partitionColumns,
                 orderingColumns,
                 descendingByColumn,
+                new boolean[orderingColumns.length],
+                source,
+                rankingSchema,
+                requireNonNull(resources, "resources is null").topNRankingPolicy(),
+                rankingType,
+                resources.codeGeneration().structuralTypes());
+    }
+
+    public TopNRankingOperator(
+            Allocator allocator,
+            int limit,
+            int[] partitionColumns,
+            int[] orderingColumns,
+            boolean[] descendingByColumn,
+            boolean[] nullsFirstByColumn,
+            RankingType rankingType,
+            Operator source,
+            Schema rankingSchema,
+            OperatorResources resources)
+    {
+        this(
+                allocator,
+                limit,
+                partitionColumns,
+                orderingColumns,
+                descendingByColumn,
+                nullsFirstByColumn,
                 source,
                 rankingSchema,
                 requireNonNull(resources, "resources is null").topNRankingPolicy(),
@@ -209,6 +242,7 @@ public class TopNRankingOperator
             int[] partitionColumns,
             int[] orderingColumns,
             boolean[] descendingByColumn,
+            boolean[] nullsFirstByColumn,
             Operator source,
             Schema rankingSchema,
             TopNRankingOperatorPolicy policy,
@@ -221,8 +255,8 @@ public class TopNRankingOperator
         if (orderingColumns.length == 0) {
             throw new IllegalArgumentException("TopNRanking requires at least one ordering column");
         }
-        if (orderingColumns.length != descendingByColumn.length) {
-            throw new IllegalArgumentException("Ordering columns and directions must have the same length");
+        if (orderingColumns.length != descendingByColumn.length || orderingColumns.length != nullsFirstByColumn.length) {
+            throw new IllegalArgumentException("Ordering columns, directions, and null placements must have the same length");
         }
         rankingSchema = requireNonNull(rankingSchema, "rankingSchema is null");
         if (rankingSchema.size() != 1) {
@@ -232,6 +266,7 @@ public class TopNRankingOperator
         this.source = source;
         this.orderingColumns = orderingColumns.clone();
         this.descendingByColumn = descendingByColumn.clone();
+        this.nullsFirstByColumn = nullsFirstByColumn.clone();
         this.partitionColumns = partitionColumns.clone();
         this.rankingType = requireNonNull(rankingType, "rankingType is null");
         this.limit = limit;
@@ -621,7 +656,7 @@ public class TopNRankingOperator
             if (leftNull == rightNull) {
                 return 0;
             }
-            return leftNull ? 1 : -1;
+            return leftNull == nullsFirstByColumn[orderingIndex] ? -1 : 1;
         }
         int comparison = comparisonKernels[column].compare(
                 leftStreams.values(),

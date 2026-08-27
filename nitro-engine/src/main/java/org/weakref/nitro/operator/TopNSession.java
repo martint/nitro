@@ -59,6 +59,7 @@ public final class TopNSession
                 limit,
                 orderingColumns,
                 descending,
+                new boolean[orderingColumns.length],
                 inputSchema,
                 EngineResources.from(allocator).operatorResources());
     }
@@ -71,11 +72,24 @@ public final class TopNSession
             Schema inputSchema,
             TopNOperatorPolicy policy)
     {
+        this(allocator, limit, orderingColumns, descending, new boolean[orderingColumns.length], inputSchema, policy);
+    }
+
+    public TopNSession(
+            Allocator allocator,
+            int limit,
+            int[] orderingColumns,
+            boolean[] descending,
+            boolean[] nullsFirst,
+            Schema inputSchema,
+            TopNOperatorPolicy policy)
+    {
         this(
                 allocator,
                 limit,
                 orderingColumns,
                 descending,
+                nullsFirst,
                 inputSchema,
                 EngineResources.from(allocator).operatorResources(),
                 policy);
@@ -89,11 +103,24 @@ public final class TopNSession
             Schema inputSchema,
             OperatorResources resources)
     {
+        this(allocator, limit, orderingColumns, descending, new boolean[orderingColumns.length], inputSchema, resources);
+    }
+
+    public TopNSession(
+            Allocator allocator,
+            int limit,
+            int[] orderingColumns,
+            boolean[] descending,
+            boolean[] nullsFirst,
+            Schema inputSchema,
+            OperatorResources resources)
+    {
         this(
                 allocator,
                 limit,
                 orderingColumns,
                 descending,
+                nullsFirst,
                 inputSchema,
                 resources,
                 requireNonNull(resources, "resources is null").topNOperatorPolicy());
@@ -104,6 +131,7 @@ public final class TopNSession
             int limit,
             int[] orderingColumns,
             boolean[] descending,
+            boolean[] nullsFirst,
             Schema inputSchema,
             OperatorResources resources,
             TopNOperatorPolicy policy)
@@ -113,11 +141,12 @@ public final class TopNSession
         }
         requireNonNull(orderingColumns, "orderingColumns is null");
         requireNonNull(descending, "descending is null");
+        requireNonNull(nullsFirst, "nullsFirst is null");
         if (orderingColumns.length == 0) {
             throw new IllegalArgumentException("TopN requires at least one ordering column");
         }
-        if (orderingColumns.length != descending.length) {
-            throw new IllegalArgumentException("TopN ordering columns and directions must have the same length");
+        if (orderingColumns.length != descending.length || orderingColumns.length != nullsFirst.length) {
+            throw new IllegalArgumentException("TopN ordering columns, directions, and null placements must have the same length");
         }
         this.allocator = requireNonNull(allocator, "allocator is null");
         this.limit = limit;
@@ -127,6 +156,7 @@ public final class TopNSession
         state = new TopNState(
                 orderingColumns,
                 descending,
+                nullsFirst,
                 operatorResources.joinBufferPolicy(),
                 allocator,
                 allocationContext,

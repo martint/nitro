@@ -46,6 +46,7 @@ public final class WindowOperator
     private final int[] partitionColumns;
     private final int[] orderingColumns;
     private final boolean[] descendingByColumn;
+    private final boolean[] nullsFirstByColumn;
     private final List<RunningWindowFunction> windowFunctions;
     private final WindowInputOrder inputOrder;
     private final boolean lazyOutputs;
@@ -79,6 +80,7 @@ public final class WindowOperator
                 partitionColumns,
                 orderingColumns,
                 descendingByColumn,
+                descendingByColumn.clone(),
                 windowFunctions,
                 Schema.unspecified(windowFunctions.size()),
                 EngineResources.from(allocator).operatorResources());
@@ -99,6 +101,7 @@ public final class WindowOperator
                 partitionColumns,
                 orderingColumns,
                 descendingByColumn,
+                descendingByColumn.clone(),
                 windowFunctions,
                 windowSchema,
                 EngineResources.from(allocator).operatorResources());
@@ -120,6 +123,32 @@ public final class WindowOperator
                 partitionColumns,
                 orderingColumns,
                 descendingByColumn,
+                descendingByColumn.clone(),
+                windowFunctions,
+                windowSchema,
+                requireNonNull(resources, "resources is null").windowPolicy(),
+                resources.codeGeneration().structuralTypes(),
+                WindowInputOrder.unordered());
+    }
+
+    public WindowOperator(
+            Allocator allocator,
+            Operator source,
+            int[] partitionColumns,
+            int[] orderingColumns,
+            boolean[] descendingByColumn,
+            boolean[] nullsFirstByColumn,
+            List<RunningWindowFunction> windowFunctions,
+            Schema windowSchema,
+            OperatorResources resources)
+    {
+        this(
+                allocator,
+                source,
+                partitionColumns,
+                orderingColumns,
+                descendingByColumn,
+                nullsFirstByColumn,
                 windowFunctions,
                 windowSchema,
                 requireNonNull(resources, "resources is null").windowPolicy(),
@@ -144,6 +173,33 @@ public final class WindowOperator
                 partitionColumns,
                 orderingColumns,
                 descendingByColumn,
+                descendingByColumn.clone(),
+                windowFunctions,
+                windowSchema,
+                requireNonNull(resources, "resources is null").windowPolicy(),
+                resources.codeGeneration().structuralTypes(),
+                inputOrder);
+    }
+
+    public WindowOperator(
+            Allocator allocator,
+            Operator source,
+            int[] partitionColumns,
+            int[] orderingColumns,
+            boolean[] descendingByColumn,
+            boolean[] nullsFirstByColumn,
+            List<RunningWindowFunction> windowFunctions,
+            Schema windowSchema,
+            OperatorResources resources,
+            WindowInputOrder inputOrder)
+    {
+        this(
+                allocator,
+                source,
+                partitionColumns,
+                orderingColumns,
+                descendingByColumn,
+                nullsFirstByColumn,
                 windowFunctions,
                 windowSchema,
                 requireNonNull(resources, "resources is null").windowPolicy(),
@@ -167,6 +223,7 @@ public final class WindowOperator
                 partitionColumns,
                 orderingColumns,
                 descendingByColumn,
+                descendingByColumn.clone(),
                 windowFunctions,
                 windowSchema,
                 policy,
@@ -180,14 +237,15 @@ public final class WindowOperator
             int[] partitionColumns,
             int[] orderingColumns,
             boolean[] descendingByColumn,
+            boolean[] nullsFirstByColumn,
             List<RunningWindowFunction> windowFunctions,
             Schema windowSchema,
             WindowOperatorPolicy policy,
             StructuralTypeKernelFactory structuralTypes,
             WindowInputOrder inputOrder)
     {
-        if (orderingColumns.length != descendingByColumn.length) {
-            throw new IllegalArgumentException("Ordering columns and directions must have the same length");
+        if (orderingColumns.length != descendingByColumn.length || orderingColumns.length != nullsFirstByColumn.length) {
+            throw new IllegalArgumentException("Ordering columns, directions, and null placements must have the same length");
         }
         if (windowFunctions.isEmpty()) {
             throw new IllegalArgumentException("windowFunctions is empty");
@@ -203,6 +261,7 @@ public final class WindowOperator
         this.partitionColumns = partitionColumns.clone();
         this.orderingColumns = orderingColumns.clone();
         this.descendingByColumn = descendingByColumn.clone();
+        this.nullsFirstByColumn = nullsFirstByColumn.clone();
         this.windowFunctions = List.copyOf(windowFunctions);
         this.inputOrder = requireNonNull(inputOrder, "inputOrder is null");
         this.outputSchema = outputSchema(source.outputSchema(), windowSchema);
@@ -654,14 +713,17 @@ public final class WindowOperator
         FlatIntegerOrderKey[] keys = new FlatIntegerOrderKey[partitionColumns.length + orderingColumns.length];
         int keyIndex = 0;
         for (int column : partitionColumns) {
-            FlatIntegerOrderKey key = flatIntegerOrderKey(columns[column], false);
+            FlatIntegerOrderKey key = flatIntegerOrderKey(columns[column], false, false);
             if (key == null) {
                 return null;
             }
             keys[keyIndex++] = key;
         }
         for (int index = 0; index < orderingColumns.length; index++) {
-            FlatIntegerOrderKey key = flatIntegerOrderKey(columns[orderingColumns[index]], descendingByColumn[index]);
+            FlatIntegerOrderKey key = flatIntegerOrderKey(
+                    columns[orderingColumns[index]],
+                    descendingByColumn[index],
+                    nullsFirstByColumn[index]);
             if (key == null) {
                 return null;
             }
@@ -670,7 +732,7 @@ public final class WindowOperator
         return keys;
     }
 
-    private static FlatIntegerOrderKey flatIntegerOrderKey(Streams streams, boolean descending)
+    private static FlatIntegerOrderKey flatIntegerOrderKey(Streams streams, boolean descending, boolean nullsFirst)
     {
         Vector values = streams.values();
         Vector nullVector = streams.getOrNull(Stream.NULLS);
@@ -680,8 +742,8 @@ public final class WindowOperator
             return null;
         }
         return switch (values) {
-            case I64Vector longs -> new FlatIntegerOrderKey(longs.values(), null, nulls, descending);
-            case I32Vector integers -> new FlatIntegerOrderKey(null, integers.values(), nulls, descending);
+            case I64Vector longs -> new FlatIntegerOrderKey(longs.values(), null, nulls, descending, nullsFirst);
+            case I32Vector integers -> new FlatIntegerOrderKey(null, integers.values(), nulls, descending, nullsFirst);
             default -> null;
         };
     }
@@ -693,14 +755,14 @@ public final class WindowOperator
             if (key.nulls() != null && (key.nulls()[left] || key.nulls()[right])) {
                 boolean leftNull = key.nulls()[left];
                 boolean rightNull = key.nulls()[right];
-                comparison = leftNull == rightNull ? 0 : leftNull ? 1 : -1;
+                comparison = leftNull == rightNull ? 0 : leftNull == key.nullsFirst() ? -1 : 1;
             }
             else {
                 comparison = key.longs() != null
                         ? Long.compare(key.longs()[left], key.longs()[right])
                         : Integer.compare(key.integers()[left], key.integers()[right]);
             }
-            if (key.descending()) {
+            if (key.descending() && comparison != 0 && (key.nulls() == null || !key.nulls()[left] && !key.nulls()[right])) {
                 comparison = -comparison;
             }
             if (comparison != 0) {
@@ -741,10 +803,15 @@ public final class WindowOperator
         int[] scratch = arrayPool.borrowInts(positions.length);
         try {
             for (int index = orderingColumns.length - 1; index >= 0; index--) {
-                stableRadixSortColumn(positions, scratch, columns[orderingColumns[index]], descendingByColumn[index]);
+                stableRadixSortColumn(
+                        positions,
+                        scratch,
+                        columns[orderingColumns[index]],
+                        descendingByColumn[index],
+                        nullsFirstByColumn[index]);
             }
             for (int index = partitionColumns.length - 1; index >= 0; index--) {
-                stableRadixSortColumn(positions, scratch, columns[partitionColumns[index]], false);
+                stableRadixSortColumn(positions, scratch, columns[partitionColumns[index]], false, false);
             }
         }
         finally {
@@ -878,7 +945,7 @@ public final class WindowOperator
                 (VectorAccess.isAllFalseNulls(nulls) || nulls instanceof BooleanVector);
     }
 
-    private void stableRadixSortColumn(int[] positions, int[] scratch, Streams streams, boolean descending)
+    private void stableRadixSortColumn(int[] positions, int[] scratch, Streams streams, boolean descending, boolean nullsFirst)
     {
         Vector values = streams.values();
         Vector nullVector = streams.getOrNull(Stream.NULLS);
@@ -937,8 +1004,8 @@ public final class WindowOperator
                     nullCount++;
                 }
             }
-            int nullOffset = descending ? 0 : source.length - nullCount;
-            int valueOffset = descending ? nullCount : 0;
+            int nullOffset = nullsFirst ? 0 : source.length - nullCount;
+            int valueOffset = nullsFirst ? nullCount : 0;
             for (int position : source) {
                 if (nulls[position]) {
                     target[nullOffset++] = position;
@@ -982,11 +1049,7 @@ public final class WindowOperator
             }
         }
         for (int orderingIndex = 0; orderingIndex < orderingColumns.length; orderingIndex++) {
-            int column = orderingColumns[orderingIndex];
-            int comparison = compareColumn(column, columns[column], leftPosition, rightPosition);
-            if (descendingByColumn[orderingIndex]) {
-                comparison = -comparison;
-            }
+            int comparison = compareOrderingColumn(orderingIndex, columns, leftPosition, rightPosition);
             if (comparison != 0) {
                 return comparison;
             }
@@ -1155,10 +1218,7 @@ public final class WindowOperator
             }
         }
         for (int orderingIndex = 0; orderingIndex < orderingColumns.length; orderingIndex++) {
-            int comparison = compareColumn(orderingColumns[orderingIndex], left, right);
-            if (descendingByColumn[orderingIndex]) {
-                comparison = -comparison;
-            }
+            int comparison = compareOrderingColumn(orderingIndex, left, right);
             if (comparison != 0) {
                 return comparison;
             }
@@ -1192,6 +1252,52 @@ public final class WindowOperator
             }
         }
         return true;
+    }
+
+    private int compareOrderingColumn(int orderingIndex, Streams[] columns, int leftPosition, int rightPosition)
+    {
+        int column = orderingColumns[orderingIndex];
+        Streams streams = columns[column];
+        return compareOrderingValues(orderingIndex, streams, leftPosition, streams, rightPosition);
+    }
+
+    private int compareOrderingColumn(int orderingIndex, long left, long right)
+    {
+        int column = orderingColumns[orderingIndex];
+        Streams leftStreams = pages.get(pageIndex(left)).columns()[column];
+        Streams rightStreams = pages.get(pageIndex(right)).columns()[column];
+        return compareOrderingValues(
+                orderingIndex,
+                leftStreams,
+                pagePosition(left),
+                rightStreams,
+                pagePosition(right));
+    }
+
+    private int compareOrderingValues(
+            int orderingIndex,
+            Streams leftStreams,
+            int leftPosition,
+            Streams rightStreams,
+            int rightPosition)
+    {
+        boolean leftNull = OperatorVectorSupport.isNull(leftStreams.getOrNull(Stream.NULLS), leftPosition);
+        boolean rightNull = OperatorVectorSupport.isNull(rightStreams.getOrNull(Stream.NULLS), rightPosition);
+        if (leftNull || rightNull) {
+            if (leftNull == rightNull) {
+                return 0;
+            }
+            return leftNull == nullsFirstByColumn[orderingIndex] ? -1 : 1;
+        }
+        int column = orderingColumns[orderingIndex];
+        int comparison = comparisonKernels[column].compare(
+                leftStreams.values(),
+                leftStreams.getOrNull(Stream.NULLS),
+                leftPosition,
+                rightStreams.values(),
+                rightStreams.getOrNull(Stream.NULLS),
+                rightPosition);
+        return descendingByColumn[orderingIndex] ? -comparison : comparison;
     }
 
     private int compareColumn(int column, long left, long right)
@@ -1560,10 +1666,15 @@ public final class WindowOperator
         long[] scratch = arrayPool.borrowLongs(rows.length);
         try {
             for (int index = orderingColumns.length - 1; index >= 0; index--) {
-                stableRadixSortRowReferenceColumn(rows, scratch, orderingColumns[index], descendingByColumn[index]);
+                stableRadixSortRowReferenceColumn(
+                        rows,
+                        scratch,
+                        orderingColumns[index],
+                        descendingByColumn[index],
+                        nullsFirstByColumn[index]);
             }
             for (int index = partitionColumns.length - 1; index >= 0; index--) {
-                stableRadixSortRowReferenceColumn(rows, scratch, partitionColumns[index], false);
+                stableRadixSortRowReferenceColumn(rows, scratch, partitionColumns[index], false, false);
             }
         }
         finally {
@@ -1572,7 +1683,7 @@ public final class WindowOperator
         return true;
     }
 
-    private void stableRadixSortRowReferenceColumn(long[] rows, long[] scratch, int column, boolean descending)
+    private void stableRadixSortRowReferenceColumn(long[] rows, long[] scratch, int column, boolean descending, boolean nullsFirst)
     {
         int bytes = pages.getFirst().columns()[column].values() instanceof I64Vector ? Long.BYTES : Integer.BYTES;
         long firstKey = 0;
@@ -1641,8 +1752,8 @@ public final class WindowOperator
                     nullCount++;
                 }
             }
-            int nullOffset = descending ? 0 : source.length - nullCount;
-            int valueOffset = descending ? nullCount : 0;
+            int nullOffset = nullsFirst ? 0 : source.length - nullCount;
+            int valueOffset = nullsFirst ? nullCount : 0;
             for (long row : source) {
                 Streams streams = pages.get(pageIndex(row)).columns()[column];
                 if (OperatorVectorSupport.isNull(streams.getOrNull(Stream.NULLS), pagePosition(row))) {
@@ -1701,5 +1812,5 @@ public final class WindowOperator
         return builder.build();
     }
 
-    private record FlatIntegerOrderKey(long[] longs, int[] integers, boolean[] nulls, boolean descending) {}
+    private record FlatIntegerOrderKey(long[] longs, int[] integers, boolean[] nulls, boolean descending, boolean nullsFirst) {}
 }

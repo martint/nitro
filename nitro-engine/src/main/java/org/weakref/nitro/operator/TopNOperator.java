@@ -54,6 +54,7 @@ public class TopNOperator
                 n,
                 columns,
                 descending,
+                new boolean[columns.length],
                 source,
                 EngineResources.from(allocator).operatorResources());
     }
@@ -66,11 +67,24 @@ public class TopNOperator
             Operator source,
             OperatorResources resources)
     {
+        this(allocator, n, columns, descending, new boolean[columns.length], source, resources);
+    }
+
+    public TopNOperator(
+            Allocator allocator,
+            int n,
+            int[] columns,
+            boolean[] descending,
+            boolean[] nullsFirst,
+            Operator source,
+            OperatorResources resources)
+    {
         this(
                 allocator,
                 n,
                 columns,
                 descending,
+                nullsFirst,
                 source,
                 requireNonNull(resources, "resources is null").joinBufferPolicy(),
                 resources.codeGeneration().structuralTypes(),
@@ -90,6 +104,7 @@ public class TopNOperator
                 n,
                 columns,
                 descending,
+                new boolean[columns.length],
                 source,
                 joinBufferPolicy,
                 new StructuralTypeKernelFactory(),
@@ -101,6 +116,7 @@ public class TopNOperator
             int n,
             int[] columns,
             boolean[] descending,
+            boolean[] nullsFirst,
             Operator source,
             JoinBufferPolicy joinBufferPolicy,
             StructuralTypeKernelFactory structuralTypes,
@@ -109,8 +125,8 @@ public class TopNOperator
         if (columns.length == 0) {
             throw new IllegalArgumentException("TopN requires at least one ordering column");
         }
-        if (columns.length != descending.length) {
-            throw new IllegalArgumentException("TopN ordering columns and directions must have the same length");
+        if (columns.length != descending.length || columns.length != nullsFirst.length) {
+            throw new IllegalArgumentException("TopN ordering columns, directions, and null placements must have the same length");
         }
         this.allocator = allocator;
         this.n = n;
@@ -119,6 +135,7 @@ public class TopNOperator
         state = new TopNState(
                 columns,
                 descending,
+                nullsFirst,
                 requireNonNull(joinBufferPolicy, "joinBufferPolicy is null"),
                 allocator,
                 allocationContext,

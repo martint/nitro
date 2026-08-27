@@ -55,6 +55,7 @@ public final class SortSession
                 allocator,
                 orderingColumns,
                 descending,
+                new boolean[orderingColumns.length],
                 inputSchema,
                 EngineResources.from(allocator).operatorResources());
     }
@@ -66,13 +67,25 @@ public final class SortSession
             Schema inputSchema,
             OperatorResources resources)
     {
+        this(allocator, orderingColumns, descending, new boolean[orderingColumns.length], inputSchema, resources);
+    }
+
+    public SortSession(
+            Allocator allocator,
+            int[] orderingColumns,
+            boolean[] descending,
+            boolean[] nullsFirst,
+            Schema inputSchema,
+            OperatorResources resources)
+    {
         requireNonNull(orderingColumns, "orderingColumns is null");
         requireNonNull(descending, "descending is null");
+        requireNonNull(nullsFirst, "nullsFirst is null");
         if (orderingColumns.length == 0) {
             throw new IllegalArgumentException("Sort requires at least one ordering column");
         }
-        if (orderingColumns.length != descending.length) {
-            throw new IllegalArgumentException("Sort ordering columns and directions must have the same length");
+        if (orderingColumns.length != descending.length || orderingColumns.length != nullsFirst.length) {
+            throw new IllegalArgumentException("Sort ordering columns, directions, and null placements must have the same length");
         }
         this.allocator = requireNonNull(allocator, "allocator is null");
         outputSchema = requireNonNull(inputSchema, "inputSchema is null");
@@ -82,6 +95,7 @@ public final class SortSession
         state = new TopNState(
                 orderingColumns,
                 descending,
+                nullsFirst,
                 operatorResources.joinBufferPolicy(),
                 allocator,
                 allocationContext,

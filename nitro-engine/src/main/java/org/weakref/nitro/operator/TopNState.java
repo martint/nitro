@@ -42,6 +42,7 @@ final class TopNState
     private final Allocator.Context allocationContext;
     private final int[] orderingColumns;
     private final boolean[] descendingByColumn;
+    private final boolean[] nullsFirstByColumn;
     private final boolean[] orderingColumnFlags;
     private final StructuralComparisonKernel[] comparisonKernels;
     private Streams[][] slotColumns;
@@ -77,6 +78,7 @@ final class TopNState
     TopNState(
             int[] orderingColumns,
             boolean[] descendingByColumn,
+            boolean[] nullsFirstByColumn,
             JoinBufferPolicy joinBufferPolicy,
             Allocator allocator,
             Allocator.Context allocationContext,
@@ -89,6 +91,7 @@ final class TopNState
         this.allocationContext = allocationContext;
         this.orderingColumns = orderingColumns.clone();
         this.descendingByColumn = descendingByColumn.clone();
+        this.nullsFirstByColumn = nullsFirstByColumn.clone();
         this.orderingColumnFlags = new boolean[outputCount];
         for (int orderingColumn : orderingColumns) {
             orderingColumnFlags[orderingColumn] = true;
@@ -248,8 +251,6 @@ final class TopNState
                 comparisonColumns[orderingColumn] = buffers.copyPosition(output, comparisonColumns[orderingColumn], position);
                 currentOrdering = comparisonColumns[orderingColumn];
             }
-            // NULLS LAST regardless of sort direction (matches Trino/SQL default); direction flips only the
-            // comparison of non-null values.
             boolean currentNull = compactCandidate
                     ? positionAccessor == null
                             ? OperatorVectorSupport.isNull(currentOrdering.getOrNull(Stream.NULLS), 0)
@@ -261,7 +262,7 @@ final class TopNState
                 if (currentNull == slotNull) {
                     continue;
                 }
-                return currentNull ? -1 : 1;
+                return compareNulls(currentNull, nullsFirstByColumn[orderingIndex]);
             }
             if (compactCandidate && positionAccessor != null) {
                 comparison = positionAccessor.compareNonNull(position, slotOrdering.values(), slotPosition);
@@ -332,7 +333,7 @@ final class TopNState
                 if (leftNull == rightNull) {
                     continue;
                 }
-                return leftNull ? -1 : 1;
+                return compareNulls(leftNull, nullsFirstByColumn[orderingIndex]);
             }
             int comparison;
             if (positionAccessor != null) {
@@ -423,7 +424,7 @@ final class TopNState
                     if (leftNull == rightNull) {
                         continue;
                     }
-                    return leftNull ? -1 : 1;
+                    return compareNulls(leftNull, nullsFirstByColumn[orderingIndex]);
                 }
                 int comparison = comparisonKernels[orderingColumn].compare(
                         ordering.values(),
@@ -440,14 +441,13 @@ final class TopNState
             }
             Streams leftOrdering = slotColumns[orderingColumn][leftSlot];
             Streams rightOrdering = slotColumns[orderingColumn][rightSlot];
-            // NULLS LAST regardless of sort direction (matches Trino/SQL); direction flips only non-null values.
             boolean leftNull = OperatorVectorSupport.isNull(leftOrdering.getOrNull(Stream.NULLS), 0);
             boolean rightNull = OperatorVectorSupport.isNull(rightOrdering.getOrNull(Stream.NULLS), 0);
             if (leftNull || rightNull) {
                 if (leftNull == rightNull) {
                     continue;
                 }
-                return leftNull ? -1 : 1;
+                return compareNulls(leftNull, nullsFirstByColumn[orderingIndex]);
             }
             int comparison = comparisonKernels[orderingColumn].compare(
                     leftOrdering.values(),
@@ -514,6 +514,12 @@ final class TopNState
     public boolean singleOrderingDescending()
     {
         return descendingByColumn[0];
+    }
+
+    /** Returns positive when the left null belongs earlier in the requested output ordering. */
+    private static int compareNulls(boolean leftNull, boolean nullsFirst)
+    {
+        return leftNull == nullsFirst ? 1 : -1;
     }
 
     public void copyRow(Batch batch, int position, int slot)

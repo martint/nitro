@@ -51,6 +51,31 @@ public final class TopNRankingSession
             Schema rankingSchema,
             OperatorResources resources)
     {
+        this(
+                allocator,
+                limit,
+                partitionColumns,
+                orderingColumns,
+                descending,
+                new boolean[orderingColumns.length],
+                rankingType,
+                inputSchema,
+                rankingSchema,
+                resources);
+    }
+
+    public TopNRankingSession(
+            Allocator allocator,
+            int limit,
+            int[] partitionColumns,
+            int[] orderingColumns,
+            boolean[] descending,
+            boolean[] nullsFirst,
+            TopNRankingOperator.RankingType rankingType,
+            Schema inputSchema,
+            Schema rankingSchema,
+            OperatorResources resources)
+    {
         this.allocator = requireNonNull(allocator, "allocator is null");
         inputColumns = requireNonNull(inputSchema, "inputSchema is null").size();
         ranking = new TopNRankingOperator(
@@ -59,6 +84,7 @@ public final class TopNRankingSession
                 partitionColumns,
                 orderingColumns,
                 descending,
+                nullsFirst,
                 rankingType,
                 TableOperator.retained(inputSchema, pages),
                 rankingSchema,

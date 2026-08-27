@@ -79,6 +79,7 @@ import org.weakref.nitro.operator.MultiStageOperator;
 import org.weakref.nitro.operator.NestedLoopJoinOperator;
 import org.weakref.nitro.operator.OffsetOperator;
 import org.weakref.nitro.operator.Operator;
+import org.weakref.nitro.operator.OperatorResources;
 import org.weakref.nitro.operator.Output;
 import org.weakref.nitro.operator.PartitionSumI64WindowFunction;
 import org.weakref.nitro.operator.ProjectOperator;
@@ -713,6 +714,65 @@ public class TestOperators
                         row(1L, null, 50L),
                         row(2L, "b", 10L),
                         row(null, "x", 40L)));
+    }
+
+    @Test
+    void testSortOperatorHonorsExplicitNullPlacementIndependentlyOfDirection()
+    {
+        OperatorResources resources = EngineResources.from(allocator).operatorResources();
+
+        assertThat(operator(new SortOperator(
+                allocator,
+                new int[] {0},
+                new boolean[] {false},
+                new boolean[] {true},
+                new ConstantTableOperator(allocator, 1, List.of(row(2L), row((Object) null), row(1L))),
+                resources)))
+                .matchesExactly(List.of(row((Object) null), row(1L), row(2L)));
+
+        assertThat(operator(new SortOperator(
+                allocator,
+                new int[] {0},
+                new boolean[] {true},
+                new boolean[] {true},
+                new ConstantTableOperator(allocator, 1, List.of(row(1L), row((Object) null), row(2L))),
+                resources)))
+                .matchesExactly(List.of(row((Object) null), row(2L), row(1L)));
+    }
+
+    @Test
+    void testTopNOperatorHonorsExplicitNullPlacement()
+    {
+        assertThat(operator(new TopNOperator(
+                allocator,
+                2,
+                new int[] {0},
+                new boolean[] {false},
+                new boolean[] {true},
+                new ConstantTableOperator(allocator, 1, List.of(row(2L), row((Object) null), row(1L))),
+                EngineResources.from(allocator).operatorResources())))
+                .matchesExactly(List.of(row((Object) null), row(1L)));
+    }
+
+    @Test
+    void testWindowOperatorHonorsExplicitNullPlacement()
+    {
+        try (Operator window = new WindowOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 1, List.of(row(2L), row((Object) null), row(1L))),
+                new int[0],
+                new int[] {0},
+                new boolean[] {false},
+                new boolean[] {true},
+                List.of(new RankWindowFunction(new int[] {0}, new boolean[] {false})),
+                Schema.unspecified(1),
+                EngineResources.from(allocator).operatorResources())) {
+            assertThat(operator(window))
+                    .matchesExactly(List.of(
+                            row(null, 1L),
+                            row(1L, 2L),
+                            row(2L, 3L)));
+        }
     }
 
     @Test

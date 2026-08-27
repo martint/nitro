@@ -1466,6 +1466,31 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testTopNRankingHonorsExplicitNullPlacement()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        try (Operator ranking = new TopNRankingOperator(
+                allocator,
+                2,
+                new int[0],
+                new int[] {0},
+                new boolean[] {false},
+                new boolean[] {true},
+                TopNRankingOperator.RankingType.ROW_NUMBER,
+                new ConstantTableOperator(allocator, 2, List.of(
+                        row(2L, "two"),
+                        row((Object) null, "null"),
+                        row(1L, "one"))),
+                Schema.unspecified(1),
+                EngineResources.from(allocator).operatorResources())) {
+            assertThat(OperatorAssertions.OperatorAssert.toRows(ranking))
+                    .containsExactly(
+                            row(null, "null", 1L),
+                            row(1L, "one", 2L));
+        }
+    }
+
+    @Test
     void testWindowOperatorRadixOrdersSignedNullableDescendingKeys()
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());

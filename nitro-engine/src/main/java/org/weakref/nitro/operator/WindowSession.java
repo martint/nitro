@@ -60,6 +60,7 @@ public final class WindowSession
                 partitionColumns,
                 orderingColumns,
                 descending,
+                descending.clone(),
                 functions,
                 windowSchema,
                 resources,
@@ -77,6 +78,31 @@ public final class WindowSession
             OperatorResources resources,
             WindowInputOrder inputOrder)
     {
+        this(
+                allocator,
+                inputSchema,
+                partitionColumns,
+                orderingColumns,
+                descending,
+                descending.clone(),
+                functions,
+                windowSchema,
+                resources,
+                inputOrder);
+    }
+
+    public WindowSession(
+            Allocator allocator,
+            Schema inputSchema,
+            int[] partitionColumns,
+            int[] orderingColumns,
+            boolean[] descending,
+            boolean[] nullsFirst,
+            List<RunningWindowFunction> functions,
+            Schema windowSchema,
+            OperatorResources resources,
+            WindowInputOrder inputOrder)
+    {
         this.allocator = requireNonNull(allocator, "allocator is null");
         inputColumns = requireNonNull(inputSchema, "inputSchema is null").size();
         inputFullyOrdered = requireNonNull(inputOrder, "inputOrder is null").isFullyOrdered(orderingColumns.length);
@@ -86,6 +112,7 @@ public final class WindowSession
                 partitionColumns,
                 orderingColumns,
                 descending,
+                nullsFirst,
                 functions,
                 windowSchema,
                 resources,

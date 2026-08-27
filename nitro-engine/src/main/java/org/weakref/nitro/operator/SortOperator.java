@@ -45,6 +45,7 @@ public class SortOperator
                 allocator,
                 columns,
                 descending,
+                new boolean[columns.length],
                 source,
                 EngineResources.from(allocator).operatorResources());
     }
@@ -56,10 +57,22 @@ public class SortOperator
             Operator source,
             OperatorResources resources)
     {
+        this(allocator, columns, descending, new boolean[columns.length], source, resources);
+    }
+
+    public SortOperator(
+            Allocator allocator,
+            int[] columns,
+            boolean[] descending,
+            boolean[] nullsFirst,
+            Operator source,
+            OperatorResources resources)
+    {
         this(
                 allocator,
                 columns,
                 descending,
+                nullsFirst,
                 source,
                 requireNonNull(resources, "resources is null").sortPolicy(),
                 resources.joinBufferPolicy(),
@@ -78,6 +91,7 @@ public class SortOperator
                 allocator,
                 columns,
                 descending,
+                new boolean[columns.length],
                 source,
                 policy,
                 joinBufferPolicy,
@@ -88,6 +102,7 @@ public class SortOperator
             Allocator allocator,
             int[] columns,
             boolean[] descending,
+            boolean[] nullsFirst,
             Operator source,
             SortOperatorPolicy policy,
             JoinBufferPolicy joinBufferPolicy,
@@ -96,8 +111,8 @@ public class SortOperator
         if (columns.length == 0) {
             throw new IllegalArgumentException("Sort requires at least one ordering column");
         }
-        if (columns.length != descending.length) {
-            throw new IllegalArgumentException("Sort ordering columns and directions must have the same length");
+        if (columns.length != descending.length || columns.length != nullsFirst.length) {
+            throw new IllegalArgumentException("Sort ordering columns, directions, and null placements must have the same length");
         }
         this.policy = requireNonNull(policy, "policy is null");
         this.allocator = allocator;
@@ -106,6 +121,7 @@ public class SortOperator
         this.state = new TopNState(
                 columns,
                 descending,
+                nullsFirst,
                 requireNonNull(joinBufferPolicy, "joinBufferPolicy is null"),
                 allocator,
                 allocationContext,
