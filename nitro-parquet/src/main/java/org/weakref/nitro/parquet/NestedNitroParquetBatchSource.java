@@ -485,7 +485,7 @@ final class NestedNitroParquetBatchSource
             this.shapeReader = new NestedRepeatedShapeReader(
                     list,
                     repeatedValues,
-                    (ParquetSchema.Primitive) repeatedValues.children().getFirst(),
+                    firstPrimitive(repeatedValues.children().getFirst()),
                     rlePolicy,
                     arrayPool);
             this.outputType = requireNonNull(outputType, "outputType is null");
@@ -803,6 +803,16 @@ final class NestedNitroParquetBatchSource
                     new StructProjectedReader(group, outputType, resources.readerPolicy().rle(), allocator.primitiveArrays());
             case ParquetSchema.Group group -> throw new UnsupportedParquetFeatureException(
                     "Native Nitro Parquet reader does not support nested field '" + group.name() + "' with this logical layout");
+        };
+    }
+
+    private static ParquetSchema.Primitive firstPrimitive(ParquetSchema.Node node)
+    {
+        return switch (node) {
+            case ParquetSchema.Primitive primitive -> primitive;
+            case ParquetSchema.Group group when !group.children().isEmpty() -> firstPrimitive(group.children().getFirst());
+            case ParquetSchema.Group group -> throw new UnsupportedParquetFeatureException(
+                    "Native nested Parquet field '" + group.name() + "' has no physical leaf");
         };
     }
 

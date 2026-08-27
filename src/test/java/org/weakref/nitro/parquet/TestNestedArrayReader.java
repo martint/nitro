@@ -19,17 +19,20 @@ import org.apache.parquet.format.Type;
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.ArrayVector;
+import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
+import org.weakref.nitro.data.StructVector;
 import org.weakref.nitro.execution.EngineResources;
 
 import java.lang.foreign.MemorySegment;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.List;
 
@@ -118,6 +121,30 @@ class TestNestedArrayReader
         }
     }
 
+    @Test
+    void testReconstructsStructElementsWithoutRereadingAnAnchorLeaf()
+    {
+        try (Allocator allocator = new Allocator(EngineResources.createDefault());
+                NestedArrayReader reader = structReader()) {
+            Streams streams = reader.read(allocator, new Allocator.Context("test"), 4, Mask.all(4));
+            ArrayVector arrays = (ArrayVector) streams.values();
+            StructVector rows = (StructVector) arrays.elementValues();
+            BooleanVector rowNulls = arrays.elementNulls();
+            I64Vector ids = (I64Vector) rows.fieldValues("id");
+            BooleanVector idNulls = (BooleanVector) rows.field("id").get(Stream.NULLS);
+            BinaryVector labels = (BinaryVector) rows.fieldValues("label");
+            BooleanVector labelNulls = (BooleanVector) rows.field("label").get(Stream.NULLS);
+
+            assertThat(arrays.offsets()).containsExactly(0, 2, 2, 3, 3);
+            assertThat(((BooleanVector) streams.get(Stream.NULLS)).values()).containsExactly(false, false, false, true);
+            assertThat(rowNulls.values()).containsExactly(false, true, false);
+            assertThat(ids.values()).containsExactly(10, 0, 30);
+            assertThat(idNulls.values()).containsExactly(false, true, false);
+            assertThat(value(labels, 0)).isEqualTo("ten");
+            assertThat(labelNulls.values()).containsExactly(false, true, true);
+        }
+    }
+
     private static NestedArrayReader reader()
     {
         return reader(
@@ -154,10 +181,59 @@ class TestNestedArrayReader
                 new TestingCursor(values, repetitions, definitions, ordinals));
     }
 
+    private static NestedArrayReader structReader()
+    {
+        ParquetSchema.Primitive id = new ParquetSchema.Primitive(
+                "id", FieldRepetitionType.OPTIONAL, Type.INT64, null, null, 0, 0, 0, 0,
+                List.of("records", "list", "element", "id"), 4, 1);
+        ParquetSchema.Primitive label = new ParquetSchema.Primitive(
+                "label", FieldRepetitionType.OPTIONAL, Type.BYTE_ARRAY, ConvertedType.UTF8, null, 0, 0, 0, 1,
+                List.of("records", "list", "element", "label"), 4, 1);
+        ParquetSchema.Group element = new ParquetSchema.Group(
+                "element", FieldRepetitionType.OPTIONAL, null, null, List.of(id, label), 3, 1);
+        ParquetSchema.Group repeatedValues = new ParquetSchema.Group(
+                "list", FieldRepetitionType.REPEATED, null, null, List.of(element), 2, 1);
+        ParquetSchema.Group list = new ParquetSchema.Group(
+                "records", FieldRepetitionType.OPTIONAL, ConvertedType.LIST, null, List.of(repeatedValues), 1, 0);
+
+        PrimitiveArrayPool pool = new PrimitiveArrayPool(0, 0);
+        LongPhysicalValueDecoder ids = new LongPhysicalValueDecoder(Type.INT64, pool);
+        ids.decodePlain(longs(10, 30), 0, 2);
+        BinaryPhysicalValueDecoder labels = new BinaryPhysicalValueDecoder(pool);
+        labels.decodePlain(binary("ten"), 0, 1);
+        int[] repetitions = {0, 1, 0, 0, 0};
+        return new NestedArrayReader(
+                list,
+                RleReaderPolicy.defaults(),
+                new NestedLeafCursor[] {
+                    new TestingCursor(ids, repetitions, new int[] {4, 2, 1, 4, 0}, new int[] {0, -1, -1, 1, -1}),
+                    new TestingCursor(labels, repetitions, new int[] {4, 2, 1, 3, 0}, new int[] {0, -1, -1, -1, -1})});
+    }
+
+    private static String value(BinaryVector vector, int position)
+    {
+        return new String(
+                vector.data(),
+                vector.offsets()[position],
+                vector.offsets()[position + 1] - vector.offsets()[position],
+                StandardCharsets.UTF_8);
+    }
+
     private static MemorySegment longs(long... values)
     {
         ByteBuffer output = ByteBuffer.allocate(values.length * Long.BYTES).order(ByteOrder.LITTLE_ENDIAN);
         Arrays.stream(values).forEach(output::putLong);
+        return MemorySegment.ofArray(output.array());
+    }
+
+    private static MemorySegment binary(String... values)
+    {
+        int bytes = Arrays.stream(values).mapToInt(value -> Integer.BYTES + value.length()).sum();
+        ByteBuffer output = ByteBuffer.allocate(bytes).order(ByteOrder.LITTLE_ENDIAN);
+        for (String value : values) {
+            byte[] encoded = value.getBytes(StandardCharsets.UTF_8);
+            output.putInt(encoded.length).put(encoded);
+        }
         return MemorySegment.ofArray(output.array());
     }
 

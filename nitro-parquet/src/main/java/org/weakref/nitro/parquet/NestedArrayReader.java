@@ -20,7 +20,11 @@ import org.weakref.nitro.data.ArrayVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.PrimitiveArrayPool;
+import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
+import org.weakref.nitro.data.StructVector;
+
+import java.util.List;
 
 import static java.util.Objects.requireNonNull;
 
@@ -30,9 +34,7 @@ final class NestedArrayReader
 {
     private final ParquetSchema.Group list;
     private final ParquetSchema.Group repeatedValues;
-    private final ParquetSchema.Primitive element;
-    private final NestedLeafCursor elementReader;
-    private final NestedValueAccumulator elements;
+    private final ElementReader elements;
 
     private boolean positioned;
     private boolean exhausted;
@@ -44,14 +46,19 @@ final class NestedArrayReader
 
     NestedArrayReader(ParquetSchema.Group list, RleReaderPolicy rlePolicy, NestedLeafCursor elementCursor)
     {
-        this(list, rlePolicy, null, elementCursor);
+        this(list, rlePolicy, null, new NestedLeafCursor[] {elementCursor});
+    }
+
+    NestedArrayReader(ParquetSchema.Group list, RleReaderPolicy rlePolicy, NestedLeafCursor[] elementCursors)
+    {
+        this(list, rlePolicy, null, elementCursors);
     }
 
     private NestedArrayReader(
             ParquetSchema.Group list,
             RleReaderPolicy rlePolicy,
             PrimitiveArrayPool arrayPool,
-            NestedLeafCursor elementCursor)
+            NestedLeafCursor[] elementCursors)
     {
         this.list = requireNonNull(list, "list is null");
         if (list.isList()) {
@@ -69,27 +76,31 @@ final class NestedArrayReader
         if (repeatedValues.repetition() != FieldRepetitionType.REPEATED || repeatedValues.children().size() != 1) {
             throw unsupported("LIST element group must be repeated and contain exactly one field");
         }
-        if (!(repeatedValues.children().getFirst() instanceof ParquetSchema.Primitive elementLeaf)) {
-            throw unsupported("nested LIST elements are not implemented yet");
-        }
-        if (elementLeaf.repetition() == FieldRepetitionType.REPEATED) {
+        ParquetSchema.Node element = repeatedValues.children().getFirst();
+        if (element.repetition() == FieldRepetitionType.REPEATED) {
             throw unsupported("LIST element cannot be repeated");
         }
-        this.element = elementLeaf;
-        this.elementReader = elementCursor == null
-                ? new NestedLeafReader(element, rlePolicy, requireNonNull(arrayPool, "arrayPool is null"))
-                : elementCursor;
-        this.elements = NestedValueAccumulators.create(element);
+        this.elements = switch (element) {
+            case ParquetSchema.Primitive primitive -> new PrimitiveElementReader(
+                    primitive,
+                    rlePolicy,
+                    arrayPool,
+                    elementCursors);
+            case ParquetSchema.Group group when !group.isList() && !group.isMap() -> new StructElementReader(
+                    group,
+                    rlePolicy,
+                    arrayPool,
+                    elementCursors);
+            case ParquetSchema.Group group -> throw unsupported(
+                    "nested " + (group.isList() ? "LIST" : "MAP") + " elements are not implemented yet");
+        };
     }
 
     void addRowGroup(ParquetFile file, RowGroup rowGroup)
     {
         requireNonNull(file, "file is null");
         requireNonNull(rowGroup, "rowGroup is null");
-        if (!(elementReader instanceof NestedLeafReader physicalReader)) {
-            throw new IllegalStateException("Cannot add Parquet row groups to an injected nested cursor");
-        }
-        physicalReader.addChunk(file, file.columnChunk(rowGroup, element).meta_data);
+        elements.addRowGroup(file, rowGroup);
     }
 
     Streams read(Allocator allocator, Allocator.Context context, int rowCount, Mask mask)
@@ -112,7 +123,7 @@ final class NestedArrayReader
             return listNulls == null ? Streams.ofValues(arrays) : Streams.ofValuesAndNulls(arrays, listNulls);
         }
 
-        if (!positioned && elementReader instanceof NestedLeafEventSource eventSource) {
+        if (!positioned && elements.eventSource() instanceof NestedLeafEventSource eventSource) {
             readEventWindows(eventSource, arrays, listNulls, rowCount, mask);
             arrays.setElements(elements.materialize(allocator, context));
             return listNulls == null ? Streams.ofValues(arrays) : Streams.ofValuesAndNulls(arrays, listNulls);
@@ -125,29 +136,24 @@ final class NestedArrayReader
             if (exhausted) {
                 throw new IllegalArgumentException("Nested LIST event stream ended before row " + row);
             }
-            if (elementReader.repetitionLevel() != 0) {
+            if (elements.repetitionLevel() != 0) {
                 throw new IllegalArgumentException("Nested LIST row starts with nonzero repetition level");
             }
 
             boolean selected = mask.all() || row == nextSelected;
-            boolean listIsNull = elementReader.definitionLevel() < list.maximumDefinitionLevel();
+            boolean listIsNull = elements.definitionLevel() < list.maximumDefinitionLevel();
             if (selected && listNulls != null) {
                 listNulls.values()[row] = listIsNull;
             }
 
             do {
-                boolean hasElement = elementReader.definitionLevel() >= repeatedValues.maximumDefinitionLevel();
+                boolean hasElement = elements.definitionLevel() >= repeatedValues.maximumDefinitionLevel();
                 if (selected && hasElement) {
-                    if (elementReader.hasValue()) {
-                        elements.append(elementReader.valueDecoder(), elementReader.valueOrdinal(), elementReader.dictionaryId());
-                    }
-                    else {
-                        elements.appendNull();
-                    }
+                    elements.appendCurrent();
                 }
                 advance();
             }
-            while (!exhausted && elementReader.repetitionLevel() != 0);
+            while (!exhausted && elements.repetitionLevel() != 0);
 
             arrays.offsets()[row + 1] = elements.size();
             if (selected && !mask.all()) {
@@ -194,7 +200,7 @@ final class NestedArrayReader
                 int repetitionLevel = window.repetitionLevel(consumed);
                 if (repetitionLevel == 0) {
                     if (elementRunCount != 0) {
-                        window.appendTo(elements, elementRunStart, elementRunCount);
+                        elements.appendWindow(window, elementRunStart, elementRunCount);
                         elementRunCount = 0;
                     }
                     if (row >= 0) {
@@ -226,13 +232,13 @@ final class NestedArrayReader
                     elementRunCount++;
                 }
                 else if (elementRunCount != 0) {
-                    window.appendTo(elements, elementRunStart, elementRunCount);
+                    elements.appendWindow(window, elementRunStart, elementRunCount);
                     elementRunCount = 0;
                 }
                 consumed++;
             }
             if (elementRunCount != 0) {
-                window.appendTo(elements, elementRunStart, elementRunCount);
+                elements.appendWindow(window, elementRunStart, elementRunCount);
             }
             reader.advanceEvents(consumed);
         }
@@ -267,7 +273,7 @@ final class NestedArrayReader
                         if (row >= 0) {
                             arrays.offsets()[row + 1] = outputElementCount + consumed;
                             if (row + 1 == rowCount) {
-                                window.appendTo(elements, 0, consumed);
+                                elements.appendWindow(window, 0, consumed);
                                 reader.advanceEvents(consumed);
                                 return;
                             }
@@ -279,7 +285,7 @@ final class NestedArrayReader
                     }
                     consumed++;
                 }
-                window.appendTo(elements, 0, consumed);
+                elements.appendWindow(window, 0, consumed);
                 outputElementCount += consumed;
                 reader.advanceEvents(consumed);
                 continue;
@@ -295,7 +301,7 @@ final class NestedArrayReader
                         arrays.offsets()[row + 1] = outputElementCount;
                         if (row + 1 == rowCount) {
                             if (elementRunCount != 0) {
-                                window.appendTo(elements, elementRunStart, elementRunCount);
+                                elements.appendWindow(window, elementRunStart, elementRunCount);
                             }
                             reader.advanceEvents(consumed);
                             return;
@@ -318,13 +324,13 @@ final class NestedArrayReader
                     outputElementCount++;
                 }
                 else if (elementRunCount != 0) {
-                    window.appendTo(elements, elementRunStart, elementRunCount);
+                    elements.appendWindow(window, elementRunStart, elementRunCount);
                     elementRunCount = 0;
                 }
                 consumed++;
             }
             if (elementRunCount != 0) {
-                window.appendTo(elements, elementRunStart, elementRunCount);
+                elements.appendWindow(window, elementRunStart, elementRunCount);
             }
             reader.advanceEvents(consumed);
         }
@@ -340,19 +346,19 @@ final class NestedArrayReader
             if (exhausted) {
                 throw new IllegalArgumentException("Nested LIST event stream ended before skipped row " + row);
             }
-            if (elementReader.repetitionLevel() != 0) {
+            if (elements.repetitionLevel() != 0) {
                 throw new IllegalArgumentException("Nested LIST row starts with nonzero repetition level");
             }
             do {
                 advance();
             }
-            while (!exhausted && elementReader.repetitionLevel() != 0);
+            while (!exhausted && elements.repetitionLevel() != 0);
         }
     }
 
     long consumedPageBytes()
     {
-        return elementReader instanceof NestedLeafReader physicalReader ? physicalReader.consumedPageBytes() : 0;
+        return elements.consumedPageBytes();
     }
 
     private void ensurePositioned()
@@ -365,7 +371,7 @@ final class NestedArrayReader
 
     private void advance()
     {
-        exhausted = !elementReader.next();
+        exhausted = !elements.next();
     }
 
     private UnsupportedParquetFeatureException unsupported(String reason)
@@ -377,8 +383,396 @@ final class NestedArrayReader
     @Override
     public void close()
     {
-        try (elementReader; elements) {
-            // Closing releases both leaf resources and allocator-owned accumulation buffers.
+        elements.close();
+    }
+
+    private interface ElementReader
+            extends AutoCloseable
+    {
+        void addRowGroup(ParquetFile file, RowGroup rowGroup);
+
+        void reset(Allocator allocator);
+
+        boolean next();
+
+        int repetitionLevel();
+
+        int definitionLevel();
+
+        void appendCurrent();
+
+        default NestedLeafEventSource eventSource()
+        {
+            return null;
+        }
+
+        default void appendWindow(NestedEventWindow window, int offset, int count)
+        {
+            throw new UnsupportedOperationException("element reader does not support event windows");
+        }
+
+        int size();
+
+        Streams materialize(Allocator allocator, Allocator.Context context);
+
+        long consumedPageBytes();
+
+        @Override
+        void close();
+    }
+
+    private static final class PrimitiveElementReader
+            implements ElementReader
+    {
+        private final ParquetSchema.Primitive element;
+        private final NestedLeafCursor reader;
+        private final NestedValueAccumulator values;
+
+        private PrimitiveElementReader(
+                ParquetSchema.Primitive element,
+                RleReaderPolicy rlePolicy,
+                PrimitiveArrayPool arrayPool,
+                NestedLeafCursor[] cursors)
+        {
+            this.element = requireNonNull(element, "element is null");
+            if (cursors != null && cursors.length != 1) {
+                throw new IllegalArgumentException("Primitive LIST element requires exactly one cursor");
+            }
+            this.reader = cursors == null
+                    ? new NestedLeafReader(element, rlePolicy, requireNonNull(arrayPool, "arrayPool is null"))
+                    : requireNonNull(cursors[0], "cursor is null");
+            this.values = NestedValueAccumulators.create(element);
+        }
+
+        @Override
+        public void addRowGroup(ParquetFile file, RowGroup rowGroup)
+        {
+            if (!(reader instanceof NestedLeafReader physicalReader)) {
+                throw new IllegalStateException("Cannot add Parquet row groups to an injected nested cursor");
+            }
+            physicalReader.addChunk(file, file.columnChunk(rowGroup, element).meta_data);
+        }
+
+        @Override
+        public void reset(Allocator allocator)
+        {
+            values.reset(allocator);
+        }
+
+        @Override
+        public boolean next()
+        {
+            return reader.next();
+        }
+
+        @Override
+        public int repetitionLevel()
+        {
+            return reader.repetitionLevel();
+        }
+
+        @Override
+        public int definitionLevel()
+        {
+            return reader.definitionLevel();
+        }
+
+        @Override
+        public void appendCurrent()
+        {
+            if (reader.hasValue()) {
+                values.append(reader.valueDecoder(), reader.valueOrdinal(), reader.dictionaryId());
+            }
+            else {
+                values.appendNull();
+            }
+        }
+
+        @Override
+        public NestedLeafEventSource eventSource()
+        {
+            return reader instanceof NestedLeafEventSource source ? source : null;
+        }
+
+        @Override
+        public void appendWindow(NestedEventWindow window, int offset, int count)
+        {
+            window.appendTo(values, offset, count);
+        }
+
+        @Override
+        public int size()
+        {
+            return values.size();
+        }
+
+        @Override
+        public Streams materialize(Allocator allocator, Allocator.Context context)
+        {
+            return values.materialize(allocator, context);
+        }
+
+        @Override
+        public long consumedPageBytes()
+        {
+            return reader instanceof NestedLeafReader physicalReader ? physicalReader.consumedPageBytes() : 0;
+        }
+
+        @Override
+        public void close()
+        {
+            try (reader; values) {
+                // Closing releases the physical leaf and allocator-owned accumulation buffers.
+            }
+        }
+    }
+
+    private static final class StructElementReader
+            implements ElementReader
+    {
+        private final ParquetSchema.Group element;
+        private final List<ParquetSchema.Primitive> fields;
+        private final NestedLeafCursor[] readers;
+        private final NestedValueAccumulator[] values;
+        private final NullAccumulator nulls = new NullAccumulator();
+
+        private StructElementReader(
+                ParquetSchema.Group element,
+                RleReaderPolicy rlePolicy,
+                PrimitiveArrayPool arrayPool,
+                NestedLeafCursor[] cursors)
+        {
+            this.element = requireNonNull(element, "element is null");
+            if (element.children().stream().anyMatch(child -> !(child instanceof ParquetSchema.Primitive))) {
+                throw new UnsupportedParquetFeatureException(
+                        "Native Parquet LIST struct element at '" + element.name() + "' contains a nested field");
+            }
+            this.fields = element.children().stream().map(ParquetSchema.Primitive.class::cast).toList();
+            if (fields.isEmpty()) {
+                throw new UnsupportedParquetFeatureException(
+                        "Native Parquet LIST struct element at '" + element.name() + "' has no fields");
+            }
+            if (cursors != null && cursors.length != fields.size()) {
+                throw new IllegalArgumentException("LIST struct element cursor count does not match field count");
+            }
+            this.readers = new NestedLeafCursor[fields.size()];
+            this.values = new NestedValueAccumulator[fields.size()];
+            for (int field = 0; field < fields.size(); field++) {
+                ParquetSchema.Primitive leaf = fields.get(field);
+                readers[field] = cursors == null
+                        ? new NestedLeafReader(leaf, rlePolicy, requireNonNull(arrayPool, "arrayPool is null"))
+                        : requireNonNull(cursors[field], "cursor is null");
+                values[field] = NestedValueAccumulators.create(leaf, true);
+            }
+        }
+
+        @Override
+        public void addRowGroup(ParquetFile file, RowGroup rowGroup)
+        {
+            for (int field = 0; field < fields.size(); field++) {
+                if (!(readers[field] instanceof NestedLeafReader physicalReader)) {
+                    throw new IllegalStateException("Cannot add Parquet row groups to injected nested cursors");
+                }
+                physicalReader.addChunk(file, file.columnChunk(rowGroup, fields.get(field)).meta_data);
+            }
+        }
+
+        @Override
+        public void reset(Allocator allocator)
+        {
+            for (NestedValueAccumulator value : values) {
+                value.reset(allocator);
+            }
+            nulls.reset(allocator);
+        }
+
+        @Override
+        public boolean next()
+        {
+            boolean available = readers[0].next();
+            for (int field = 1; field < readers.length; field++) {
+                if (readers[field].next() != available) {
+                    throw new IllegalArgumentException("LIST struct leaf event streams have different lengths");
+                }
+            }
+            if (available) {
+                int repetitionLevel = readers[0].repetitionLevel();
+                boolean elementIsNull = readers[0].definitionLevel() < element.maximumDefinitionLevel();
+                for (int field = 1; field < readers.length; field++) {
+                    if (readers[field].repetitionLevel() != repetitionLevel) {
+                        throw new IllegalArgumentException("LIST struct leaves disagree about repetition boundaries");
+                    }
+                    if ((readers[field].definitionLevel() < element.maximumDefinitionLevel()) != elementIsNull) {
+                        throw new IllegalArgumentException("LIST struct leaves disagree about element presence");
+                    }
+                }
+            }
+            return available;
+        }
+
+        @Override
+        public int repetitionLevel()
+        {
+            return readers[0].repetitionLevel();
+        }
+
+        @Override
+        public int definitionLevel()
+        {
+            return readers[0].definitionLevel();
+        }
+
+        @Override
+        public void appendCurrent()
+        {
+            int repetitionLevel = readers[0].repetitionLevel();
+            boolean elementIsNull = readers[0].definitionLevel() < element.maximumDefinitionLevel();
+            nulls.append(elementIsNull);
+            for (int field = 0; field < readers.length; field++) {
+                NestedLeafCursor reader = readers[field];
+                if (reader.repetitionLevel() != repetitionLevel) {
+                    throw new IllegalArgumentException("LIST struct leaves disagree about repetition boundaries");
+                }
+                if ((reader.definitionLevel() < element.maximumDefinitionLevel()) != elementIsNull) {
+                    throw new IllegalArgumentException("LIST struct leaves disagree about element presence");
+                }
+                if (reader.hasValue()) {
+                    values[field].append(reader.valueDecoder(), reader.valueOrdinal(), reader.dictionaryId());
+                }
+                else {
+                    values[field].appendNull();
+                }
+            }
+        }
+
+        @Override
+        public int size()
+        {
+            return values[0].size();
+        }
+
+        @Override
+        public Streams materialize(Allocator allocator, Allocator.Context context)
+        {
+            StructVector structs = allocator.allocate(context, StructVector.class, size(), StructVector::new);
+            for (int field = 0; field < fields.size(); field++) {
+                structs.setField(fields.get(field).name(), values[field].materialize(allocator, context));
+            }
+            if (element.repetition() == FieldRepetitionType.REQUIRED) {
+                return Streams.ofValues(structs);
+            }
+            return Streams.builder()
+                    .put(Stream.VALUES, structs)
+                    .put(Stream.NULLS, nulls.materialize(allocator, context))
+                    .build();
+        }
+
+        @Override
+        public long consumedPageBytes()
+        {
+            long bytes = 0;
+            for (NestedLeafCursor reader : readers) {
+                if (reader instanceof NestedLeafReader physicalReader) {
+                    bytes = Math.addExact(bytes, physicalReader.consumedPageBytes());
+                }
+            }
+            return bytes;
+        }
+
+        @Override
+        public void close()
+        {
+            RuntimeException failure = null;
+            for (NestedLeafCursor reader : readers) {
+                try {
+                    reader.close();
+                }
+                catch (RuntimeException e) {
+                    failure = merge(failure, e);
+                }
+            }
+            for (NestedValueAccumulator value : values) {
+                try {
+                    value.close();
+                }
+                catch (RuntimeException e) {
+                    failure = merge(failure, e);
+                }
+            }
+            try {
+                nulls.close();
+            }
+            catch (RuntimeException e) {
+                failure = merge(failure, e);
+            }
+            if (failure != null) {
+                throw failure;
+            }
+        }
+
+        private static RuntimeException merge(RuntimeException failure, RuntimeException next)
+        {
+            if (failure == null) {
+                return next;
+            }
+            failure.addSuppressed(next);
+            return failure;
+        }
+    }
+
+    private static final class NullAccumulator
+            implements AutoCloseable
+    {
+        private static final boolean[] EMPTY = new boolean[0];
+
+        private PrimitiveArrayPool arrayPool;
+        private boolean[] values = EMPTY;
+        private int size;
+
+        void reset(Allocator allocator)
+        {
+            PrimitiveArrayPool requestedPool = requireNonNull(allocator, "allocator is null").primitiveArrays();
+            if (arrayPool != null && arrayPool != requestedPool) {
+                throw new IllegalArgumentException("Nested null accumulator cannot change allocator ownership");
+            }
+            arrayPool = requestedPool;
+            size = 0;
+        }
+
+        void append(boolean value)
+        {
+            ensureCapacity(size + 1);
+            values[size++] = value;
+        }
+
+        BooleanVector materialize(Allocator allocator, Allocator.Context context)
+        {
+            BooleanVector result = allocator.allocate(context, BooleanVector.class, size, BooleanVector::new);
+            System.arraycopy(values, 0, result.values(), 0, size);
+            return result;
+        }
+
+        private void ensureCapacity(int required)
+        {
+            if (values.length >= required) {
+                return;
+            }
+            int capacity = Math.max(required, Math.max(16, values.length * 2));
+            boolean[] replacement = arrayPool.borrowBooleans(capacity);
+            System.arraycopy(values, 0, replacement, 0, size);
+            arrayPool.release(values);
+            values = replacement;
+        }
+
+        @Override
+        public void close()
+        {
+            if (arrayPool != null) {
+                arrayPool.release(values);
+                values = EMPTY;
+                arrayPool = null;
+                size = 0;
+            }
         }
     }
 }
