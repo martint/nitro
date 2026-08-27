@@ -13,8 +13,14 @@
  */
 package org.weakref.nitro.parquet;
 
+import jdk.incubator.vector.IntVector;
+import jdk.incubator.vector.VectorOperators;
+import jdk.incubator.vector.VectorSpecies;
+
 final class NestedEventWindow
 {
+    private static final VectorSpecies<Integer> INT_SPECIES = IntVector.SPECIES_PREFERRED;
+
     private PhysicalValueDecoder values;
     private int[] repetitionLevels;
     private int[] definitionLevels;
@@ -87,14 +93,31 @@ final class NestedEventWindow
         return repetitionLevels;
     }
 
-    int[] definitionLevels()
+    boolean allDefinitionLevelsAtLeast(int count, int minimum)
     {
-        return definitionLevels;
-    }
+        if (count < 0 || count > length) {
+            throw new IndexOutOfBoundsException("Invalid nested event prefix: " + count);
+        }
+        if (constantDefinitionLevel) {
+            return definitionLevel >= minimum;
+        }
 
-    boolean allDefinitionLevelsAtLeast(int minimum)
-    {
-        return constantDefinitionLevel && definitionLevel >= minimum;
+        int end = offset + count;
+        int vectorEnd = offset + INT_SPECIES.loopBound(count);
+        IntVector threshold = IntVector.broadcast(INT_SPECIES, minimum);
+        for (int index = offset; index < vectorEnd; index += INT_SPECIES.length()) {
+            if (IntVector.fromArray(INT_SPECIES, definitionLevels, index)
+                    .compare(VectorOperators.LT, threshold)
+                    .anyTrue()) {
+                return false;
+            }
+        }
+        for (int index = vectorEnd; index < end; index++) {
+            if (definitionLevels[index] < minimum) {
+                return false;
+            }
+        }
+        return true;
     }
 
     int offset()

@@ -69,6 +69,20 @@ class TestNestedArrayReader
     }
 
     @Test
+    void testReconstructsDenseEventWindow()
+    {
+        try (Allocator allocator = new Allocator(EngineResources.createDefault());
+                NestedArrayReader reader = denseReader()) {
+            Streams streams = reader.read(allocator, new Allocator.Context("test"), 2, Mask.all(2));
+            ArrayVector arrays = (ArrayVector) streams.values();
+
+            assertThat(arrays.offsets()).containsExactly(0, 2, 5);
+            assertThat(((I64Vector) arrays.elementValues()).values()).containsExactly(1, 2, 3, 4, 5);
+            assertThat(((BooleanVector) streams.get(Stream.NULLS)).values()).containsExactly(false, false);
+        }
+    }
+
+    @Test
     void testSkipAdvancesWithoutMaterializingElements()
     {
         try (Allocator allocator = new Allocator(EngineResources.createDefault());
@@ -106,6 +120,24 @@ class TestNestedArrayReader
 
     private static NestedArrayReader reader()
     {
+        return reader(
+                new long[] {1, 3, 4},
+                new int[] {0, 1, 1, 0, 0, 0},
+                new int[] {3, 2, 3, 0, 1, 3},
+                new int[] {0, -1, 1, -1, -1, 2});
+    }
+
+    private static NestedArrayReader denseReader()
+    {
+        return reader(
+                new long[] {1, 2, 3, 4, 5},
+                new int[] {0, 1, 0, 1, 1},
+                new int[] {3, 3, 3, 3, 3},
+                new int[] {0, 1, 2, 3, 4});
+    }
+
+    private static NestedArrayReader reader(long[] physicalValues, int[] repetitions, int[] definitions, int[] ordinals)
+    {
         ParquetSchema.Primitive element = new ParquetSchema.Primitive(
                 "element", FieldRepetitionType.OPTIONAL, Type.INT64, null, null, 0, 0, 0, 0,
                 List.of("items", "list", "element"), 3, 1);
@@ -115,15 +147,11 @@ class TestNestedArrayReader
                 "items", FieldRepetitionType.OPTIONAL, ConvertedType.LIST, null, List.of(repeatedValues), 1, 0);
 
         LongPhysicalValueDecoder values = new LongPhysicalValueDecoder(Type.INT64, new PrimitiveArrayPool(0, 0));
-        values.decodePlain(longs(1, 3, 4), 0, 3);
+        values.decodePlain(longs(physicalValues), 0, physicalValues.length);
         return new NestedArrayReader(
                 list,
                 RleReaderPolicy.defaults(),
-                new TestingCursor(
-                        values,
-                        new int[] {0, 1, 1, 0, 0, 0},
-                        new int[] {3, 2, 3, 0, 1, 3},
-                        new int[] {0, -1, 1, -1, -1, 2}));
+                new TestingCursor(values, repetitions, definitions, ordinals));
     }
 
     private static MemorySegment longs(long... values)

@@ -167,9 +167,14 @@ final class NestedArrayReader
             int rowCount,
             Mask mask)
     {
+        if (mask.all()) {
+            readAllEventWindows(reader, arrays, listNulls, rowCount);
+            return;
+        }
+
         int row = -1;
         int selectedIndex = 0;
-        int nextSelected = mask.all() ? 0 : (mask.count() == 0 ? rowCount : mask.position(0));
+        int nextSelected = mask.count() == 0 ? rowCount : mask.position(0);
         boolean selected = false;
 
         while (true) {
@@ -200,8 +205,8 @@ final class NestedArrayReader
                         }
                     }
                     row++;
-                    selected = mask.all() || row == nextSelected;
-                    if (selected && !mask.all()) {
+                    selected = row == nextSelected;
+                    if (selected) {
                         selectedIndex++;
                         nextSelected = selectedIndex < mask.count() ? mask.position(selectedIndex) : rowCount;
                     }
@@ -219,6 +224,98 @@ final class NestedArrayReader
                         elementRunStart = consumed;
                     }
                     elementRunCount++;
+                }
+                else if (elementRunCount != 0) {
+                    window.appendTo(elements, elementRunStart, elementRunCount);
+                    elementRunCount = 0;
+                }
+                consumed++;
+            }
+            if (elementRunCount != 0) {
+                window.appendTo(elements, elementRunStart, elementRunCount);
+            }
+            reader.advanceEvents(consumed);
+        }
+    }
+
+    private void readAllEventWindows(
+            NestedLeafEventSource reader,
+            ArrayVector arrays,
+            BooleanVector listNulls,
+            int rowCount)
+    {
+        int row = -1;
+        int outputElementCount = 0;
+        int elementDefinitionLevel = repeatedValues.maximumDefinitionLevel();
+        int listDefinitionLevel = list.maximumDefinitionLevel();
+
+        while (true) {
+            NestedEventWindow window = reader.eventWindow();
+            if (window == null) {
+                if (row == rowCount - 1) {
+                    arrays.offsets()[rowCount] = outputElementCount;
+                    return;
+                }
+                throw new IllegalArgumentException("Nested LIST event stream ended before row " + (row + 1));
+            }
+
+            int windowLength = window.length();
+            if (window.allDefinitionLevelsAtLeast(windowLength, elementDefinitionLevel)) {
+                int consumed = 0;
+                while (consumed < windowLength) {
+                    if (window.repetitionLevel(consumed) == 0) {
+                        if (row >= 0) {
+                            arrays.offsets()[row + 1] = outputElementCount + consumed;
+                            if (row + 1 == rowCount) {
+                                window.appendTo(elements, 0, consumed);
+                                reader.advanceEvents(consumed);
+                                return;
+                            }
+                        }
+                        row++;
+                    }
+                    else if (row < 0) {
+                        throw new IllegalArgumentException("Nested LIST row starts with nonzero repetition level");
+                    }
+                    consumed++;
+                }
+                window.appendTo(elements, 0, consumed);
+                outputElementCount += consumed;
+                reader.advanceEvents(consumed);
+                continue;
+            }
+
+            int consumed = 0;
+            int elementRunStart = -1;
+            int elementRunCount = 0;
+            while (consumed < windowLength) {
+                int repetitionLevel = window.repetitionLevel(consumed);
+                if (repetitionLevel == 0) {
+                    if (row >= 0) {
+                        arrays.offsets()[row + 1] = outputElementCount;
+                        if (row + 1 == rowCount) {
+                            if (elementRunCount != 0) {
+                                window.appendTo(elements, elementRunStart, elementRunCount);
+                            }
+                            reader.advanceEvents(consumed);
+                            return;
+                        }
+                    }
+                    row++;
+                    if (listNulls != null) {
+                        listNulls.values()[row] = window.definitionLevel(consumed) < listDefinitionLevel;
+                    }
+                }
+                else if (row < 0) {
+                    throw new IllegalArgumentException("Nested LIST row starts with nonzero repetition level");
+                }
+
+                if (window.definitionLevel(consumed) >= elementDefinitionLevel) {
+                    if (elementRunCount == 0) {
+                        elementRunStart = consumed;
+                    }
+                    elementRunCount++;
+                    outputElementCount++;
                 }
                 else if (elementRunCount != 0) {
                     window.appendTo(elements, elementRunStart, elementRunCount);

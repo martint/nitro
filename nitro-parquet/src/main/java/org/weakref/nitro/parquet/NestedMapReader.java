@@ -13,9 +13,6 @@
  */
 package org.weakref.nitro.parquet;
 
-import jdk.incubator.vector.IntVector;
-import jdk.incubator.vector.VectorOperators;
-import jdk.incubator.vector.VectorSpecies;
 import org.apache.parquet.format.FieldRepetitionType;
 import org.apache.parquet.format.RowGroup;
 import org.weakref.nitro.data.Allocator;
@@ -36,8 +33,6 @@ import static java.util.Objects.requireNonNull;
 final class NestedMapReader
         implements AutoCloseable
 {
-    private static final VectorSpecies<Integer> INT_SPECIES = IntVector.SPECIES_PREFERRED;
-
     private final ParquetSchema.Group map;
     private final ParquetSchema.Group entries;
     private final ParquetSchema.Primitive key;
@@ -334,8 +329,8 @@ final class NestedMapReader
                     valueOffset + windowLength) >= 0) {
                 throw new IllegalArgumentException("Nested MAP key/value repetition levels differ");
             }
-            if (allAtLeast(keyWindow, windowLength, entryDefinitionLevel) &&
-                    allAtLeast(valueWindow, windowLength, entryDefinitionLevel)) {
+            if (keyWindow.allDefinitionLevelsAtLeast(windowLength, entryDefinitionLevel) &&
+                    valueWindow.allDefinitionLevelsAtLeast(windowLength, entryDefinitionLevel)) {
                 int consumed = 0;
                 while (consumed < windowLength) {
                     if (keyRepetitionLevels[keyOffset + consumed] == 0) {
@@ -420,35 +415,6 @@ final class NestedMapReader
     {
         keyWindow.appendTo(keyValues, start, count);
         valueWindow.appendTo(values, start, count);
-    }
-
-    private static boolean allAtLeast(NestedEventWindow window, int length, int minimum)
-    {
-        if (window.allDefinitionLevelsAtLeast(minimum)) {
-            return true;
-        }
-        int[] values = window.definitionLevels();
-        if (values == null) {
-            return false;
-        }
-        int offset = window.offset();
-        int end = offset + length;
-        int vectorEnd = offset + INT_SPECIES.loopBound(length);
-        IntVector threshold = IntVector.broadcast(INT_SPECIES, minimum);
-        for (int index = offset; index < vectorEnd; index += INT_SPECIES.length()) {
-            if (IntVector.fromArray(INT_SPECIES, values, index)
-                    .compare(VectorOperators.LT, threshold)
-                    .anyTrue()) {
-                return false;
-            }
-        }
-        offset = vectorEnd;
-        for (int index = offset; index < end; index++) {
-            if (values[index] < minimum) {
-                return false;
-            }
-        }
-        return true;
     }
 
     void skip(long rowCount)
