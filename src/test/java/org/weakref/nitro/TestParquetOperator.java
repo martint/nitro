@@ -127,6 +127,7 @@ import static org.weakref.nitro.OperatorAssertions.operator;
 import static org.weakref.nitro.parquet.NativeParquetTestFileWriter.Column.optionalBinary;
 import static org.weakref.nitro.parquet.NativeParquetTestFileWriter.Column.optionalInt32;
 import static org.weakref.nitro.parquet.NativeParquetTestFileWriter.Column.optionalInt64;
+import static org.weakref.nitro.parquet.NativeParquetTestFileWriter.Column.required;
 import static org.weakref.nitro.parquet.NativeParquetTestFileWriter.Column.requiredBinary;
 import static org.weakref.nitro.parquet.NativeParquetTestFileWriter.Column.requiredBoolean;
 import static org.weakref.nitro.parquet.NativeParquetTestFileWriter.Column.requiredInt32;
@@ -1668,6 +1669,52 @@ public class TestParquetOperator
             }
             assertThat(source.poll()).isSameAs(SourcePoll.Finished.FINISHED);
         }
+    }
+
+    @Test
+    void testNitroParquetSourceDecodesFixedWidthInt96Values()
+            throws IOException
+    {
+        byte[] first = new byte[12];
+        byte[] second = new byte[12];
+        for (int index = 0; index < 12; index++) {
+            first[index] = (byte) index;
+            second[index] = (byte) (20 + index);
+        }
+        for (boolean dictionaryEnabled : List.of(false, true)) {
+            java.nio.file.Path file = tempDirectory.resolve("nitro-int96-" + dictionaryEnabled + ".parquet");
+            write(
+                    file,
+                    "nitro_int96",
+                    List.of(required(
+                            "value",
+                            org.apache.parquet.format.Type.INT96,
+                            List.of(first, second, first))),
+                    dictionaryEnabled);
+            Schema schema = new Schema(List.of(new Field("value", ENCODED_VARCHAR, false)));
+
+            try (AllocationResources allocationResources = AllocationResources.createDefault();
+                    Allocator allocator = new Allocator(allocationResources);
+                    NitroParquetBatchSource source = NitroParquetBatchSource.forSplits(
+                            NitroParquetScanResources.createDefault(),
+                            allocator,
+                            List.of(NitroParquetBatchSource.Split.wholeFile(file)),
+                            schema,
+                            ParquetColumnNameMatching.EXACT)) {
+                SourcePoll.Ready ready = (SourcePoll.Ready) source.poll();
+                try (var batch = ready.batch()) {
+                    VectorAccess.BinaryValues values = VectorAccess.binaryValues(batch.column(0).borrow(Stream.VALUES));
+                    assertThat(copy(values.value(0))).containsExactly(first);
+                    assertThat(copy(values.value(1))).containsExactly(second);
+                    assertThat(copy(values.value(2))).containsExactly(first);
+                }
+            }
+        }
+    }
+
+    private static byte[] copy(VectorAccess.BinarySlice value)
+    {
+        return Arrays.copyOfRange(value.data(), value.offset(), value.offset() + value.length());
     }
 
     @Test

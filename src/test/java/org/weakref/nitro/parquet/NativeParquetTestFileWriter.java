@@ -570,6 +570,13 @@ public final class NativeParquetTestFileWriter
                 case INT32 -> writeLittleEndianInt(output, ((Number) value).intValue());
                 case FLOAT -> writeLittleEndianInt(output, Float.floatToRawIntBits(((Number) value).floatValue()));
                 case INT64 -> writeLittleEndianLong(output, ((Number) value).longValue());
+                case INT96 -> {
+                    byte[] bytes = (byte[]) value;
+                    if (bytes.length != 12) {
+                        throw new IllegalArgumentException("INT96 test value must contain 12 bytes");
+                    }
+                    output.write(bytes);
+                }
                 case DOUBLE -> writeLittleEndianLong(output, Double.doubleToRawLongBits(((Number) value).doubleValue()));
                 case BYTE_ARRAY -> {
                     byte[] bytes = value instanceof byte[] array ? array : value.toString().getBytes(StandardCharsets.UTF_8);
@@ -586,7 +593,7 @@ public final class NativeParquetTestFileWriter
     {
         Statistics statistics = new Statistics().setNull_count(nullCount);
         List<?> values = column.values().stream().filter(value -> value != null).toList();
-        if (values.isEmpty() || column.type() == Type.BOOLEAN) {
+        if (values.isEmpty() || column.type() == Type.BOOLEAN || column.type() == Type.INT96) {
             return statistics;
         }
         Object minimum = values.getFirst();

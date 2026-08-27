@@ -328,6 +328,7 @@ public final class ColumnReader
     private final DecompressedPageCache decompressedPages;
     private final boolean flbaDecimal;
     private final int typeLength;
+    private final int fixedBinaryWidth;
     private final List<Chunk> chunks = new ArrayList<>();
     private int cachedDictionarySize = Integer.MIN_VALUE;
     private Boolean dictionaryOnly;
@@ -686,6 +687,11 @@ public final class ColumnReader
         this.optional = optional;
         this.typeLength = typeLength;
         this.flbaDecimal = physicalType == Type.FIXED_LEN_BYTE_ARRAY && decimal;
+        this.fixedBinaryWidth = switch (physicalType) {
+            case INT96 -> 12;
+            case FIXED_LEN_BYTE_ARRAY -> decimal ? 0 : typeLength;
+            default -> 0;
+        };
         this.decompressedPages = decompressedPages;
         this.kind = switch (physicalType) {
             // FLOAT uses Trino's stack convention: its raw IEEE-754 bits occupy a long carrier. Decode the four
@@ -696,6 +702,7 @@ public final class ColumnReader
             // the long path (raw bits) and let the scan reinterpret to a double vector (see isDouble()).
             case DOUBLE -> Kind.LONG;
             // Short decimal (precision <= 18) stored as fixed bytes decodes to an unscaled long.
+            case INT96 -> Kind.BINARY;
             case FIXED_LEN_BYTE_ARRAY -> decimal ? Kind.LONG : Kind.BINARY;
             case BYTE_ARRAY -> Kind.BINARY;
             default -> throw new IllegalArgumentException("Unsupported physical type for NitroParquet: " + physicalType);
@@ -4611,21 +4618,23 @@ public final class ColumnReader
             }
         }
         else {
-            // BINARY dictionary: numValues entries of [4-byte LE length][bytes].
+            // Variable BINARY entries carry a length prefix. INT96 and non-decimal FLBA entries have a fixed width.
             long cursor = 0;
-            int total = 0;
-            for (int i = 0; i < numValues; i++) {
-                int length = body.get(LE_INT, cursor);
-                cursor += 4 + length;
-                total += length;
+            int total = fixedBinaryWidth == 0 ? 0 : Math.multiplyExact(numValues, fixedBinaryWidth);
+            if (fixedBinaryWidth == 0) {
+                for (int i = 0; i < numValues; i++) {
+                    int length = body.get(LE_INT, cursor);
+                    cursor += 4 + length;
+                    total += length;
+                }
             }
             int[] offsets = arrayPool.borrowInts(numValues + 1);
             byte[] bytes = borrowDictionaryBytes(total);
             cursor = 0;
             int out = 0;
             for (int i = 0; i < numValues; i++) {
-                int length = body.get(LE_INT, cursor);
-                cursor += 4;
+                int length = fixedBinaryWidth == 0 ? body.get(LE_INT, cursor) : fixedBinaryWidth;
+                cursor += fixedBinaryWidth == 0 ? Integer.BYTES : 0;
                 offsets[i] = out;
                 MemorySegment.copy(body, ValueLayout.JAVA_BYTE, cursor, bytes, out, length);
                 out += length;
@@ -5157,8 +5166,8 @@ public final class ColumnReader
 
     private long appendPlainEntryPresized(MemorySegment body, long cursor)
     {
-        int length = body.get(LE_INT, cursor);
-        cursor += Integer.BYTES;
+        int length = fixedBinaryWidth == 0 ? body.get(LE_INT, cursor) : fixedBinaryWidth;
+        cursor += fixedBinaryWidth == 0 ? Integer.BYTES : 0;
         MemorySegment.copy(body, ValueLayout.JAVA_BYTE, cursor, pageBytes, pageBytesUsed, length);
         pageBytesUsed += length;
         return cursor + length;
@@ -5166,8 +5175,8 @@ public final class ColumnReader
 
     private long appendPlainEntry(MemorySegment body, long cursor)
     {
-        int length = body.get(LE_INT, cursor);
-        cursor += 4;
+        int length = fixedBinaryWidth == 0 ? body.get(LE_INT, cursor) : fixedBinaryWidth;
+        cursor += fixedBinaryWidth == 0 ? Integer.BYTES : 0;
         ensurePageBytes(pageBytesUsed + length);
         MemorySegment.copy(body, ValueLayout.JAVA_BYTE, cursor, pageBytes, pageBytesUsed, length);
         pageBytesUsed += length;
