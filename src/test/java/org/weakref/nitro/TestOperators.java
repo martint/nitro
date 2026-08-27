@@ -82,6 +82,7 @@ import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.OperatorResources;
 import org.weakref.nitro.operator.Output;
 import org.weakref.nitro.operator.PartitionSumI64WindowFunction;
+import org.weakref.nitro.operator.PeerDistributionWindowFunction;
 import org.weakref.nitro.operator.ProjectOperator;
 import org.weakref.nitro.operator.RankWindowFunction;
 import org.weakref.nitro.operator.RankingWindowFunction;
@@ -799,6 +800,66 @@ public class TestOperators
                             row(2L, 2L),
                             row(4L, 3L),
                             row(4L, 3L)));
+        }
+    }
+
+    @Test
+    void testWindowOperatorSupportsPeerDistributions()
+    {
+        List<Row> input = List.of(row(4L), row(1L), row(2L), row(1L), row(4L));
+        try (Operator window = new WindowOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 1, input),
+                new int[0],
+                new int[] {0},
+                new boolean[] {false},
+                List.of(
+                        new PeerDistributionWindowFunction(
+                                Schema.unspecified(1),
+                                new int[] {0},
+                                PeerDistributionWindowFunction.Distribution.PERCENT_RANK),
+                        new PeerDistributionWindowFunction(
+                                Schema.unspecified(1),
+                                new int[] {0},
+                                PeerDistributionWindowFunction.Distribution.CUMULATIVE)),
+                Schema.unspecified(2),
+                EngineResources.from(allocator).operatorResources())) {
+            assertThat(operator(window))
+                    .matchesExactly(List.of(
+                            row(1L, 0.0, 0.4),
+                            row(1L, 0.0, 0.4),
+                            row(2L, 0.5, 0.6),
+                            row(4L, 0.75, 1.0),
+                            row(4L, 0.75, 1.0)));
+        }
+    }
+
+    @Test
+    void testPeerDistributionsResetAtPartitionBoundaries()
+    {
+        try (Operator window = new WindowOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 2, List.of(row(2L, 9L), row(1L, 5L), row(1L, 2L), row(1L, 2L))),
+                new int[] {0},
+                new int[] {1},
+                new boolean[] {false},
+                List.of(
+                        new PeerDistributionWindowFunction(
+                                Schema.unspecified(2),
+                                new int[] {1},
+                                PeerDistributionWindowFunction.Distribution.PERCENT_RANK),
+                        new PeerDistributionWindowFunction(
+                                Schema.unspecified(2),
+                                new int[] {1},
+                                PeerDistributionWindowFunction.Distribution.CUMULATIVE)),
+                Schema.unspecified(2),
+                EngineResources.from(allocator).operatorResources())) {
+            assertThat(operator(window))
+                    .matchesExactly(List.of(
+                            row(1L, 2L, 0.0, 2.0 / 3.0),
+                            row(1L, 2L, 0.0, 2.0 / 3.0),
+                            row(1L, 5L, 1.0, 1.0),
+                            row(2L, 9L, 0.0, 1.0)));
         }
     }
 
