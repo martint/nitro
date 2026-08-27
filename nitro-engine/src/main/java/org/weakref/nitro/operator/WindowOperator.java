@@ -457,6 +457,7 @@ public final class WindowOperator
     public void close()
     {
         source.close();
+        partitionPositionIndex.close();
         allocator.release(allocationContext);
         arrayPool.release(singlePageOrder);
         singlePageOrder = null;
@@ -1593,7 +1594,8 @@ public final class WindowOperator
                 this,
                 (singlePageOrder == null ? 0 : (long) singlePageOrder.length * Integer.BYTES) +
                         (batchPositions == null ? 0 : (long) batchPositions.length * Integer.BYTES) +
-                        (rowReferences == null ? 0 : (long) rowReferences.length * Long.BYTES));
+                        (rowReferences == null ? 0 : (long) rowReferences.length * Long.BYTES) +
+                        partitionPositionIndex.retainedBytes());
     }
 
     private long[] rowReferences(List<TableOperator.Page> pages)
@@ -1810,14 +1812,23 @@ public final class WindowOperator
     {
         private int start;
         private int end;
+        private int[] peerBounds;
+        private boolean initialized;
 
         private void reset(int start, int end)
         {
             if (start < 0 || start > end || end > rowCount()) {
                 throw new IndexOutOfBoundsException("Invalid partition range [%s, %s) for %s rows".formatted(start, end, rowCount()));
             }
+            if (initialized && this.start == start && this.end == end) {
+                return;
+            }
+            arrayPool.release(peerBounds);
+            peerBounds = null;
             this.start = start;
             this.end = end;
+            initialized = true;
+            accountRetainedArrays();
         }
 
         @Override
@@ -1854,12 +1865,78 @@ public final class WindowOperator
             return singlePage || pageIndex(rowReferences[leftAbsolutePosition]) == pageIndex(rowReferences[rightAbsolutePosition]);
         }
 
+        @Override
+        public int peerStart(int position)
+        {
+            absolutePosition(position);
+            ensurePeerBounds();
+            return peerBounds[position * 2];
+        }
+
+        @Override
+        public int peerEnd(int position)
+        {
+            absolutePosition(position);
+            ensurePeerBounds();
+            return peerBounds[position * 2 + 1];
+        }
+
+        private void ensurePeerBounds()
+        {
+            if (peerBounds != null) {
+                return;
+            }
+            peerBounds = arrayPool.borrowInts(Math.multiplyExact(size(), 2));
+            int peerStart = 0;
+            while (peerStart < size()) {
+                int peerEnd = peerStart + 1;
+                while (peerEnd < size() && samePeer(peerEnd - 1, peerEnd)) {
+                    peerEnd++;
+                }
+                for (int position = peerStart; position < peerEnd; position++) {
+                    peerBounds[position * 2] = peerStart;
+                    peerBounds[position * 2 + 1] = peerEnd;
+                }
+                peerStart = peerEnd;
+            }
+            accountRetainedArrays();
+        }
+
+        private boolean samePeer(int leftPosition, int rightPosition)
+        {
+            for (int orderingIndex = 0; orderingIndex < orderingColumns.length; orderingIndex++) {
+                int column = orderingColumns[orderingIndex];
+                Streams left = column(column, leftPosition);
+                Streams right = column(column, rightPosition);
+                if (compareOrderingValues(
+                        orderingIndex,
+                        left,
+                        sourcePosition(leftPosition),
+                        right,
+                        sourcePosition(rightPosition)) != 0) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
         private int absolutePosition(int position)
         {
             if (position < 0 || position >= size()) {
                 throw new IndexOutOfBoundsException(position);
             }
             return start + position;
+        }
+
+        private long retainedBytes()
+        {
+            return peerBounds == null ? 0 : (long) peerBounds.length * Integer.BYTES;
+        }
+
+        private void close()
+        {
+            arrayPool.release(peerBounds);
+            peerBounds = null;
         }
     }
 

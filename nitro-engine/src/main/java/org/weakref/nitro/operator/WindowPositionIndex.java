@@ -33,6 +33,12 @@ public interface WindowPositionIndex
      */
     boolean sharesSource(int leftPosition, int rightPosition);
 
+    /** Returns the inclusive start of the peer group containing {@code position}. */
+    int peerStart(int position);
+
+    /** Returns the exclusive end of the peer group containing {@code position}. */
+    int peerEnd(int position);
+
     default boolean isNull(int column, int position)
     {
         return OperatorVectorSupport.isNull(column(column, position).getOrNull(Stream.NULLS), sourcePosition(position));

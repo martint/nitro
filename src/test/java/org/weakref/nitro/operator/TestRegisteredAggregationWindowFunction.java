@@ -200,6 +200,51 @@ class TestRegisteredAggregationWindowFunction
         }
     }
 
+    @Test
+    void resolvesPeerGroupsAcrossSourcePages()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        TableOperator source = new TableOperator(
+                3,
+                List.of(
+                        TableOperator.Page.values(
+                                2,
+                                new Vector[] {
+                                        new I64Vector(new long[] {1, 1}),
+                                        new I64Vector(new long[] {1, 1}),
+                                        new I64Vector(new long[] {2, 3})},
+                                Mask.all(2)),
+                        TableOperator.Page.values(
+                                2,
+                                new Vector[] {
+                                        new I64Vector(new long[] {1, 1}),
+                                        new I64Vector(new long[] {1, 2}),
+                                        new I64Vector(new long[] {5, 7})},
+                                Mask.all(2))));
+        WindowFrame peers = (partition, outputPosition, bounds) -> bounds.set(
+                partition.peerStart(outputPosition),
+                partition.peerEnd(outputPosition));
+
+        try (Operator operator = new WindowOperator(
+                allocator,
+                source,
+                new int[] {0},
+                new int[] {1},
+                new boolean[] {false},
+                List.of(new RegisteredAggregationWindowFunction(
+                        new NullableSum(false),
+                        source.outputSchema(),
+                        new int[] {2},
+                        peers)))) {
+            assertThat(OperatorAssertions.OperatorAssert.toRows(operator))
+                    .containsExactly(
+                            row(1L, 1L, 2L, 10L),
+                            row(1L, 1L, 3L, 10L),
+                            row(1L, 1L, 5L, 10L),
+                            row(1L, 2L, 7L, 7L));
+        }
+    }
+
     private static final class NullableSum
             implements AggregationImplementation
     {
