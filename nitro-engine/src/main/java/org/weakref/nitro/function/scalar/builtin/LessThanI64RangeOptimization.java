@@ -20,6 +20,7 @@ import org.weakref.nitro.core.function.mask.RangeConstraint;
 import org.weakref.nitro.core.function.projection.ProjectionArgument;
 import org.weakref.nitro.core.function.projection.ProjectionCodeBuilder;
 import org.weakref.nitro.core.function.projection.ProjectionProgram;
+import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
@@ -40,6 +41,8 @@ import java.util.Optional;
 public final class LessThanI64RangeOptimization
         implements RangeBoundProvider, RangeConstraint.Kernel, MaskCodeProvider
 {
+    private static final RangeConstraint.Kernel KERNEL = LessThanI64RangeOptimization::applyRange;
+
     @Override
     public Optional<ProjectionProgram> generate(ProjectionCodeBuilder builder, List<ProjectionArgument> arguments)
     {
@@ -67,20 +70,30 @@ public final class LessThanI64RangeOptimization
                     1,
                     lower,
                     RangeConstraint.Position.LOWER_EXCLUSIVE,
-                    this));
+                    KERNEL));
         }
         if (right.orElse(null) instanceof Long upper && left.isEmpty()) {
             return Optional.of(new RangeBound(
                     0,
                     upper,
                     RangeConstraint.Position.UPPER_EXCLUSIVE,
-                    this));
+                    KERNEL));
         }
         return Optional.empty();
     }
 
     @Override
     public boolean apply(Streams input, Object lowerExclusive, Object upperExclusive, Mask mask)
+    {
+        return applyRange(input, lowerExclusive, upperExclusive, mask);
+    }
+
+    static RangeConstraint.Kernel kernel()
+    {
+        return KERNEL;
+    }
+
+    private static boolean applyRange(Streams input, Object lowerExclusive, Object upperExclusive, Mask mask)
     {
         if (!(lowerExclusive instanceof Long lower) || !(upperExclusive instanceof Long upper) ||
                 !VectorAccess.isAllFalseNulls(input.getOrNull(Stream.ERRORS))) {
@@ -99,6 +112,19 @@ public final class LessThanI64RangeOptimization
         switch (input.values()) {
             case I64Vector values -> mask.retainConstantRange(values.values(), lower, upper, nulls);
             case I32Vector values -> mask.retainConstantRange(values.values(), lower, upper, nulls);
+            case DictionaryVector dictionary -> {
+                Vector entries = dictionary.values();
+                if (!(entries instanceof I64Vector || entries instanceof I32Vector)) {
+                    return false;
+                }
+                VectorAccess.LongValues values = VectorAccess.longValues(entries);
+                boolean[] keep = new boolean[entries.length()];
+                for (int entry = 0; entry < entries.length(); entry++) {
+                    long value = values.value(entry);
+                    keep[entry] = value > lower && value < upper;
+                }
+                mask.retainDictionaryComparison(dictionary.ids(), keep, nulls, true);
+            }
             default -> {
                 return false;
             }

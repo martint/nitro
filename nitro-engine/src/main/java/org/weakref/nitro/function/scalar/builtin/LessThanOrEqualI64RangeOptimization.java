@@ -64,14 +64,14 @@ public final class LessThanOrEqualI64RangeOptimization
                     1,
                     lower - 1,
                     RangeConstraint.Position.LOWER_EXCLUSIVE,
-                    this));
+                    LessThanI64RangeOptimization.kernel()));
         }
         if (right.orElse(null) instanceof Long upper && left.isEmpty() && upper != Long.MAX_VALUE) {
             return Optional.of(new RangeBound(
                     0,
                     upper + 1,
                     RangeConstraint.Position.UPPER_EXCLUSIVE,
-                    this));
+                    LessThanI64RangeOptimization.kernel()));
         }
         return Optional.empty();
     }
