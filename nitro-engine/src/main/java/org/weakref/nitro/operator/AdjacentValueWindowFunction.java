@@ -20,19 +20,19 @@ import org.weakref.nitro.data.Streams;
 
 import static java.util.Objects.requireNonNull;
 
-/** Broadcasts one registered value endpoint over every row in its partition. */
-public final class PartitionEndpointWindowFunction
+/** Selects the immediately preceding or following physical value within each partition. */
+public final class AdjacentValueWindowFunction
         implements RunningWindowFunction
 {
     private final TypeVectorFactory vectorFactory;
     private final int inputColumn;
-    private final Endpoint endpoint;
+    private final Direction direction;
 
-    private Streams selected;
-    private int selectedPosition;
+    private Streams previous;
+    private int previousPosition;
     private boolean outputValuesInitialized;
 
-    public PartitionEndpointWindowFunction(TypeBinding outputType, int inputColumn, Endpoint endpoint)
+    public AdjacentValueWindowFunction(TypeBinding outputType, int inputColumn, Direction direction)
     {
         requireNonNull(outputType, "outputType is null");
         this.vectorFactory = outputType.vectorFactory()
@@ -41,21 +41,21 @@ public final class PartitionEndpointWindowFunction
             throw new IllegalArgumentException("inputColumn is negative");
         }
         this.inputColumn = inputColumn;
-        this.endpoint = requireNonNull(endpoint, "endpoint is null");
+        this.direction = requireNonNull(direction, "direction is null");
     }
 
     @Override
     public Streams emptyOutput(Allocator allocator, Allocator.Context allocationContext, int size)
     {
         outputValuesInitialized = false;
-        return WindowValueCopySupport.emptyOutput(vectorFactory, allocator, allocationContext, size, false);
+        return WindowValueCopySupport.emptyOutput(vectorFactory, allocator, allocationContext, size, true);
     }
 
     @Override
     public void reset()
     {
-        selected = null;
-        selectedPosition = -1;
+        previous = null;
+        previousPosition = -1;
     }
 
     @Override
@@ -68,43 +68,44 @@ public final class PartitionEndpointWindowFunction
             int outputPosition,
             int outputSize)
     {
-        if (endpoint == Endpoint.LAST || selected == null) {
-            selected = sourceColumns[inputColumn];
-            selectedPosition = inputPosition;
+        Streams current = sourceColumns[inputColumn];
+        if (direction == Direction.PRECEDING && previous != null) {
+            output = copy(allocator, allocationContext, previous, output, previousPosition, outputPosition, outputSize);
         }
+        else if (direction == Direction.FOLLOWING && previous != null) {
+            output = copy(allocator, allocationContext, current, output, inputPosition, outputPosition - 1, outputSize);
+        }
+        previous = current;
+        previousPosition = inputPosition;
         return output;
     }
 
-    @Override
-    public Streams finishPartition(
+    private Streams copy(
             Allocator allocator,
             Allocator.Context allocationContext,
+            Streams source,
             Streams output,
-            int partitionStart,
-            int partitionEnd,
+            int sourcePosition,
+            int outputPosition,
             int outputSize)
     {
-        if (selected == null || partitionStart >= partitionEnd) {
-            return output;
-        }
-
         Streams result = WindowValueCopySupport.copyRange(
                 allocator,
                 allocationContext,
-                selected,
+                source,
                 output,
                 outputValuesInitialized,
-                selectedPosition,
-                partitionStart,
-                partitionEnd,
+                sourcePosition,
+                outputPosition,
+                outputPosition + 1,
                 outputSize);
         outputValuesInitialized = true;
         return result;
     }
 
-    public enum Endpoint
+    public enum Direction
     {
-        FIRST,
-        LAST
+        PRECEDING,
+        FOLLOWING
     }
 }
