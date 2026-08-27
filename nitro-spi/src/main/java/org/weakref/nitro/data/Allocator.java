@@ -223,6 +223,23 @@ public class Allocator
         return vector;
     }
 
+    /**
+     * Replaces a dictionary's physical value domain without changing its logical-row mapping. Allocator-owned
+     * mappings and their frequency metadata are reparented without copying. Borrowed/raw mappings retain the
+     * existing shared-mapping contract: the producer must keep their immutable id array alive for the replacement's
+     * lifetime.
+     */
+    public DictionaryVector replaceDictionaryValues(Context context, DictionaryVector source, Vector values)
+    {
+        requireNonNull(context, "context is null");
+        requireNonNull(source, "source is null");
+        requireNonNull(values, "values is null");
+        if (source.hasOwnedMapping()) {
+            return source.ownedMappingWithValues(values);
+        }
+        return allocateDictionarySharedIds(context, source.ids(), source.length(), values);
+    }
+
     public RleVector allocateRle(Context context, int[] counts, Vector values)
     {
         if (policy.directSingleRunRle() && counts.length == 1) {

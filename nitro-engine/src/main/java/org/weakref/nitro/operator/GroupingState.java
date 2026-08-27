@@ -3625,6 +3625,7 @@ final class GroupingState
         private final StructuralKeyKernel[] kernels;
         private final Object2LongOpenHashMap<StructuralGroupingKey> groups = new Object2LongOpenHashMap<>();
         private final ArrayList<StructuralGroupingKey> representatives = new ArrayList<>();
+        private final StructuralGroupingKey reusableProbe;
 
         private StructuralGroupingIndex(
                 Allocator allocator,
@@ -3634,6 +3635,7 @@ final class GroupingState
             this.allocator = allocator;
             this.allocationContext = allocationContext;
             this.kernels = kernels.clone();
+            this.reusableProbe = new StructuralGroupingKey(this.kernels);
             groups.defaultReturnValue(-1);
         }
 
@@ -3651,13 +3653,13 @@ final class GroupingState
             int newGroupCount = 0;
             long[] output = result.values();
             for (int position : mask) {
-                StructuralGroupingKey probe = new StructuralGroupingKey(kernels, values, nulls, position);
-                long groupId = groups.getLong(probe);
+                reusableProbe.set(values, nulls, position);
+                long groupId = groups.getLong(reusableProbe);
                 if (groupId == -1) {
-                    groupId = newGroups.getLong(probe);
+                    groupId = newGroups.getLong(reusableProbe);
                     if (groupId == -1) {
                         groupId = nextGroupId + newGroupCount;
-                        newGroups.put(probe, groupId);
+                        newGroups.put(new StructuralGroupingKey(kernels, values, nulls, position), groupId);
                         newGroupPositions[newGroupCount++] = position;
                     }
                 }
@@ -3696,13 +3698,13 @@ final class GroupingState
                 if (counts[domain] == 0) {
                     continue;
                 }
-                StructuralGroupingKey probe = new StructuralGroupingKey(kernels, values, nulls, domain);
-                long groupId = groups.getLong(probe);
+                reusableProbe.set(values, nulls, domain);
+                long groupId = groups.getLong(reusableProbe);
                 if (groupId == -1) {
-                    groupId = newGroups.getLong(probe);
+                    groupId = newGroups.getLong(reusableProbe);
                     if (groupId == -1) {
                         groupId = nextGroupId + newGroupCount;
-                        newGroups.put(probe, groupId);
+                        newGroups.put(new StructuralGroupingKey(kernels, values, nulls, domain), groupId);
                         newGroupPositions[newGroupCount++] = domain;
                     }
                 }
@@ -3724,7 +3726,8 @@ final class GroupingState
 
         private boolean contains(Vector[] values, Vector[] nulls, int position)
         {
-            return groups.getLong(new StructuralGroupingKey(kernels, values, nulls, position)) != -1;
+            reusableProbe.set(values, nulls, position);
+            return groups.getLong(reusableProbe) != -1;
         }
 
         private Streams groupedValues(
@@ -3816,9 +3819,14 @@ final class GroupingState
         private static final int NULL_HASH = 0x9E3779B9;
 
         private final StructuralKeyKernel[] kernels;
-        private final Vector[] values;
-        private final Vector[] nulls;
-        private final int position;
+        private Vector[] values;
+        private Vector[] nulls;
+        private int position;
+
+        private StructuralGroupingKey(StructuralKeyKernel[] kernels)
+        {
+            this.kernels = kernels;
+        }
 
         private StructuralGroupingKey(
                 StructuralKeyKernel[] kernels,
@@ -3827,6 +3835,13 @@ final class GroupingState
                 int position)
         {
             this.kernels = kernels;
+            this.values = values;
+            this.nulls = nulls;
+            this.position = position;
+        }
+
+        private void set(Vector[] values, Vector[] nulls, int position)
+        {
             this.values = values;
             this.nulls = nulls;
             this.position = position;

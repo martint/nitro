@@ -15,6 +15,11 @@ package org.weakref.nitro.operator;
 
 import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.core.type.TypeOperators;
+import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.RleVector;
+import org.weakref.nitro.data.Stream;
+import org.weakref.nitro.data.Streams;
+import org.weakref.nitro.data.StructVector;
 import org.weakref.nitro.data.Vector;
 
 import java.lang.invoke.MethodHandle;
@@ -73,6 +78,11 @@ public final class StructuralTypeKernelFactory
         boolean hasHash = operators.hash().isPresent();
         boolean hasIdentical = operators.identical().isPresent();
         if (!hasValueRead && !hasHash && !hasIdentical) {
+            if (type.supportedVectorTypes().contains(StructVector.class)) {
+                return new StructStructuralKeyKernel(type.nestedValueTypes().stream()
+                        .map(this::key)
+                        .toArray(StructuralKeyKernel[]::new));
+            }
             return LegacyStructuralKeyKernel.INSTANCE;
         }
         if (!hasValueRead || !hasHash || !hasIdentical) {
@@ -84,6 +94,99 @@ public final class StructuralTypeKernelFactory
                 operators.valueRead().orElseThrow(),
                 operators.hash().orElseThrow(),
                 operators.identical().orElseThrow());
+    }
+
+    /**
+     * Structural semantics derived from a provider's ordered child bindings and Nitro's physical struct shape.
+     * The engine does not inspect the provider's logical type identity or carrier class.
+     */
+    private static final class StructStructuralKeyKernel
+            implements StructuralKeyKernel
+    {
+        private static final int NULL_HASH = 0x9E37_79B9;
+
+        private final StructuralKeyKernel[] fields;
+
+        private StructStructuralKeyKernel(StructuralKeyKernel[] fields)
+        {
+            this.fields = fields.clone();
+        }
+
+        @Override
+        public long hash(Vector values, Vector nulls, int position)
+        {
+            StructPosition row = structPosition(values, position);
+            requireFieldCount(row.values(), fields.length);
+            int hash = 1;
+            for (int field = 0; field < fields.length; field++) {
+                Streams streams = row.values().field(field);
+                int fieldHash = OperatorVectorSupport.isNull(streams.getOrNull(Stream.NULLS), row.position())
+                        ? NULL_HASH
+                        : Long.hashCode(fields[field].hash(
+                                streams.values(), streams.getOrNull(Stream.NULLS), row.position()));
+                hash = 31 * hash + fieldHash;
+            }
+            return hash;
+        }
+
+        @Override
+        public boolean identical(
+                Vector leftValues,
+                Vector leftNulls,
+                int leftPosition,
+                Vector rightValues,
+                Vector rightNulls,
+                int rightPosition)
+        {
+            StructPosition left = structPosition(leftValues, leftPosition);
+            StructPosition right = structPosition(rightValues, rightPosition);
+            requireFieldCount(left.values(), fields.length);
+            requireFieldCount(right.values(), fields.length);
+            for (int field = 0; field < fields.length; field++) {
+                Streams leftField = left.values().field(field);
+                Streams rightField = right.values().field(field);
+                Vector leftFieldNulls = leftField.getOrNull(Stream.NULLS);
+                Vector rightFieldNulls = rightField.getOrNull(Stream.NULLS);
+                boolean leftNull = OperatorVectorSupport.isNull(leftFieldNulls, left.position());
+                boolean rightNull = OperatorVectorSupport.isNull(rightFieldNulls, right.position());
+                if (leftNull || rightNull) {
+                    if (leftNull != rightNull) {
+                        return false;
+                    }
+                    continue;
+                }
+                if (!fields[field].identical(
+                        leftField.values(),
+                        leftFieldNulls,
+                        left.position(),
+                        rightField.values(),
+                        rightFieldNulls,
+                        right.position())) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private static StructPosition structPosition(Vector values, int position)
+        {
+            return switch (values) {
+                case StructVector struct -> new StructPosition(struct, position);
+                case DictionaryVector dictionary -> structPosition(dictionary.values(), dictionary.ids()[position]);
+                case RleVector rle -> structPosition(rle.values(), OperatorVectorSupport.runIndex(rle, position));
+                default -> throw new IllegalArgumentException(
+                        "Expected struct vector but found " + values.getClass().getSimpleName());
+            };
+        }
+
+        private static void requireFieldCount(StructVector values, int expected)
+        {
+            if (values.fields().size() != expected) {
+                throw new IllegalArgumentException("Struct field count does not match logical child binding count");
+            }
+        }
+
+        private record StructPosition(StructVector values, int position) {}
     }
 
     private static final class BoundStructuralIdentityKernel

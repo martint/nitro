@@ -18,11 +18,15 @@ import org.apache.parquet.format.RowGroup;
 import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.PrimitiveArrayPool;
+import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.StructVector;
+import org.weakref.nitro.data.Vector;
 
+import java.util.Arrays;
 import java.util.List;
 
 import static java.util.Objects.requireNonNull;
@@ -135,7 +139,6 @@ final class NestedStructReader
         for (NestedValueAccumulator accumulator : values) {
             accumulator.reset(allocator, context, rowCount);
         }
-        StructVector result = allocator.allocate(context, StructVector.class, rowCount, StructVector::new);
         BooleanVector structNulls = struct.repetition() == FieldRepetitionType.OPTIONAL
                 ? allocator.allocate(context, BooleanVector.class, rowCount, BooleanVector::new)
                 : null;
@@ -169,10 +172,116 @@ final class NestedStructReader
                 nextSelected = selectedIndex < mask.count() ? mask.position(selectedIndex) : rowCount;
             }
         }
-        for (int field = 0; field < fields.size(); field++) {
-            result.setField(fields.get(field).name(), values[field].materialize(allocator, context));
+        Streams[] fieldStreams = new Streams[fields.size()];
+        for (int field = 0; field < fieldStreams.length; field++) {
+            fieldStreams[field] = values[field].materialize(allocator, context);
+        }
+        Vector result = coalesceDictionaryStruct(allocator, context, rowCount, fields, fieldStreams);
+        if (result == null) {
+            StructVector flat = allocator.allocate(context, StructVector.class, rowCount, StructVector::new);
+            for (int field = 0; field < fieldStreams.length; field++) {
+                flat.setField(fields.get(field).name(), fieldStreams[field]);
+            }
+            result = flat;
         }
         return structNulls == null ? Streams.ofValues(result) : Streams.ofValuesAndNulls(result, structNulls);
+    }
+
+    /**
+     * Promotes independently decoded field dictionaries to one dictionary-encoded struct when they describe the
+     * same logical-row mapping. Parquet encodes primitive leaves independently, so the physical dictionaries are
+     * separate even when a low-cardinality row repeats as a unit. Keeping that relationship visible lets structural
+     * consumers hash and compare the small physical domain instead of every logical row.
+     */
+    static DictionaryVector coalesceDictionaryStruct(
+            Allocator allocator,
+            Allocator.Context context,
+            int rowCount,
+            List<ParquetSchema.Primitive> fields,
+            Streams[] fieldStreams)
+    {
+        if (fieldStreams.length == 0 || fieldStreams.length != fields.size()) {
+            return null;
+        }
+        if (!(fieldStreams[0].values() instanceof DictionaryVector mapping) || mapping.length() != rowCount) {
+            return null;
+        }
+        int domainSize = mapping.values().length();
+        for (int field = 0; field < fieldStreams.length; field++) {
+            Streams streams = fieldStreams[field];
+            if (!(streams.values() instanceof DictionaryVector dictionary) ||
+                    dictionary.length() != rowCount ||
+                    dictionary.values().length() != domainSize ||
+                    !sameIds(mapping, dictionary, rowCount)) {
+                return null;
+            }
+            if (!compatibleSideStream(mapping, streams.getOrNull(Stream.NULLS), rowCount, domainSize) ||
+                    !compatibleSideStream(mapping, streams.getOrNull(Stream.ERRORS), rowCount, domainSize)) {
+                return null;
+            }
+        }
+
+        StructVector domain = allocator.allocate(context, StructVector.class, domainSize, StructVector::new);
+        for (int field = 0; field < fieldStreams.length; field++) {
+            Streams streams = fieldStreams[field];
+            DictionaryVector dictionary = (DictionaryVector) streams.values();
+            Streams.Builder domainField = Streams.builder().put(Stream.VALUES, dictionary.values());
+            addDomainSideStream(allocator, context, streams.getOrNull(Stream.NULLS), domainSize, Stream.NULLS, domainField);
+            addDomainSideStream(allocator, context, streams.getOrNull(Stream.ERRORS), domainSize, Stream.ERRORS, domainField);
+            domain.setField(fields.get(field).name(), domainField.build());
+        }
+        // Nested accumulators use allocator-owned id/frequency vectors. Reparent those buffers under the enclosing
+        // dictionary instead of copying one logical-row id per field or per output batch. The raw-array fallback is
+        // retained for injected/custom accumulators whose mapping has no transferable allocator owner.
+        if (mapping.hasOwnedMapping()) {
+            return allocator.replaceDictionaryValues(context, mapping, domain);
+        }
+        return allocator.allocateDictionary(context, mapping.ids(), rowCount, domain);
+    }
+
+    private static boolean sameIds(DictionaryVector left, DictionaryVector right, int length)
+    {
+        return left.hasSameRowMapping(right) ||
+                Arrays.equals(left.ids(), 0, length, right.ids(), 0, length);
+    }
+
+    private static boolean compatibleSideStream(DictionaryVector mapping, Vector side, int rowCount, int domainSize)
+    {
+        return side == null ||
+                (side instanceof DictionaryVector dictionary &&
+                        dictionary.values().length() == domainSize &&
+                        sameIds(mapping, dictionary, rowCount)) ||
+                (side instanceof BooleanVector booleans && allFalse(booleans, rowCount));
+    }
+
+    private static void addDomainSideStream(
+            Allocator allocator,
+            Allocator.Context context,
+            Vector side,
+            int domainSize,
+            Stream stream,
+            Streams.Builder output)
+    {
+        if (side instanceof DictionaryVector dictionary) {
+            output.put(stream, dictionary.values());
+        }
+        else if (side != null) {
+            output.put(stream, allocator.allocate(context, BooleanVector.class, domainSize, BooleanVector::new));
+        }
+    }
+
+    private static boolean allFalse(BooleanVector vector, int length)
+    {
+        if (vector.length() != length) {
+            return false;
+        }
+        boolean[] values = vector.values();
+        for (int position = 0; position < length; position++) {
+            if (values[position]) {
+                return false;
+            }
+        }
+        return true;
     }
 
     void skip(long rowCount)

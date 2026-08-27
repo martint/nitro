@@ -116,6 +116,31 @@ class TestAllocator
     }
 
     @Test
+    void testDictionaryDomainReplacementRetainsOwnedMapping()
+    {
+        try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
+            Allocator.Context context = new Allocator.Context("dictionary-replacement");
+            I32Vector ids = allocator.allocate(context, I32Vector.class, 4, I32Vector::new);
+            System.arraycopy(new int[] {0, 1, 0, 1}, 0, ids.values(), 0, 4);
+            I32Vector frequencies = allocator.allocate(context, I32Vector.class, 2, I32Vector::new);
+            frequencies.values()[0] = 2;
+            frequencies.values()[1] = 2;
+            I64Vector originalDomain = allocator.allocate(context, I64Vector.class, 2, I64Vector::new);
+            DictionaryVector original = DictionaryVector.wrapOwnedIdsWithDomainFrequencies(ids, 4, originalDomain, frequencies);
+            I64Vector replacementDomain = allocator.allocate(context, I64Vector.class, 2, I64Vector::new);
+
+            DictionaryVector replacement = original.ownedMappingWithValues(replacementDomain);
+
+            assertThat(replacement.hasOwnedMapping()).isTrue();
+            assertThat(replacement.ids()).isSameAs(ids.values());
+            assertThat(replacement.values()).isSameAs(replacementDomain);
+            assertThat(replacement.domainFrequency(0)).isEqualTo(2);
+            assertThat(replacement.domainFrequency(1)).isEqualTo(2);
+            assertThat(allocator.ownsVectorTree(replacement)).isTrue();
+        }
+    }
+
+    @Test
     void testSparseVariableWidthCopyIsCompactAndIndependent()
     {
         try (Allocator allocator = new Allocator(EngineResources.createDefault())) {

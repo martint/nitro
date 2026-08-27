@@ -398,6 +398,43 @@ public final class DictionaryVector
         return new DictionaryVector(ids, null, length, siblingValues, false, false, false, mappingIdentity, domainPresenceBits, hasDomainPresence, domainFrequencies, false);
     }
 
+    /**
+     * Returns whether this mapping is backed by allocator-owned vectors that can follow a replacement value tree
+     * through transfer and release. Raw-array dictionaries cannot safely use {@link #ownedMappingWithValues(Vector)}
+     * because their storage ownership resides in this wrapper itself.
+     */
+    public boolean hasOwnedMapping()
+    {
+        return ownedIds != null;
+    }
+
+    /**
+     * Replaces the value domain while retaining this dictionary's allocator-owned mapping and frequency metadata.
+     * The result is an ownership replacement, not an independent sibling: callers must publish only the returned
+     * vector outside the current allocation context. Allocator tree traversal is identity-aware, so the shared owned
+     * children are transferred once and the superseded wrapper cannot release them afterward.
+     */
+    public DictionaryVector ownedMappingWithValues(Vector replacementValues)
+    {
+        checkArgument(ownedIds != null, "Dictionary mapping is not allocator-owned");
+        checkArgument(replacementValues.length() == values.length(), "Replacement domain length differs");
+        DictionaryVector replacement = new DictionaryVector(
+                ids,
+                ownedIds,
+                length,
+                replacementValues,
+                false,
+                false,
+                false,
+                mappingIdentity,
+                domainPresenceBits,
+                hasDomainPresence,
+                domainFrequencies,
+                false);
+        replacement.ownedDomainFrequencies = ownedDomainFrequencies;
+        return replacement;
+    }
+
     public boolean hasSameRowMapping(DictionaryVector other)
     {
         return other != null && mappingIdentity == other.mappingIdentity && length == other.length;

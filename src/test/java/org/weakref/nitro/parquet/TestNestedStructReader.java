@@ -20,6 +20,7 @@ import org.junit.jupiter.api.Test;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.PrimitiveArrayPool;
@@ -88,6 +89,65 @@ class TestNestedStructReader
             assertThat(((I64Vector) rows.fieldValues("id")).values()).containsExactly(2);
             assertThat(((BooleanVector) rows.field("name").get(Stream.NULLS)).values()).containsExactly(true);
         }
+    }
+
+    @Test
+    void testCoalescesFieldsWithEqualDictionaryMappings()
+    {
+        try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
+            Allocator.Context context = new Allocator.Context("test");
+            I64Vector firstDomain = allocator.allocate(context, I64Vector.class, 2, I64Vector::new);
+            firstDomain.values()[0] = 10;
+            firstDomain.values()[1] = 20;
+            I64Vector secondDomain = allocator.allocate(context, I64Vector.class, 2, I64Vector::new);
+            secondDomain.values()[0] = 100;
+            secondDomain.values()[1] = 200;
+            int[] ids = {0, 1, 0, 1};
+            DictionaryVector first = allocator.allocateDictionary(context, ids, firstDomain);
+            DictionaryVector second = allocator.allocateDictionary(context, Arrays.copyOf(ids, ids.length), secondDomain);
+            BooleanVector noNulls = allocator.allocate(context, BooleanVector.class, ids.length, BooleanVector::new);
+
+            DictionaryVector rows = NestedStructReader.coalesceDictionaryStruct(
+                    allocator,
+                    context,
+                    ids.length,
+                    List.of(requiredLong("first", 0), requiredLong("second", 1)),
+                    new Streams[] {Streams.ofValues(first), Streams.ofValuesAndNulls(second, noNulls)});
+
+            assertThat(rows).isNotNull();
+            assertThat(rows.ids()).containsExactly(ids);
+            StructVector domain = (StructVector) rows.values();
+            assertThat(((I64Vector) domain.fieldValues("first")).values()).containsExactly(10, 20);
+            assertThat(((I64Vector) domain.fieldValues("second")).values()).containsExactly(100, 200);
+            assertThat(((BooleanVector) domain.field("second").get(Stream.NULLS)).values()).containsExactly(false, false);
+        }
+    }
+
+    @Test
+    void testDoesNotCoalesceDifferentDictionaryMappings()
+    {
+        try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
+            Allocator.Context context = new Allocator.Context("test");
+            I64Vector firstDomain = allocator.allocate(context, I64Vector.class, 2, I64Vector::new);
+            I64Vector secondDomain = allocator.allocate(context, I64Vector.class, 2, I64Vector::new);
+            DictionaryVector first = allocator.allocateDictionary(context, new int[] {0, 1, 0, 1}, firstDomain);
+            DictionaryVector second = allocator.allocateDictionary(context, new int[] {1, 0, 1, 0}, secondDomain);
+
+            assertThat(NestedStructReader.coalesceDictionaryStruct(
+                    allocator,
+                    context,
+                    4,
+                    List.of(requiredLong("first", 0), requiredLong("second", 1)),
+                    new Streams[] {Streams.ofValues(first), Streams.ofValues(second)}))
+                    .isNull();
+        }
+    }
+
+    private static ParquetSchema.Primitive requiredLong(String name, int leafIndex)
+    {
+        return new ParquetSchema.Primitive(
+                name, FieldRepetitionType.REQUIRED, Type.INT64, null, null, 0, 0, 0, leafIndex,
+                List.of("person", name), 1, 0);
     }
 
     private static NestedStructReader reader()
