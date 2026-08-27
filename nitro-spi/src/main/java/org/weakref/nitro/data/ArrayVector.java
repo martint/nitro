@@ -23,6 +23,7 @@ public final class ArrayVector
     private final int positionCount;
     private final int[] offsets;
     private Streams elements = Streams.empty();
+    private int initializedOffsetCount = 1;
 
     public ArrayVector(int positionCount)
     {
@@ -111,6 +112,7 @@ public final class ArrayVector
     @Override
     public Vector copy(Allocator allocator, Allocator.Context allocationContext)
     {
+        finishSparseOffsets();
         ArrayVector copy = allocator.allocateArray(allocationContext, positionCount);
         copyInto(copy);
         copy.setElements(allocator.copyStreams(allocationContext, elements));
@@ -120,6 +122,7 @@ public final class ArrayVector
     @Override
     public Vector copy(Allocator allocator, Allocator.Context allocationContext, int[] positions)
     {
+        finishSparseOffsets();
         ArrayVector copy = allocator.allocateArray(allocationContext, positions.length);
         int totalElements = 0;
         for (int index = 0; index < positions.length; index++) {
@@ -127,6 +130,7 @@ public final class ArrayVector
             totalElements += length(positions[index]);
         }
         copy.offsets()[positions.length] = totalElements;
+        copy.initializedOffsetCount = positions.length + 1;
         copy.setElements(allocator.copyStreams(allocationContext, elements, nestedPositions(positions, positions.length, totalElements)));
         return copy;
     }
@@ -134,6 +138,7 @@ public final class ArrayVector
     @Override
     public Vector copyMasked(Allocator allocator, Allocator.Context allocationContext, Vector existing, Mask mask)
     {
+        finishSparseOffsets();
         for (int position : mask) {
             existing = copySinglePositionInto(allocator, allocationContext, existing, position, position, length());
         }
@@ -143,10 +148,9 @@ public final class ArrayVector
     @Override
     public Vector copyPositionsInto(Allocator allocator, Allocator.Context allocationContext, Vector existing, int[] sourcePositions, int sourceCount, int outputStart, int size)
     {
+        finishSparseOffsets();
         ArrayVector output = allocator.reallocateIfNecessary(allocationContext, existing instanceof ArrayVector vector ? vector : null, ArrayVector.class, size, ArrayVector::new);
-        if (outputStart == 0) {
-            output.offsets()[0] = 0;
-        }
+        output.initializeEmptyOffsetsThrough(outputStart);
 
         int childOutputStart = output.offsets()[outputStart];
         int currentOffset = childOutputStart;
@@ -159,6 +163,7 @@ public final class ArrayVector
             totalElements += valueLength;
         }
         output.offsets()[outputStart + sourceCount] = currentOffset;
+        output.initializedOffsetCount = Math.max(output.initializedOffsetCount, outputStart + sourceCount + 1);
         output.setElements(copyNestedStreams(
                 allocator,
                 allocationContext,
@@ -173,15 +178,15 @@ public final class ArrayVector
     @Override
     public Vector copySinglePositionInto(Allocator allocator, Allocator.Context allocationContext, Vector existing, int sourcePosition, int outputPosition, int size)
     {
+        finishSparseOffsets();
         ArrayVector output = allocator.reallocateIfNecessary(allocationContext, existing instanceof ArrayVector vector ? vector : null, ArrayVector.class, size, ArrayVector::new);
-        if (outputPosition == 0) {
-            output.offsets()[0] = 0;
-        }
+        output.initializeEmptyOffsetsThrough(outputPosition);
 
         int childOutputStart = output.offsets()[outputPosition];
         int valueLength = length(sourcePosition);
         output.offsets()[outputPosition] = childOutputStart;
         output.offsets()[outputPosition + 1] = childOutputStart + valueLength;
+        output.initializedOffsetCount = Math.max(output.initializedOffsetCount, outputPosition + 2);
         output.setElements(copyNestedStreams(
                 allocator,
                 allocationContext,
@@ -222,9 +227,11 @@ public final class ArrayVector
     @Override
     public void copyInto(Vector target)
     {
+        finishSparseOffsets();
         ArrayVector arrayTarget = (ArrayVector) target;
         System.arraycopy(offsets, 0, arrayTarget.offsets(), 0, offsets.length);
         arrayTarget.setElements(elements);
+        arrayTarget.initializedOffsetCount = arrayTarget.offsets.length;
     }
 
     @Override
@@ -232,6 +239,7 @@ public final class ArrayVector
     {
         java.util.Arrays.fill(offsets, 0);
         clearElements();
+        initializedOffsetCount = 1;
     }
 
     @Override
@@ -281,6 +289,23 @@ public final class ArrayVector
             }
         }
         return result;
+    }
+
+    private void initializeEmptyOffsetsThrough(int outputPosition)
+    {
+        if (outputPosition < initializedOffsetCount) {
+            return;
+        }
+        int currentOffset = offsets[initializedOffsetCount - 1];
+        java.util.Arrays.fill(offsets, initializedOffsetCount, outputPosition + 1, currentOffset);
+        initializedOffsetCount = outputPosition + 1;
+    }
+
+    private void finishSparseOffsets()
+    {
+        if (initializedOffsetCount > 1) {
+            initializeEmptyOffsetsThrough(positionCount);
+        }
     }
 
     private Streams copyNestedStreams(Allocator allocator, Allocator.Context allocationContext, Streams existing, Streams source, int[] sourcePositions, int outputStart, int size)

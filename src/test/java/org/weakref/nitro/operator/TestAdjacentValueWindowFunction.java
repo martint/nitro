@@ -20,10 +20,12 @@ import org.weakref.nitro.core.type.TypeOperators;
 import org.weakref.nitro.core.type.TypeVectorFactory;
 import org.weakref.nitro.data.AllocationResources;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.ArrayVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.ErrorValue;
 import org.weakref.nitro.data.ErrorVector;
 import org.weakref.nitro.data.I64Vector;
+import org.weakref.nitro.data.MapVector;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.StructVector;
@@ -97,6 +99,88 @@ class TestAdjacentValueWindowFunction
         }
     }
 
+    @Test
+    void selectsFollowingArraysAcrossPartitionBoundaryGaps()
+    {
+        try (AllocationResources resources = AllocationResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            Allocator.Context context = new Allocator.Context("test");
+            AdjacentValueWindowFunction following = new AdjacentValueWindowFunction(arrayType(), 0, FOLLOWING);
+            Streams output = following.emptyOutput(allocator, context, 4);
+
+            ArrayVector arrays = new ArrayVector(4);
+            arrays.offsets()[0] = 0;
+            arrays.offsets()[1] = 1;
+            arrays.offsets()[2] = 3;
+            arrays.offsets()[3] = 4;
+            arrays.offsets()[4] = 6;
+            arrays.setElements(Streams.ofValues(new I64Vector(new long[] {7, 8, 9, 10, 11, 12})));
+            Streams source = Streams.ofValues(arrays);
+            output = following.append(allocator, context, output, new Streams[] {source}, 0, 0, 4);
+            output = following.append(allocator, context, output, new Streams[] {source}, 1, 1, 4);
+            following.reset();
+            output = following.append(allocator, context, output, new Streams[] {source}, 2, 2, 4);
+            output = following.append(allocator, context, output, new Streams[] {source}, 3, 3, 4);
+
+            ArrayVector values = (ArrayVector) output.values();
+            ArrayVector materialized = (ArrayVector) values.copyPositionsInto(
+                    allocator,
+                    context,
+                    null,
+                    new int[] {0, 1, 2, 3},
+                    4,
+                    0,
+                    4);
+            assertThat(values.offsets()).containsExactly(0, 2, 2, 4, 4);
+            assertThat(((I64Vector) values.elements().values()).values()).containsExactly(8, 9, 11, 12);
+            assertThat(((BooleanVector) output.get(Stream.NULLS)).values()).containsExactly(false, true, false, true);
+            assertThat(materialized.offsets()).containsExactly(0, 2, 2, 4, 4);
+            assertThat(((I64Vector) materialized.elements().values()).values()).containsExactly(8, 9, 11, 12);
+            allocator.release(context);
+        }
+    }
+
+    @Test
+    void selectsFollowingMapsAcrossPartitionBoundaryGaps()
+    {
+        try (AllocationResources resources = AllocationResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            Allocator.Context context = new Allocator.Context("test");
+            AdjacentValueWindowFunction following = new AdjacentValueWindowFunction(mapType(), 0, FOLLOWING);
+            Streams output = following.emptyOutput(allocator, context, 4);
+
+            MapVector maps = new MapVector(4);
+            System.arraycopy(new int[] {0, 1, 3, 4, 6}, 0, maps.offsets(), 0, 5);
+            maps.setEntries(
+                    Streams.ofValues(new I64Vector(new long[] {1, 2, 3, 4, 5, 6})),
+                    Streams.ofValues(new I64Vector(new long[] {10, 20, 30, 40, 50, 60})));
+            Streams source = Streams.ofValues(maps);
+            output = following.append(allocator, context, output, new Streams[] {source}, 0, 0, 4);
+            output = following.append(allocator, context, output, new Streams[] {source}, 1, 1, 4);
+            following.reset();
+            output = following.append(allocator, context, output, new Streams[] {source}, 2, 2, 4);
+            output = following.append(allocator, context, output, new Streams[] {source}, 3, 3, 4);
+
+            MapVector values = (MapVector) output.values();
+            MapVector materialized = (MapVector) values.copyPositionsInto(
+                    allocator,
+                    context,
+                    null,
+                    new int[] {0, 1, 2, 3},
+                    4,
+                    0,
+                    4);
+            assertThat(values.offsets()).containsExactly(0, 2, 2, 4, 4);
+            assertThat(((I64Vector) values.keys().values()).values()).containsExactly(2, 3, 5, 6);
+            assertThat(((I64Vector) values.values().values()).values()).containsExactly(20, 30, 50, 60);
+            assertThat(((BooleanVector) output.get(Stream.NULLS)).values()).containsExactly(false, true, false, true);
+            assertThat(materialized.offsets()).containsExactly(0, 2, 2, 4, 4);
+            assertThat(((I64Vector) materialized.keys().values()).values()).containsExactly(2, 3, 5, 6);
+            assertThat(((I64Vector) materialized.values().values()).values()).containsExactly(20, 30, 50, 60);
+            allocator.release(context);
+        }
+    }
+
     private static TypeBinding i64Type()
     {
         return type(
@@ -113,6 +197,32 @@ class TestAdjacentValueWindowFunction
                 (allocator, length) -> {
                     StructVector values = allocator.allocate(StructVector.class, length, StructVector::new);
                     values.setField("value", Streams.ofValues(allocator.allocate(I64Vector.class, length, I64Vector::new)));
+                    return values;
+                });
+    }
+
+    private static TypeBinding arrayType()
+    {
+        return type(
+                "testing:array",
+                Set.of(ArrayVector.class),
+                (allocator, length) -> {
+                    ArrayVector values = allocator.allocate(ArrayVector.class, length, ArrayVector::new);
+                    values.setElements(Streams.ofValues(allocator.allocate(I64Vector.class, 0, I64Vector::new)));
+                    return values;
+                });
+    }
+
+    private static TypeBinding mapType()
+    {
+        return type(
+                "testing:map",
+                Set.of(MapVector.class),
+                (allocator, length) -> {
+                    MapVector values = allocator.allocate(MapVector.class, length, MapVector::new);
+                    values.setEntries(
+                            Streams.ofValues(allocator.allocate(I64Vector.class, 0, I64Vector::new)),
+                            Streams.ofValues(allocator.allocate(I64Vector.class, 0, I64Vector::new)));
                     return values;
                 });
     }

@@ -24,6 +24,7 @@ public final class MapVector
     private final int[] offsets;
     private Streams keys = Streams.empty();
     private Streams values = Streams.empty();
+    private int initializedOffsetCount = 1;
 
     public MapVector(int positionCount)
     {
@@ -125,6 +126,7 @@ public final class MapVector
     @Override
     public Vector copy(Allocator allocator, Allocator.Context allocationContext)
     {
+        finishSparseOffsets();
         MapVector copy = allocator.allocateMap(allocationContext, positionCount);
         copyInto(copy);
         copy.setEntries(
@@ -136,6 +138,7 @@ public final class MapVector
     @Override
     public Vector copy(Allocator allocator, Allocator.Context allocationContext, int[] positions)
     {
+        finishSparseOffsets();
         MapVector copy = allocator.allocateMap(allocationContext, positions.length);
         int totalEntries = 0;
         for (int index = 0; index < positions.length; index++) {
@@ -143,6 +146,7 @@ public final class MapVector
             totalEntries += length(positions[index]);
         }
         copy.offsets()[positions.length] = totalEntries;
+        copy.initializedOffsetCount = positions.length + 1;
         int[] entryPositions = nestedPositions(positions, positions.length, totalEntries);
         copy.setEntries(
                 allocator.copyStreams(allocationContext, keys, entryPositions),
@@ -153,6 +157,7 @@ public final class MapVector
     @Override
     public Vector copyMasked(Allocator allocator, Allocator.Context allocationContext, Vector existing, Mask mask)
     {
+        finishSparseOffsets();
         for (int position : mask) {
             existing = copySinglePositionInto(allocator, allocationContext, existing, position, position, length());
         }
@@ -162,10 +167,9 @@ public final class MapVector
     @Override
     public Vector copyPositionsInto(Allocator allocator, Allocator.Context allocationContext, Vector existing, int[] sourcePositions, int sourceCount, int outputStart, int size)
     {
+        finishSparseOffsets();
         MapVector output = allocator.reallocateIfNecessary(allocationContext, existing instanceof MapVector vector ? vector : null, MapVector.class, size, MapVector::new);
-        if (outputStart == 0) {
-            output.offsets()[0] = 0;
-        }
+        output.initializeEmptyOffsetsThrough(outputStart);
 
         int childOutputStart = output.offsets()[outputStart];
         int currentOffset = childOutputStart;
@@ -178,6 +182,7 @@ public final class MapVector
             totalEntries += valueLength;
         }
         output.offsets()[outputStart + sourceCount] = currentOffset;
+        output.initializedOffsetCount = Math.max(output.initializedOffsetCount, outputStart + sourceCount + 1);
 
         int[] entryPositions = nestedPositions(sourcePositions, sourceCount, totalEntries);
         output.setEntries(
@@ -189,15 +194,15 @@ public final class MapVector
     @Override
     public Vector copySinglePositionInto(Allocator allocator, Allocator.Context allocationContext, Vector existing, int sourcePosition, int outputPosition, int size)
     {
+        finishSparseOffsets();
         MapVector output = allocator.reallocateIfNecessary(allocationContext, existing instanceof MapVector vector ? vector : null, MapVector.class, size, MapVector::new);
-        if (outputPosition == 0) {
-            output.offsets()[0] = 0;
-        }
+        output.initializeEmptyOffsetsThrough(outputPosition);
 
         int childOutputStart = output.offsets()[outputPosition];
         int valueLength = length(sourcePosition);
         output.offsets()[outputPosition] = childOutputStart;
         output.offsets()[outputPosition + 1] = childOutputStart + valueLength;
+        output.initializedOffsetCount = Math.max(output.initializedOffsetCount, outputPosition + 2);
 
         int[] entryPositions = nestedPositions(new int[] {sourcePosition}, 1, valueLength);
         output.setEntries(
@@ -235,9 +240,11 @@ public final class MapVector
     @Override
     public void copyInto(Vector target)
     {
+        finishSparseOffsets();
         MapVector mapTarget = (MapVector) target;
         System.arraycopy(offsets, 0, mapTarget.offsets(), 0, offsets.length);
         mapTarget.setEntries(keys, values);
+        mapTarget.initializedOffsetCount = mapTarget.offsets.length;
     }
 
     @Override
@@ -245,6 +252,7 @@ public final class MapVector
     {
         java.util.Arrays.fill(offsets, 0);
         clearEntries();
+        initializedOffsetCount = 1;
     }
 
     @Override
@@ -296,6 +304,23 @@ public final class MapVector
             }
         }
         return result;
+    }
+
+    private void initializeEmptyOffsetsThrough(int outputPosition)
+    {
+        if (outputPosition < initializedOffsetCount) {
+            return;
+        }
+        int currentOffset = offsets[initializedOffsetCount - 1];
+        java.util.Arrays.fill(offsets, initializedOffsetCount, outputPosition + 1, currentOffset);
+        initializedOffsetCount = outputPosition + 1;
+    }
+
+    private void finishSparseOffsets()
+    {
+        if (initializedOffsetCount > 1) {
+            initializeEmptyOffsetsThrough(positionCount);
+        }
     }
 
     private Streams copyNestedStreams(Allocator allocator, Allocator.Context allocationContext, Streams existing, Streams source, int[] sourcePositions, int outputStart, int size)
