@@ -18,9 +18,12 @@ import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.core.type.TypeIdentity;
 import org.weakref.nitro.core.type.TypeOperators;
+import org.weakref.nitro.data.ArrayVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I64Vector;
+import org.weakref.nitro.data.MapVector;
+import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.StructVector;
 import org.weakref.nitro.data.Vector;
@@ -58,6 +61,55 @@ class TestStructuralTypeKernelFactory
         assertThat(kernel.hash(dictionary, null, 1)).isEqualTo(kernel.hash(rows, null, 0));
     }
 
+    @Test
+    void testDerivesArrayKeySemanticsFromElementBinding()
+    {
+        TypeBinding scalar = Schema.unspecified(1).field(0).type();
+        StructuralKeyKernel kernel = new StructuralTypeKernelFactory().key(
+                new TestingNestedType("array", ArrayVector.class, List.of(scalar)));
+
+        ArrayVector arrays = new ArrayVector(4);
+        System.arraycopy(new int[] {0, 2, 4, 6, 8}, 0, arrays.offsets(), 0, 5);
+        arrays.setElements(Streams.ofValuesAndNulls(
+                new I64Vector(new long[] {11, 22, 11, 22, 22, 11, 11, 99}),
+                new BooleanVector(new boolean[] {false, true, false, true, true, false, false, true})));
+
+        assertThat(kernel.identical(arrays, null, 0, arrays, null, 1)).isTrue();
+        assertThat(kernel.hash(arrays, null, 0)).isEqualTo(kernel.hash(arrays, null, 1));
+        assertThat(kernel.identical(arrays, null, 0, arrays, null, 2)).isFalse();
+        assertThat(kernel.identical(arrays, null, 0, arrays, null, 3)).isTrue();
+
+        DictionaryVector dictionary = DictionaryVector.wrap(new int[] {2, 0}, arrays);
+        RleVector rle = new RleVector(new int[] {3}, DictionaryVector.wrap(new int[] {2}, arrays));
+        assertThat(kernel.identical(rle, null, 0, arrays, null, 2)).isTrue();
+        assertThat(kernel.hash(rle, null, 2)).isEqualTo(kernel.hash(arrays, null, 2));
+    }
+
+    @Test
+    void testDerivesOrderIndependentMapKeySemanticsFromChildBindings()
+    {
+        TypeBinding scalar = Schema.unspecified(1).field(0).type();
+        StructuralKeyKernel kernel = new StructuralTypeKernelFactory().key(
+                new TestingNestedType("map", MapVector.class, List.of(scalar, scalar)));
+
+        MapVector maps = new MapVector(3);
+        System.arraycopy(new int[] {0, 2, 4, 6}, 0, maps.offsets(), 0, 4);
+        maps.setEntries(
+                Streams.ofValues(new I64Vector(new long[] {1, 2, 2, 1, 2, 1})),
+                Streams.ofValuesAndNulls(
+                        new I64Vector(new long[] {10, 20, 20, 10, 99, 10}),
+                        new BooleanVector(new boolean[] {false, true, true, false, false, false})));
+
+        assertThat(kernel.identical(maps, null, 0, maps, null, 1)).isTrue();
+        assertThat(kernel.hash(maps, null, 0)).isEqualTo(kernel.hash(maps, null, 1));
+        assertThat(kernel.identical(maps, null, 0, maps, null, 2)).isFalse();
+
+        DictionaryVector dictionary = DictionaryVector.wrap(new int[] {1}, maps);
+        RleVector rle = new RleVector(new int[] {4}, dictionary);
+        assertThat(kernel.identical(rle, null, 3, maps, null, 0)).isTrue();
+        assertThat(kernel.hash(rle, null, 0)).isEqualTo(kernel.hash(maps, null, 0));
+    }
+
     private record TestingStructType(List<TypeBinding> nestedValueTypes)
             implements TypeBinding
     {
@@ -88,6 +140,42 @@ class TestStructuralTypeKernelFactory
         public Set<Class<? extends Vector>> supportedVectorTypes()
         {
             return Set.of(StructVector.class, DictionaryVector.class);
+        }
+    }
+
+    private record TestingNestedType(
+            String name,
+            Class<? extends Vector> physicalType,
+            List<TypeBinding> nestedValueTypes)
+            implements TypeBinding
+    {
+        private TestingNestedType
+        {
+            nestedValueTypes = List.copyOf(nestedValueTypes);
+        }
+
+        @Override
+        public TypeIdentity identity()
+        {
+            return new TypeIdentity("testing:" + name);
+        }
+
+        @Override
+        public Class<?> carrierType()
+        {
+            return Object.class;
+        }
+
+        @Override
+        public TypeOperators operators()
+        {
+            return TypeOperators.UNSPECIFIED;
+        }
+
+        @Override
+        public Set<Class<? extends Vector>> supportedVectorTypes()
+        {
+            return Set.of(physicalType, DictionaryVector.class, RleVector.class);
         }
     }
 }

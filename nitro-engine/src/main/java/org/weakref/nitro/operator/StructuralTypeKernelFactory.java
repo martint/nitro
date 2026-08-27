@@ -15,7 +15,9 @@ package org.weakref.nitro.operator;
 
 import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.core.type.TypeOperators;
+import org.weakref.nitro.data.ArrayVector;
 import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.MapVector;
 import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
@@ -83,6 +85,13 @@ public final class StructuralTypeKernelFactory
                         .map(this::key)
                         .toArray(StructuralKeyKernel[]::new));
             }
+            if (type.supportedVectorTypes().contains(ArrayVector.class)) {
+                return new ArrayStructuralKeyKernel(requireChildBindings(type, 1)[0]);
+            }
+            if (type.supportedVectorTypes().contains(MapVector.class)) {
+                StructuralKeyKernel[] children = requireChildBindings(type, 2);
+                return new MapStructuralKeyKernel(children[0], children[1]);
+            }
             return LegacyStructuralKeyKernel.INSTANCE;
         }
         if (!hasValueRead || !hasHash || !hasIdentical) {
@@ -94,6 +103,233 @@ public final class StructuralTypeKernelFactory
                 operators.valueRead().orElseThrow(),
                 operators.hash().orElseThrow(),
                 operators.identical().orElseThrow());
+    }
+
+    private StructuralKeyKernel[] requireChildBindings(TypeBinding type, int expected)
+    {
+        if (type.nestedValueTypes().size() != expected) {
+            throw new IllegalArgumentException("Type %s has %s child bindings; expected %s"
+                    .formatted(type.identity(), type.nestedValueTypes().size(), expected));
+        }
+        return type.nestedValueTypes().stream()
+                .map(this::key)
+                .toArray(StructuralKeyKernel[]::new);
+    }
+
+    /**
+     * Ordered structural semantics for Nitro's physical repeated-value shape.
+     */
+    private static final class ArrayStructuralKeyKernel
+            implements StructuralKeyKernel
+    {
+        private static final int NULL_HASH = 0x9E37_79B9;
+
+        private final StructuralKeyKernel elements;
+
+        private ArrayStructuralKeyKernel(StructuralKeyKernel elements)
+        {
+            this.elements = requireNonNull(elements, "elements is null");
+        }
+
+        @Override
+        public long hash(Vector values, Vector nulls, int position)
+        {
+            ArrayPosition array = arrayPosition(values, position);
+            Streams elementStreams = array.values().elements();
+            Vector elementNulls = elementStreams.getOrNull(Stream.NULLS);
+            int hash = 1;
+            for (int element = array.values().startOffset(array.position());
+                    element < array.values().endOffset(array.position());
+                    element++) {
+                int elementHash = OperatorVectorSupport.isNull(elementNulls, element)
+                        ? NULL_HASH
+                        : Long.hashCode(elements.hash(elementStreams.values(), elementNulls, element));
+                hash = 31 * hash + elementHash;
+            }
+            return hash;
+        }
+
+        @Override
+        public boolean identical(
+                Vector leftValues,
+                Vector leftNulls,
+                int leftPosition,
+                Vector rightValues,
+                Vector rightNulls,
+                int rightPosition)
+        {
+            ArrayPosition left = arrayPosition(leftValues, leftPosition);
+            ArrayPosition right = arrayPosition(rightValues, rightPosition);
+            int length = left.values().length(left.position());
+            if (length != right.values().length(right.position())) {
+                return false;
+            }
+
+            Streams leftElements = left.values().elements();
+            Streams rightElements = right.values().elements();
+            Vector leftElementNulls = leftElements.getOrNull(Stream.NULLS);
+            Vector rightElementNulls = rightElements.getOrNull(Stream.NULLS);
+            int leftOffset = left.values().startOffset(left.position());
+            int rightOffset = right.values().startOffset(right.position());
+            for (int index = 0; index < length; index++) {
+                int leftElement = leftOffset + index;
+                int rightElement = rightOffset + index;
+                boolean leftNull = OperatorVectorSupport.isNull(leftElementNulls, leftElement);
+                boolean rightNull = OperatorVectorSupport.isNull(rightElementNulls, rightElement);
+                if (leftNull || rightNull) {
+                    if (leftNull != rightNull) {
+                        return false;
+                    }
+                    continue;
+                }
+                if (!elements.identical(
+                        leftElements.values(), leftElementNulls, leftElement,
+                        rightElements.values(), rightElementNulls, rightElement)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private static ArrayPosition arrayPosition(Vector values, int position)
+        {
+            return switch (values) {
+                case ArrayVector array -> new ArrayPosition(array, position);
+                case DictionaryVector dictionary -> arrayPosition(dictionary.values(), dictionary.ids()[position]);
+                case RleVector rle -> arrayPosition(rle.values(), OperatorVectorSupport.runIndex(rle, position));
+                default -> throw new IllegalArgumentException(
+                        "Expected array vector but found " + values.getClass().getSimpleName());
+            };
+        }
+
+        private record ArrayPosition(ArrayVector values, int position) {}
+    }
+
+    /**
+     * Order-independent structural semantics for Nitro's physical key/value repeated shape.
+     */
+    private static final class MapStructuralKeyKernel
+            implements StructuralKeyKernel
+    {
+        private static final long NULL_HASH = 0x9E37_79B9L;
+
+        private final StructuralKeyKernel keys;
+        private final StructuralKeyKernel values;
+
+        private MapStructuralKeyKernel(StructuralKeyKernel keys, StructuralKeyKernel values)
+        {
+            this.keys = requireNonNull(keys, "keys is null");
+            this.values = requireNonNull(values, "values is null");
+        }
+
+        @Override
+        public long hash(Vector valueVector, Vector nulls, int position)
+        {
+            MapPosition map = mapPosition(valueVector, position);
+            Streams keyStreams = map.values().keys();
+            Streams valueStreams = map.values().values();
+            Vector keyNulls = keyStreams.getOrNull(Stream.NULLS);
+            Vector valueNulls = valueStreams.getOrNull(Stream.NULLS);
+            long hash = 0;
+            for (int entry = map.values().startOffset(map.position());
+                    entry < map.values().endOffset(map.position());
+                    entry++) {
+                long keyHash = OperatorVectorSupport.isNull(keyNulls, entry)
+                        ? NULL_HASH
+                        : keys.hash(keyStreams.values(), keyNulls, entry);
+                long valueHash = OperatorVectorSupport.isNull(valueNulls, entry)
+                        ? NULL_HASH
+                        : values.hash(valueStreams.values(), valueNulls, entry);
+                hash += mix64(keyHash) ^ Long.rotateLeft(mix64(valueHash), 23);
+            }
+            return hash;
+        }
+
+        @Override
+        public boolean identical(
+                Vector leftValues,
+                Vector leftNulls,
+                int leftPosition,
+                Vector rightValues,
+                Vector rightNulls,
+                int rightPosition)
+        {
+            MapPosition left = mapPosition(leftValues, leftPosition);
+            MapPosition right = mapPosition(rightValues, rightPosition);
+            int length = left.values().length(left.position());
+            if (length != right.values().length(right.position())) {
+                return false;
+            }
+
+            Streams leftKeys = left.values().keys();
+            Streams rightKeys = right.values().keys();
+            Streams leftMapValues = left.values().values();
+            Streams rightMapValues = right.values().values();
+            Vector leftKeyNulls = leftKeys.getOrNull(Stream.NULLS);
+            Vector rightKeyNulls = rightKeys.getOrNull(Stream.NULLS);
+            Vector leftValueNulls = leftMapValues.getOrNull(Stream.NULLS);
+            Vector rightValueNulls = rightMapValues.getOrNull(Stream.NULLS);
+            int rightStart = right.values().startOffset(right.position());
+            int rightEnd = right.values().endOffset(right.position());
+            for (int leftEntry = left.values().startOffset(left.position());
+                    leftEntry < left.values().endOffset(left.position());
+                    leftEntry++) {
+                boolean found = false;
+                for (int rightEntry = rightStart; rightEntry < rightEnd; rightEntry++) {
+                    if (!identicalValue(keys, leftKeys, leftKeyNulls, leftEntry, rightKeys, rightKeyNulls, rightEntry)) {
+                        continue;
+                    }
+                    if (!identicalValue(values, leftMapValues, leftValueNulls, leftEntry, rightMapValues, rightValueNulls, rightEntry)) {
+                        return false;
+                    }
+                    found = true;
+                    break;
+                }
+                if (!found) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private static boolean identicalValue(
+                StructuralKeyKernel kernel,
+                Streams left,
+                Vector leftNulls,
+                int leftPosition,
+                Streams right,
+                Vector rightNulls,
+                int rightPosition)
+        {
+            boolean leftNull = OperatorVectorSupport.isNull(leftNulls, leftPosition);
+            boolean rightNull = OperatorVectorSupport.isNull(rightNulls, rightPosition);
+            if (leftNull || rightNull) {
+                return leftNull == rightNull;
+            }
+            return kernel.identical(
+                    left.values(), leftNulls, leftPosition,
+                    right.values(), rightNulls, rightPosition);
+        }
+
+        private static MapPosition mapPosition(Vector values, int position)
+        {
+            return switch (values) {
+                case MapVector map -> new MapPosition(map, position);
+                case DictionaryVector dictionary -> mapPosition(dictionary.values(), dictionary.ids()[position]);
+                case RleVector rle -> mapPosition(rle.values(), OperatorVectorSupport.runIndex(rle, position));
+                default -> throw new IllegalArgumentException(
+                        "Expected map vector but found " + values.getClass().getSimpleName());
+            };
+        }
+
+        private static long mix64(long value)
+        {
+            value = (value ^ (value >>> 33)) * 0xff51afd7ed558ccdL;
+            value = (value ^ (value >>> 33)) * 0xc4ceb9fe1a85ec53L;
+            return value ^ (value >>> 33);
+        }
+
+        private record MapPosition(MapVector values, int position) {}
     }
 
     /**
