@@ -14,7 +14,6 @@
 package org.weakref.nitro.operator.aggregation;
 
 import org.weakref.nitro.data.Allocator;
-import org.weakref.nitro.data.AvgStateVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.StddevSampStateVector;

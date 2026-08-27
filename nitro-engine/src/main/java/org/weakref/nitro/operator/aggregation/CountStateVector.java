@@ -11,9 +11,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.weakref.nitro.data;
+package org.weakref.nitro.operator.aggregation;
 
 import org.weakref.nitro.core.function.aggregation.LongStateUpdate;
+import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.DynamicRetainedBytesVector;
+import org.weakref.nitro.data.FlatVector;
+import org.weakref.nitro.data.I64Vector;
+import org.weakref.nitro.data.Vector;
 
 import static java.util.Objects.requireNonNull;
 

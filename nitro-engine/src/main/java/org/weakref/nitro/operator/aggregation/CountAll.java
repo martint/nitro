@@ -16,7 +16,6 @@ package org.weakref.nitro.operator.aggregation;
 import org.weakref.nitro.core.function.aggregation.GroupedAggregationUpdate;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
-import org.weakref.nitro.data.CountStateVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
