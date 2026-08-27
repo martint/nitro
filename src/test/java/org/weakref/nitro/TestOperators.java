@@ -4182,6 +4182,56 @@ public class TestOperators
     }
 
     @Test
+    void testLimitOperatorStopsWithoutPollingUpstreamAgain()
+    {
+        AtomicInteger hasNextCalls = new AtomicInteger();
+        Operator source = new Operator()
+        {
+            private boolean returned;
+
+            @Override
+            public int outputCount()
+            {
+                return 1;
+            }
+
+            @Override
+            public Schema outputSchema()
+            {
+                return Schema.unspecified(1);
+            }
+
+            @Override
+            public boolean hasNext()
+            {
+                hasNextCalls.incrementAndGet();
+                return !returned;
+            }
+
+            @Override
+            public Batch next()
+            {
+                returned = true;
+                return new Batch(Mask.all(1), Output.of(Streams.ofValues(new I64Vector(new long[] {11}))));
+            }
+
+            @Override
+            public void constrain(Mask mask) {}
+
+            @Override
+            public void close() {}
+        };
+
+        try (Operator limit = new LimitOperator(allocator, 1, source)) {
+            assertThat(limit.hasNext()).isTrue();
+            try (Batch ignored = limit.next()) {
+                assertThat(limit.hasNext()).isFalse();
+            }
+        }
+        assertThat(hasNextCalls).hasValue(1);
+    }
+
+    @Test
     void testOperatorAssertionsDecodeNestedArrays()
     {
         ArrayVector arrays = new ArrayVector(1);

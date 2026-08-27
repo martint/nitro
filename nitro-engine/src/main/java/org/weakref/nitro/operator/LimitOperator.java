@@ -70,7 +70,7 @@ public class LimitOperator
     @Override
     public boolean hasNext()
     {
-        return source.hasNext() && count < limit;
+        return count < limit && source.hasNext();
     }
 
     @Override
