@@ -101,6 +101,18 @@ public interface Vector
     }
 
     /**
+     * Whether incremental writes into a shared output must visit output positions in ascending order.
+     *
+     * <p>Repeated vectors append child values while their parent offsets are constructed. A branch-at-a-time merge
+     * would visit disjoint parent positions out of order and corrupt that offset/child relationship. Composite and
+     * encoded vectors propagate the requirement from their physical children.
+     */
+    default boolean requiresMonotonicOutputWrites()
+    {
+        return false;
+    }
+
+    /**
      * Produces a logical copy of the entire vector in the target allocator context.
      */
     Vector copy(Allocator allocator, Allocator.Context allocationContext);

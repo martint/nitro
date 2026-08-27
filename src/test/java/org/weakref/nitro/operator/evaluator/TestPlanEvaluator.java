@@ -454,6 +454,40 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testConditionalMergesRepeatedValuesInOutputOrder()
+    {
+        ArrayVector emptyArrays = new ArrayVector(4);
+        emptyArrays.setElements(Streams.ofValues(new I64Vector(new long[0])));
+
+        ArrayVector populatedArrays = new ArrayVector(4);
+        System.arraycopy(new int[] {0, 1, 2, 3, 4}, 0, populatedArrays.offsets(), 0, 5);
+        populatedArrays.setElements(Streams.ofValues(new I64Vector(new long[] {10, 20, 30, 40})));
+
+        Variable result = new Variable(0);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(
+                        result,
+                        new org.weakref.nitro.operator.evaluator.ir.Merge(
+                                new ReferenceMask(new Reference(new Input(0), Stream.VALUES)),
+                                new Reference(new Input(1), Stream.VALUES),
+                                new Reference(new Input(2), Stream.VALUES)),
+                        AllMask.ALL)),
+                List.of(new Reference(result, Stream.VALUES)));
+        PlanEvaluator evaluator = planEvaluator(
+                plan,
+                new PrimitiveRegistry(),
+                inputResolver(Map.of(
+                        new Reference(new Input(0), Stream.VALUES), new BooleanVector(new boolean[] {true, false, true, false}),
+                        new Reference(new Input(1), Stream.VALUES), emptyArrays,
+                        new Reference(new Input(2), Stream.VALUES), populatedArrays)),
+                new Allocator(EngineResources.createDefault()));
+
+        ArrayVector values = (ArrayVector) evaluator.evaluate(new Reference(result, Stream.VALUES), Mask.all(4)).values();
+        assertThat(values.offsets()).containsExactly(0, 0, 1, 1, 2);
+        assertThat(((I64Vector) values.elementValues()).values()).startsWith(20, 40);
+    }
+
+    @Test
     void testConditionalPropagatesConditionErrorsAndTreatsNullAsFalse()
     {
         ErrorValue diagnostic = new ErrorValue("test", 23, "CONDITION_ERROR", "USER_ERROR", "condition failed");

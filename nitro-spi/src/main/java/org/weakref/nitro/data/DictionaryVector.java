@@ -564,6 +564,12 @@ public final class DictionaryVector
     }
 
     @Override
+    public boolean requiresMonotonicOutputWrites()
+    {
+        return values.requiresMonotonicOutputWrites();
+    }
+
+    @Override
     public Vector copy(Allocator allocator, Allocator.Context allocationContext)
     {
         if (hasDomainFrequencies()) {

@@ -110,6 +110,12 @@ public final class ArrayVector
     }
 
     @Override
+    public boolean requiresMonotonicOutputWrites()
+    {
+        return true;
+    }
+
+    @Override
     public Vector copy(Allocator allocator, Allocator.Context allocationContext)
     {
         finishSparseOffsets();

@@ -159,6 +159,12 @@ public final class RleVector
     }
 
     @Override
+    public boolean requiresMonotonicOutputWrites()
+    {
+        return values.requiresMonotonicOutputWrites();
+    }
+
+    @Override
     public long contentFingerprint()
     {
         long valuesFingerprint = values.contentFingerprint();

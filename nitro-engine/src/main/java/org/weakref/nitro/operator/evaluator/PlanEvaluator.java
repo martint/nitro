@@ -1620,11 +1620,46 @@ public final class PlanEvaluator
             }
         }
 
+        if (!singleBranch) {
+            Vector ordered = tryMergeBranchesInOutputOrder(stream, trueReference, falseReference, trueMask, falseMask, mask, target);
+            if (ordered != null) {
+                return ordered;
+            }
+        }
+
         if (!trueMask.none()) {
             target = mergeBranchInto(stream, trueReference, trueMask, mask, target, singleBranch && falseMask.none());
         }
         if (!falseMask.none()) {
             target = mergeBranchInto(stream, falseReference, falseMask, mask, target, singleBranch && trueMask.none());
+        }
+        return target;
+    }
+
+    private Vector tryMergeBranchesInOutputOrder(
+            Stream stream,
+            Reference trueReference,
+            Reference falseReference,
+            Mask trueMask,
+            Mask falseMask,
+            Mask fullMask,
+            Vector target)
+    {
+        if (stream != Stream.VALUES) {
+            return null;
+        }
+        Vector trueVector = evaluateMergeBranchVector(stream, trueReference, trueMask);
+        Vector falseVector = evaluateMergeBranchVector(stream, falseReference, falseMask);
+        if ((trueVector == null || !trueVector.requiresMonotonicOutputWrites()) &&
+                (falseVector == null || !falseVector.requiresMonotonicOutputWrites())) {
+            return null;
+        }
+
+        for (int position : fullMask) {
+            Vector source = trueMask.contains(position) ? trueVector : falseMask.contains(position) ? falseVector : null;
+            if (source != null) {
+                target = source.copySinglePositionInto(allocator, allocationContext, target, position, position, fullMask.size());
+            }
         }
         return target;
     }

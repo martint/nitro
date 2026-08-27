@@ -101,6 +101,14 @@ public final class StructVector
     }
 
     @Override
+    public boolean requiresMonotonicOutputWrites()
+    {
+        return fields.values().stream()
+                .flatMap(streams -> streams.asMap().values().stream())
+                .anyMatch(Vector::requiresMonotonicOutputWrites);
+    }
+
+    @Override
     public Vector copy(Allocator allocator, Allocator.Context allocationContext)
     {
         StructVector copy = allocator.allocate(allocationContext, StructVector.class, positionCount, StructVector::new);
