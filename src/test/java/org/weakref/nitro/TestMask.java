@@ -18,6 +18,8 @@ import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 
+import java.util.ArrayList;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 class TestMask
@@ -191,6 +193,54 @@ class TestMask
         assertThat(selection.selectedDomainBits()).isEqualTo(0b1010);
         assertThat(mask.count()).isEqualTo(4);
         assertThat(mask).containsExactly(0, 1, 4, 6);
+    }
+
+    @Test
+    void visitsSelectedDictionaryDomainWithoutLogicalExpansion()
+    {
+        int[] ids = {3, 1, 2, 0, 3, 2, 1};
+        DictionaryVector dictionary = DictionaryVector.wrapWithDomainFrequencies(
+                ids,
+                ids.length,
+                new I64Vector(new long[] {10, 20, 30, 40}),
+                new int[] {1, 2, 2, 2});
+        Mask mask = Mask.all(ids.length);
+        mask.retainDictionaryComparison(dictionary, new boolean[] {false, true, false, true});
+
+        ArrayList<Integer> visited = new ArrayList<>();
+        assertThat(dictionary.visitSelectedDomain(mask, value -> visited.add(value))).isTrue();
+        assertThat(visited).containsExactly(1, 3);
+    }
+
+    @Test
+    void visitsArbitraryCardinalityDomainFromExactFrequencies()
+    {
+        long[] values = new long[70];
+        int[] frequencies = new int[70];
+        frequencies[1] = 2;
+        frequencies[69] = 1;
+        DictionaryVector dictionary = DictionaryVector.wrapWithDomainFrequencies(
+                new int[] {1, 69, 1},
+                3,
+                new I64Vector(values),
+                frequencies);
+
+        ArrayList<Integer> visited = new ArrayList<>();
+        assertThat(dictionary.visitSelectedDomain(Mask.all(3), value -> visited.add(value))).isTrue();
+        assertThat(visited).containsExactly(1, 69);
+    }
+
+    @Test
+    void declinesDomainVisitWithoutExactMetadata()
+    {
+        DictionaryVector dictionary = DictionaryVector.wrap(
+                new int[] {1, 2, 1},
+                3,
+                new I64Vector(new long[] {10, 20, 30}));
+
+        ArrayList<Integer> visited = new ArrayList<>();
+        assertThat(dictionary.visitSelectedDomain(Mask.all(3), value -> visited.add(value))).isFalse();
+        assertThat(visited).isEmpty();
     }
 
     @Test

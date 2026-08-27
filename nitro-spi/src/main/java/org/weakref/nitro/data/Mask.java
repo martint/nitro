@@ -1302,6 +1302,13 @@ public class Mask
         return Arrays.copyOf(positions, selection.domainSize());
     }
 
+    int dictionaryDomainFrequency(DictionaryDomainSelection selection, int dictionaryId)
+    {
+        checkArgument(selection != null && selection == dictionaryDomainSelection, "Dictionary selection is not current");
+        checkArgument(dictionaryId >= 0 && dictionaryId < selection.domainSize(), "Dictionary id is out of bounds");
+        return positions[dictionaryId];
+    }
+
     private boolean dictionarySparseWrites(int dictionarySize, long keepBits, boolean wanted)
     {
         long domainBits = dictionarySize == Long.SIZE ? -1L : (1L << dictionarySize) - 1;

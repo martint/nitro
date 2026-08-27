@@ -15,8 +15,10 @@ package org.weakref.nitro.data;
 
 import java.util.Arrays;
 import java.util.function.Consumer;
+import java.util.function.IntPredicate;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import static java.util.Objects.requireNonNull;
 
 public final class DictionaryVector
         implements Vector
@@ -223,6 +225,48 @@ public final class DictionaryVector
     {
         checkArgument(domainFrequencies != null, "Dictionary does not carry domain frequencies");
         return domainFrequencies[dictionaryId];
+    }
+
+    /**
+     * Visits each dictionary entry represented by the selected logical rows exactly once, without materializing row
+     * positions. The visitor may return {@code false} to stop early. Returns {@code false} without invoking the
+     * visitor when this vector and mask do not carry enough metadata to prove the selected physical domain; callers
+     * must then use the ordinary logical-row path.
+     * <p>
+     * This contract is cardinality-independent when the vector carries exact domain frequencies. Compact
+     * dictionary-domain masks currently cover domains of at most 64 entries, matching {@link Mask}'s encoded mask
+     * representation.
+     */
+    public boolean visitSelectedDomain(Mask mask, IntPredicate visitor)
+    {
+        requireNonNull(mask, "mask is null");
+        requireNonNull(visitor, "visitor is null");
+        checkArgument(mask.size() == length, "Mask and dictionary lengths differ");
+
+        Mask.DictionaryDomainSelection selection = mask.dictionaryDomainSelection(this);
+        if (selection != null) {
+            long selectedBits = selection.selectedDomainBits();
+            while (selectedBits != 0) {
+                int dictionaryId = Long.numberOfTrailingZeros(selectedBits);
+                selectedBits &= selectedBits - 1;
+                if (mask.dictionaryDomainFrequency(selection, dictionaryId) > 0 && !visitor.test(dictionaryId)) {
+                    break;
+                }
+            }
+            return true;
+        }
+        if (mask.none()) {
+            return true;
+        }
+        if (!mask.all() || domainFrequencies == null) {
+            return false;
+        }
+        for (int dictionaryId = 0; dictionaryId < domainFrequencies.length; dictionaryId++) {
+            if (domainFrequencies[dictionaryId] > 0 && !visitor.test(dictionaryId)) {
+                break;
+            }
+        }
+        return true;
     }
 
     @Override
