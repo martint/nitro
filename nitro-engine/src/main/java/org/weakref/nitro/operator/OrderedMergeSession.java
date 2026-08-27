@@ -91,7 +91,8 @@ public final class OrderedMergeSession
         for (int index = 0; index < orderings.length; index++) {
             Ordering ordering = requireNonNull(orderings[index], "ordering is null");
             checkIndex(ordering.column(), schema.size());
-            comparisonKernels[index] = structuralTypes.comparison(schema.field(ordering.column()).type());
+            comparisonKernels[index] = structuralTypes.comparison(
+                    schema.field(ordering.column()).type(), ordering.nullsFirst());
         }
     }
 

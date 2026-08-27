@@ -48,6 +48,9 @@ public final class StructuralTypeKernelFactory
         boolean hasValueRead = operators.valueRead().isPresent();
         boolean hasIdentical = operators.identical().isPresent();
         if (!hasValueRead && !hasIdentical) {
+            if (isRecursiveStructuralShape(type)) {
+                return key(type);
+            }
             return LegacyStructuralIdentityKernel.INSTANCE;
         }
         if (!hasValueRead || !hasIdentical) {
@@ -58,6 +61,13 @@ public final class StructuralTypeKernelFactory
                 type,
                 operators.valueRead().orElseThrow(),
                 operators.identical().orElseThrow());
+    }
+
+    private static boolean isRecursiveStructuralShape(TypeBinding type)
+    {
+        return type.supportedVectorTypes().contains(StructVector.class) ||
+                type.supportedVectorTypes().contains(ArrayVector.class) ||
+                type.supportedVectorTypes().contains(MapVector.class);
     }
 
     StructuralKeyKernel key(TypeBinding type)
@@ -504,6 +514,11 @@ public final class StructuralTypeKernelFactory
 
     StructuralComparisonKernel comparison(TypeBinding type)
     {
+        return comparison(type, false);
+    }
+
+    StructuralComparisonKernel comparison(TypeBinding type, boolean nestedNullsFirst)
+    {
         requireNonNull(type, "type is null");
         TypeOperators operators = requireNonNull(type.operators(), "type operators are null");
         boolean hasVectorComparison = operators.vectorComparison().isPresent();
@@ -522,6 +537,22 @@ public final class StructuralTypeKernelFactory
         boolean hasComparison = operators.comparison().isPresent();
         boolean hasIdentical = operators.identical().isPresent();
         if (!hasValueRead && !hasComparison && !hasIdentical) {
+            if (type.supportedVectorTypes().contains(StructVector.class)) {
+                return new StructStructuralComparisonKernel(
+                        type.nestedValueTypes().stream()
+                                .map(child -> comparison(child, nestedNullsFirst))
+                                .toArray(StructuralComparisonKernel[]::new),
+                        nestedNullsFirst);
+            }
+            if (type.supportedVectorTypes().contains(ArrayVector.class)) {
+                TypeBinding[] children = type.nestedValueTypes().toArray(TypeBinding[]::new);
+                if (children.length != 1) {
+                    throw new IllegalArgumentException("Type %s has %s child bindings; expected 1"
+                            .formatted(type.identity(), children.length));
+                }
+                return new ArrayStructuralComparisonKernel(
+                        comparison(children[0], nestedNullsFirst), nestedNullsFirst);
+            }
             return LegacyStructuralComparisonKernel.INSTANCE;
         }
         if (!hasValueRead || !hasComparison || !hasIdentical) {
@@ -533,6 +564,193 @@ public final class StructuralTypeKernelFactory
                 operators.valueRead().orElseThrow(),
                 operators.comparison().orElseThrow(),
                 operators.identical().orElseThrow());
+    }
+
+    private static final class StructStructuralComparisonKernel
+            implements StructuralComparisonKernel
+    {
+        private final StructuralComparisonKernel[] fields;
+        private final boolean nullsFirst;
+
+        private StructStructuralComparisonKernel(StructuralComparisonKernel[] fields, boolean nullsFirst)
+        {
+            this.fields = fields.clone();
+            this.nullsFirst = nullsFirst;
+        }
+
+        @Override
+        public int compare(
+                Vector leftValues,
+                Vector leftNulls,
+                int leftPosition,
+                Vector rightValues,
+                Vector rightNulls,
+                int rightPosition)
+        {
+            StructStructuralKeyKernel.StructPosition left = StructStructuralKeyKernel.structPosition(leftValues, leftPosition);
+            StructStructuralKeyKernel.StructPosition right = StructStructuralKeyKernel.structPosition(rightValues, rightPosition);
+            StructStructuralKeyKernel.requireFieldCount(left.values(), fields.length);
+            StructStructuralKeyKernel.requireFieldCount(right.values(), fields.length);
+            for (int field = 0; field < fields.length; field++) {
+                Streams leftField = left.values().field(field);
+                Streams rightField = right.values().field(field);
+                Vector leftFieldNulls = leftField.getOrNull(Stream.NULLS);
+                Vector rightFieldNulls = rightField.getOrNull(Stream.NULLS);
+                boolean leftNull = OperatorVectorSupport.isNull(leftFieldNulls, left.position());
+                boolean rightNull = OperatorVectorSupport.isNull(rightFieldNulls, right.position());
+                if (leftNull || rightNull) {
+                    int comparison = compareNulls(leftNull, rightNull, nullsFirst);
+                    if (comparison != 0) {
+                        return comparison;
+                    }
+                    continue;
+                }
+                int comparison = fields[field].compare(
+                        leftField.values(), leftFieldNulls, left.position(),
+                        rightField.values(), rightFieldNulls, right.position());
+                if (comparison != 0) {
+                    return comparison;
+                }
+            }
+            return 0;
+        }
+
+        @Override
+        public boolean identical(
+                Vector leftValues,
+                Vector leftNulls,
+                int leftPosition,
+                Vector rightValues,
+                Vector rightNulls,
+                int rightPosition)
+        {
+            StructStructuralKeyKernel.StructPosition left = StructStructuralKeyKernel.structPosition(leftValues, leftPosition);
+            StructStructuralKeyKernel.StructPosition right = StructStructuralKeyKernel.structPosition(rightValues, rightPosition);
+            StructStructuralKeyKernel.requireFieldCount(left.values(), fields.length);
+            StructStructuralKeyKernel.requireFieldCount(right.values(), fields.length);
+            for (int field = 0; field < fields.length; field++) {
+                Streams leftField = left.values().field(field);
+                Streams rightField = right.values().field(field);
+                Vector leftFieldNulls = leftField.getOrNull(Stream.NULLS);
+                Vector rightFieldNulls = rightField.getOrNull(Stream.NULLS);
+                boolean leftNull = OperatorVectorSupport.isNull(leftFieldNulls, left.position());
+                boolean rightNull = OperatorVectorSupport.isNull(rightFieldNulls, right.position());
+                if (leftNull || rightNull) {
+                    if (leftNull != rightNull) {
+                        return false;
+                    }
+                    continue;
+                }
+                if (!fields[field].identical(
+                        leftField.values(), leftFieldNulls, left.position(),
+                        rightField.values(), rightFieldNulls, right.position())) {
+                    return false;
+                }
+            }
+            return true;
+        }
+    }
+
+    private static final class ArrayStructuralComparisonKernel
+            implements StructuralComparisonKernel
+    {
+        private final StructuralComparisonKernel elements;
+        private final boolean nullsFirst;
+
+        private ArrayStructuralComparisonKernel(StructuralComparisonKernel elements, boolean nullsFirst)
+        {
+            this.elements = requireNonNull(elements, "elements is null");
+            this.nullsFirst = nullsFirst;
+        }
+
+        @Override
+        public int compare(
+                Vector leftValues,
+                Vector leftNulls,
+                int leftPosition,
+                Vector rightValues,
+                Vector rightNulls,
+                int rightPosition)
+        {
+            ArrayStructuralKeyKernel.ArrayPosition left = ArrayStructuralKeyKernel.arrayPosition(leftValues, leftPosition);
+            ArrayStructuralKeyKernel.ArrayPosition right = ArrayStructuralKeyKernel.arrayPosition(rightValues, rightPosition);
+            Streams leftElements = left.values().elements();
+            Streams rightElements = right.values().elements();
+            Vector leftElementNulls = leftElements.getOrNull(Stream.NULLS);
+            Vector rightElementNulls = rightElements.getOrNull(Stream.NULLS);
+            int leftOffset = left.values().startOffset(left.position());
+            int rightOffset = right.values().startOffset(right.position());
+            int length = Math.min(left.values().length(left.position()), right.values().length(right.position()));
+            for (int index = 0; index < length; index++) {
+                int leftElement = leftOffset + index;
+                int rightElement = rightOffset + index;
+                boolean leftNull = OperatorVectorSupport.isNull(leftElementNulls, leftElement);
+                boolean rightNull = OperatorVectorSupport.isNull(rightElementNulls, rightElement);
+                if (leftNull || rightNull) {
+                    int comparison = compareNulls(leftNull, rightNull, nullsFirst);
+                    if (comparison != 0) {
+                        return comparison;
+                    }
+                    continue;
+                }
+                int comparison = elements.compare(
+                        leftElements.values(), leftElementNulls, leftElement,
+                        rightElements.values(), rightElementNulls, rightElement);
+                if (comparison != 0) {
+                    return comparison;
+                }
+            }
+            return Integer.compare(left.values().length(left.position()), right.values().length(right.position()));
+        }
+
+        @Override
+        public boolean identical(
+                Vector leftValues,
+                Vector leftNulls,
+                int leftPosition,
+                Vector rightValues,
+                Vector rightNulls,
+                int rightPosition)
+        {
+            ArrayStructuralKeyKernel.ArrayPosition left = ArrayStructuralKeyKernel.arrayPosition(leftValues, leftPosition);
+            ArrayStructuralKeyKernel.ArrayPosition right = ArrayStructuralKeyKernel.arrayPosition(rightValues, rightPosition);
+            int length = left.values().length(left.position());
+            if (length != right.values().length(right.position())) {
+                return false;
+            }
+            Streams leftElements = left.values().elements();
+            Streams rightElements = right.values().elements();
+            Vector leftElementNulls = leftElements.getOrNull(Stream.NULLS);
+            Vector rightElementNulls = rightElements.getOrNull(Stream.NULLS);
+            int leftOffset = left.values().startOffset(left.position());
+            int rightOffset = right.values().startOffset(right.position());
+            for (int index = 0; index < length; index++) {
+                int leftElement = leftOffset + index;
+                int rightElement = rightOffset + index;
+                boolean leftNull = OperatorVectorSupport.isNull(leftElementNulls, leftElement);
+                boolean rightNull = OperatorVectorSupport.isNull(rightElementNulls, rightElement);
+                if (leftNull || rightNull) {
+                    if (leftNull != rightNull) {
+                        return false;
+                    }
+                    continue;
+                }
+                if (!elements.identical(
+                        leftElements.values(), leftElementNulls, leftElement,
+                        rightElements.values(), rightElementNulls, rightElement)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+    }
+
+    private static int compareNulls(boolean leftNull, boolean rightNull, boolean nullsFirst)
+    {
+        if (leftNull == rightNull) {
+            return 0;
+        }
+        return leftNull == nullsFirst ? -1 : 1;
     }
 
     private static final class BoundStructuralKeyKernel

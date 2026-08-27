@@ -269,6 +269,7 @@ public final class WindowOperator
                 source.outputSchema(),
                 this.partitionColumns,
                 this.orderingColumns,
+                this.nullsFirstByColumn,
                 requireNonNull(structuralTypes, "structuralTypes is null"));
         this.allowsLegacyOrderingShortcuts = allowsLegacyOrderingShortcuts(
                 this.comparisonKernels, this.partitionColumns, this.orderingColumns);
@@ -283,14 +284,17 @@ public final class WindowOperator
             Schema sourceSchema,
             int[] partitionColumns,
             int[] orderingColumns,
+            boolean[] nullsFirstByColumn,
             StructuralTypeKernelFactory structuralTypes)
     {
         StructuralComparisonKernel[] kernels = new StructuralComparisonKernel[sourceSchema.size()];
         for (int column : partitionColumns) {
             kernels[column] = structuralTypes.comparison(sourceSchema.field(column).type());
         }
-        for (int column : orderingColumns) {
-            kernels[column] = structuralTypes.comparison(sourceSchema.field(column).type());
+        for (int index = 0; index < orderingColumns.length; index++) {
+            int column = orderingColumns[index];
+            kernels[column] = structuralTypes.comparison(
+                    sourceSchema.field(column).type(), nullsFirstByColumn[index]);
         }
         return kernels;
     }

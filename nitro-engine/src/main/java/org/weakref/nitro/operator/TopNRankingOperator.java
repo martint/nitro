@@ -276,6 +276,7 @@ public class TopNRankingOperator
                 source.outputSchema(),
                 this.partitionColumns,
                 this.orderingColumns,
+                this.nullsFirstByColumn,
                 requireNonNull(structuralTypes, "structuralTypes is null"));
         this.partitionKernels = partitionKernels(
                 source.outputSchema(),
@@ -312,14 +313,17 @@ public class TopNRankingOperator
             Schema sourceSchema,
             int[] partitionColumns,
             int[] orderingColumns,
+            boolean[] nullsFirstByColumn,
             StructuralTypeKernelFactory structuralTypes)
     {
         StructuralComparisonKernel[] kernels = new StructuralComparisonKernel[sourceSchema.size()];
         for (int column : partitionColumns) {
             kernels[column] = structuralTypes.comparison(sourceSchema.field(column).type());
         }
-        for (int column : orderingColumns) {
-            kernels[column] = structuralTypes.comparison(sourceSchema.field(column).type());
+        for (int index = 0; index < orderingColumns.length; index++) {
+            int column = orderingColumns[index];
+            kernels[column] = structuralTypes.comparison(
+                    sourceSchema.field(column).type(), nullsFirstByColumn[index]);
         }
         return kernels;
     }

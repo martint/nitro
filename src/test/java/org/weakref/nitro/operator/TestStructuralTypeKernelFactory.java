@@ -40,7 +40,8 @@ class TestStructuralTypeKernelFactory
     {
         TypeBinding scalar = Schema.unspecified(1).field(0).type();
         TypeBinding rowType = new TestingStructType(List.of(scalar, scalar));
-        StructuralKeyKernel kernel = new StructuralTypeKernelFactory().key(rowType);
+        StructuralTypeKernelFactory factory = new StructuralTypeKernelFactory();
+        StructuralKeyKernel kernel = factory.key(rowType);
 
         StructVector rows = new StructVector(4);
         rows.setField("id", Streams.ofValuesAndNulls(
@@ -59,14 +60,23 @@ class TestStructuralTypeKernelFactory
         DictionaryVector dictionary = DictionaryVector.wrap(new int[] {2, 0}, rows);
         assertThat(kernel.identical(dictionary, null, 0, rows, null, 3)).isTrue();
         assertThat(kernel.hash(dictionary, null, 1)).isEqualTo(kernel.hash(rows, null, 0));
+
+        StructuralComparisonKernel nullsLast = factory.comparison(rowType, false);
+        StructuralComparisonKernel nullsFirst = factory.comparison(rowType, true);
+        assertThat(nullsLast.compare(rows, null, 0, rows, null, 1)).isZero();
+        assertThat(nullsLast.compare(rows, null, 2, rows, null, 0)).isPositive();
+        assertThat(nullsFirst.compare(rows, null, 2, rows, null, 0)).isNegative();
+        assertThat(nullsLast.compare(dictionary, null, 1, rows, null, 0)).isZero();
+        assertThat(factory.identity(rowType).identical(dictionary, null, 0, rows, null, 3)).isTrue();
     }
 
     @Test
     void testDerivesArrayKeySemanticsFromElementBinding()
     {
         TypeBinding scalar = Schema.unspecified(1).field(0).type();
-        StructuralKeyKernel kernel = new StructuralTypeKernelFactory().key(
-                new TestingNestedType("array", ArrayVector.class, List.of(scalar)));
+        TypeBinding arrayType = new TestingNestedType("array", ArrayVector.class, List.of(scalar));
+        StructuralTypeKernelFactory factory = new StructuralTypeKernelFactory();
+        StructuralKeyKernel kernel = factory.key(arrayType);
 
         ArrayVector arrays = new ArrayVector(4);
         System.arraycopy(new int[] {0, 2, 4, 6, 8}, 0, arrays.offsets(), 0, 5);
@@ -83,6 +93,13 @@ class TestStructuralTypeKernelFactory
         RleVector rle = new RleVector(new int[] {3}, DictionaryVector.wrap(new int[] {2}, arrays));
         assertThat(kernel.identical(rle, null, 0, arrays, null, 2)).isTrue();
         assertThat(kernel.hash(rle, null, 2)).isEqualTo(kernel.hash(arrays, null, 2));
+
+        StructuralComparisonKernel nullsLast = factory.comparison(arrayType, false);
+        StructuralComparisonKernel nullsFirst = factory.comparison(arrayType, true);
+        assertThat(nullsLast.compare(arrays, null, 0, arrays, null, 1)).isZero();
+        assertThat(nullsLast.compare(arrays, null, 2, arrays, null, 0)).isPositive();
+        assertThat(nullsFirst.compare(arrays, null, 2, arrays, null, 0)).isNegative();
+        assertThat(factory.identity(arrayType).identical(rle, null, 1, arrays, null, 2)).isTrue();
     }
 
     @Test

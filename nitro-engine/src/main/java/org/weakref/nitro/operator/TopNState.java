@@ -97,9 +97,12 @@ final class TopNState
             orderingColumnFlags[orderingColumn] = true;
         }
         this.comparisonKernels = new StructuralComparisonKernel[outputCount];
-        for (int orderingColumn : orderingColumns) {
+        for (int orderingIndex = 0; orderingIndex < orderingColumns.length; orderingIndex++) {
+            int orderingColumn = orderingColumns[orderingIndex];
             comparisonKernels[orderingColumn] =
-                    structuralTypes.comparison(sourceSchema.field(orderingColumn).type());
+                    structuralTypes.comparison(
+                            sourceSchema.field(orderingColumn).type(),
+                            nullsFirstByColumn[orderingIndex]);
         }
         this.slotColumns = new Streams[outputCount][capacity];
         this.comparisonColumns = new Streams[outputCount];
