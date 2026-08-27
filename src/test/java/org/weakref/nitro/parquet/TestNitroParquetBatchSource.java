@@ -94,12 +94,19 @@ class TestNitroParquetBatchSource
     void testFlatSchemaKeepsPhysicalLeafOrdinals()
     {
         ParquetFile.SchemaColumns schema = ParquetFile.parseFlatSchema(List.of(
-                new SchemaElement("root").setNum_children(2),
+                new SchemaElement("root").setNum_children(3),
                 new SchemaElement("first").setType(Type.INT64).setRepetition_type(org.apache.parquet.format.FieldRepetitionType.REQUIRED),
-                new SchemaElement("second").setType(Type.BYTE_ARRAY).setRepetition_type(org.apache.parquet.format.FieldRepetitionType.OPTIONAL)));
+                new SchemaElement("second").setType(Type.BYTE_ARRAY).setRepetition_type(org.apache.parquet.format.FieldRepetitionType.OPTIONAL),
+                new SchemaElement("third")
+                        .setType(Type.BYTE_ARRAY)
+                        .setLogicalType(LogicalType.STRING(new StringType()))
+                        .setRepetition_type(org.apache.parquet.format.FieldRepetitionType.REQUIRED)));
 
         assertEquals(0, schema.columns().get(0).leafIndex());
         assertEquals(1, schema.columns().get(1).leafIndex());
+        assertFalse(schema.columns().get(1).string());
+        assertEquals(2, schema.columns().get(2).leafIndex());
+        assertTrue(schema.columns().get(2).string());
         assertEquals(1, schema.columnIndexByName().get("second"));
     }
 

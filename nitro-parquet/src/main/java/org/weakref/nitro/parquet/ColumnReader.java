@@ -324,6 +324,7 @@ public final class ColumnReader
     private final Kind kind;
     private final boolean optional;
     private final Type physicalType;
+    private final boolean utf8;
     private final DecompressedPageCache decompressedPages;
     private final boolean flbaDecimal;
     private final int typeLength;
@@ -517,6 +518,28 @@ public final class ColumnReader
                 optional,
                 typeLength,
                 decimal,
+                false,
+                decompressedPages,
+                arrayPool,
+                readerPolicy);
+    }
+
+    public ColumnReader(
+            Type physicalType,
+            boolean optional,
+            int typeLength,
+            boolean decimal,
+            boolean utf8,
+            DecompressedPageCache decompressedPages,
+            PrimitiveArrayPool arrayPool,
+            ParquetReaderPolicy readerPolicy)
+    {
+        this(
+                physicalType,
+                optional,
+                typeLength,
+                decimal,
+                utf8,
                 decompressedPages,
                 arrayPool,
                 readerPolicy,
@@ -538,6 +561,33 @@ public final class ColumnReader
                 optional,
                 typeLength,
                 decimal,
+                false,
+                decompressedPages,
+                arrayPool,
+                readerPolicy,
+                arenaPolicy,
+                arenaPolicy.createArena(),
+                true,
+                null);
+    }
+
+    ColumnReader(
+            Type physicalType,
+            boolean optional,
+            int typeLength,
+            boolean decimal,
+            boolean utf8,
+            DecompressedPageCache decompressedPages,
+            PrimitiveArrayPool arrayPool,
+            ParquetReaderPolicy readerPolicy,
+            ParquetArenaPolicy arenaPolicy)
+    {
+        this(
+                physicalType,
+                optional,
+                typeLength,
+                decimal,
+                utf8,
                 decompressedPages,
                 arrayPool,
                 readerPolicy,
@@ -563,6 +613,7 @@ public final class ColumnReader
                 optional,
                 typeLength,
                 decimal,
+                false,
                 decompressedPages,
                 arrayPool,
                 readerPolicy,
@@ -577,6 +628,7 @@ public final class ColumnReader
             boolean optional,
             int typeLength,
             boolean decimal,
+            boolean utf8,
             DecompressedPageCache decompressedPages,
             PrimitiveArrayPool arrayPool,
             ParquetReaderPolicy readerPolicy,
@@ -587,6 +639,7 @@ public final class ColumnReader
                 optional,
                 typeLength,
                 decimal,
+                utf8,
                 decompressedPages,
                 arrayPool,
                 readerPolicy,
@@ -601,6 +654,7 @@ public final class ColumnReader
             boolean optional,
             int typeLength,
             boolean decimal,
+            boolean utf8,
             DecompressedPageCache decompressedPages,
             PrimitiveArrayPool arrayPool,
             ParquetReaderPolicy readerPolicy,
@@ -628,6 +682,7 @@ public final class ColumnReader
         this.rle = new RleReader(rleReaderPolicy);
         this.defRle = new RleReader(rleReaderPolicy);
         this.physicalType = physicalType;
+        this.utf8 = utf8;
         this.optional = optional;
         this.typeLength = typeLength;
         this.flbaDecimal = physicalType == Type.FIXED_LEN_BYTE_ARRAY && decimal;
@@ -701,6 +756,7 @@ public final class ColumnReader
                     optional,
                     typeLength,
                     flbaDecimal,
+                    utf8,
                     decompressedPages,
                     arrayPool,
                     readerPolicy,
@@ -712,10 +768,14 @@ public final class ColumnReader
                     optional,
                     typeLength,
                     flbaDecimal,
+                    utf8,
                     decompressedPages,
                     arrayPool,
                     readerPolicy,
-                    arenaPolicy);
+                    arenaPolicy,
+                    arenaPolicy.createArena(),
+                    true,
+                    null);
         }
         else {
             sibling = new ColumnReader(
@@ -723,11 +783,14 @@ public final class ColumnReader
                     optional,
                     typeLength,
                     flbaDecimal,
+                    utf8,
                     decompressedPages,
                     arrayPool,
                     readerPolicy,
                     arenaPolicy,
-                    scratchArena);
+                    scratchArena,
+                    false,
+                    null);
         }
         sibling.chunks.addAll(chunks);
         sibling.chunks.forEach(chunk -> chunk.input.retain());
@@ -2599,7 +2662,7 @@ public final class ColumnReader
         int[] offsets = result == null ? null : result.offsets();
         byte[] data = result == null ? null : result.data();
         if (result != null) {
-            result.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+            markUtf8(result);
             offsets[0] = 0;
         }
 
@@ -2625,7 +2688,7 @@ public final class ColumnReader
                     flat = true;
                     if (result == null) {
                         result = BinaryVector.allocate(allocator, allocationContext, count, initialSelectedBinaryCapacity(count));
-                        result.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+                        markUtf8(result);
                         offsets = result.offsets();
                         data = result.data();
                         offsets[0] = 0;
@@ -2785,7 +2848,7 @@ public final class ColumnReader
             System.arraycopy(binaryOutOffsets, 0, result.offsets(), 0, count + 1);
             System.arraycopy(binaryOutData, 0, result.data(), 0, dataLength);
         }
-        result.addTraits(java.util.Set.of(org.weakref.nitro.data.Utf8Traits.UTF8_STRING));
+        markUtf8(result);
         lastReadNullsProvenAbsent = nullsProvenAbsent;
         return result;
     }
@@ -2799,6 +2862,13 @@ public final class ColumnReader
         // but leave escaped storage to its downstream owner/GC instead of lending the arrays to a later row group.
         escapedBinaryDictionaries.put(dictionary, Boolean.TRUE);
         return dictionary;
+    }
+
+    private void markUtf8(BinaryVector vector)
+    {
+        if (utf8) {
+            vector.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        }
     }
 
     private void readStreamingBinaryDictionaryIds(int[] batchIds, int outputOffset, int count, boolean[] nullsOut)
@@ -3510,7 +3580,7 @@ public final class ColumnReader
         }
         org.weakref.nitro.data.BinaryVector result = new org.weakref.nitro.data.BinaryVector(
                 batchRows, Arrays.copyOf(binaryOutOffsets, batchRows + 1), Arrays.copyOf(binaryOutData, dataLength));
-        result.addTraits(java.util.Set.of(org.weakref.nitro.data.Utf8Traits.UTF8_STRING));
+        markUtf8(result);
         return result;
     }
 
@@ -3520,7 +3590,7 @@ public final class ColumnReader
             return (BinaryVector) allocator.adopt(allocationContext, readSelectedBinary(survivors, count, batchRows, nullsOut));
         }
         BinaryVector result = BinaryVector.allocate(allocator, allocationContext, batchRows, initialSelectedBinaryCapacity(count));
-        result.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        markUtf8(result);
         int[] offsets = result.offsets();
         byte[] data = result.data();
 
@@ -3606,7 +3676,7 @@ public final class ColumnReader
         checkArgument(nullsOut == null || nullsOut.length >= count, "nullsOut does not contain count entries");
 
         BinaryVector result = BinaryVector.allocate(allocator, allocationContext, count, initialSelectedBinaryCapacity(count));
-        result.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        markUtf8(result);
         int[] offsets = result.offsets();
         byte[] data = result.data();
 
@@ -4570,7 +4640,7 @@ public final class ColumnReader
                     numValues,
                     offsets,
                     bytes).freezeContent();
-            dictionaryVector.addTraits(java.util.Set.of(org.weakref.nitro.data.Utf8Traits.UTF8_STRING));
+            markUtf8(dictionaryVector);
             dictionaryVectorCache.put(dictionaryGeneration, dictionaryVector);
             // Keep only the few most recent generations. A batch spans at most one chunk boundary (row groups are far
             // larger than a batch), so emission needs the current dictionary and a flat fallback needs at most the one

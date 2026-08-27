@@ -2680,6 +2680,8 @@ public class TestParquetOperator
                 try {
                     BinaryVector requiredDictionary = binaryValues(requiredValues);
                     BinaryVector optionalDictionary = binaryValues(optionalValues);
+                    assertThat(requiredDictionary.hasTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING)).isTrue();
+                    assertThat(optionalDictionary.hasTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING)).isFalse();
                     for (int index = 0; index < batchSize; index++) {
                         int position = consumed + index;
                         int requiredPosition = requiredValues instanceof DictionaryVector dictionary ? dictionary.ids()[index] : index;
@@ -2981,6 +2983,7 @@ public class TestParquetOperator
                 first.optional(),
                 first.typeLength(),
                 first.decimal(),
+                first.string(),
                 null,
                 arrayPool,
                 ParquetReaderPolicy.defaults());

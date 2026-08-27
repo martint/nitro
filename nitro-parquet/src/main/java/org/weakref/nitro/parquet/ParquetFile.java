@@ -67,9 +67,10 @@ public final class ParquetFile
     /**
      * A flat top-level column: its physical type, nullability, leaf index (matching the row group's
      * column-chunk order), the fixed-length-byte-array length ({@code 0} unless FLBA), and whether it carries
-     * a DECIMAL logical type (short decimals decode to an unscaled long).
+     * DECIMAL or STRING logical semantics. Physical BYTE_ARRAY alone is not sufficient to distinguish VARCHAR
+     * from VARBINARY.
      */
-    public record Column(String name, Type type, boolean optional, int leafIndex, int typeLength, boolean decimal) {}
+    public record Column(String name, Type type, boolean optional, int leafIndex, int typeLength, boolean decimal, boolean string) {}
 
     public record PrimitiveField(
             String name,
@@ -257,7 +258,8 @@ public final class ParquetFile
                     optional,
                     primitive.leafIndex(),
                     primitive.typeLength(),
-                    decimal));
+                    decimal,
+                    primitive.string()));
         }
         return new SchemaColumns(List.copyOf(columns), Map.copyOf(columnIndexByName));
     }
@@ -436,7 +438,8 @@ public final class ParquetFile
                 primitive.repetition() == FieldRepetitionType.OPTIONAL,
                 primitive.leafIndex(),
                 primitive.typeLength(),
-                primitive.decimal());
+                primitive.decimal(),
+                primitive.string());
     }
 
     /** The column chunk for {@code column} within {@code rowGroup}. */

@@ -686,6 +686,7 @@ public final class NitroParquetBatchSource
                     first.optional(),
                     first.typeLength(),
                     first.decimal(),
+                    first.string(),
                     decompressedPages,
                     arrayPool,
                     readerPolicy,

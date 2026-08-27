@@ -127,6 +127,7 @@ final class NestedNitroParquetBatchSource
                     leaf.maximumDefinitionLevel() != 0,
                     leaf.typeLength(),
                     leaf.decimal(),
+                    leaf.string(),
                     null,
                     allocator.primitiveArrays(),
                     resources.readerPolicy(),
