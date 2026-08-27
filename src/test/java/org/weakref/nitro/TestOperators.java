@@ -81,6 +81,7 @@ import org.weakref.nitro.operator.OffsetOperator;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.OperatorResources;
 import org.weakref.nitro.operator.Output;
+import org.weakref.nitro.operator.PartitionBucketWindowFunction;
 import org.weakref.nitro.operator.PartitionSumI64WindowFunction;
 import org.weakref.nitro.operator.PeerDistributionWindowFunction;
 import org.weakref.nitro.operator.ProjectOperator;
@@ -894,6 +895,41 @@ public class TestOperators
                             row(4L, 0.25, 0.6),
                             row(null, 0.75, 1.0),
                             row(null, 0.75, 1.0)));
+        }
+    }
+
+    @Test
+    void testWindowOperatorSupportsNTile()
+    {
+        try (Operator window = new WindowOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 3, List.of(
+                        row(1L, 10L, 4L),
+                        row(1L, 20L, 4L),
+                        row(1L, 30L, 4L),
+                        row(1L, 40L, 4L),
+                        row(1L, 50L, 4L),
+                        row(1L, 60L, 4L),
+                        row(2L, 10L, 20L),
+                        row(2L, 20L, (Object) null),
+                        row(2L, 30L, 20L))),
+                new int[] {0},
+                new int[] {1},
+                new boolean[] {false},
+                List.of(new PartitionBucketWindowFunction(2)),
+                Schema.unspecified(1),
+                EngineResources.from(allocator).operatorResources())) {
+            assertThat(operator(window))
+                    .matchesExactly(List.of(
+                            row(1L, 10L, 4L, 1L),
+                            row(1L, 20L, 4L, 1L),
+                            row(1L, 30L, 4L, 2L),
+                            row(1L, 40L, 4L, 2L),
+                            row(1L, 50L, 4L, 3L),
+                            row(1L, 60L, 4L, 4L),
+                            row(2L, 10L, 20L, 1L),
+                            row(2L, 20L, null, null),
+                            row(2L, 30L, 20L, 3L)));
         }
     }
 
