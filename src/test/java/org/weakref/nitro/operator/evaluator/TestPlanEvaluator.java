@@ -38,6 +38,7 @@ import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.StructVector;
+import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.execution.EngineResources;
 import org.weakref.nitro.function.scalar.AnnotatedScalarLoader;
@@ -3662,6 +3663,40 @@ public class TestPlanEvaluator
         Streams result = evaluator.evaluate(new Reference(shifted, Stream.VALUES), Mask.all(3));
         assertThat(((I64Vector) result.get(Stream.VALUES)).values()).containsExactly(3L, 6L, 2L);
         assertThat(requestedNulls).isFalse();
+    }
+
+    @Test
+    void testLengthUtf8AcceptsNestedDictionary()
+    {
+        Variable length = new Variable(0);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(
+                        length,
+                        new Call("length_utf8", List.of(new Reference(new Input(0), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(new Reference(length, Stream.VALUES)));
+        DictionaryVector inner = DictionaryVector.wrap(
+                new int[] {0, 1, 0},
+                utf8Vector("a", "nitro"));
+        DictionaryVector outer = DictionaryVector.wrapNested(
+                new int[] {0, 1, 2, 0, 2, 1},
+                6,
+                inner);
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        PlanEvaluator evaluator = planEvaluator(
+                plan,
+                primitiveRegistry(),
+                inputResolver(Map.of(new Reference(new Input(0), Stream.VALUES), outer)),
+                allocator);
+
+        Vector result = evaluator.evaluate(new Reference(length, Stream.VALUES), Mask.all(6)).values();
+        assertThat(readLongs(result)).containsExactly(1, 5, 1, 1, 1, 5);
+        assertThat(result).isInstanceOf(DictionaryVector.class);
+        DictionaryVector outerResult = (DictionaryVector) result;
+        assertThat(outerResult.ids()).isSameAs(outer.ids());
+        assertThat(outerResult.values()).isInstanceOf(DictionaryVector.class);
+        assertThat(((DictionaryVector) outerResult.values()).ids()).isSameAs(inner.ids());
+        assertThat(allocator.allocatedVectorBytesByType()).doesNotContainKey("DictionaryVector");
     }
 
     @Test

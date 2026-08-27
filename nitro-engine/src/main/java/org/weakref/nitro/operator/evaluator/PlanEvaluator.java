@@ -1117,7 +1117,7 @@ public final class PlanEvaluator
 
     private DictionaryVector wrapBorrowedDictionary(int[] ids, int length, Vector values)
     {
-        DictionaryVector dictionary = allocator.adopt(allocationContext, DictionaryVector.wrap(ids, length, values));
+        DictionaryVector dictionary = allocator.adopt(allocationContext, DictionaryVector.wrapNested(ids, length, values));
         borrowedDictionaryResults.add(dictionary);
         return dictionary;
     }

@@ -18,6 +18,7 @@ import org.weakref.nitro.core.type.Field;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.ArrayVector;
+import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I64Vector;
@@ -58,7 +59,7 @@ public class TestUnnestOperator
                 List.of(UnnestOperator.Mapping.direct(1, List.of(output))),
                 Optional.empty(),
                 false,
-                2);
+                new UnnestOperatorPolicy(2));
 
         assertThat(operator(unnest)).matchesExactly(List.of(
                 row(1L, 10L),
@@ -95,7 +96,7 @@ public class TestUnnestOperator
                         UnnestOperator.Mapping.direct(2, List.of(output, output))),
                 Optional.of(output),
                 true,
-                16);
+                new UnnestOperatorPolicy(16));
 
         assertThat(operator(unnest)).matchesExactly(List.of(
                 row(7L, 10L, 100L, 1_000L, 1L),
@@ -124,7 +125,7 @@ public class TestUnnestOperator
                 List.of(UnnestOperator.Mapping.direct(0, List.of(output))),
                 Optional.empty(),
                 false,
-                16);
+                new UnnestOperatorPolicy(16));
 
         assertThat(operator(unnest)).matchesExactly(List.of(
                 row(10L), row(11L), row(20L), row(10L), row(11L)));
@@ -161,7 +162,7 @@ public class TestUnnestOperator
                                 new UnnestOperator.OutputMapping(0, List.of(1), output)))),
                 Optional.empty(),
                 false,
-                16);
+                new UnnestOperatorPolicy(16));
 
         assertThat(operator(unnest)).matchesExactly(List.of(
                 row(10L, 100L),
@@ -190,13 +191,136 @@ public class TestUnnestOperator
                 List.of(UnnestOperator.Mapping.direct(0, List.of(Schema.unspecified(1).field(0)))),
                 Optional.empty(),
                 false,
-                16);
+                new UnnestOperatorPolicy(16));
 
         try (Batch batch = unnest.next()) {
             assertThat(batch.borrowMask().selectedCount()).isEqualTo(3);
             assertThat(batch.output(0).borrow(Stream.VALUES)).isSameAs(elements);
         }
         assertThat(unnest.hasNext()).isFalse();
+        unnest.close();
+    }
+
+    @Test
+    void testForwardsContiguousRepeatedChildrenWithOrdinality()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        I64Vector elements = new I64Vector(new long[] {10, 11, 20});
+        ArrayVector arrays = new ArrayVector(2);
+        System.arraycopy(new int[] {0, 2, 3}, 0, arrays.offsets(), 0, 3);
+        arrays.setElements(Streams.ofValues(elements));
+        Operator source = new TableOperator(
+                Schema.unspecified(1),
+                List.of(TableOperator.Page.values(2, new Vector[] {arrays}, Mask.all(2))));
+        Field output = Schema.unspecified(1).field(0);
+        Operator unnest = new UnnestOperator(
+                allocator,
+                source,
+                new int[0],
+                List.of(UnnestOperator.Mapping.direct(0, List.of(output))),
+                Optional.of(output),
+                false,
+                new UnnestOperatorPolicy(16));
+
+        try (Batch batch = unnest.next()) {
+            assertThat(batch.output(0).borrow(Stream.VALUES)).isSameAs(elements);
+            assertThat(((I64Vector) batch.output(1).borrow(Stream.VALUES)).values()).startsWith(1, 2, 1);
+        }
+        unnest.close();
+    }
+
+    @Test
+    void testMappedOutputPreservesFixedWidthNestedDictionary()
+    {
+        DictionaryVector elements = DictionaryVector.wrap(
+                new int[] {0, 1, 0},
+                new I64Vector(new long[] {10, 20}));
+        assertMappedOutput(
+                Streams.ofValues(elements),
+                new UnnestOperatorPolicy(16),
+                elements,
+                null,
+                new int[] {0, 1, 0});
+    }
+
+    @Test
+    void testMappedOutputPreservesVariableWidthNestedDictionary()
+    {
+        BinaryVector values = new BinaryVector(2, new int[] {0, 1, 2}, new byte[] {'a', 'b'});
+        DictionaryVector elements = DictionaryVector.wrap(new int[] {0, 1, 0}, values);
+        BooleanVector nullDomain = new BooleanVector(new boolean[] {false, true});
+        DictionaryVector elementNulls = DictionaryVector.wrap(new int[] {0, 1, 0}, nullDomain);
+        assertMappedOutput(
+                Streams.of(elements, elementNulls, null),
+                new UnnestOperatorPolicy(16),
+                elements,
+                elementNulls,
+                new int[] {0, 1, 0});
+    }
+
+    @Test
+    void testSiblingOutputsShareBorrowedMapping()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        I64Vector keyDomain = new I64Vector(new long[] {10, 20});
+        DictionaryVector keys = DictionaryVector.wrap(new int[] {0, 1, 0}, keyDomain);
+        BinaryVector valueDomain = new BinaryVector(2, new int[] {0, 1, 2}, new byte[] {'a', 'b'});
+        DictionaryVector values = DictionaryVector.wrap(new int[] {0, 1, 0}, valueDomain);
+        MapVector maps = new MapVector(2);
+        System.arraycopy(new int[] {0, 2, 3}, 0, maps.offsets(), 0, 3);
+        maps.setEntries(Streams.ofValues(keys), Streams.ofValues(values));
+        Operator source = new TableOperator(
+                Schema.unspecified(1),
+                List.of(TableOperator.Page.values(2, new Vector[] {maps}, Mask.all(2))));
+        Field output = Schema.unspecified(1).field(0);
+        Operator unnest = new UnnestOperator(
+                allocator,
+                source,
+                new int[0],
+                List.of(UnnestOperator.Mapping.direct(0, List.of(output, output))),
+                Optional.of(output),
+                false,
+                new UnnestOperatorPolicy(16));
+
+        try (Batch batch = unnest.next()) {
+            DictionaryVector mappedKeys = (DictionaryVector) batch.output(0).borrow(Stream.VALUES);
+            assertThat(mappedKeys).isSameAs(keys);
+            assertThat(mappedKeys.ids()).startsWith(0, 1, 0);
+            DictionaryVector mappedValues = (DictionaryVector) batch.output(1).borrow(Stream.VALUES);
+            assertThat(mappedValues).isSameAs(values);
+            assertThat(mappedValues.ids()).startsWith(0, 1, 0);
+        }
+        unnest.close();
+    }
+
+    private static void assertMappedOutput(Streams elements, UnnestOperatorPolicy policy, Vector expectedValues, Vector expectedNulls, int[] expectedIds)
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        ArrayVector arrays = new ArrayVector(2);
+        System.arraycopy(new int[] {0, 2, 3}, 0, arrays.offsets(), 0, 3);
+        arrays.setElements(elements);
+        Operator source = new TableOperator(
+                Schema.unspecified(1),
+                List.of(TableOperator.Page.values(2, new Vector[] {arrays}, Mask.all(2))));
+        Operator unnest = new UnnestOperator(
+                allocator,
+                source,
+                new int[0],
+                List.of(UnnestOperator.Mapping.direct(0, List.of(Schema.unspecified(1).field(0)))),
+                Optional.of(Schema.unspecified(1).field(0)),
+                false,
+                policy);
+
+        try (Batch batch = unnest.next()) {
+            DictionaryVector mapped = (DictionaryVector) batch.output(0).borrow(Stream.VALUES);
+            assertThat(mapped).isSameAs(expectedValues);
+            assertThat(mapped.ids()).startsWith(expectedIds);
+            if (expectedNulls != null) {
+                DictionaryVector mappedNulls = (DictionaryVector) batch.output(0).borrow(Stream.NULLS);
+                assertThat(mappedNulls).isSameAs(expectedNulls);
+                assertThat(mappedNulls.ids()).startsWith(expectedIds);
+            }
+        }
         unnest.close();
     }
 

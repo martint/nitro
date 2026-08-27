@@ -78,16 +78,46 @@ public final class LengthUtf8
             result = result.with(Stream.NULLS, outputNulls);
         }
         if (requestedStreams.contains(Stream.VALUES)) {
-            I64Vector outputValues = context.allocator().allocateOrGrow(
-                    allocationContext,
-                    output != null && output.has(Stream.VALUES) && output.values() instanceof I64Vector vector ? vector : null,
-                    I64Vector.class,
-                    requiredLength,
-                    I64Vector::new);
-            apply(values, inputNulls, mask, outputValues);
+            Vector outputValues;
+            if (mask.all() && values instanceof DictionaryVector dictionary) {
+                outputValues = encodedLengths(dictionary, context);
+            }
+            else {
+                I64Vector flatOutput = context.allocator().allocateOrGrow(
+                        allocationContext,
+                        output != null && output.has(Stream.VALUES) && output.values() instanceof I64Vector vector ? vector : null,
+                        I64Vector.class,
+                        requiredLength,
+                        I64Vector::new);
+                apply(values, inputNulls, mask, flatOutput);
+                outputValues = flatOutput;
+            }
             result = result.with(Stream.VALUES, outputValues);
         }
         return result;
+    }
+
+    private Vector encodedLengths(DictionaryVector dictionary, PrimitiveExecutionContext context)
+    {
+        Vector values = dictionary.values();
+        Vector domainLengths;
+        if (values instanceof DictionaryVector nested) {
+            domainLengths = encodedLengths(nested, context);
+        }
+        else {
+            I64Vector lengths = context.allocator().allocate(
+                    allocationContext,
+                    I64Vector.class,
+                    values.length(),
+                    I64Vector::new);
+            for (int position = 0; position < values.length(); position++) {
+                lengths.values()[position] = utf8Length(values, position);
+            }
+            domainLengths = lengths;
+        }
+        return context.allocator().adopt(
+                allocationContext,
+                DictionaryVector.wrapNested(dictionary.ids(), dictionary.length(), domainLengths));
     }
 
     private static void apply(Vector values, Vector inputNulls, Mask mask, I64Vector output)

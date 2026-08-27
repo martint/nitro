@@ -19,7 +19,6 @@ import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.ErrorVector;
-import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.RepeatedVector;
@@ -107,6 +106,8 @@ public final class UnnestOperator
     private final int[][] nestedPositions;
     private final boolean[][] padding;
     private final boolean[] mappingHasPadding;
+    private final int[] repeatedStarts;
+    private final int[] repeatedLengths;
     private final long[] ordinality;
 
     private InputState input;
@@ -122,6 +123,25 @@ public final class UnnestOperator
             boolean outer,
             int maxRowsPerBatch)
     {
+        this(
+                allocator,
+                source,
+                replicateColumns,
+                mappings,
+                ordinalityField,
+                outer,
+                new UnnestOperatorPolicy(maxRowsPerBatch));
+    }
+
+    public UnnestOperator(
+            Allocator allocator,
+            Operator source,
+            int[] replicateColumns,
+            List<Mapping> mappings,
+            Optional<Field> ordinalityField,
+            boolean outer,
+            UnnestOperatorPolicy policy)
+    {
         this.allocator = requireNonNull(allocator, "allocator is null");
         this.source = requireNonNull(source, "source is null");
         this.replicateColumns = requireNonNull(replicateColumns, "replicateColumns is null").clone();
@@ -129,8 +149,8 @@ public final class UnnestOperator
         this.ordinalityField = requireNonNull(ordinalityField, "ordinalityField is null");
         this.outer = outer;
         checkArgument(!this.mappings.isEmpty(), "mappings is empty");
-        checkArgument(maxRowsPerBatch > 0, "maxRowsPerBatch must be positive");
-        this.maxRowsPerBatch = maxRowsPerBatch;
+        policy = requireNonNull(policy, "policy is null");
+        this.maxRowsPerBatch = policy.maxRowsPerBatch();
 
         Schema sourceSchema = source.outputSchema();
         List<Field> outputFields = new ArrayList<>();
@@ -144,15 +164,17 @@ public final class UnnestOperator
         ordinalityField.ifPresent(outputFields::add);
         outputSchema = new Schema(outputFields);
 
-        replicatePositions = allocator.primitiveArrays().borrowInts(maxRowsPerBatch);
+        replicatePositions = allocator.primitiveArrays().borrowInts(this.maxRowsPerBatch);
         nestedPositions = new int[this.mappings.size()][];
         padding = new boolean[this.mappings.size()][];
         for (int mapping = 0; mapping < this.mappings.size(); mapping++) {
-            nestedPositions[mapping] = allocator.primitiveArrays().borrowInts(maxRowsPerBatch);
-            padding[mapping] = allocator.primitiveArrays().borrowBooleans(maxRowsPerBatch);
+            nestedPositions[mapping] = allocator.primitiveArrays().borrowInts(this.maxRowsPerBatch);
+            padding[mapping] = allocator.primitiveArrays().borrowBooleans(this.maxRowsPerBatch);
         }
         mappingHasPadding = allocator.primitiveArrays().borrowBooleans(this.mappings.size());
-        ordinality = allocator.primitiveArrays().borrowLongs(maxRowsPerBatch);
+        repeatedStarts = allocator.primitiveArrays().borrowInts(this.mappings.size());
+        repeatedLengths = allocator.primitiveArrays().borrowInts(this.mappings.size());
+        ordinality = allocator.primitiveArrays().borrowLongs(this.maxRowsPerBatch);
     }
 
     @Override
@@ -205,24 +227,34 @@ public final class UnnestOperator
         Output[] outputs = new Output[outputCount()];
         int output = 0;
 
-        I32Vector replicateIds = ownedIds(replicatePositions, count, owned);
         for (int replicateColumn : replicateColumns) {
-            outputs[output++] = mappedOutput(input.batch.output(replicateColumn), replicateIds, count, false, null, null, owned);
+            outputs[output] = mappedOutput(
+                    input.batch.output(replicateColumn),
+                    replicatePositions,
+                    count,
+                    isIdentityMapping(replicatePositions, count),
+                    false,
+                    null,
+                    null,
+                    owned);
+            output++;
         }
 
         for (int mapping = 0; mapping < mappings.size(); mapping++) {
-            I32Vector nestedIds = ownedIds(nestedPositions[mapping], count, owned);
             boolean hasPadding = mappingHasPadding[mapping];
+            boolean identityMapping = !hasPadding && isIdentityMapping(nestedPositions[mapping], count);
             VectorAccess.RepeatedValues repeated = input.repeated[mapping];
             for (OutputMapping outputMapping : mappings.get(mapping).outputs()) {
-                outputs[output++] = mappedOutput(
+                outputs[output] = mappedOutput(
                         project(repeated.output(outputMapping.repeatedOutput()), outputMapping.fieldPath()),
-                        nestedIds,
+                        nestedPositions[mapping],
                         count,
+                        identityMapping,
                         hasPadding,
                         padding[mapping],
                         outputMapping.field(),
                         owned);
+                output++;
             }
         }
 
@@ -319,25 +351,27 @@ public final class UnnestOperator
                 allocator.primitiveArrays().release(padding[mapping]);
             }
             allocator.primitiveArrays().release(mappingHasPadding);
+            allocator.primitiveArrays().release(repeatedStarts);
+            allocator.primitiveArrays().release(repeatedLengths);
             allocator.primitiveArrays().release(ordinality);
         }
     }
 
-    private I32Vector ownedIds(int[] values, int count, List<Vector> owned)
-    {
-        I32Vector ids = allocator.allocate(allocationContext, I32Vector.class, count, I32Vector::new);
-        System.arraycopy(values, 0, ids.values(), 0, count);
-        owned.add(ids);
-        return ids;
-    }
-
-    private Output mappedOutput(Output sourceOutput, I32Vector ids, int count, boolean hasPadding, boolean[] padding, Field field, List<Vector> owned)
+    private Output mappedOutput(
+            Output sourceOutput,
+            int[] ids,
+            int count,
+            boolean identityMapping,
+            boolean hasPadding,
+            boolean[] padding,
+            Field field,
+            List<Vector> owned)
     {
         Streams sourceStreams = Streams.of(
                 sourceOutput.borrow(Stream.VALUES),
                 sourceOutput.borrowOrNull(Stream.NULLS),
                 sourceOutput.borrowOrNull(Stream.ERRORS));
-        return mappedOutput(new Projection(sourceStreams, List.of()), ids, count, hasPadding, padding, field, owned);
+        return mappedOutput(new Projection(sourceStreams, List.of()), ids, count, identityMapping, hasPadding, padding, field, owned);
     }
 
     private static Projection project(Streams source, List<Integer> fieldPath)
@@ -356,7 +390,15 @@ public final class UnnestOperator
         return new Projection(result, inheritedNulls);
     }
 
-    private Output mappedOutput(Projection projection, I32Vector ids, int count, boolean hasPadding, boolean[] padding, Field field, List<Vector> owned)
+    private Output mappedOutput(
+            Projection projection,
+            int[] ids,
+            int count,
+            boolean identityMapping,
+            boolean hasPadding,
+            boolean[] padding,
+            Field field,
+            List<Vector> owned)
     {
         Streams source = projection.streams();
         Streams.Builder streams = Streams.builder();
@@ -381,7 +423,7 @@ public final class UnnestOperator
                         .map(VectorAccess::booleanValues)
                         .toList();
                 for (int position = 0; position < count; position++) {
-                    int sourcePosition = ids.values()[position];
+                    int sourcePosition = ids[position];
                     boolean isNull = hasPadding && padding[position] || sourceNulls.value(sourcePosition);
                     for (VectorAccess.BooleanValues inherited : inheritedNulls) {
                         isNull |= inherited.value(sourcePosition);
@@ -395,14 +437,17 @@ public final class UnnestOperator
                 ErrorVector errors = allocator.allocate(allocationContext, ErrorVector.class, count, ErrorVector::new);
                 for (int position = 0; position < count; position++) {
                     if (!padding[position]) {
-                        sourceVector.copySinglePositionInto(allocator, allocationContext, errors, ids.values()[position], position, count);
+                        sourceVector.copySinglePositionInto(allocator, allocationContext, errors, ids[position], position, count);
                     }
                 }
                 owned.add(errors);
                 mapped = errors;
             }
+            else if (identityMapping && sourceVector.length() == count) {
+                mapped = sourceVector;
+            }
             else {
-                mapped = DictionaryVector.wrap(ids.values(), count, sourceVector);
+                mapped = DictionaryVector.wrapNested(ids, count, sourceVector);
             }
             streams.put(stream, mapped);
         }
@@ -412,7 +457,7 @@ public final class UnnestOperator
                     .map(VectorAccess::booleanValues)
                     .toList();
             for (int position = 0; position < count; position++) {
-                int sourcePosition = ids.values()[position];
+                int sourcePosition = ids[position];
                 boolean isNull = hasPadding && padding[position];
                 for (VectorAccess.BooleanValues inherited : inheritedNulls) {
                     isNull |= inherited.value(sourcePosition);
@@ -423,6 +468,16 @@ public final class UnnestOperator
             streams.put(Stream.NULLS, nulls);
         }
         return borrowedOutput(streams.build());
+    }
+
+    private static boolean isIdentityMapping(int[] ids, int count)
+    {
+        for (int position = 0; position < count; position++) {
+            if (ids[position] != position) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private Output borrowedOutput(Streams streams)
@@ -454,6 +509,7 @@ public final class UnnestOperator
         private final VectorAccess.BooleanValues[] collectionNulls;
         private int selectedIndex;
         private int elementIndex;
+        private int rowLength = -1;
         private boolean closed;
 
         private InputState(Batch batch)
@@ -527,14 +583,16 @@ public final class UnnestOperator
             int output = 0;
             while (output < limit && hasOutput()) {
                 int inputPosition = mask.position(selectedIndex);
-                int rowLength = outputLength(inputPosition);
+                if (rowLength < 0) {
+                    rowLength = prepareRow(inputPosition);
+                }
                 while (output < limit && elementIndex < rowLength) {
                     replicatePositions[output] = inputPosition;
                     ordinality[output] = elementIndex + 1L;
                     for (int mapping = 0; mapping < mappings.size(); mapping++) {
-                        int length = repeatedLength(mapping, inputPosition);
+                        int length = repeatedLengths[mapping];
                         if (elementIndex < length) {
-                            nestedPositions[mapping][output] = repeated[mapping].startOffset(inputPosition) + elementIndex;
+                            nestedPositions[mapping][output] = repeatedStarts[mapping] + elementIndex;
                         }
                         else {
                             nestedPositions[mapping][output] = 0;
@@ -548,24 +606,28 @@ public final class UnnestOperator
                 if (elementIndex == rowLength) {
                     selectedIndex++;
                     elementIndex = 0;
+                    rowLength = -1;
                     skipRowsWithoutOutput();
                 }
             }
             return output;
         }
 
-        private int outputLength(int inputPosition)
+        private int prepareRow(int inputPosition)
         {
             int length = 0;
             for (int mapping = 0; mapping < mappings.size(); mapping++) {
-                length = Math.max(length, repeatedLength(mapping, inputPosition));
+                if (collectionNulls[mapping].value(inputPosition)) {
+                    repeatedStarts[mapping] = 0;
+                    repeatedLengths[mapping] = 0;
+                }
+                else {
+                    repeatedStarts[mapping] = repeated[mapping].startOffset(inputPosition);
+                    repeatedLengths[mapping] = repeated[mapping].length(inputPosition);
+                }
+                length = Math.max(length, repeatedLengths[mapping]);
             }
             return outer ? Math.max(1, length) : length;
-        }
-
-        private int repeatedLength(int mapping, int inputPosition)
-        {
-            return collectionNulls[mapping].value(inputPosition) ? 0 : repeated[mapping].length(inputPosition);
         }
 
         private void skipRowsWithoutOutput()
@@ -573,8 +635,13 @@ public final class UnnestOperator
             if (outer) {
                 return;
             }
-            while (selectedIndex < mask.selectedCount() && outputLength(mask.position(selectedIndex)) == 0) {
+            while (selectedIndex < mask.selectedCount()) {
+                rowLength = prepareRow(mask.position(selectedIndex));
+                if (rowLength != 0) {
+                    return;
+                }
                 selectedIndex++;
+                rowLength = -1;
             }
         }
 

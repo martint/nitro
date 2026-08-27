@@ -15,7 +15,7 @@ package org.weakref.nitro.operator;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
-/** Immutable, composition-owned output sizing for repeated-value expansion. */
+/** Immutable, composition-owned physical policy for repeated-value expansion. */
 public record UnnestOperatorPolicy(int maxRowsPerBatch)
 {
     public UnnestOperatorPolicy
