@@ -23,4 +23,16 @@ public interface LongStateUpdate
         extends GroupedStateUpdate
 {
     void update(int group, long value);
+
+    /**
+     * Applies the same physical contribution repeatedly. Encoded-domain consumers use this convention when many
+     * logical rows reference one physical value. The conservative default preserves arbitrary provider semantics;
+     * additive state carriers can combine the repetitions in constant time.
+     */
+    default void updateRepeated(int group, long value, int count)
+    {
+        for (int repetition = 0; repetition < count; repetition++) {
+            update(group, value);
+        }
+    }
 }

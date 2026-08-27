@@ -2745,12 +2745,26 @@ final class GroupingState
 
         int[] ids = dictionary.ids();
         int used = 0;
-        for (int position : mask) {
-            int domain = OperatorVectorSupport.isNull(nullVector, position) ? domainSize : ids[position];
-            if (counts[domain]++ == 0) {
-                used++;
-                if (domain < domainSize) {
-                    representatives[domain] = position;
+        // Exact reader-produced frequencies make an all-row, non-null encoded domain self-describing. Every
+        // grouping representation can consume the physical domain directly without revisiting logical ids.
+        boolean exactDomainFrequencies = mask.all() &&
+                VectorAccess.isAllFalseNulls(nullVector) &&
+                dictionary.hasDomainFrequencies();
+        if (exactDomainFrequencies) {
+            for (int domain = 0; domain < domainSize; domain++) {
+                int frequency = dictionary.domainFrequency(domain);
+                counts[domain] = frequency;
+                used += frequency == 0 ? 0 : 1;
+            }
+        }
+        else {
+            for (int position : mask) {
+                int domain = OperatorVectorSupport.isNull(nullVector, position) ? domainSize : ids[position];
+                if (counts[domain]++ == 0) {
+                    used++;
+                    if (domain < domainSize) {
+                        representatives[domain] = position;
+                    }
                 }
             }
         }
@@ -2773,14 +2787,15 @@ final class GroupingState
             }
         }
         else if (useFlatGrouping) {
-            Vector[] values = {dictionary};
-            Vector[] nulls = {nullVector};
+            Vector[] values = {exactDomainFrequencies ? dictionaryValues : dictionary};
+            Vector[] nulls = {exactDomainFrequencies ? null : nullVector};
             flatGroupingTable.beginBatch(values, nulls);
             try {
                 for (int domain = 0; domain < domainSize; domain++) {
                     if (counts[domain] != 0) {
                         long newGroupId = nextGroupId;
-                        long groupId = flatGroupingTable.assignGroup(values, nulls, representatives[domain], newGroupId);
+                        int position = exactDomainFrequencies ? domain : representatives[domain];
+                        long groupId = flatGroupingTable.assignGroup(values, nulls, position, newGroupId);
                         if (groupId == newGroupId) {
                             nextGroupId++;
                         }

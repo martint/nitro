@@ -363,6 +363,41 @@ public class TestUnnestOperator
         unnest.close();
     }
 
+    @Test
+    void testOuterSiblingOutputsPublishSharedExpansionMapping()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        MapVector maps = new MapVector(3);
+        System.arraycopy(new int[] {0, 0, 0, 2}, 0, maps.offsets(), 0, 4);
+        maps.setEntries(
+                Streams.ofValues(new I64Vector(new long[] {10, 20})),
+                Streams.ofValues(new I64Vector(new long[] {100, 200})));
+        Operator source = new TableOperator(
+                Schema.unspecified(1),
+                List.of(new TableOperator.Page(
+                        3,
+                        new Streams[] {Streams.ofValuesAndNulls(maps, new BooleanVector(new boolean[] {true, false, false}))},
+                        Mask.all(3))));
+        Field output = Schema.unspecified(1).field(0);
+        Operator unnest = new UnnestOperator(
+                allocator,
+                source,
+                new int[0],
+                List.of(UnnestOperator.Mapping.direct(0, List.of(output, output))),
+                Optional.empty(),
+                true,
+                new UnnestOperatorPolicy(16));
+
+        try (Batch batch = unnest.next()) {
+            DictionaryVector mappedKeys = (DictionaryVector) batch.output(0).borrow(Stream.VALUES);
+            DictionaryVector mappedValues = (DictionaryVector) batch.output(1).borrow(Stream.VALUES);
+            assertThat(mappedKeys.ids()).startsWith(0, 0, 0, 1);
+            assertThat(mappedValues.ids()).startsWith(0, 0, 0, 1);
+            assertThat(mappedKeys.hasSameRowMapping(mappedValues)).isTrue();
+        }
+        unnest.close();
+    }
+
     private static void assertMappedOutput(Streams elements, UnnestOperatorPolicy policy, Vector expectedValues, Vector expectedNulls, int[] expectedIds)
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());

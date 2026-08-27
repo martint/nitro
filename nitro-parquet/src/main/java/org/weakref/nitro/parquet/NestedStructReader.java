@@ -26,7 +26,6 @@ import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.StructVector;
 import org.weakref.nitro.data.Vector;
 
-import java.util.Arrays;
 import java.util.List;
 
 import static java.util.Objects.requireNonNull;
@@ -241,8 +240,7 @@ final class NestedStructReader
 
     private static boolean sameIds(DictionaryVector left, DictionaryVector right, int length)
     {
-        return left.hasSameRowMapping(right) ||
-                Arrays.equals(left.ids(), 0, length, right.ids(), 0, length);
+        return DictionaryDomainCoalescer.sameIds(left, right, length);
     }
 
     private static boolean compatibleSideStream(DictionaryVector mapping, Vector side, int rowCount, int domainSize)

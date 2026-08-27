@@ -55,6 +55,21 @@ public final class UnnestOperator
         }
     }
 
+    /** Publishes sibling streams over one immutable logical-row mapping. */
+    private static final class SharedMapping
+    {
+        private DictionaryVector anchor;
+
+        private DictionaryVector wrap(int[] ids, int count, Vector values)
+        {
+            if (anchor == null) {
+                anchor = DictionaryVector.wrapNested(ids, count, values);
+                return anchor;
+            }
+            return anchor.sharedMappingWithValues(values);
+        }
+    }
+
     public record OutputMapping(int repeatedOutput, List<Integer> fieldPath, Field field)
     {
         public OutputMapping
@@ -231,6 +246,7 @@ public final class UnnestOperator
         Output[] outputs = new Output[outputCount()];
         int output = 0;
 
+        SharedMapping replicateMapping = new SharedMapping();
         for (int replicateColumn : replicateColumns) {
             outputs[output] = mappedOutput(
                     input.batch.output(replicateColumn),
@@ -240,11 +256,13 @@ public final class UnnestOperator
                     false,
                     null,
                     null,
+                    replicateMapping,
                     owned);
             output++;
         }
 
         for (int mapping = 0; mapping < mappings.size(); mapping++) {
+            SharedMapping sharedMapping = new SharedMapping();
             boolean hasPadding = mappingHasPadding[mapping];
             boolean identityMapping = !hasPadding && isIdentityMapping(nestedPositions[mapping], count);
             VectorAccess.RepeatedValues repeated = input.repeated[mapping];
@@ -257,6 +275,7 @@ public final class UnnestOperator
                         hasPadding,
                         padding[mapping],
                         outputMapping.field(),
+                        sharedMapping,
                         owned);
                 output++;
             }
@@ -279,7 +298,6 @@ public final class UnnestOperator
         if (output != outputs.length) {
             throw new IllegalStateException("UNNEST output shape changed after planning");
         }
-
         boolean last = !input.hasOutput();
         outputOpen = true;
         return new Batch(
@@ -380,13 +398,14 @@ public final class UnnestOperator
             boolean hasPadding,
             boolean[] padding,
             Field field,
+            SharedMapping sharedMapping,
             List<Vector> owned)
     {
         Streams sourceStreams = Streams.of(
                 sourceOutput.borrow(Stream.VALUES),
                 sourceOutput.borrowOrNull(Stream.NULLS),
                 sourceOutput.borrowOrNull(Stream.ERRORS));
-        return mappedOutput(new Projection(sourceStreams, List.of()), ids, count, identityMapping, hasPadding, padding, field, owned);
+        return mappedOutput(new Projection(sourceStreams, List.of()), ids, count, identityMapping, hasPadding, padding, field, sharedMapping, owned);
     }
 
     private static Projection project(Streams source, List<Integer> fieldPath)
@@ -413,6 +432,7 @@ public final class UnnestOperator
             boolean hasPadding,
             boolean[] padding,
             Field field,
+            SharedMapping sharedMapping,
             List<Vector> owned)
     {
         Streams source = projection.streams();
@@ -463,7 +483,7 @@ public final class UnnestOperator
                 mapped = sourceVector;
             }
             else {
-                mapped = DictionaryVector.wrapNested(ids, count, sourceVector);
+                mapped = sharedMapping.wrap(ids, count, sourceVector);
             }
             streams.put(stream, mapped);
             mappedNulls |= stream == Stream.NULLS;

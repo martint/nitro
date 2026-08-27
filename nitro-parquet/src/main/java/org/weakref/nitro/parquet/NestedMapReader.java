@@ -174,7 +174,7 @@ final class NestedMapReader
                 : null;
 
         if (rowCount == 0) {
-            maps.setEntries(keyValues.materialize(allocator, context), values.materialize(allocator, context));
+            setEntries(allocator, context, maps);
             return mapNulls == null ? Streams.ofValues(maps) : Streams.ofValuesAndNulls(maps, mapNulls);
         }
 
@@ -182,7 +182,7 @@ final class NestedMapReader
                 keyReader instanceof NestedLeafEventSource keySource &&
                 valueReader instanceof NestedLeafEventSource valueSource) {
             readEventWindows(keySource, valueSource, maps, mapNulls, rowCount, mask);
-            maps.setEntries(keyValues.materialize(allocator, context), values.materialize(allocator, context));
+            setEntries(allocator, context, maps);
             return mapNulls == null ? Streams.ofValues(maps) : Streams.ofValuesAndNulls(maps, mapNulls);
         }
 
@@ -230,8 +230,16 @@ final class NestedMapReader
         if (keyValues.size() != values.size()) {
             throw new IllegalArgumentException("Nested MAP key/value cardinalities differ");
         }
-        maps.setEntries(keyValues.materialize(allocator, context), values.materialize(allocator, context));
+        setEntries(allocator, context, maps);
         return mapNulls == null ? Streams.ofValues(maps) : Streams.ofValuesAndNulls(maps, mapNulls);
+    }
+
+    private void setEntries(Allocator allocator, Allocator.Context context, MapVector maps)
+    {
+        Streams[] entries = DictionaryDomainCoalescer.coalesce(
+                keyValues.materialize(allocator, context),
+                values.materialize(allocator, context));
+        maps.setEntries(entries[0], entries[1]);
     }
 
     private void readEventWindows(

@@ -500,6 +500,58 @@ class TestFusedGroupedAggregation
     }
 
     @Test
+    void binaryDictionaryDomainConsumesAlignedInputMapping()
+    {
+        int size = 16_384;
+        int[] ids = new int[size];
+        boolean[] logicalNulls = new boolean[size];
+        String[] keys = {"alpha", "beta", "gamma", "delta"};
+        long[] domainValues = {11, 22, 33, 44};
+        Map<String, long[]> expected = new HashMap<>();
+        for (int position = 0; position < size; position++) {
+            int id = (position * 3 + 1) & 3;
+            ids[position] = id;
+            logicalNulls[position] = position % 11 == 0;
+            if (!logicalNulls[position]) {
+                long[] state = expected.computeIfAbsent(keys[id], _ -> new long[2]);
+                state[0] += domainValues[id];
+                state[1]++;
+            }
+        }
+        DictionaryVector keyDictionary = DictionaryVector.wrapNested(ids, size, utf8(keys));
+        DictionaryVector valueDictionary = keyDictionary.sharedMappingWithValues(new I64Vector(domainValues));
+        TableOperator.Page page = new TableOperator.Page(
+                size,
+                new Streams[] {
+                        Streams.ofValues(keyDictionary),
+                        Streams.ofValuesAndNulls(valueDictionary, new BooleanVector(logicalNulls))},
+                Mask.all(size));
+
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        Operator operator = new GroupedAggregationOperator(
+                allocator,
+                List.of(0),
+                List.of(new Sum(1), new CountColumn(1)),
+                new TableOperator(2, List.of(page)));
+        Map<String, long[]> actual = new HashMap<>();
+        try (operator) {
+            while (operator.hasNext()) {
+                try (Batch result = operator.next()) {
+                    Vector resultKeys = result.output(0).borrow(Stream.VALUES);
+                    I64Vector sums = (I64Vector) result.output(1).borrow(Stream.VALUES);
+                    I64Vector counts = (I64Vector) result.output(2).borrow(Stream.VALUES);
+                    for (int position : result.borrowMask()) {
+                        actual.put(utf8(resultKeys, position), new long[] {
+                                sums.values()[position], counts.values()[position]});
+                    }
+                }
+            }
+        }
+        assertThat(actual).containsOnlyKeys(expected.keySet());
+        expected.forEach((key, value) -> assertThat(actual.get(key)).containsExactly(value));
+    }
+
+    @Test
     void keyOnlyDictionaryGroupingDiscardsLogicalGroupIds()
     {
         int size = 100_000;
