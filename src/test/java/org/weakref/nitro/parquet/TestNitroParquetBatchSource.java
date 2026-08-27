@@ -147,6 +147,17 @@ class TestNitroParquetBatchSource
     }
 
     @Test
+    void testWideFixedDecimalRemainsPhysicalBinary()
+    {
+        try (PrimitiveArrayPool arrays = new PrimitiveArrayPool(0, 0);
+                ColumnReader shortDecimal = new ColumnReader(Type.FIXED_LEN_BYTE_ARRAY, false, 8, true, null, arrays, ParquetReaderPolicy.defaults());
+                ColumnReader longDecimal = new ColumnReader(Type.FIXED_LEN_BYTE_ARRAY, false, 16, true, null, arrays, ParquetReaderPolicy.defaults())) {
+            assertEquals(ColumnReader.Kind.LONG, shortDecimal.kind());
+            assertEquals(ColumnReader.Kind.BINARY, longDecimal.kind());
+        }
+    }
+
+    @Test
     void testNumericChunkStatisticsRejectDisjointDomain()
     {
         ColumnMetaData metadata = new ColumnMetaData(

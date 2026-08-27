@@ -689,10 +689,10 @@ public final class ColumnReader
         this.utf8 = utf8;
         this.optional = optional;
         this.typeLength = typeLength;
-        this.flbaDecimal = physicalType == Type.FIXED_LEN_BYTE_ARRAY && decimal;
+        this.flbaDecimal = physicalType == Type.FIXED_LEN_BYTE_ARRAY && decimal && typeLength <= Long.BYTES;
         this.fixedBinaryWidth = switch (physicalType) {
             case INT96 -> 12;
-            case FIXED_LEN_BYTE_ARRAY -> decimal ? 0 : typeLength;
+            case FIXED_LEN_BYTE_ARRAY -> flbaDecimal ? 0 : typeLength;
             default -> 0;
         };
         this.decompressedPages = decompressedPages;
@@ -704,15 +704,12 @@ public final class ColumnReader
             // DOUBLE is 8 little-endian bytes, bit-identical to INT64 in PLAIN/dictionary encoding; decode it through
             // the long path (raw bits) and let the scan reinterpret to a double vector (see isDouble()).
             case DOUBLE -> Kind.LONG;
-            // Short decimal (precision <= 18) stored as fixed bytes decodes to an unscaled long.
+            // Fixed decimals wider than a long remain physical binary values for a connector-owned logical binding.
             case INT96 -> Kind.BINARY;
-            case FIXED_LEN_BYTE_ARRAY -> decimal ? Kind.LONG : Kind.BINARY;
+            case FIXED_LEN_BYTE_ARRAY -> flbaDecimal ? Kind.LONG : Kind.BINARY;
             case BYTE_ARRAY -> Kind.BINARY;
             default -> throw new IllegalArgumentException("Unsupported physical type for NitroParquet: " + physicalType);
         };
-        if (flbaDecimal && typeLength > 8) {
-            throw new IllegalArgumentException("Only short decimals (<= 8 bytes) supported, got FLBA length " + typeLength);
-        }
     }
 
     public void addChunk(MemorySegment fileSegment, ColumnMetaData metadata, long rowCount)
