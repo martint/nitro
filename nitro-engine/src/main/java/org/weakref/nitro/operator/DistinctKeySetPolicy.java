@@ -44,7 +44,10 @@ public record DistinctKeySetPolicy(
         boolean inlineSmallGroupedLong,
         boolean keyOnlyDictionaryDomain,
         int keyOnlyDictionaryDomainMinimumReduction,
-        int keyOnlySparseRetentionMinPercent)
+        int keyOnlySparseRetentionMinPercent,
+        boolean independentDictionaryTupleDomain,
+        int independentDictionaryTupleDomainMinimumReduction,
+        int independentDictionaryTupleDomainMaxEntries)
 {
     public DistinctKeySetPolicy
     {
@@ -66,6 +69,9 @@ public record DistinctKeySetPolicy(
         }
         if (keyOnlySparseRetentionMinPercent <= 0 || keyOnlySparseRetentionMinPercent > 100) {
             throw new IllegalArgumentException("keyOnlySparseRetentionMinPercent must be in [1, 100]");
+        }
+        if (independentDictionaryTupleDomainMinimumReduction <= 0 || independentDictionaryTupleDomainMaxEntries <= 0) {
+            throw new IllegalArgumentException("Independent dictionary tuple-domain admission values must be positive");
         }
     }
 
@@ -94,7 +100,10 @@ public record DistinctKeySetPolicy(
                 true,
                 true,
                 4,
-                75);
+                75,
+                true,
+                4,
+                65_536);
     }
 
     public static DistinctKeySetPolicy fromSystemProperties()
@@ -122,7 +131,10 @@ public record DistinctKeySetPolicy(
                 booleanProperty("nitro.distinct.inlineSmallGroupedLong", true),
                 booleanProperty("nitro.distinct.keyOnlyDictionaryDomain", true),
                 Integer.getInteger("nitro.distinct.keyOnlyDictionaryDomainMinimumReduction", 4),
-                Integer.getInteger("nitro.distinct.keyOnlySparseRetentionMinPercent", 75));
+                Integer.getInteger("nitro.distinct.keyOnlySparseRetentionMinPercent", 75),
+                booleanProperty("nitro.distinct.independentDictionaryTupleDomain", true),
+                Integer.getInteger("nitro.distinct.independentDictionaryTupleDomainMinimumReduction", 4),
+                Integer.getInteger("nitro.distinct.independentDictionaryTupleDomainMaxEntries", 65_536));
     }
 
     private static boolean booleanProperty(String name, boolean defaultValue)

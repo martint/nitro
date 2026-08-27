@@ -1289,6 +1289,7 @@ final class DistinctKeySet
         private long[] cachedSharedDictionaryNullGenerations;
         private final long[] sharedDictionaryGenerationScratch;
         private final long[] sharedDictionaryNullGenerationScratch;
+        private final IndependentDictionaryTupleDomain independentDictionaryTupleDomain;
         private boolean debugSharedDictionaryResolverPrinted;
         private boolean debugSharedDictionaryNullResolverPrinted;
         private boolean debugSharedDictionaryBaseCachePrinted;
@@ -1313,6 +1314,7 @@ final class DistinctKeySet
             nullAccessors = new VectorAccess.BooleanValues[arity];
             sharedDictionaryGenerationScratch = new long[arity];
             sharedDictionaryNullGenerationScratch = new long[arity];
+            independentDictionaryTupleDomain = new IndependentDictionaryTupleDomain(arity, arrayPool, policy);
         }
 
         @Override
@@ -1344,8 +1346,13 @@ final class DistinctKeySet
         @Override
         public int addBatch(Vector[] values, Vector[] nulls, Mask mask, int[] distinctPositions)
         {
-            prepareAccessors(values);
             ensurePositionCapacity(mask.selectedCount());
+            int dictionaryPositionCount = independentDictionaryTupleDomain.filter(values, nulls, mask, nonNullPositions);
+            if (dictionaryPositionCount >= 0) {
+                prepareAccessors(values);
+                return assignAndCollect(nonNullPositions, dictionaryPositionCount, values[0].length(), distinctPositions);
+            }
+            prepareAccessors(values);
             int positionCount = 0;
             if (policy.sharedDictionaryNullResolver() && prepareSharedDictionaryNullAccessors(nulls)) {
                 boolean cacheBasePositions = prepareSharedDictionaryBasePositionCache();
@@ -1700,6 +1707,7 @@ final class DistinctKeySet
         public void releaseBuffers()
         {
             table.releaseBuffers();
+            independentDictionaryTupleDomain.releaseBuffers();
             arrayPool.release(nonNullPositions);
             arrayPool.release(assignedGroups);
             arrayPool.release(processedBasePositions);
@@ -1722,7 +1730,8 @@ final class DistinctKeySet
             return table.retainedBytes() +
                     (long) nonNullPositions.length * Integer.BYTES +
                     (long) assignedGroups.length * Long.BYTES +
-                    (long) processedBasePositions.length * Long.BYTES;
+                    (long) processedBasePositions.length * Long.BYTES +
+                    independentDictionaryTupleDomain.retainedBytes();
         }
     }
 
@@ -1751,6 +1760,124 @@ final class DistinctKeySet
         }
     }
 
+    /**
+     * Tracks the Cartesian physical domain of independently dictionary-encoded key vectors. A physical tuple is
+     * passed to the authoritative logical-key index once per stable set of dictionary values; repeated logical rows
+     * that carry the same tuple of dictionary ids are skipped without decoding or hashing their values again.
+     *
+     * <p>The helper is deliberately arity-independent. It admits only bounded, null-free domains with enough row
+     * reduction to repay mixed-radix tuple-id construction. Dictionary values, rather than row mappings, define the
+     * cache generation: mappings may change freely while a tuple id continues to denote the same physical values.
+     */
+    private static final class IndependentDictionaryTupleDomain
+    {
+        private final int arity;
+        private final PrimitiveArrayPool arrayPool;
+        private final DistinctKeySetPolicy policy;
+        private final Vector[] dictionaryValues;
+        private final long[] dictionaryGenerations;
+        private final int[] cardinalities;
+        private final DictionaryVector[] dictionaries;
+        private byte[] seenTuples;
+
+        private IndependentDictionaryTupleDomain(int arity, PrimitiveArrayPool arrayPool, DistinctKeySetPolicy policy)
+        {
+            this.arity = arity;
+            this.arrayPool = arrayPool;
+            this.policy = policy;
+            dictionaryValues = new Vector[arity];
+            dictionaryGenerations = new long[arity];
+            cardinalities = new int[arity];
+            dictionaries = new DictionaryVector[arity];
+        }
+
+        /** Returns -1 when the ordinary logical-row path should be used. */
+        private int filter(Vector[] values, Vector[] nulls, Mask mask, int[] positions)
+        {
+            if (!policy.independentDictionaryTupleDomain() || values.length != arity || nulls.length != arity) {
+                return -1;
+            }
+            try {
+                return filterDictionaryTuples(values, nulls, mask, positions);
+            }
+            finally {
+                // Retain only the small physical value domains used as the cache signature, never a logical-row
+                // mapping from an upstream batch.
+                Arrays.fill(dictionaries, null);
+            }
+        }
+
+        private int filterDictionaryTuples(Vector[] values, Vector[] nulls, Mask mask, int[] positions)
+        {
+            int domainSize = 1;
+            boolean generationChanged = seenTuples == null;
+            for (int field = 0; field < arity; field++) {
+                if (!(values[field] instanceof DictionaryVector dictionary) ||
+                        !VectorAccess.isAllFalseNulls(nulls[field])) {
+                    return -1;
+                }
+                int cardinality = dictionary.values().length();
+                if (cardinality == 0 || domainSize > policy.independentDictionaryTupleDomainMaxEntries() / cardinality) {
+                    return -1;
+                }
+                domainSize *= cardinality;
+                if (domainSize > policy.independentDictionaryTupleDomainMaxEntries()) {
+                    return -1;
+                }
+                dictionaries[field] = dictionary;
+                Vector dictionaryValue = dictionary.values();
+                long generation = dictionaryValue.contentGeneration();
+                generationChanged |= dictionaryValues[field] != dictionaryValue ||
+                        dictionaryGenerations[field] != generation ||
+                        cardinalities[field] != cardinality;
+            }
+            int selectedCount = mask.selectedCount();
+            if ((long) domainSize * policy.independentDictionaryTupleDomainMinimumReduction() > selectedCount) {
+                return -1;
+            }
+
+            if (seenTuples == null || seenTuples.length < domainSize) {
+                arrayPool.release(seenTuples);
+                seenTuples = arrayPool.borrowBytes(domainSize);
+                generationChanged = true;
+            }
+            if (generationChanged) {
+                Arrays.fill(seenTuples, (byte) 0);
+                for (int field = 0; field < arity; field++) {
+                    Vector dictionaryValue = dictionaries[field].values();
+                    dictionaryValues[field] = dictionaryValue;
+                    dictionaryGenerations[field] = dictionaryValue.contentGeneration();
+                    cardinalities[field] = dictionaryValue.length();
+                }
+            }
+
+            int count = 0;
+            for (int position : mask) {
+                int tupleId = 0;
+                for (int field = 0; field < arity; field++) {
+                    tupleId = tupleId * cardinalities[field] + dictionaries[field].ids()[position];
+                }
+                if (seenTuples[tupleId] == 0) {
+                    seenTuples[tupleId] = 1;
+                    positions[count++] = position;
+                }
+            }
+            return count;
+        }
+
+        private void releaseBuffers()
+        {
+            arrayPool.release(seenTuples);
+            seenTuples = null;
+            Arrays.fill(dictionaryValues, null);
+        }
+
+        private long retainedBytes()
+        {
+            return seenTuples == null ? 0 : seenTuples.length;
+        }
+    }
+
     private static final class LongPairDistinctIndex
             implements DistinctIndex
     {
@@ -1771,6 +1898,7 @@ final class DistinctKeySet
         private int batchCount;
         private int pendingAdditional;
         private AdaptiveMultiLongDistinctIndex adaptiveDelegate;
+        private final IndependentDictionaryTupleDomain independentDictionaryTupleDomain;
 
         private LongPairDistinctIndex(
                 int expectedSize,
@@ -1785,6 +1913,7 @@ final class DistinctKeySet
             this.policy = policy;
             this.adaptiveLongGroupingPolicy = adaptiveLongGroupingPolicy;
             this.adaptiveCompactCandidate = adaptiveCompactCandidate;
+            independentDictionaryTupleDomain = new IndependentDictionaryTupleDomain(2, arrayPool, policy);
             int capacity = DistinctKeySet.capacity(expectedSize);
             allocate(capacity);
         }
@@ -1854,6 +1983,26 @@ final class DistinctKeySet
         @Override
         public int addBatch(Vector[] values, Vector[] nulls, Mask mask, int[] distinctPositions)
         {
+            if (adaptiveDelegate != null) {
+                return adaptiveDelegate.addBatch(values, nulls, mask, distinctPositions);
+            }
+            int dictionaryPositionCount = independentDictionaryTupleDomain.filter(
+                    values, nulls, mask, distinctPositions);
+            if (dictionaryPositionCount >= 0) {
+                VectorAccess.LongValues firstValues = VectorAccess.longValues(values[0]);
+                VectorAccess.LongValues secondValues = VectorAccess.longValues(values[1]);
+                int count = 0;
+                for (int index = 0; index < dictionaryPositionCount; index++) {
+                    int position = distinctPositions[index];
+                    boolean added = policy.taggedLongPairHash()
+                            ? addTaggedKey(firstValues.value(position), secondValues.value(position))
+                            : addBooleanKey(firstValues.value(position), secondValues.value(position));
+                    if (added) {
+                        distinctPositions[count++] = position;
+                    }
+                }
+                return count;
+            }
             if (migrateForNextBatch()) {
                 return adaptiveDelegate.addBatch(values, nulls, mask, distinctPositions);
             }
@@ -2199,6 +2348,7 @@ final class DistinctKeySet
                 adaptiveDelegate.releaseBuffers();
                 adaptiveDelegate = null;
             }
+            independentDictionaryTupleDomain.releaseBuffers();
             releaseTableBuffers();
         }
 
@@ -2223,7 +2373,8 @@ final class DistinctKeySet
             return (firstKeys == null ? 0 : (long) firstKeys.length * Long.BYTES) +
                     (secondKeys == null ? 0 : (long) secondKeys.length * Long.BYTES) +
                     (occupied == null ? 0 : occupied.length) +
-                    (tags == null ? 0 : tags.length);
+                    (tags == null ? 0 : tags.length) +
+                    independentDictionaryTupleDomain.retainedBytes();
         }
 
         private static int mix(long first, long second)

@@ -203,6 +203,76 @@ class TestDistinctKeySet
             long wide = 1L << 40;
             assertDistinctPositions(keys, longPair(new long[] {wide, 5, wide}, new long[] {60, 50, 60}), null, 0);
             assertDistinctPositions(keys, longPair(new long[] {1, 2, 3, 4, 5, wide}, new long[] {10, 20, 30, 40, 50, 60}), null);
+
+            int[] firstIds = new int[16];
+            int[] secondIds = new int[16];
+            for (int position = 0; position < firstIds.length; position++) {
+                firstIds[position] = (position >>> 1) & 1;
+                secondIds[position] = position & 1;
+            }
+            assertDistinctPositions(keys, new Vector[] {
+                    DictionaryVector.wrap(firstIds, new I64Vector(new long[] {1, 7})),
+                    DictionaryVector.wrap(secondIds, new I64Vector(new long[] {10, 70}))}, null, 1, 2, 3);
+        }
+        finally {
+            keys.releaseBuffers();
+        }
+    }
+
+    @Test
+    void testIndependentDictionaryPairDomainCachesPhysicalTuplesExactly()
+    {
+        int[] firstIds = new int[16];
+        int[] secondIds = new int[16];
+        for (int position = 0; position < firstIds.length; position++) {
+            firstIds[position] = (position >>> 1) & 1;
+            secondIds[position] = position & 1;
+        }
+        I64Vector secondDictionary = new I64Vector(new long[] {20, 21});
+        Vector[] initial = {
+                DictionaryVector.wrap(firstIds, new I64Vector(new long[] {10, 11})),
+                DictionaryVector.wrap(secondIds, secondDictionary)};
+        DistinctKeySet keys = DistinctKeySet.create(initial, arrayPool, codeGeneration, DistinctKeySetPolicy.defaults(), adaptiveLongGroupingPolicy, flatKeyTablePolicy);
+        try {
+            assertDistinctPositions(keys, initial, null, 0, 1, 2, 3);
+            assertDistinctPositions(keys, new Vector[] {
+                    DictionaryVector.wrap(firstIds, ((DictionaryVector) initial[0]).values()),
+                    DictionaryVector.wrap(secondIds, secondDictionary)}, null);
+
+            // A changed physical dictionary invalidates the tuple cache, while the logical key table remains
+            // authoritative and reports only tuples containing the genuinely new logical value.
+            Vector[] changed = {
+                    DictionaryVector.wrap(firstIds, new I64Vector(new long[] {10, 12})),
+                    DictionaryVector.wrap(secondIds, secondDictionary)};
+            assertDistinctPositions(keys, changed, null, 2, 3);
+        }
+        finally {
+            keys.releaseBuffers();
+        }
+    }
+
+    @Test
+    void testIndependentDictionaryTupleDomainIsArityIndependent()
+    {
+        int length = 32;
+        Vector[] values = new Vector[3];
+        for (int field = 0; field < values.length; field++) {
+            int[] ids = new int[length];
+            for (int position = 0; position < length; position++) {
+                ids[position] = (position >>> field) & 1;
+            }
+            values[field] = DictionaryVector.wrap(ids, new I64Vector(new long[] {field * 10L, field * 10L + 1}));
+        }
+        DistinctKeySet keys = DistinctKeySet.create(values, arrayPool, codeGeneration, DistinctKeySetPolicy.defaults(), adaptiveLongGroupingPolicy, flatKeyTablePolicy);
+        try {
+            Vector[] nulls = new Vector[values.length];
+            for (int field = 0; field < nulls.length; field++) {
+                nulls[field] = new BooleanVector(new boolean[length]);
+            }
+            int[] positions = new int[length];
+            int distinct = keys.addBatch(values, nulls, Mask.all(length), positions);
+            assertThat(Arrays.copyOf(positions, distinct)).containsExactly(0, 1, 2, 3, 4, 5, 6, 7);
+            assertThat(keys.addBatch(values, nulls, Mask.all(length), positions)).isZero();
         }
         finally {
             keys.releaseBuffers();
@@ -592,7 +662,10 @@ class TestDistinctKeySet
                 defaults.inlineSmallGroupedLong(),
                 defaults.keyOnlyDictionaryDomain(),
                 defaults.keyOnlyDictionaryDomainMinimumReduction(),
-                defaults.keyOnlySparseRetentionMinPercent());
+                defaults.keyOnlySparseRetentionMinPercent(),
+                defaults.independentDictionaryTupleDomain(),
+                defaults.independentDictionaryTupleDomainMinimumReduction(),
+                defaults.independentDictionaryTupleDomainMaxEntries());
     }
 
     private static DictionaryVector nestedLongDictionary(int[] outerIds, int[] innerIds, long[] values)
