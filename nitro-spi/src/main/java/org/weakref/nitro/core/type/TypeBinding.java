@@ -15,6 +15,7 @@ package org.weakref.nitro.core.type;
 
 import org.weakref.nitro.data.Vector;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
@@ -58,6 +59,18 @@ public interface TypeBinding
     default Optional<TypeVectorConstructor> vectorConstructor()
     {
         return Optional.empty();
+    }
+
+    /// Logical child bindings for a structural value.
+    ///
+    /// Array bindings expose the element, map bindings expose key then value, and row bindings
+    /// expose fields in logical order. Empty identifies a scalar or a structural binding whose
+    /// provider has not exposed recursive boundary construction. Consumers must use the admitted
+    /// vector shape to distinguish structural kinds; type identities and carrier classes are not
+    /// engine vocabulary.
+    default List<TypeBinding> nestedValueTypes()
+    {
+        return List.of();
     }
 
     /**
