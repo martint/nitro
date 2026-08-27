@@ -832,7 +832,7 @@ public class TestOperators
     {
         try (Operator window = new WindowOperator(
                 allocator,
-                new ConstantTableOperator(allocator, 1, List.of(row(4L), row(1L), row(2L), row(1L), row(4L))),
+                new ConstantTableOperator(allocator, 1, List.of(row(4L), row((Object) null), row(1L), row((Object) null), row(4L))),
                 new int[0],
                 new int[] {0},
                 new boolean[] {false},
@@ -846,17 +846,17 @@ public class TestOperators
             assertThat(operator(window))
                     .matchesExactly(List.of(
                             row(1L, 1L),
-                            row(1L, 1L),
-                            row(2L, 2L),
-                            row(4L, 3L),
-                            row(4L, 3L)));
+                            row(4L, 2L),
+                            row(4L, 2L),
+                            row(null, 3L),
+                            row(null, 3L)));
         }
     }
 
     @Test
     void testWindowOperatorSupportsPeerDistributions()
     {
-        List<Row> input = List.of(row(4L), row(1L), row(2L), row(1L), row(4L));
+        List<Row> input = List.of(row(4L), row((Object) null), row(1L), row((Object) null), row(4L));
         try (Operator window = new WindowOperator(
                 allocator,
                 new ConstantTableOperator(allocator, 1, input),
@@ -876,11 +876,11 @@ public class TestOperators
                 EngineResources.from(allocator).operatorResources())) {
             assertThat(operator(window))
                     .matchesExactly(List.of(
-                            row(1L, 0.0, 0.4),
-                            row(1L, 0.0, 0.4),
-                            row(2L, 0.5, 0.6),
-                            row(4L, 0.75, 1.0),
-                            row(4L, 0.75, 1.0)));
+                            row(1L, 0.0, 0.2),
+                            row(4L, 0.25, 0.6),
+                            row(4L, 0.25, 0.6),
+                            row(null, 0.75, 1.0),
+                            row(null, 0.75, 1.0)));
         }
     }
 

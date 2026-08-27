@@ -134,6 +134,14 @@ public final class PeerDistributionWindowFunction
             int column = orderingColumns[orderingIndex];
             Streams left = leftColumns[column];
             Streams right = rightColumns[column];
+            boolean leftNull = OperatorVectorSupport.isNull(left.getOrNull(Stream.NULLS), leftPosition);
+            boolean rightNull = OperatorVectorSupport.isNull(right.getOrNull(Stream.NULLS), rightPosition);
+            if (leftNull || rightNull) {
+                if (leftNull != rightNull) {
+                    return true;
+                }
+                continue;
+            }
             if (orderingKernels[orderingIndex].compare(
                     left.values(),
                     left.getOrNull(Stream.NULLS),

@@ -110,6 +110,14 @@ public class RankingWindowFunction
         for (int orderingIndex = 0; orderingIndex < orderingColumns.length; orderingIndex++) {
             Streams left = leftColumns[orderingColumns[orderingIndex]];
             Streams right = rightColumns[orderingColumns[orderingIndex]];
+            boolean leftNull = OperatorVectorSupport.isNull(left.getOrNull(Stream.NULLS), leftPosition);
+            boolean rightNull = OperatorVectorSupport.isNull(right.getOrNull(Stream.NULLS), rightPosition);
+            if (leftNull || rightNull) {
+                if (leftNull != rightNull) {
+                    return true;
+                }
+                continue;
+            }
             int comparison = orderingKernels == null
                     ? OperatorOrderingSemantics.compare(
                             left.values(),
