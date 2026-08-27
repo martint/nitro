@@ -17,6 +17,10 @@ import org.junit.jupiter.api.Test;
 import org.weakref.nitro.core.batch.ColumnView;
 import org.weakref.nitro.core.batch.Selection;
 import org.weakref.nitro.core.batch.SourceBatch;
+import org.weakref.nitro.core.execution.ExecutionContext;
+import org.weakref.nitro.core.execution.ExecutionDiagnostics;
+import org.weakref.nitro.core.execution.ExecutionPolicy;
+import org.weakref.nitro.core.execution.MemoryReservation;
 import org.weakref.nitro.core.source.BatchSource;
 import org.weakref.nitro.core.source.LongDomain;
 import org.weakref.nitro.core.source.LongDomainCapability;
@@ -25,8 +29,12 @@ import org.weakref.nitro.core.source.SourceCapability;
 import org.weakref.nitro.core.source.SourceColumnHandle;
 import org.weakref.nitro.core.source.SourcePoll;
 import org.weakref.nitro.core.type.Schema;
+import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.MaskSelection;
+import org.weakref.nitro.execution.DriverResult;
+import org.weakref.nitro.execution.EngineResources;
+import org.weakref.nitro.execution.OperatorExecutionDriver;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.DynamicFilter;
 import org.weakref.nitro.operator.Operator;
@@ -36,6 +44,8 @@ import org.weakref.nitro.operator.source.SourceOperatorIngress;
 
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -43,6 +53,67 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class TestOperatorBatchSource
 {
+    @Test
+    void testBlockedSourceSuspendsWithoutRepolling()
+    {
+        CompletableFuture<Void> inputReady = new CompletableFuture<>();
+        AtomicInteger polls = new AtomicInteger();
+        AtomicBoolean closed = new AtomicBoolean();
+        SourceBatch batch = emptySourceBatch();
+        BatchSource batchSource = testingSource(polls, closed, inputReady, batch);
+        TestingExecutionContext context = new TestingExecutionContext();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+
+        try (OperatorExecutionDriver driver = new OperatorExecutionDriver(
+                new BatchSourceOperator(batchSource, emptyIngress(), context),
+                allocator,
+                context)) {
+            assertThat(driver.processNext(_ -> {})).isEqualTo(DriverResult.BLOCKED);
+            assertThat(polls).hasValue(1);
+            assertThat(driver.blocked()).contains(inputReady);
+
+            assertThat(driver.processNext(_ -> {})).isEqualTo(DriverResult.BLOCKED);
+            assertThat(polls).hasValue(1);
+
+            inputReady.complete(null);
+            assertThat(driver.processNext(_ -> {})).isEqualTo(DriverResult.OUTPUT);
+            assertThat(polls).hasValue(2);
+            assertThat(context.inputBatches).hasValue(1);
+            assertThat(context.inputPositions).hasValue(0);
+            assertThat(driver.processNext(_ -> {})).isEqualTo(DriverResult.FINISHED);
+            assertThat(polls).hasValue(3);
+            assertThat(closed).isTrue();
+        }
+    }
+
+    @Test
+    void testStackPreservingAwaitContinuesTheSamePull()
+    {
+        CompletableFuture<Void> inputReady = new CompletableFuture<>();
+        AtomicInteger polls = new AtomicInteger();
+        AtomicInteger awaits = new AtomicInteger();
+        TestingExecutionContext context = new TestingExecutionContext()
+        {
+            @Override
+            public void await(CompletionStage<Void> continuation)
+            {
+                assertThat(continuation).isSameAs(inputReady);
+                inputReady.complete(null);
+                awaits.incrementAndGet();
+            }
+        };
+        BatchSource batchSource = testingSource(polls, new AtomicBoolean(), inputReady, emptySourceBatch());
+        Operator source = new BatchSourceOperator(batchSource, emptyIngress(), context);
+
+        assertThat(source.hasNext()).isTrue();
+        assertThat(awaits).hasValue(1);
+        assertThat(polls).hasValue(2);
+        try (Batch _ = source.next()) {
+            assertThat(polls).hasValue(2);
+        }
+        source.close();
+    }
+
     @Test
     void testRuntimeFilterPublishesClassloaderNeutralLongDomain()
     {
@@ -337,5 +408,137 @@ class TestOperatorBatchSource
 
         @Override
         public void close() {}
+    }
+
+    private static BatchSource testingSource(
+            AtomicInteger polls,
+            AtomicBoolean closed,
+            CompletableFuture<Void> inputReady,
+            SourceBatch batch)
+    {
+        return new BatchSource()
+        {
+            @Override
+            public Schema schema()
+            {
+                return Schema.unspecified(0);
+            }
+
+            @Override
+            public SourceColumnHandle column(int outputIndex)
+            {
+                throw new IndexOutOfBoundsException(outputIndex);
+            }
+
+            @Override
+            public Set<SourceCapability> capabilities()
+            {
+                return Set.of();
+            }
+
+            @Override
+            public SourcePoll poll()
+            {
+                return switch (polls.getAndIncrement()) {
+                    case 0 -> new SourcePoll.Blocked(inputReady);
+                    case 1 -> new SourcePoll.Ready(batch);
+                    default -> SourcePoll.Finished.FINISHED;
+                };
+            }
+
+            @Override
+            public void close()
+            {
+                closed.set(true);
+            }
+        };
+    }
+
+    private static SourceBatch emptySourceBatch()
+    {
+        return new SourceBatch()
+        {
+            @Override
+            public Schema schema()
+            {
+                return Schema.unspecified(0);
+            }
+
+            @Override
+            public Selection selection()
+            {
+                return new MaskSelection(Mask.all(0));
+            }
+
+            @Override
+            public ColumnView column(int index)
+            {
+                throw new IndexOutOfBoundsException(index);
+            }
+
+            @Override
+            public void select(Selection selection) {}
+
+            @Override
+            public void close() {}
+        };
+    }
+
+    private static SourceOperatorIngress emptyIngress()
+    {
+        return batch -> new Batch(
+                Mask.all(0),
+                _ -> {},
+                mask -> mask,
+                _ -> {},
+                batch::close,
+                new Output[0]);
+    }
+
+    private static class TestingExecutionContext
+            implements ExecutionContext
+    {
+        private final AtomicInteger inputBatches = new AtomicInteger();
+        private final AtomicInteger inputPositions = new AtomicInteger();
+
+        @Override
+        public MemoryReservation memory()
+        {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public ExecutionPolicy policy()
+        {
+            return new ExecutionPolicy() {};
+        }
+
+        @Override
+        public ExecutionDiagnostics diagnostics()
+        {
+            return (event, value) -> {
+                if (event.equals(BatchSourceOperator.INPUT_BATCHES)) {
+                    inputBatches.addAndGet(Math.toIntExact(value));
+                }
+                if (event.equals(BatchSourceOperator.INPUT_POSITIONS)) {
+                    inputPositions.addAndGet(Math.toIntExact(value));
+                }
+            };
+        }
+
+        @Override
+        public boolean isYieldRequested()
+        {
+            return false;
+        }
+
+        @Override
+        public boolean isCancelled()
+        {
+            return false;
+        }
+
+        @Override
+        public void requestMemoryRevocation() {}
     }
 }

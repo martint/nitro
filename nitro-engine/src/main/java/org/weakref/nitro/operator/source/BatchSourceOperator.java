@@ -14,6 +14,7 @@
 package org.weakref.nitro.operator.source;
 
 import org.weakref.nitro.core.batch.SourceBatch;
+import org.weakref.nitro.core.execution.ExecutionContext;
 import org.weakref.nitro.core.source.BatchSource;
 import org.weakref.nitro.core.source.SourceCapability;
 import org.weakref.nitro.core.source.SourcePoll;
@@ -34,8 +35,12 @@ import static java.util.Objects.requireNonNull;
 public final class BatchSourceOperator
         implements Operator
 {
+    public static final String INPUT_BATCHES = "nitro.source.input-batches";
+    public static final String INPUT_POSITIONS = "nitro.source.input-positions";
+
     private final BatchSource source;
     private final SourceOperatorIngress ingress;
+    private final ExecutionContext executionContext;
     private final Operator nativeSource;
     private SourceBatch staged;
     private Batch currentBatch;
@@ -43,8 +48,15 @@ public final class BatchSourceOperator
 
     public BatchSourceOperator(BatchSource source, SourceOperatorIngress ingress)
     {
+        this(source, ingress, null);
+    }
+
+    /// Creates an adapter for a source which may suspend while waiting for input.
+    public BatchSourceOperator(BatchSource source, SourceOperatorIngress ingress, ExecutionContext executionContext)
+    {
         this.source = requireNonNull(source, "source is null");
         this.ingress = requireNonNull(ingress, "ingress is null");
+        this.executionContext = executionContext;
         this.nativeSource = ingress.directOperator(source)
                 .orElse(null);
     }
@@ -73,16 +85,30 @@ public final class BatchSourceOperator
         if (finished) {
             return false;
         }
-        SourcePoll poll = source.poll();
-        switch (poll) {
-            case SourcePoll.Ready(var batch) -> {
-                staged = batch;
-                return true;
-            }
-            case SourcePoll.Blocked _ -> throw new IllegalStateException("pull adapter cannot consume a blocked source");
-            case SourcePoll.Finished _ -> {
-                finished = true;
-                return false;
+        while (true) {
+            SourcePoll poll = source.poll();
+            switch (poll) {
+                case SourcePoll.Ready(var batch) -> {
+                    staged = batch;
+                    if (executionContext != null) {
+                        executionContext.diagnostics().record(INPUT_BATCHES, 1);
+                        executionContext.diagnostics().record(INPUT_POSITIONS, batch.selection().positionCount());
+                        // Staging makes this a restart-safe scheduling point: an unwinding host can
+                        // re-enter hasNext() without polling or consuming the source again.
+                        executionContext.checkpoint();
+                    }
+                    return true;
+                }
+                case SourcePoll.Blocked(var continuation) -> {
+                    if (executionContext == null) {
+                        throw new IllegalStateException("blocked source requires an execution context");
+                    }
+                    executionContext.await(continuation);
+                }
+                case SourcePoll.Finished _ -> {
+                    finished = true;
+                    return false;
+                }
             }
         }
     }
