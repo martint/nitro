@@ -2757,7 +2757,14 @@ final class GroupingState
         reserveAdditionalGroups(used);
 
         Vector dictionaryValues = dictionary.values();
-        if (useLongGrouping) {
+        if (structuralGrouping != null) {
+            nextGroupId = structuralGrouping.assignDictionaryDomain(
+                    dictionaryValues,
+                    counts,
+                    domainGroups,
+                    nextGroupId);
+        }
+        else if (useLongGrouping) {
             VectorAccess.LongValues values = VectorAccess.longValues(dictionaryValues);
             for (int domain = 0; domain < domainSize; domain++) {
                 if (counts[domain] != 0) {
@@ -3665,6 +3672,50 @@ final class GroupingState
             Vector[] ownedNulls = copyNullableVectors(nulls, positions);
             for (int position = 0; position < newGroupCount; position++) {
                 StructuralGroupingKey key = new StructuralGroupingKey(kernels, ownedValues, ownedNulls, position);
+                groups.put(key, nextGroupId + position);
+                representatives.add(key);
+            }
+            return nextGroupId + newGroupCount;
+        }
+
+        private long assignDictionaryDomain(
+                Vector dictionaryValues,
+                int[] counts,
+                int[] domainGroups,
+                long nextGroupId)
+        {
+            int domainSize = dictionaryValues.length();
+            groups.ensureCapacity(groups.size() + domainSize);
+            Object2LongOpenHashMap<StructuralGroupingKey> newGroups = new Object2LongOpenHashMap<>();
+            newGroups.defaultReturnValue(-1);
+            int[] newGroupPositions = new int[domainSize];
+            int newGroupCount = 0;
+            Vector[] values = {dictionaryValues};
+            Vector[] nulls = {null};
+            for (int domain = 0; domain < domainSize; domain++) {
+                if (counts[domain] == 0) {
+                    continue;
+                }
+                StructuralGroupingKey probe = new StructuralGroupingKey(kernels, values, nulls, domain);
+                long groupId = groups.getLong(probe);
+                if (groupId == -1) {
+                    groupId = newGroups.getLong(probe);
+                    if (groupId == -1) {
+                        groupId = nextGroupId + newGroupCount;
+                        newGroups.put(probe, groupId);
+                        newGroupPositions[newGroupCount++] = domain;
+                    }
+                }
+                domainGroups[domain] = toIntExact(groupId);
+            }
+            if (newGroupCount == 0) {
+                return nextGroupId;
+            }
+
+            int[] positions = Arrays.copyOf(newGroupPositions, newGroupCount);
+            Vector[] ownedValues = copyVectors(values, positions);
+            for (int position = 0; position < newGroupCount; position++) {
+                StructuralGroupingKey key = new StructuralGroupingKey(kernels, ownedValues, nulls, position);
                 groups.put(key, nextGroupId + position);
                 representatives.add(key);
             }

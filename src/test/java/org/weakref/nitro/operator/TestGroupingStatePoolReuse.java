@@ -14,6 +14,9 @@
 package org.weakref.nitro.operator;
 
 import org.junit.jupiter.api.Test;
+import org.weakref.nitro.core.type.TypeBinding;
+import org.weakref.nitro.core.type.TypeIdentity;
+import org.weakref.nitro.core.type.TypeOperators;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
@@ -25,7 +28,12 @@ import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.execution.EngineResources;
 
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
+import java.util.Optional;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -37,6 +45,112 @@ public class TestGroupingStatePoolReuse
     private final GroupingStateResources groupingResources = engineResources.groupingState();
     private final AdaptiveLongGroupingPolicy adaptiveLongGroupingPolicy = engineResources.operatorResources().adaptiveLongGroupingPolicy();
     private final FlatKeyTablePolicy flatKeyTablePolicy = engineResources.operatorResources().flatKeyTablePolicy();
+
+    @Test
+    public void testStructuralDictionaryDomainUsesRegisteredSemantics()
+            throws ReflectiveOperationException
+    {
+        TypeOperators operators = new TypeOperators(
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.of(MethodHandles.lookup().findStatic(
+                        TestGroupingStatePoolReuse.class,
+                        "vectorAbsoluteIdentical",
+                        MethodType.methodType(boolean.class, Vector.class, int.class, Vector.class, int.class))),
+                Optional.of(MethodHandles.lookup().findStatic(
+                        TestGroupingStatePoolReuse.class,
+                        "vectorAbsoluteHash",
+                        MethodType.methodType(long.class, Vector.class, int.class))),
+                Optional.empty());
+        TypeBinding type = new TypeBinding()
+        {
+            @Override
+            public TypeIdentity identity()
+            {
+                return new TypeIdentity("testing:structural-dictionary-domain");
+            }
+
+            @Override
+            public Class<?> carrierType()
+            {
+                return long.class;
+            }
+
+            @Override
+            public TypeOperators operators()
+            {
+                return operators;
+            }
+
+            @Override
+            public Set<Class<? extends Vector>> supportedVectorTypes()
+            {
+                return Set.of(I64Vector.class);
+            }
+
+            @Override
+            public boolean supportsVector(Vector vector)
+            {
+                return vector instanceof I64Vector ||
+                        (vector instanceof DictionaryVector dictionary && dictionary.values() instanceof I64Vector);
+            }
+        };
+
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            allocator.beginExecution();
+            Allocator.Context context = new Allocator.Context("structuralDictionaryDomainTest");
+            GroupingState state = new GroupingState(
+                    resources.primitiveArrays(),
+                    resources.operatorCodeGeneration(),
+                    resources.groupingState(),
+                    resources.operatorResources().adaptiveLongGroupingPolicy(),
+                    resources.operatorResources().flatKeyTablePolicy(),
+                    List.of(type),
+                    allocator,
+                    context);
+            DictionaryVector dictionary = new DictionaryVector(
+                    new int[] {0, 1, 2, 3, 0, 2},
+                    new I64Vector(new long[] {1, -1, 2, -2}));
+            state.initializeSchema(new Vector[] {dictionary}, new Vector[] {null}, Mask.all(dictionary.length()));
+
+            int[] counts = new int[5];
+            int[] domainGroups = new int[5];
+            int[] representatives = new int[4];
+            assertThat(state.assignSingleDictionaryDomain(
+                    dictionary,
+                    null,
+                    Mask.all(dictionary.length()),
+                    counts,
+                    domainGroups,
+                    representatives)).isEqualTo(5);
+            assertThat(counts).containsExactly(2, 1, 2, 1, 0);
+            assertThat(domainGroups).startsWith(0, 0, 1, 1);
+            assertThat(state.groupCount()).isEqualTo(2);
+
+            state.releaseBuffers();
+            allocator.release(context);
+        }
+    }
+
+    public static boolean vectorAbsoluteIdentical(
+            Vector left,
+            int leftPosition,
+            Vector right,
+            int rightPosition)
+    {
+        return Math.abs(((I64Vector) left).values()[leftPosition]) ==
+                Math.abs(((I64Vector) right).values()[rightPosition]);
+    }
+
+    public static long vectorAbsoluteHash(Vector vector, int position)
+    {
+        return Long.hashCode(Math.abs(((I64Vector) vector).values()[position]));
+    }
 
     @Test
     public void testReleasedDirectIndexDoesNotExposeStaleGroups()
