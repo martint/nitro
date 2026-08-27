@@ -49,6 +49,7 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import static java.lang.Math.toIntExact;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class TestOperatorBatchSource
@@ -518,10 +519,10 @@ class TestOperatorBatchSource
         {
             return (event, value) -> {
                 if (event.equals(BatchSourceOperator.INPUT_BATCHES)) {
-                    inputBatches.addAndGet(Math.toIntExact(value));
+                    inputBatches.addAndGet(toIntExact(value));
                 }
                 if (event.equals(BatchSourceOperator.INPUT_POSITIONS)) {
-                    inputPositions.addAndGet(Math.toIntExact(value));
+                    inputPositions.addAndGet(toIntExact(value));
                 }
             };
         }

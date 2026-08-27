@@ -15,6 +15,8 @@ package org.weakref.nitro.operator;
 
 import org.weakref.nitro.core.type.Schema;
 
+import java.util.Optional;
+
 /**
  * Aggregation state whose input batches are scheduled by an external host.
  */
@@ -73,6 +75,15 @@ public interface BatchAggregationSession
     }
 
     Batch finish();
+
+    /// Finishes input and returns the final output when the aggregation produces one.
+    ///
+    /// Most aggregation modes always return a batch. Decorators which implement SQL grouping-set
+    /// semantics may legitimately suppress an empty physical result and return no batch.
+    default Optional<Batch> finishOutput()
+    {
+        return Optional.of(finish());
+    }
 
     @Override
     void close();
