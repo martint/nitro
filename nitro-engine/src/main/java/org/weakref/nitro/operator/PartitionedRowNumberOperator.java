@@ -15,11 +15,13 @@ package org.weakref.nitro.operator;
 
 import org.weakref.nitro.core.type.Field;
 import org.weakref.nitro.core.type.Schema;
+import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Stream;
+import org.weakref.nitro.data.Vector;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -46,9 +48,13 @@ public final class PartitionedRowNumberOperator
     private final Allocator allocator;
     private final Allocator.Context allocationContext;
     private final PrimitiveArrayPool arrayPool;
-    private final GroupOperator groupedSource;
+    private final int[] partitionColumns;
+    private final Operator source;
     private final Schema outputSchema;
     private final OptionalLong maxRowsPerPartition;
+    private final Vector[] partitionValues;
+    private final Vector[] partitionNulls;
+    private final GroupingState groupingState;
 
     private long[] counts = EMPTY_COUNTS;
     private int[] selectedPositions = EMPTY_POSITIONS;
@@ -65,11 +71,20 @@ public final class PartitionedRowNumberOperator
         this.allocator = requireNonNull(allocator, "allocator is null");
         this.allocationContext = new Allocator.Context("PartitionedRowNumberOperator");
         this.arrayPool = allocator.primitiveArrays();
-        this.groupedSource = new GroupOperator(
+        this.partitionColumns = requireNonNull(partitionColumns, "partitionColumns is null").clone();
+        this.source = requireNonNull(source, "source is null");
+        operatorResources = requireNonNull(operatorResources, "operatorResources is null");
+        this.partitionValues = new Vector[partitionColumns.length];
+        this.partitionNulls = new Vector[partitionColumns.length];
+        this.groupingState = new GroupingState(
+                arrayPool,
+                operatorResources.codeGeneration(),
+                operatorResources.grouping(),
+                operatorResources.adaptiveLongGroupingPolicy(),
+                operatorResources.flatKeyTablePolicy(),
+                partitionTypes(source.outputSchema(), partitionColumns),
                 allocator,
-                requireNonNull(partitionColumns, "partitionColumns is null"),
-                requireNonNull(source, "source is null"),
-                requireNonNull(operatorResources, "operatorResources is null"));
+                allocationContext);
         this.outputSchema = outputSchema(source.outputSchema(), requireNonNull(rowNumberField, "rowNumberField is null"));
         this.maxRowsPerPartition = requireNonNull(maxRowsPerPartition, "maxRowsPerPartition is null");
         maxRowsPerPartition.ifPresent(maxRows -> {
@@ -77,6 +92,18 @@ public final class PartitionedRowNumberOperator
                 throw new IllegalArgumentException("maxRowsPerPartition is negative");
             }
         });
+    }
+
+    private static List<TypeBinding> partitionTypes(Schema sourceSchema, int[] partitionColumns)
+    {
+        for (int column : partitionColumns) {
+            if (column < 0 || column >= sourceSchema.size()) {
+                throw new IllegalArgumentException("partition column is out of bounds: " + column);
+            }
+        }
+        return Arrays.stream(partitionColumns)
+                .mapToObj(column -> sourceSchema.field(column).type())
+                .toList();
     }
 
     private static Schema outputSchema(Schema sourceSchema, Field rowNumberField)
@@ -101,32 +128,33 @@ public final class PartitionedRowNumberOperator
     @Override
     public boolean hasNext()
     {
-        return groupedSource.hasNext();
+        return source.hasNext();
     }
 
     @Override
     public Batch next()
     {
-        Batch groupedBatch = groupedSource.next();
-        Mask sourceMask = groupedBatch.borrowMask();
-        I64Vector groupIds = (I64Vector) groupedBatch.output(0).borrow(Stream.VALUES);
+        Batch sourceBatch = source.next();
+        Mask sourceMask = sourceBatch.borrowMask();
         I64Vector rowNumbers = allocator.allocate(allocationContext, I64Vector.class, sourceMask.size(), I64Vector::new);
+        boolean moreInputExpected = !source.supportsOpenBatchHasNext() || source.hasNext();
+        assignGroups(sourceBatch, sourceMask, rowNumbers, moreInputExpected);
 
-        int selectedCount = assignRowNumbers(sourceMask, groupIds.values(), rowNumbers.values());
+        int selectedCount = assignRowNumbers(sourceMask, rowNumbers.values());
         Mask outputMask = sourceMask;
         boolean ownsOutputMask = false;
         if (selectedCount != sourceMask.selectedCount()) {
             outputMask = allocator.allocateSparseMask(allocationContext, selectedPositions, selectedCount, sourceMask.size());
             ownsOutputMask = true;
-            groupedSource.constrain(outputMask);
-            groupedBatch.constrain(outputMask);
+            source.constrain(outputMask);
+            sourceBatch.constrain(outputMask);
         }
 
-        BatchState batchState = new BatchState(groupedBatch, ownsOutputMask ? outputMask : null, rowNumbers);
+        BatchState batchState = new BatchState(sourceBatch, ownsOutputMask ? outputMask : null, rowNumbers);
         currentBatchState = batchState;
         Output[] outputs = new Output[outputCount()];
         for (int outputIndex = 0; outputIndex < outputCount() - 1; outputIndex++) {
-            Output sourceOutput = groupedBatch.output(outputIndex + 1);
+            Output sourceOutput = sourceBatch.output(outputIndex);
             outputs[outputIndex] = new Output(
                     sourceOutput.streams(),
                     sourceOutput::borrow,
@@ -157,7 +185,33 @@ public final class PartitionedRowNumberOperator
                 outputs);
     }
 
-    private int assignRowNumbers(Mask mask, long[] groupIds, long[] rowNumbers)
+    private void assignGroups(Batch sourceBatch, Mask mask, I64Vector groups, boolean moreInputExpected)
+    {
+        if (partitionColumns.length == 1) {
+            Output output = sourceBatch.output(partitionColumns[0]);
+            groupingState.assignGroups(
+                    output.borrow(Stream.VALUES),
+                    output.borrowOrNull(Stream.NULLS),
+                    mask,
+                    groups,
+                    moreInputExpected);
+            return;
+        }
+        try {
+            for (int index = 0; index < partitionColumns.length; index++) {
+                Output output = sourceBatch.output(partitionColumns[index]);
+                partitionValues[index] = output.borrow(Stream.VALUES);
+                partitionNulls[index] = output.borrowOrNull(Stream.NULLS);
+            }
+            groupingState.assignGroups(partitionValues, partitionNulls, mask, groups, moreInputExpected);
+        }
+        finally {
+            Arrays.fill(partitionValues, null);
+            Arrays.fill(partitionNulls, null);
+        }
+    }
+
+    private int assignRowNumbers(Mask mask, long[] rowNumbers)
     {
         if (selectedPositions.length < mask.selectedCount()) {
             int[] previous = selectedPositions;
@@ -168,7 +222,7 @@ public final class PartitionedRowNumberOperator
         int selectedCount = 0;
         for (int index = 0; index < mask.selectedCount(); index++) {
             int position = mask.position(index);
-            int groupId = toIntExact(groupIds[position]);
+            int groupId = toIntExact(rowNumbers[position]);
             ensureGroupCapacity(groupId + 1);
             long rowNumber = ++counts[groupId];
             rowNumbers[position] = rowNumber;
@@ -195,7 +249,7 @@ public final class PartitionedRowNumberOperator
     @Override
     public void constrain(Mask mask)
     {
-        groupedSource.constrain(mask);
+        source.constrain(mask);
         if (currentBatchState != null) {
             currentBatchState.constrain(mask);
         }
@@ -204,13 +258,13 @@ public final class PartitionedRowNumberOperator
     @Override
     public boolean supportsRetainedBatches()
     {
-        return groupedSource.supportsRetainedBatches();
+        return source.supportsRetainedBatches();
     }
 
     @Override
     public boolean supportsOpenBatchHasNext()
     {
-        return groupedSource.supportsOpenBatchHasNext();
+        return source.supportsOpenBatchHasNext();
     }
 
     @Override
@@ -219,7 +273,10 @@ public final class PartitionedRowNumberOperator
         if (currentBatchState != null) {
             currentBatchState.close();
         }
-        groupedSource.close();
+        source.close();
+        Arrays.fill(partitionValues, null);
+        Arrays.fill(partitionNulls, null);
+        groupingState.releaseBuffers();
         arrayPool.release(counts);
         arrayPool.release(selectedPositions);
         counts = EMPTY_COUNTS;
@@ -229,20 +286,20 @@ public final class PartitionedRowNumberOperator
 
     private final class BatchState
     {
-        private final Batch groupedBatch;
+        private final Batch sourceBatch;
         private final Mask ownedMask;
         private I64Vector rowNumbers;
 
-        private BatchState(Batch groupedBatch, Mask ownedMask, I64Vector rowNumbers)
+        private BatchState(Batch sourceBatch, Mask ownedMask, I64Vector rowNumbers)
         {
-            this.groupedBatch = groupedBatch;
+            this.sourceBatch = sourceBatch;
             this.ownedMask = ownedMask;
             this.rowNumbers = rowNumbers;
         }
 
         private void constrain(Mask mask)
         {
-            groupedBatch.constrain(mask);
+            sourceBatch.constrain(mask);
         }
 
         private Mask takeMask(Mask mask)
@@ -250,7 +307,7 @@ public final class PartitionedRowNumberOperator
             if (mask == ownedMask) {
                 return allocator.transfer(allocationContext, mask);
             }
-            return groupedBatch.takeMask();
+            return sourceBatch.takeMask();
         }
 
         private void releaseMask(Mask mask)
@@ -269,7 +326,7 @@ public final class PartitionedRowNumberOperator
                 allocator.release(allocationContext, rowNumbers);
                 rowNumbers = null;
             }
-            groupedBatch.close();
+            sourceBatch.close();
         }
     }
 }
