@@ -16,6 +16,10 @@ package org.weakref.nitro.operator;
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.core.type.Field;
 import org.weakref.nitro.core.type.Schema;
+import org.weakref.nitro.core.type.TypeBinding;
+import org.weakref.nitro.core.type.TypeIdentity;
+import org.weakref.nitro.core.type.TypeOperators;
+import org.weakref.nitro.core.type.TypeVectorFactory;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.ArrayVector;
 import org.weakref.nitro.data.BinaryVector;
@@ -39,6 +43,46 @@ import static org.weakref.nitro.data.Row.row;
 
 public class TestUnnestOperator
 {
+    private static final TypeBinding BIGINT = new TypeBinding()
+    {
+        @Override
+        public TypeIdentity identity()
+        {
+            return new TypeIdentity("testing:bigint");
+        }
+
+        @Override
+        public Class<?> carrierType()
+        {
+            return long.class;
+        }
+
+        @Override
+        public TypeOperators operators()
+        {
+            return TypeOperators.UNSPECIFIED;
+        }
+
+        @Override
+        public Optional<TypeVectorFactory> vectorFactory()
+        {
+            return Optional.of(new TypeVectorFactory()
+            {
+                @Override
+                public Vector constant(org.weakref.nitro.data.VectorAllocator allocator, Object value, int length)
+                {
+                    throw new UnsupportedOperationException();
+                }
+
+                @Override
+                public Vector nullValues(org.weakref.nitro.data.VectorAllocator allocator, int length)
+                {
+                    return allocator.allocate(I64Vector.class, length, I64Vector::new);
+                }
+            });
+        }
+    };
+
     @Test
     void testExpandsArrayInBoundedBatches()
     {
@@ -101,7 +145,33 @@ public class TestUnnestOperator
         assertThat(operator(unnest)).matchesExactly(List.of(
                 row(7L, 10L, 100L, 1_000L, 1L),
                 row(7L, 11L, null, null, 2L),
-                row(8L, null, null, null, 1L)));
+                row(8L, null, null, null, null)));
+    }
+
+    @Test
+    void testOuterPaddingWithEmptyNullableElementStream()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        ArrayVector arrays = new ArrayVector(2);
+        arrays.setElements(Streams.ofValuesAndNulls(new I64Vector(0), new BooleanVector(0)));
+        Operator source = new TableOperator(
+                Schema.unspecified(1),
+                List.of(new TableOperator.Page(
+                        2,
+                        new Streams[] {Streams.ofValuesAndNulls(arrays, new BooleanVector(new boolean[] {false, true}))},
+                        Mask.all(2))));
+        Field output = new Field(BIGINT, true);
+
+        Operator unnest = new UnnestOperator(
+                allocator,
+                source,
+                new int[0],
+                List.of(UnnestOperator.Mapping.direct(0, List.of(output))),
+                Optional.of(output),
+                true,
+                new UnnestOperatorPolicy(16));
+
+        assertThat(operator(unnest)).matchesExactly(List.of(row(null, null), row(null, null)));
     }
 
     @Test

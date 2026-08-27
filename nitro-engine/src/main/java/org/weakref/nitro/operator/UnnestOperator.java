@@ -109,6 +109,7 @@ public final class UnnestOperator
     private final int[] repeatedStarts;
     private final int[] repeatedLengths;
     private final long[] ordinality;
+    private final boolean[] ordinalityNulls;
 
     private InputState input;
     private boolean outputOpen;
@@ -175,6 +176,9 @@ public final class UnnestOperator
         repeatedStarts = allocator.primitiveArrays().borrowInts(this.mappings.size());
         repeatedLengths = allocator.primitiveArrays().borrowInts(this.mappings.size());
         ordinality = allocator.primitiveArrays().borrowLongs(this.maxRowsPerBatch);
+        ordinalityNulls = outer && ordinalityField.isPresent()
+                ? allocator.primitiveArrays().borrowBooleans(this.maxRowsPerBatch)
+                : null;
     }
 
     @Override
@@ -262,7 +266,15 @@ public final class UnnestOperator
             I64Vector ordinality = allocator.allocate(allocationContext, I64Vector.class, count, I64Vector::new);
             System.arraycopy(this.ordinality, 0, ordinality.values(), 0, count);
             owned.add(ordinality);
-            outputs[output++] = borrowedOutput(Streams.ofValues(ordinality));
+            if (input.hasOrdinalityNulls()) {
+                BooleanVector nulls = allocator.allocate(allocationContext, BooleanVector.class, count, BooleanVector::new);
+                System.arraycopy(ordinalityNulls, 0, nulls.values(), 0, count);
+                owned.add(nulls);
+                outputs[output++] = borrowedOutput(Streams.ofValuesAndNulls(ordinality, nulls));
+            }
+            else {
+                outputs[output++] = borrowedOutput(Streams.ofValues(ordinality));
+            }
         }
         if (output != outputs.length) {
             throw new IllegalStateException("UNNEST output shape changed after planning");
@@ -354,6 +366,9 @@ public final class UnnestOperator
             allocator.primitiveArrays().release(repeatedStarts);
             allocator.primitiveArrays().release(repeatedLengths);
             allocator.primitiveArrays().release(ordinality);
+            if (ordinalityNulls != null) {
+                allocator.primitiveArrays().release(ordinalityNulls);
+            }
         }
     }
 
@@ -402,6 +417,7 @@ public final class UnnestOperator
     {
         Streams source = projection.streams();
         Streams.Builder streams = Streams.builder();
+        boolean mappedNulls = false;
         for (Stream stream : source.streams()) {
             Vector sourceVector = source.get(stream);
             Vector mapped;
@@ -450,8 +466,9 @@ public final class UnnestOperator
                 mapped = DictionaryVector.wrapNested(ids, count, sourceVector);
             }
             streams.put(stream, mapped);
+            mappedNulls |= stream == Stream.NULLS;
         }
-        if ((hasPadding || !projection.inheritedNulls().isEmpty()) && !source.hasNulls()) {
+        if ((hasPadding || !projection.inheritedNulls().isEmpty()) && !mappedNulls) {
             BooleanVector nulls = allocator.allocate(allocationContext, BooleanVector.class, count, BooleanVector::new);
             List<VectorAccess.BooleanValues> inheritedNulls = projection.inheritedNulls().stream()
                     .map(VectorAccess::booleanValues)
@@ -459,8 +476,10 @@ public final class UnnestOperator
             for (int position = 0; position < count; position++) {
                 int sourcePosition = ids[position];
                 boolean isNull = hasPadding && padding[position];
-                for (VectorAccess.BooleanValues inherited : inheritedNulls) {
-                    isNull |= inherited.value(sourcePosition);
+                if (!isNull) {
+                    for (VectorAccess.BooleanValues inherited : inheritedNulls) {
+                        isNull |= inherited.value(sourcePosition);
+                    }
                 }
                 nulls.values()[position] = isNull;
             }
@@ -510,6 +529,8 @@ public final class UnnestOperator
         private int selectedIndex;
         private int elementIndex;
         private int rowLength = -1;
+        private boolean outerPadding;
+        private boolean hasOrdinalityNulls;
         private boolean closed;
 
         private InputState(Batch batch)
@@ -579,6 +600,7 @@ public final class UnnestOperator
                 Arrays.fill(values, 0, limit, false);
             }
             Arrays.fill(mappingHasPadding, false);
+            hasOrdinalityNulls = false;
 
             int output = 0;
             while (output < limit && hasOutput()) {
@@ -589,6 +611,10 @@ public final class UnnestOperator
                 while (output < limit && elementIndex < rowLength) {
                     replicatePositions[output] = inputPosition;
                     ordinality[output] = elementIndex + 1L;
+                    if (ordinalityNulls != null) {
+                        ordinalityNulls[output] = outerPadding;
+                        hasOrdinalityNulls |= outerPadding;
+                    }
                     for (int mapping = 0; mapping < mappings.size(); mapping++) {
                         int length = repeatedLengths[mapping];
                         if (elementIndex < length) {
@@ -613,6 +639,11 @@ public final class UnnestOperator
             return output;
         }
 
+        private boolean hasOrdinalityNulls()
+        {
+            return hasOrdinalityNulls;
+        }
+
         private int prepareRow(int inputPosition)
         {
             int length = 0;
@@ -627,6 +658,7 @@ public final class UnnestOperator
                 }
                 length = Math.max(length, repeatedLengths[mapping]);
             }
+            outerPadding = outer && length == 0;
             return outer ? Math.max(1, length) : length;
         }
 
