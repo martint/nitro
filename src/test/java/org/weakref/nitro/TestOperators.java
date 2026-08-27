@@ -807,6 +807,19 @@ public class TestOperators
     }
 
     @Test
+    void testSortOperatorOrdersBooleans()
+    {
+        assertThat(operator(new SortOperator(
+                allocator,
+                new int[] {0},
+                new boolean[] {false},
+                new boolean[] {false},
+                new ConstantTableOperator(allocator, 1, List.of(row(true), row((Object) null), row(false))),
+                EngineResources.from(allocator).operatorResources())))
+                .matchesExactly(List.of(row(0L), row(1L), row((Object) null)));
+    }
+
+    @Test
     void testWindowOperatorHonorsExplicitNullPlacement()
     {
         try (Operator window = new WindowOperator(

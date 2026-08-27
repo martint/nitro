@@ -14,6 +14,7 @@
 package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.BinaryVector;
+import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.F64Vector;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
@@ -48,6 +49,11 @@ final class OperatorOrderingSemantics
         }
         if (left instanceof BinaryVector && right instanceof BinaryVector) {
             return OperatorVectorSupport.binaryCompare(leftValues, leftPosition, rightValues, rightPosition);
+        }
+        if (left instanceof BooleanVector && right instanceof BooleanVector) {
+            return Boolean.compare(
+                    OperatorVectorSupport.booleanValue(leftValues, leftPosition),
+                    OperatorVectorSupport.booleanValue(rightValues, rightPosition));
         }
         throw new IllegalArgumentException("Unsupported ordering comparison between %s and %s".formatted(
                 left.getClass().getSimpleName(),
