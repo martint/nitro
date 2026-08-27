@@ -1329,11 +1329,12 @@ public class Allocator
      * Detaches every allocator-owned buffer reachable from the supplied roots for release by an asynchronous
      * consumer.
      *
-     * <p>Unlike {@link #leaseVectorTree(List)}, final close never re-enters a producer-local reuse pool. Detachment
+     * <p>Unlike {@link #leaseVectorTree(List)}, final close never re-enters a producer-local vector pool. Detachment
      * immediately removes the vectors from the producer context and its memory reservation. The last consumer may
-     * then close on any thread; the detached vector objects are not returned to another allocator because their
-     * position and initialization contracts belong to the producer. This is intended for host boundaries such as
-     * buffered exchanges whose consumer is not confined to the producer driver's execution thread.
+     * then close on any thread. Detached vector objects are not returned to another allocator because their position
+     * and initialization contracts belong to the producer, but storage with an explicit reset contract is returned
+     * to the shared {@link AllocationResources} primitive pool. This is intended for host boundaries such as buffered
+     * exchanges whose consumer is not confined to the producer driver's execution thread.
      */
     public synchronized AsyncVectorTreeLease detachVectorTreeForAsyncRelease(List<? extends Vector> roots)
     {
@@ -1729,9 +1730,10 @@ public class Allocator
         if (!lease.recyclable) {
             return;
         }
-        // Detached vector objects may encode position/mask ownership that is local to their producer. They are left
-        // to GC after the final asynchronous consumer; only storage with its own explicit reset contract belongs in
-        // the longer-lived primitive pool.
+        // Detached vector objects may encode position/mask ownership that is local to their producer, so never put
+        // the object back into a vector pool. Primitive storage with its own explicit reset contract is independent
+        // of that identity and can safely return to the explicitly owned, thread-safe AllocationResources pool.
+        releaseStorage(vector);
     }
 
     private void transferOwnedVector(Context context, Vector vector)

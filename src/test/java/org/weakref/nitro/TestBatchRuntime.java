@@ -1297,7 +1297,7 @@ public class TestBatchRuntime
     }
 
     @Test
-    void testAsyncVectorTreeDetachKeepsStorageLeaseOwnedAcrossOwners()
+    void testAsyncVectorTreeDetachRecyclesStorageAcrossOwners()
     {
         try (EngineResources resources = EngineResources.createDefault();
                 Allocator producer = new Allocator(resources)) {
@@ -1314,7 +1314,7 @@ public class TestBatchRuntime
             try (Allocator consumer = new Allocator(resources)) {
                 I64Vector fresh = I64Vector.allocate(consumer, owner, 32_768);
                 assertThat(fresh).isNotSameAs(values);
-                assertThat(fresh.values()).isNotSameAs(storage);
+                assertThat(fresh.values()).isSameAs(storage);
             }
         }
     }
@@ -1371,7 +1371,7 @@ public class TestBatchRuntime
         try (EngineResources resources = EngineResources.createDefault();
                 Allocator allocator = new Allocator(resources)) {
             Allocator.Context owner = new Allocator.Context("Owner");
-            I64Vector values = allocator.allocate(owner, I64Vector.class, 32_768, I64Vector::new);
+            I64Vector values = I64Vector.allocate(allocator, owner, 32_768);
             DictionaryVector first = DictionaryVector.wrap(new int[] {0}, values);
             DictionaryVector second = DictionaryVector.wrap(new int[] {1}, values);
 
@@ -1379,13 +1379,15 @@ public class TestBatchRuntime
             Allocator.AsyncVectorTreeLease secondLease = allocator.detachVectorTreeForAsyncRelease(List.of(second));
             firstLease.close();
 
-            I64Vector whilePinned = allocator.allocate(owner, I64Vector.class, 32_768, I64Vector::new);
+            I64Vector whilePinned = I64Vector.allocate(allocator, owner, 32_768);
             assertThat(whilePinned).isNotSameAs(values);
             allocator.discard(owner, whilePinned);
 
             CompletableFuture.runAsync(secondLease::close).join();
 
-            assertThat(allocator.allocate(owner, I64Vector.class, 32_768, I64Vector::new)).isNotSameAs(values);
+            I64Vector recycled = I64Vector.allocate(allocator, owner, 32_768);
+            assertThat(recycled).isNotSameAs(values);
+            assertThat(recycled.values()).isSameAs(values.values());
         }
     }
 
