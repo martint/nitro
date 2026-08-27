@@ -18,6 +18,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.parallel.Execution;
 import org.junit.jupiter.api.parallel.ExecutionMode;
+import org.weakref.nitro.core.execution.ExecutionSuspension;
 import org.weakref.nitro.core.function.aggregation.GroupedAggregationUpdate;
 import org.weakref.nitro.core.function.aggregation.GroupedStateUpdate;
 import org.weakref.nitro.core.function.aggregation.LongStateUpdate;
@@ -744,6 +745,64 @@ public class TestOperators
                         row(2.0, 10L),
                         row(2.0, 30L),
                         row(1.0, 20L)));
+    }
+
+    @Test
+    void testSortOperatorResumesLoadingAfterExecutionSuspension()
+    {
+        Operator delegate = new TableOperator(
+                1,
+                List.of(
+                        TableOperator.Page.values(1, new Vector[] {new I64Vector(new long[] {2})}, Mask.all(1)),
+                        TableOperator.Page.values(1, new Vector[] {new I64Vector(new long[] {1})}, Mask.all(1))));
+        Operator suspendingSource = new Operator()
+        {
+            private int hasNextCalls;
+
+            @Override
+            public int outputCount()
+            {
+                return delegate.outputCount();
+            }
+
+            @Override
+            public Schema outputSchema()
+            {
+                return delegate.outputSchema();
+            }
+
+            @Override
+            public boolean hasNext()
+            {
+                if (++hasNextCalls == 2) {
+                    throw ExecutionSuspension.yield();
+                }
+                return delegate.hasNext();
+            }
+
+            @Override
+            public Batch next()
+            {
+                return delegate.next();
+            }
+
+            @Override
+            public void constrain(Mask mask)
+            {
+                delegate.constrain(mask);
+            }
+
+            @Override
+            public void close()
+            {
+                delegate.close();
+            }
+        };
+
+        try (Operator sort = new SortOperator(allocator, new int[] {0}, new boolean[] {false}, suspendingSource)) {
+            assertThatThrownBy(sort::next).isSameAs(ExecutionSuspension.yield());
+            assertThat(operator(sort)).matchesExactly(List.of(row(1L), row(2L)));
+        }
     }
 
     @Test

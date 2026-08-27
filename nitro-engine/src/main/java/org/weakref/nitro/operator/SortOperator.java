@@ -37,6 +37,7 @@ public class SortOperator
     private long[] sortKeys = new long[0];
     private int[] radixCounts = new int[0];
 
+    private int slotCount;
     private boolean done;
 
     public SortOperator(Allocator allocator, int[] columns, boolean[] descending, Operator source)
@@ -171,8 +172,6 @@ public class SortOperator
 
     private Mask computeSorted()
     {
-        int slotCount = 0;
-
         while (source.hasNext()) {
             Batch batch = source.next();
             // A full sort retains every input row, so eagerly copy every output while this batch is open. Each stream
