@@ -52,6 +52,7 @@ public final class WindowOperator
     private final boolean lazyOutputs;
     private final Schema outputSchema;
     private final StructuralComparisonKernel[] comparisonKernels;
+    private final StructuralTypeKernelFactory structuralTypes;
     private final boolean allowsLegacyOrderingShortcuts;
     private final PartitionPositionIndex partitionPositionIndex = new PartitionPositionIndex();
 
@@ -266,12 +267,13 @@ public final class WindowOperator
         this.windowFunctions = List.copyOf(windowFunctions);
         this.inputOrder = requireNonNull(inputOrder, "inputOrder is null");
         this.outputSchema = outputSchema(source.outputSchema(), windowSchema);
+        this.structuralTypes = requireNonNull(structuralTypes, "structuralTypes is null");
         this.comparisonKernels = comparisonKernels(
                 source.outputSchema(),
                 this.partitionColumns,
                 this.orderingColumns,
                 this.nullsFirstByColumn,
-                requireNonNull(structuralTypes, "structuralTypes is null"));
+                this.structuralTypes);
         this.allowsLegacyOrderingShortcuts = allowsLegacyOrderingShortcuts(
                 this.comparisonKernels, this.partitionColumns, this.orderingColumns);
         // A single-function window normally exposes a narrow result whose consumers read every stream, leaving
@@ -1879,6 +1881,38 @@ public final class WindowOperator
             absolutePosition(position);
             ensurePeerBounds();
             return peerBounds[position * 2 + 1];
+        }
+
+        @Override
+        public int compareNonNull(int leftColumn, int leftPosition, int rightColumn, int rightPosition)
+        {
+            absolutePosition(leftPosition);
+            absolutePosition(rightPosition);
+            var leftType = source.outputSchema().field(leftColumn).type();
+            var rightType = source.outputSchema().field(rightColumn).type();
+            if (!leftType.identity().equals(rightType.identity())) {
+                throw new IllegalArgumentException("Window comparison columns have different logical types");
+            }
+            Streams left = column(leftColumn, leftPosition);
+            Streams right = column(rightColumn, rightPosition);
+            int leftSourcePosition = sourcePosition(leftPosition);
+            int rightSourcePosition = sourcePosition(rightPosition);
+            if (OperatorVectorSupport.isNull(left.getOrNull(Stream.NULLS), leftSourcePosition) ||
+                    OperatorVectorSupport.isNull(right.getOrNull(Stream.NULLS), rightSourcePosition)) {
+                throw new IllegalArgumentException("Window comparison values must be non-null");
+            }
+            StructuralComparisonKernel comparison = comparisonKernels[leftColumn];
+            if (comparison == null) {
+                comparison = structuralTypes.comparison(leftType);
+                comparisonKernels[leftColumn] = comparison;
+            }
+            return comparison.compare(
+                    left.values(),
+                    left.getOrNull(Stream.NULLS),
+                    leftSourcePosition,
+                    right.values(),
+                    right.getOrNull(Stream.NULLS),
+                    rightSourcePosition);
         }
 
         private void ensurePeerBounds()

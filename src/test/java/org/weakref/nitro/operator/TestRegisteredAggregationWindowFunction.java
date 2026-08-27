@@ -221,9 +221,10 @@ class TestRegisteredAggregationWindowFunction
                                         new I64Vector(new long[] {1, 2}),
                                         new I64Vector(new long[] {5, 7})},
                                 Mask.all(2))));
-        WindowFrame peers = (partition, outputPosition, bounds) -> bounds.set(
-                partition.peerStart(outputPosition),
-                partition.peerEnd(outputPosition));
+        WindowFrame peers = (partition, outputPosition, bounds) -> {
+            assertThat(partition.compareNonNull(1, 0, 2, 2)).isNegative();
+            bounds.set(partition.peerStart(outputPosition), partition.peerEnd(outputPosition));
+        };
 
         try (Operator operator = new WindowOperator(
                 allocator,

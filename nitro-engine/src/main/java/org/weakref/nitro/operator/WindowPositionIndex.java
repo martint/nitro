@@ -39,6 +39,12 @@ public interface WindowPositionIndex
     /** Returns the exclusive end of the peer group containing {@code position}. */
     int peerEnd(int position);
 
+    /** Compares two non-null logical values through their registered type semantics. */
+    default int compareNonNull(int leftColumn, int leftPosition, int rightColumn, int rightPosition)
+    {
+        throw new UnsupportedOperationException("Logical comparison is not available");
+    }
+
     default boolean isNull(int column, int position)
     {
         return OperatorVectorSupport.isNull(column(column, position).getOrNull(Stream.NULLS), sourcePosition(position));
