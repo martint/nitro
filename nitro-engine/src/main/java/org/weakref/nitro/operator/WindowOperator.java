@@ -476,10 +476,10 @@ public final class WindowOperator
 
     private void load()
     {
-        loaded = true;
-
-        pages = new ArrayList<>();
-        sourceSchema = new Streams[source.outputCount()];
+        if (pages == null) {
+            pages = new ArrayList<>();
+            sourceSchema = new Streams[source.outputCount()];
+        }
         while (source.hasNext()) {
             try (Batch batch = source.next()) {
                 Mask mask = batch.borrowMask();
@@ -506,6 +506,7 @@ public final class WindowOperator
                 pages.add(new TableOperator.Page(mask.count(), columns, Mask.all(mask.count())));
             }
         }
+        loaded = true;
         windowOutputs = new Streams[windowFunctions.size()];
         if (pages.size() == 1) {
             singlePage = true;

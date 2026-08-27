@@ -15,6 +15,7 @@ package org.weakref.nitro;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.ResourceLock;
+import org.weakref.nitro.core.execution.ExecutionSuspension;
 import org.weakref.nitro.core.type.Field;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.core.type.TypeBinding;
@@ -858,6 +859,78 @@ public class TestOperatorBatches
                             row(2L, 1L, 21L, 21L),
                             row(2L, 2L, 20L, 41L),
                             row(2L, 2L, 22L, 63L));
+        }
+    }
+
+    @Test
+    void testWindowOperatorResumesLoadingAfterExecutionSuspension()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        Operator delegate = new TableOperator(
+                2,
+                List.of(
+                        TableOperator.Page.values(
+                                1,
+                                new Vector[] {new I64Vector(new long[] {2}), new I64Vector(new long[] {20})},
+                                Mask.all(1)),
+                        TableOperator.Page.values(
+                                1,
+                                new Vector[] {new I64Vector(new long[] {1}), new I64Vector(new long[] {10})},
+                                Mask.all(1))));
+        Operator suspendingSource = new Operator()
+        {
+            private int hasNextCalls;
+
+            @Override
+            public int outputCount()
+            {
+                return delegate.outputCount();
+            }
+
+            @Override
+            public Schema outputSchema()
+            {
+                return delegate.outputSchema();
+            }
+
+            @Override
+            public boolean hasNext()
+            {
+                if (++hasNextCalls == 2) {
+                    throw ExecutionSuspension.yield();
+                }
+                return delegate.hasNext();
+            }
+
+            @Override
+            public Batch next()
+            {
+                return delegate.next();
+            }
+
+            @Override
+            public void constrain(Mask mask)
+            {
+                delegate.constrain(mask);
+            }
+
+            @Override
+            public void close()
+            {
+                delegate.close();
+            }
+        };
+
+        try (Operator window = new WindowOperator(
+                allocator,
+                suspendingSource,
+                new int[0],
+                new int[] {0},
+                new boolean[] {false},
+                List.of(new RunningSumI64WindowFunction(1)))) {
+            assertThatThrownBy(window::hasNext).isSameAs(ExecutionSuspension.yield());
+            assertThat(OperatorAssertions.OperatorAssert.toRows(window))
+                    .containsExactly(row(1L, 10L, 10L), row(2L, 20L, 30L));
         }
     }
 
