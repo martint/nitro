@@ -34,6 +34,7 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.weakref.nitro.data.Row.row;
 import static org.weakref.nitro.operator.RegisteredAggregationWindowFunction.Frame.FULL_PARTITION;
+import static org.weakref.nitro.operator.RegisteredAggregationWindowFunction.Frame.RUNNING_PEERS;
 import static org.weakref.nitro.operator.RegisteredAggregationWindowFunction.Frame.RUNNING_ROWS;
 
 class TestRegisteredAggregationWindowFunction
@@ -79,6 +80,43 @@ class TestRegisteredAggregationWindowFunction
         assertThat(running.copyResultCalls).isEqualTo(5);
         assertThat(running.boundPositionCalls).isEqualTo(5);
         assertThat(partition.copyResultCalls).isZero();
+    }
+
+    @Test
+    void evaluatesProviderAggregateForPeerRunningFrame()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        ConstantTableOperator source = new ConstantTableOperator(allocator, 3, List.of(
+                row(1L, 2L, 5L),
+                row(1L, 1L, 3L),
+                row(1L, 1L, 7L),
+                row(2L, 1L, 11L),
+                row(1L, 3L, (Object) null),
+                row(2L, 1L, 13L)));
+        NullableSum peers = new NullableSum(false);
+
+        try (Operator operator = new WindowOperator(
+                allocator,
+                source,
+                new int[] {0},
+                new int[] {1},
+                new boolean[] {false},
+                List.of(new RegisteredAggregationWindowFunction(
+                        peers,
+                        source.outputSchema(),
+                        new int[] {2},
+                        RUNNING_PEERS,
+                        new int[] {1})))) {
+            assertThat(OperatorAssertions.OperatorAssert.toRows(operator))
+                    .containsExactly(
+                            row(1L, 1L, 3L, 10L),
+                            row(1L, 1L, 7L, 10L),
+                            row(1L, 2L, 5L, 15L),
+                            row(1L, 3L, null, 15L),
+                            row(2L, 1L, 11L, 24L),
+                            row(2L, 1L, 13L, 24L));
+        }
+        assertThat(peers.copyResultCalls).isZero();
     }
 
     private static final class NullableSum

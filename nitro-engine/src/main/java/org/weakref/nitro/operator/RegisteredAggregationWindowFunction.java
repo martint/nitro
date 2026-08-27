@@ -40,6 +40,8 @@ public final class RegisteredAggregationWindowFunction
     private final Schema inputSchema;
     private final int[] inputColumns;
     private final Frame frame;
+    private final int[] orderingColumns;
+    private final StructuralComparisonKernel[] orderingKernels;
     private final int[] activePosition = new int[1];
 
     private Object state;
@@ -47,6 +49,9 @@ public final class RegisteredAggregationWindowFunction
     private Streams[] boundSourceColumns;
     private AggregationInput boundInput;
     private AggregationPositionAccumulator boundPositionAccumulator;
+    private Streams[] previousColumns;
+    private int previousPosition;
+    private int peerStartOutputPosition;
 
     public RegisteredAggregationWindowFunction(
             AggregationImplementation implementation,
@@ -54,13 +59,34 @@ public final class RegisteredAggregationWindowFunction
             int[] inputColumns,
             Frame frame)
     {
+        this(implementation, inputSchema, inputColumns, frame, new int[0]);
+    }
+
+    public RegisteredAggregationWindowFunction(
+            AggregationImplementation implementation,
+            Schema inputSchema,
+            int[] inputColumns,
+            Frame frame,
+            int[] orderingColumns)
+    {
         this.implementation = requireNonNull(implementation, "implementation is null");
         this.inputSchema = requireNonNull(inputSchema, "inputSchema is null");
         this.inputColumns = requireNonNull(inputColumns, "inputColumns is null").clone();
         this.frame = requireNonNull(frame, "frame is null");
+        this.orderingColumns = requireNonNull(orderingColumns, "orderingColumns is null").clone();
         if (Arrays.stream(this.inputColumns).anyMatch(column -> column < 0 || column >= inputSchema.size())) {
             throw new IllegalArgumentException("aggregate input column is outside the input schema");
         }
+        if (Arrays.stream(this.orderingColumns).anyMatch(column -> column < 0 || column >= inputSchema.size())) {
+            throw new IllegalArgumentException("aggregate ordering column is outside the input schema");
+        }
+        if ((frame == Frame.RUNNING_PEERS) != (this.orderingColumns.length > 0)) {
+            throw new IllegalArgumentException("peer-running aggregate requires one or more ordering columns only");
+        }
+        StructuralTypeKernelFactory structuralTypes = new StructuralTypeKernelFactory();
+        this.orderingKernels = Arrays.stream(this.orderingColumns)
+                .mapToObj(column -> structuralTypes.comparison(inputSchema.field(column).type()))
+                .toArray(StructuralComparisonKernel[]::new);
     }
 
     @Override
@@ -87,6 +113,9 @@ public final class RegisteredAggregationWindowFunction
     {
         requireInitialized();
         implementation.initialize(state, 0, 1);
+        previousColumns = null;
+        previousPosition = -1;
+        peerStartOutputPosition = -1;
     }
 
     @Override
@@ -99,6 +128,21 @@ public final class RegisteredAggregationWindowFunction
             int outputPosition,
             int outputSize)
     {
+        if (frame == Frame.RUNNING_PEERS) {
+            if (previousColumns == null) {
+                peerStartOutputPosition = outputPosition;
+            }
+            else if (orderingChanged(previousColumns, previousPosition, sourceColumns, inputPosition)) {
+                output = copyCurrentResultRange(
+                        allocator,
+                        allocationContext,
+                        output,
+                        peerStartOutputPosition,
+                        outputPosition,
+                        outputSize);
+                peerStartOutputPosition = outputPosition;
+            }
+        }
         bindInput(sourceColumns);
         if (boundPositionAccumulator != null) {
             boundPositionAccumulator.add(inputPosition);
@@ -133,6 +177,8 @@ public final class RegisteredAggregationWindowFunction
             result = implementation.result(0, state, result, allocator, allocationContext);
             output = copyResultPosition(allocator, allocationContext, result, output, outputPosition, outputSize);
         }
+        previousColumns = sourceColumns;
+        previousPosition = inputPosition;
         return output;
     }
 
@@ -163,8 +209,59 @@ public final class RegisteredAggregationWindowFunction
         if (frame == Frame.RUNNING_ROWS || partitionStart == partitionEnd) {
             return output;
         }
+        if (frame == Frame.RUNNING_PEERS) {
+            return copyCurrentResultRange(
+                    allocator,
+                    allocationContext,
+                    output,
+                    peerStartOutputPosition,
+                    partitionEnd,
+                    outputSize);
+        }
         result = implementation.result(0, state, result, allocator, allocationContext);
         return copyResultRange(allocator, allocationContext, result, output, partitionStart, partitionEnd, outputSize);
+    }
+
+    private Streams copyCurrentResultRange(
+            Allocator allocator,
+            Allocator.Context allocationContext,
+            Streams output,
+            int outputStart,
+            int outputEnd,
+            int outputSize)
+    {
+        result = implementation.result(0, state, result, allocator, allocationContext);
+        return copyResultRange(allocator, allocationContext, result, output, outputStart, outputEnd, outputSize);
+    }
+
+    private boolean orderingChanged(
+            Streams[] leftColumns,
+            int leftPosition,
+            Streams[] rightColumns,
+            int rightPosition)
+    {
+        for (int orderingIndex = 0; orderingIndex < orderingColumns.length; orderingIndex++) {
+            Streams left = leftColumns[orderingColumns[orderingIndex]];
+            Streams right = rightColumns[orderingColumns[orderingIndex]];
+            boolean leftNull = OperatorVectorSupport.isNull(left.getOrNull(Stream.NULLS), leftPosition);
+            boolean rightNull = OperatorVectorSupport.isNull(right.getOrNull(Stream.NULLS), rightPosition);
+            if (leftNull || rightNull) {
+                if (leftNull != rightNull) {
+                    return true;
+                }
+                continue;
+            }
+            if (orderingKernels[orderingIndex].compare(
+                    left.values(),
+                    left.getOrNull(Stream.NULLS),
+                    leftPosition,
+                    right.values(),
+                    right.getOrNull(Stream.NULLS),
+                    rightPosition) != 0) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void requireInitialized()
@@ -223,6 +320,7 @@ public final class RegisteredAggregationWindowFunction
     public enum Frame
     {
         RUNNING_ROWS,
+        RUNNING_PEERS,
         FULL_PARTITION
     }
 }
