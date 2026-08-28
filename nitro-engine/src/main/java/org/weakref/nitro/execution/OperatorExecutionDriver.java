@@ -80,7 +80,7 @@ public final class OperatorExecutionDriver
                 closeRoot();
                 return DriverResult.FINISHED;
             }
-            batch = root.next();
+            batch = requireNonNull(root.next(), () -> "root operator returned a null batch: " + root.getClass().getName());
         }
         catch (ExecutionSuspension suspension) {
             return suspend(suspension);

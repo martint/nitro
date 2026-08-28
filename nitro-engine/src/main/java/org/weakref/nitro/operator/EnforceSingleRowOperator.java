@@ -36,6 +36,7 @@ public class EnforceSingleRowOperator
 
     private boolean loaded;
     private boolean done;
+    private int rowCount;
     private Batch stagedBatch;
 
     public EnforceSingleRowOperator(Allocator allocator, Operator source)
@@ -104,9 +105,6 @@ public class EnforceSingleRowOperator
 
     private void load()
     {
-        loaded = true;
-
-        int rowCount = 0;
         while (source.hasNext()) {
             try (Batch batch = source.next()) {
                 captureSchema(batch);
@@ -128,6 +126,7 @@ public class EnforceSingleRowOperator
         stagedBatch = new Batch(
                 allocator.allocateRangeMask(allocationContext, 0, 1),
                 outputs());
+        loaded = true;
     }
 
     private void captureSchema(Batch batch)

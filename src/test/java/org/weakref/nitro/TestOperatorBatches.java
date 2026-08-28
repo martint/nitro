@@ -3615,6 +3615,62 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testEnforceSingleRowOperatorResumesLoadingAfterExecutionSuspension()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        Operator delegate = new ConstantTableOperator(allocator, 1, List.of(row(11L)));
+        Operator suspendingSource = new Operator()
+        {
+            private int hasNextCalls;
+
+            @Override
+            public int outputCount()
+            {
+                return delegate.outputCount();
+            }
+
+            @Override
+            public Schema outputSchema()
+            {
+                return delegate.outputSchema();
+            }
+
+            @Override
+            public boolean hasNext()
+            {
+                if (++hasNextCalls == 2) {
+                    throw ExecutionSuspension.yield();
+                }
+                return delegate.hasNext();
+            }
+
+            @Override
+            public Batch next()
+            {
+                return delegate.next();
+            }
+
+            @Override
+            public void constrain(Mask mask)
+            {
+                delegate.constrain(mask);
+            }
+
+            @Override
+            public void close()
+            {
+                delegate.close();
+            }
+        };
+
+        try (Operator operator = new EnforceSingleRowOperator(allocator, suspendingSource)) {
+            assertThatThrownBy(operator::hasNext).isSameAs(ExecutionSuspension.yield());
+            assertThat(OperatorAssertions.OperatorAssert.toRows(operator))
+                    .containsExactly(row(11L));
+        }
+    }
+
+    @Test
     void testEnforceSingleRowOperatorProducesNullRowForEmptyInput()
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());
