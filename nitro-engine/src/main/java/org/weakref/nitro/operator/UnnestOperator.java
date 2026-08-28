@@ -416,7 +416,7 @@ public final class UnnestOperator
             // Struct-level nulls are semantically inherited by every child. Preserve them separately so mappedOutput
             // can combine them with the leaf's own null stream without materializing the structural value.
             Vector parentNulls = result.getOrNull(Stream.NULLS);
-            if (parentNulls != null) {
+            if (parentNulls != null && !VectorAccess.isAllFalseNulls(parentNulls)) {
                 inheritedNulls.add(parentNulls);
             }
             result = VectorAccess.structField(result.values(), field);

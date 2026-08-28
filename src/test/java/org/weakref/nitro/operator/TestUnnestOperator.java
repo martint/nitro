@@ -296,6 +296,44 @@ public class TestUnnestOperator
     }
 
     @Test
+    void testFlattensArrayOfRowsWithoutPublishingInertRowNulls()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        StructVector rows = new StructVector(3);
+        rows.setField("id", Streams.ofValues(new I64Vector(new long[] {10, 20, 30})));
+        ArrayVector arrays = new ArrayVector(2);
+        System.arraycopy(new int[] {0, 2, 3}, 0, arrays.offsets(), 0, 3);
+        arrays.setElements(Streams.ofValuesAndNulls(
+                rows,
+                new BooleanVector(new boolean[] {false, false, false})));
+        Operator source = new TableOperator(
+                Schema.unspecified(1),
+                List.of(TableOperator.Page.values(
+                        2,
+                        new Vector[] {arrays},
+                        Mask.all(2))));
+        Field output = Schema.unspecified(1).field(0);
+
+        Operator unnest = new UnnestOperator(
+                allocator,
+                source,
+                new int[0],
+                List.of(new UnnestOperator.Mapping(
+                        0,
+                        List.of(new UnnestOperator.OutputMapping(0, List.of(0), output)))),
+                Optional.empty(),
+                false,
+                new UnnestOperatorPolicy(16));
+
+        try (Batch batch = unnest.next()) {
+            assertThat(batch.output(0).borrow(Stream.VALUES)).isSameAs(rows.field(0).values());
+            assertThat(batch.output(0).borrowOrNull(Stream.NULLS)).isNull();
+        }
+        assertThat(unnest.hasNext()).isFalse();
+        unnest.close();
+    }
+
+    @Test
     void testForwardsContiguousRepeatedChildren()
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());
