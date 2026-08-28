@@ -14,11 +14,13 @@
 package org.weakref.nitro.execution;
 
 import org.weakref.nitro.core.execution.ExecutionContext;
+import org.weakref.nitro.core.execution.ExecutionSuspension;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.Operator;
 
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Consumer;
 
@@ -39,6 +41,7 @@ public final class OperatorExecutionDriver
     private boolean finished;
     private boolean rootClosed;
     private boolean closed;
+    private CompletionStage<Void> suspendedContinuation;
 
     public OperatorExecutionDriver(Operator root, Allocator allocator, ExecutionContext context)
     {
@@ -57,6 +60,14 @@ public final class OperatorExecutionDriver
         Batch batch;
         try {
             context.checkpoint();
+            if (suspendedContinuation != null) {
+                CompletableFuture<Void> future = suspendedContinuation.toCompletableFuture();
+                if (!future.isDone()) {
+                    return DriverResult.BLOCKED;
+                }
+                future.join();
+                suspendedContinuation = null;
+            }
             if (allocator.memoryBlocked().isPresent()) {
                 return DriverResult.BLOCKED;
             }
@@ -70,6 +81,9 @@ public final class OperatorExecutionDriver
                 return DriverResult.FINISHED;
             }
             batch = root.next();
+        }
+        catch (ExecutionSuspension suspension) {
+            return suspend(suspension);
         }
         catch (IllegalStateException failure) {
             if (context.isCancelled()) {
@@ -91,7 +105,18 @@ public final class OperatorExecutionDriver
     /// Host continuation for a [DriverResult#BLOCKED] result.
     public Optional<CompletionStage<Void>> blocked()
     {
-        return allocator.memoryBlocked();
+        return Optional.ofNullable(suspendedContinuation).or(allocator::memoryBlocked);
+    }
+
+    private DriverResult suspend(ExecutionSuspension suspension)
+    {
+        return switch (suspension.reason()) {
+            case YIELD -> DriverResult.YIELDED;
+            case BLOCKED -> {
+                suspendedContinuation = suspension.continuation().orElseThrow();
+                yield DriverResult.BLOCKED;
+            }
+        };
     }
 
     @Override

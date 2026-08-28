@@ -15,6 +15,7 @@ package org.weakref.nitro;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.ResourceLock;
+import org.weakref.nitro.core.execution.ExecutionSuspension;
 import org.weakref.nitro.core.type.Field;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.core.type.TypeBinding;
@@ -862,7 +863,7 @@ public class TestOperatorBatches
     }
 
     @Test
-    void testWindowOperatorRetainsLoadingStateAcrossInputDepletion()
+    void testWindowOperatorResumesLoadingAfterExecutionSuspension()
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());
         Operator delegate = new TableOperator(
@@ -896,7 +897,7 @@ public class TestOperatorBatches
             public boolean hasNext()
             {
                 if (++hasNextCalls == 2) {
-                    throw InputDepleted.INSTANCE;
+                    throw ExecutionSuspension.yield();
                 }
                 return delegate.hasNext();
             }
@@ -927,7 +928,7 @@ public class TestOperatorBatches
                 new int[] {0},
                 new boolean[] {false},
                 List.of(new RunningSumI64WindowFunction(1)))) {
-            assertThatThrownBy(window::hasNext).isSameAs(InputDepleted.INSTANCE);
+            assertThatThrownBy(window::hasNext).isSameAs(ExecutionSuspension.yield());
             assertThat(OperatorAssertions.OperatorAssert.toRows(window))
                     .containsExactly(row(1L, 10L, 10L), row(2L, 20L, 30L));
         }
@@ -5162,17 +5163,6 @@ public class TestOperatorBatches
             values[index] = booleanValues.value(index);
         }
         return values;
-    }
-
-    private static final class InputDepleted
-            extends RuntimeException
-    {
-        private static final InputDepleted INSTANCE = new InputDepleted();
-
-        private InputDepleted()
-        {
-            super(null, null, false, false);
-        }
     }
 
     private static Operator lazyNonRetainedOuterOperator(long[] keys, long[] payloadValues)

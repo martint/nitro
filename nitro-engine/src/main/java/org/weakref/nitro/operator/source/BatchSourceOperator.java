@@ -93,7 +93,8 @@ public final class BatchSourceOperator
                     if (executionContext != null) {
                         executionContext.diagnostics().record(INPUT_BATCHES, 1);
                         executionContext.diagnostics().record(INPUT_POSITIONS, batch.selection().positionCount());
-                        // Staging commits source accounting before the batch becomes visible downstream.
+                        // Staging makes this a restart-safe scheduling point: an unwinding host can
+                        // re-enter hasNext() without polling or consuming the source again.
                         executionContext.checkpoint();
                     }
                     return true;
