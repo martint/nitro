@@ -16,11 +16,8 @@ package org.weakref.nitro.operator;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.execution.EngineResources;
-
-import java.util.ArrayList;
-import java.util.List;
-import java.util.PriorityQueue;
 
 import static java.util.Objects.requireNonNull;
 
@@ -34,7 +31,7 @@ public class TopNOperator
     private final Operator source;
     private final TopNState state;
     private final TopNOperatorPolicy policy;
-    private final PriorityQueue<Entry> queue;
+    private final SlotHeap queue;
 
     private Boolean denseOrdering;
     private boolean firstBatch = true;
@@ -148,7 +145,7 @@ public class TopNOperator
                 source.outputSchema(),
                 requireNonNull(structuralTypes, "structuralTypes is null"),
                 n);
-        queue = new PriorityQueue<>(n, (left, right) -> state.compareSlots(left.position(), right.position()));
+        queue = new SlotHeap(allocator.primitiveArrays(), n, state);
     }
 
     @Override
@@ -217,7 +214,7 @@ public class TopNOperator
                         for (int index = 0; index < copied; index++) {
                             int slot = outputStart + index;
                             state.deferPayloadRow(batch, initial.position(index), slot);
-                            queue.add(new Entry(slot));
+                            queue.add(slot);
                         }
                     }
                     finally {
@@ -232,20 +229,20 @@ public class TopNOperator
                     if (queue.size() < n) {
                         int slot = queue.size();
                         state.copyRow(batch, position, slot);
-                        queue.add(new Entry(slot));
+                        queue.add(slot);
                     }
                     else {
-                        Entry head = queue.peek();
-                        if (state.compareOrderingValue(batch, position, head.position(), compactOrderingCandidates) > 0) {
-                            queue.poll();
+                        int head = queue.peek();
+                        if (state.compareOrderingValue(batch, position, head, compactOrderingCandidates) > 0) {
+                            queue.removeHead();
                             if (Boolean.TRUE.equals(denseOrdering)) {
-                                state.copyDenseOrderingRow(batch, position, head.position(), n);
-                                state.deferPayloadRow(batch, position, head.position());
+                                state.copyDenseOrderingRow(batch, position, head, n);
+                                state.deferPayloadRow(batch, position, head);
                             }
                             else {
-                                state.copyRow(batch, position, head.position());
+                                state.copyRow(batch, position, head);
                             }
-                            queue.add(new Entry(head.position()));
+                            queue.add(head);
                         }
                     }
                 }
@@ -262,9 +259,7 @@ public class TopNOperator
             // advancing source (e.g. a Parquet scan) would itself invalidate the current batch.
             boolean canDeferFinalBatch = source.supportsConstrainedReborrow() && !source.hasNext();
             if (!source.supportsRetainedBatches() && !canDeferFinalBatch) {
-                state.flushPendingBatch(batch, queue.stream()
-                        .map(Entry::position)
-                        .toList());
+                state.flushPendingBatch(batch, queue.values(), 0, queue.size());
                 if (!queue.isEmpty()) {
                     state.releaseFallbackBatch();
                 }
@@ -277,16 +272,8 @@ public class TopNOperator
         }
 
         int count = queue.size();
-        List<Integer> orderedSlots = orderedSlots(queue);
-        if (Boolean.TRUE.equals(denseOrdering)) {
-            int[] primitiveOrderedSlots = orderedSlots.stream()
-                    .mapToInt(Integer::intValue)
-                    .toArray();
-            state.setOrderedSlots(primitiveOrderedSlots, primitiveOrderedSlots.length);
-        }
-        else {
-            state.setOrderedSlots(orderedSlots);
-        }
+        int[] orderedSlots = queue.removeAllBestFirst();
+        state.setOrderedSlots(orderedSlots, orderedSlots.length);
 
         return allocator.allocateRangeMask(allocationContext, 0, count);
     }
@@ -387,15 +374,6 @@ public class TopNOperator
                 outputs);
     }
 
-    private List<Integer> orderedSlots(PriorityQueue<Entry> queue)
-    {
-        List<Entry> entries = new ArrayList<>(queue);
-        entries.sort((left, right) -> state.compareSlots(right.position(), left.position()));
-        return entries.stream()
-                .map(Entry::position)
-                .toList();
-    }
-
     @Override
     public void constrain(Mask mask)
     {
@@ -416,8 +394,130 @@ public class TopNOperator
             allocator.release(allocationContext, outputMask);
             outputMask = null;
         }
+        queue.close();
         allocator.release(allocationContext);
     }
 
-    record Entry(int position) {}
+    private static final class SlotHeap
+            implements AutoCloseable
+    {
+        private final PrimitiveArrayPool arrayPool;
+        private final TopNState state;
+        private int[] values;
+        private int size;
+
+        private SlotHeap(PrimitiveArrayPool arrayPool, int capacity, TopNState state)
+        {
+            if (capacity <= 0) {
+                throw new IllegalArgumentException("TopN limit must be positive");
+            }
+            this.arrayPool = requireNonNull(arrayPool, "arrayPool is null");
+            this.state = requireNonNull(state, "state is null");
+            values = arrayPool.borrowInts(capacity);
+        }
+
+        public int size()
+        {
+            return size;
+        }
+
+        public boolean isEmpty()
+        {
+            return size == 0;
+        }
+
+        public int[] values()
+        {
+            return values;
+        }
+
+        public int peek()
+        {
+            if (size == 0) {
+                throw new IllegalStateException("TopN heap is empty");
+            }
+            return values[0];
+        }
+
+        public void add(int value)
+        {
+            if (size == values.length) {
+                throw new IllegalStateException("TopN heap exceeds its configured limit");
+            }
+            int index = size++;
+            values[index] = value;
+            while (index > 0) {
+                int parent = (index - 1) >>> 1;
+                if (compare(values[index], values[parent]) >= 0) {
+                    return;
+                }
+                swap(index, parent);
+                index = parent;
+            }
+        }
+
+        public int removeHead()
+        {
+            int result = peek();
+            int remaining = --size;
+            if (remaining > 0) {
+                values[0] = values[remaining];
+                siftDown(0);
+            }
+            return result;
+        }
+
+        public int[] removeAllBestFirst()
+        {
+            int[] ordered = new int[size];
+            for (int output = size - 1; output >= 0; output--) {
+                ordered[output] = removeHead();
+            }
+            return ordered;
+        }
+
+        private void siftDown(int index)
+        {
+            while (true) {
+                int left = (index << 1) + 1;
+                if (left >= size) {
+                    return;
+                }
+                int right = left + 1;
+                int child = right < size && compare(values[right], values[left]) < 0
+                        ? right
+                        : left;
+                if (compare(values[child], values[index]) >= 0) {
+                    return;
+                }
+                swap(index, child);
+                index = child;
+            }
+        }
+
+        private void swap(int left, int right)
+        {
+            int value = values[left];
+            values[left] = values[right];
+            values[right] = value;
+        }
+
+        private int compare(int left, int right)
+        {
+            int comparison = state.compareSlots(left, right);
+            // SQL does not assign an order to equal sort keys, but stable slot order keeps operator output
+            // deterministic and preserves the order produced by the former object heap.
+            return comparison != 0 ? comparison : Integer.compare(right, left);
+        }
+
+        @Override
+        public void close()
+        {
+            if (values != null) {
+                arrayPool.release(values);
+                values = null;
+                size = 0;
+            }
+        }
+    }
 }
