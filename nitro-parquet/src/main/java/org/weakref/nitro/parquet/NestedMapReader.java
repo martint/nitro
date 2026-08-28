@@ -42,6 +42,7 @@ final class NestedMapReader
     private final NestedLeafCursor valueReader;
     private final NestedValueAccumulator keyValues;
     private final NestedValueAccumulator values;
+    private final ParquetMaterializationPolicy materializationPolicy;
 
     private boolean positioned;
     private boolean exhausted;
@@ -112,6 +113,7 @@ final class NestedMapReader
             ParquetValueBinding.Group logicalBinding)
     {
         this.map = requireNonNull(map, "map is null");
+        this.materializationPolicy = requireNonNull(materializationPolicy, "materializationPolicy is null");
         if (!map.isMap()) {
             throw unsupported("field is not annotated as MAP");
         }
@@ -208,7 +210,7 @@ final class NestedMapReader
                 valueReader instanceof NestedLeafEventSource valueSource) {
             readEventWindows(keySource, valueSource, maps, mapNulls, rowCount, mask);
             setEntries(allocator, context, maps);
-            return mapNulls == null ? Streams.ofValues(maps) : Streams.ofValuesAndNulls(maps, mapNulls);
+            return finish(allocator, context, maps, mapNulls, rowCount, mask);
         }
 
         int selectedIndex = 0;
@@ -256,6 +258,33 @@ final class NestedMapReader
             throw new IllegalArgumentException("Nested MAP key/value cardinalities differ");
         }
         setEntries(allocator, context, maps);
+        return finish(allocator, context, maps, mapNulls, rowCount, mask);
+    }
+
+    private Streams finish(
+            Allocator allocator,
+            Allocator.Context context,
+            MapVector maps,
+            BooleanVector mapNulls,
+            int rowCount,
+            Mask mask)
+    {
+        if (materializationPolicy.constantNestedDomain() && mask.all()) {
+            Streams encoded = ConstantNestedDomainEncoder.tryEncode(
+                    allocator,
+                    context,
+                    maps,
+                    mapNulls,
+                    rowCount,
+                    materializationPolicy.constantNestedDomainMinRows());
+            if (encoded != null) {
+                allocator.release(context, maps);
+                if (mapNulls != null) {
+                    allocator.release(context, mapNulls);
+                }
+                return encoded;
+            }
+        }
         return mapNulls == null ? Streams.ofValues(maps) : Streams.ofValuesAndNulls(maps, mapNulls);
     }
 

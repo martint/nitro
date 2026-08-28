@@ -20,12 +20,14 @@ import org.junit.jupiter.api.Test;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.MapVector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
+import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.execution.EngineResources;
 
 import java.lang.foreign.MemorySegment;
@@ -105,6 +107,45 @@ class TestNestedMapReader
             assertThat(maps.offsets()).containsExactly(0, 1);
             assertThat(((I64Vector) maps.keyValues()).values()).containsExactly(3);
             assertThat(value((BinaryVector) maps.valueValues(), 0)).isEqualTo("three");
+        }
+    }
+
+    @Test
+    void testRecoversConstantParentDomainFromEncodedChildren()
+    {
+        int rowCount = 128;
+        Allocator.Context context = new Allocator.Context("test");
+        try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
+            MapVector maps = allocator.allocateMap(context, rowCount);
+            for (int position = 0; position <= rowCount; position++) {
+                maps.offsets()[position] = position * 2;
+            }
+            int[] ids = new int[rowCount * 2];
+            for (int position = 0; position < ids.length; position++) {
+                ids[position] = position & 1;
+            }
+            maps.setEntries(
+                    Streams.ofValues(allocator.allocateDictionary(
+                            context, ids, new I64Vector(new long[] {1, 17}))),
+                    Streams.ofValues(allocator.allocateDictionary(
+                            context, ids, new I64Vector(new long[] {11, 22}))));
+
+            Streams encoded = ConstantNestedDomainEncoder.tryEncode(
+                    allocator, context, maps, null, rowCount, 64);
+
+            assertThat(encoded).isNotNull();
+            assertThat(encoded.values()).isInstanceOfSatisfying(DictionaryVector.class, dictionary -> {
+                assertThat(dictionary.length()).isEqualTo(rowCount);
+                assertThat(dictionary.values()).isInstanceOfSatisfying(MapVector.class, domain -> {
+                    assertThat(domain.length()).isOne();
+                    assertThat(domain.offsets()).containsExactly(0, 2);
+                    assertThat(VectorAccess.longValues(domain.keyValues()).value(0)).isEqualTo(1);
+                    assertThat(VectorAccess.longValues(domain.keyValues()).value(1)).isEqualTo(17);
+                    assertThat(VectorAccess.longValues(domain.valueValues()).value(0)).isEqualTo(11);
+                    assertThat(VectorAccess.longValues(domain.valueValues()).value(1)).isEqualTo(22);
+                });
+                assertThat(dictionary.domainFrequency(0)).isEqualTo(rowCount);
+            });
         }
     }
 

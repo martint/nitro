@@ -36,6 +36,7 @@ final class NestedArrayReader
     private final ParquetSchema.Group list;
     private final ParquetSchema.Group repeatedValues;
     private final ElementReader elements;
+    private final ParquetMaterializationPolicy materializationPolicy;
 
     private boolean positioned;
     private boolean exhausted;
@@ -105,6 +106,7 @@ final class NestedArrayReader
             ParquetValueBinding.Group logicalBinding)
     {
         this.list = requireNonNull(list, "list is null");
+        this.materializationPolicy = requireNonNull(materializationPolicy, "materializationPolicy is null");
         if (list.isList()) {
             if (list.children().size() != 1 || !(list.children().getFirst() instanceof ParquetSchema.Group repeatedGroup)) {
                 throw unsupported("LIST must contain one repeated element group");
@@ -180,7 +182,7 @@ final class NestedArrayReader
         if (!positioned && elements.eventSource() instanceof NestedLeafEventSource eventSource) {
             readEventWindows(eventSource, arrays, listNulls, rowCount, mask);
             arrays.setElements(elements.materialize(allocator, context));
-            return listNulls == null ? Streams.ofValues(arrays) : Streams.ofValuesAndNulls(arrays, listNulls);
+            return finish(allocator, context, arrays, listNulls, rowCount, mask);
         }
 
         int selectedIndex = 0;
@@ -217,6 +219,33 @@ final class NestedArrayReader
         }
 
         arrays.setElements(elements.materialize(allocator, context));
+        return finish(allocator, context, arrays, listNulls, rowCount, mask);
+    }
+
+    private Streams finish(
+            Allocator allocator,
+            Allocator.Context context,
+            ArrayVector arrays,
+            BooleanVector listNulls,
+            int rowCount,
+            Mask mask)
+    {
+        if (materializationPolicy.constantNestedDomain() && mask.all()) {
+            Streams encoded = ConstantNestedDomainEncoder.tryEncode(
+                    allocator,
+                    context,
+                    arrays,
+                    listNulls,
+                    rowCount,
+                    materializationPolicy.constantNestedDomainMinRows());
+            if (encoded != null) {
+                allocator.release(context, arrays);
+                if (listNulls != null) {
+                    allocator.release(context, listNulls);
+                }
+                return encoded;
+            }
+        }
         return listNulls == null ? Streams.ofValues(arrays) : Streams.ofValuesAndNulls(arrays, listNulls);
     }
 
