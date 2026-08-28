@@ -808,6 +808,18 @@ public class TestOperators
     }
 
     @Test
+    void testSortOperatorProducesTypedEmptyOutputWithoutInputBatches()
+    {
+        Schema schema = new Schema(List.of(new Field("value", i64ValueType(), false)));
+        assertThat(operator(new SortOperator(
+                allocator,
+                new int[] {0},
+                new boolean[] {false},
+                typedTable(schema))))
+                .matchesExactly(List.of());
+    }
+
+    @Test
     void testTopNRankingOperatorResumesLoadingAfterExecutionSuspension()
     {
         Operator delegate = new TableOperator(

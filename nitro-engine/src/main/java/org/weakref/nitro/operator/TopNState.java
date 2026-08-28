@@ -45,6 +45,7 @@ final class TopNState
     private final boolean[] nullsFirstByColumn;
     private final boolean[] orderingColumnFlags;
     private final StructuralComparisonKernel[] comparisonKernels;
+    private final Schema sourceSchema;
     private Streams[][] slotColumns;
     private final Streams[] comparisonColumns;
     private final Vector[] candidateNullVectors;
@@ -92,6 +93,7 @@ final class TopNState
         this.orderingColumns = orderingColumns.clone();
         this.descendingByColumn = descendingByColumn.clone();
         this.nullsFirstByColumn = nullsFirstByColumn.clone();
+        this.sourceSchema = sourceSchema;
         this.orderingColumnFlags = new boolean[outputCount];
         for (int orderingColumn : orderingColumns) {
             orderingColumnFlags[orderingColumn] = true;
@@ -748,6 +750,29 @@ final class TopNState
             throw new IllegalStateException("TopN did not observe source output streams");
         }
         return streams;
+    }
+
+    public void prepareEmptyOutputSchema()
+    {
+        for (int outputIndex = 0; outputIndex < exposedStreams.length; outputIndex++) {
+            if (exposedStreams[outputIndex] != null) {
+                continue;
+            }
+            var type = sourceSchema.field(outputIndex).type();
+            if (!type.isSpecified()) {
+                schema[outputIndex] = Streams.empty();
+                exposedStreams[outputIndex] = Set.of();
+                continue;
+            }
+            var factory = type.vectorFactory()
+                    .orElseThrow(() -> new IllegalStateException("TopN output type does not provide a vector factory"));
+            Vector values = factory.nullValues(allocator.vectorAllocator(allocationContext), 0);
+            if (values.length() != 0 || !type.supportsVector(values)) {
+                throw new IllegalStateException("TopN output type returned an incompatible empty representation");
+            }
+            schema[outputIndex] = Streams.ofValues(values);
+            exposedStreams[outputIndex] = Set.of(Stream.VALUES);
+        }
     }
 
     public void releaseFallbackBatch()

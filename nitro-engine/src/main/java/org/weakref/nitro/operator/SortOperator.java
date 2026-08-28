@@ -231,6 +231,9 @@ public class SortOperator
             }
         }
 
+        if (slotCount == 0) {
+            state.prepareEmptyOutputSchema();
+        }
         stableSort(orderedSlots, sortScratch, slotCount);
         state.setOrderedSlots(orderedSlots, slotCount);
         done = true;
