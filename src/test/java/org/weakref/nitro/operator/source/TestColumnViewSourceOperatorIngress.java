@@ -31,12 +31,14 @@ import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
+import org.weakref.nitro.data.ValueDemand;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.DynamicFilter;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.Output;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -44,10 +46,33 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class TestColumnViewSourceOperatorIngress
 {
     private static final Schema SCHEMA = Schema.unspecified(List.of("value"));
+
+    @Test
+    void testPreservesKnownEmptySourceOutputDemand()
+    {
+        try (Operator operator = new BatchSourceOperator(
+                new SingleBatchSource(null),
+                new SourceOperatorIngress()
+                {
+                    @Override
+                    public Batch adapt(SourceBatch batch)
+                    {
+                        throw new UnsupportedOperationException();
+                    }
+                })) {
+            assertThat(operator.sourceOutputDemand(Map.of())).contains(Map.of());
+            assertThat(operator.sourceOutputDemand(Map.of(0, ValueDemand.FULL)))
+                    .contains(Map.of(0, ValueDemand.FULL));
+            assertThatThrownBy(() -> operator.sourceOutputDemand(Map.of(1, ValueDemand.FULL)))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessage("demanded output is outside source schema: 1");
+        }
+    }
 
     @Test
     void testConstructedColumnBindingPreservesLazinessSelectionAndLifetime()

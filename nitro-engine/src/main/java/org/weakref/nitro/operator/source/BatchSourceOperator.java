@@ -20,10 +20,14 @@ import org.weakref.nitro.core.source.SourceCapability;
 import org.weakref.nitro.core.source.SourcePoll;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.ValueDemand;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.DynamicFilter;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.StaticFilterEnforcement;
+
+import java.util.Map;
+import java.util.Optional;
 
 import static java.util.Objects.requireNonNull;
 
@@ -149,6 +153,18 @@ public final class BatchSourceOperator
             throw new IllegalStateException("No current batch");
         }
         currentBatch.constrain(mask);
+    }
+
+    @Override
+    public Optional<Map<Integer, ValueDemand>> sourceOutputDemand(Map<Integer, ValueDemand> demandedOutputs)
+    {
+        requireNonNull(demandedOutputs, "demandedOutputs is null");
+        for (int output : demandedOutputs.keySet()) {
+            if (output < 0 || output >= outputCount()) {
+                throw new IllegalArgumentException("demanded output is outside source schema: " + output);
+            }
+        }
+        return Optional.of(Map.copyOf(demandedOutputs));
     }
 
     @Override
