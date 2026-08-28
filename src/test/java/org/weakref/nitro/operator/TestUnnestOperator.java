@@ -33,6 +33,7 @@ import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.StructVector;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.execution.EngineResources;
 
 import java.util.List;
@@ -181,6 +182,7 @@ public class TestUnnestOperator
         Allocator allocator = new Allocator(EngineResources.createDefault());
         ArrayVector domain = array(new int[] {0, 2, 3}, 10, 11, 20);
         DictionaryVector arrays = DictionaryVector.wrap(new int[] {0, 1, 0}, domain);
+        assertThat(VectorAccess.repeatedValues(arrays).supportsValueRuns()).isFalse();
         Operator source = new TableOperator(
                 Schema.unspecified(1),
                 List.of(TableOperator.Page.values(
@@ -208,6 +210,7 @@ public class TestUnnestOperator
         Allocator allocator = new Allocator(EngineResources.createDefault());
         ArrayVector domain = array(new int[] {0, 2, 3}, 10, 11, 20);
         RleVector arrays = new RleVector(new int[] {2, 1}, domain);
+        assertThat(VectorAccess.repeatedValues(arrays).supportsValueRuns()).isTrue();
         Operator source = new TableOperator(
                 Schema.unspecified(1),
                 List.of(TableOperator.Page.values(3, new Vector[] {arrays}, Mask.all(3))));

@@ -289,6 +289,32 @@ public final class DictionaryVector
         return domainFrequencies[dictionaryId];
     }
 
+    /** Returns whether every represented dictionary entry satisfies the predicate, or false without exact metadata. */
+    public boolean allPresentDomainEntriesMatch(IntPredicate predicate)
+    {
+        requireNonNull(predicate, "predicate is null");
+        if (domainFrequencies != null) {
+            for (int dictionaryId = 0; dictionaryId < domainFrequencies.length; dictionaryId++) {
+                if (domainFrequencies[dictionaryId] > 0 && !predicate.test(dictionaryId)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        if (!hasDomainPresence) {
+            return false;
+        }
+        long present = domainPresenceBits;
+        while (present != 0) {
+            int dictionaryId = Long.numberOfTrailingZeros(present);
+            present &= present - 1;
+            if (!predicate.test(dictionaryId)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     /**
      * Visits each dictionary entry represented by the selected logical rows exactly once, without materializing row
      * positions. The visitor may return {@code false} to stop early. Returns {@code false} without invoking the

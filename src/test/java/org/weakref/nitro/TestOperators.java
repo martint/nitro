@@ -531,6 +531,28 @@ public class TestOperators
     }
 
     @Test
+    void testDictionaryDomainPresenceProvesReferencedNullDomainIsEmpty()
+    {
+        BooleanVector nullDomain = new BooleanVector(new boolean[] {false, true});
+        DictionaryVector nulls = DictionaryVector.wrapOwnedIdsWithDomainPresence(
+                new I32Vector(new int[] {0, 0, 0}),
+                3,
+                nullDomain,
+                0b01);
+        assertThat(VectorAccess.isAllFalseNulls(nulls)).isTrue();
+
+        DictionaryVector nullable = DictionaryVector.wrapOwnedIdsWithDomainPresence(
+                new I32Vector(new int[] {0, 1, 0}),
+                3,
+                nullDomain,
+                0b11);
+        assertThat(VectorAccess.isAllFalseNulls(nullable)).isFalse();
+
+        DictionaryVector unknownMembership = DictionaryVector.wrap(new int[] {0, 0, 0}, nullDomain);
+        assertThat(VectorAccess.isAllFalseNulls(unknownMembership)).isFalse();
+    }
+
+    @Test
     void testProjectOperatorSupportsNestedDictionaryIntegerDispatch()
     {
         PrimitiveRegistry primitiveRegistry = primitiveRegistry();

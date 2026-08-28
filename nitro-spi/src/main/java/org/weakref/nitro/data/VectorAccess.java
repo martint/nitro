@@ -38,6 +38,11 @@ public final class VectorAccess
             return position + 1;
         }
 
+        default boolean supportsValueRuns()
+        {
+            return false;
+        }
+
         int outputCount();
 
         Streams output(int output);
@@ -108,6 +113,12 @@ public final class VectorAccess
                     public int valueRunEnd(int position)
                     {
                         return rle.runEnd(run(position));
+                    }
+
+                    @Override
+                    public boolean supportsValueRuns()
+                    {
+                        return true;
                     }
 
                     @Override
@@ -367,8 +378,11 @@ public final class VectorAccess
             return flat.isAllFalse();
         }
         if (nulls instanceof DictionaryVector dictionary) {
-            // Any ids over an all-false dictionary select only false, so the stream is all-false.
-            // (Conservative: a false here may still be effectively all-false, but never the reverse.)
+            BooleanValues values = booleanValues(dictionary.values());
+            if (dictionary.allPresentDomainEntriesMatch(dictionaryId -> !values.value(dictionaryId))) {
+                return true;
+            }
+            // Without exact membership metadata, an all-false physical domain is still sufficient proof.
             return isAllFalseNulls(dictionary.values());
         }
         if (nulls instanceof ConcatenatedBooleanVector concatenated) {

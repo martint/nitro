@@ -576,7 +576,7 @@ public final class UnnestOperator
                 Vector nulls = input.borrowOrNull(Stream.NULLS);
                 boolean nullFree = VectorAccess.isAllFalseNulls(nulls);
                 collectionNulls[mapping] = VectorAccess.booleanValues(nullFree ? null : nulls);
-                rowShapeReusable &= nullFree;
+                rowShapeReusable &= nullFree && repeated[mapping].supportsValueRuns();
             }
             this.rowShapeReusable = rowShapeReusable;
             skipRowsWithoutOutput();
