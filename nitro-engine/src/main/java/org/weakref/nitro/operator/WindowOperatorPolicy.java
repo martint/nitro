@@ -28,6 +28,13 @@ public record WindowOperatorPolicy(
         int reuseOrderedInputSamples,
         boolean debugReuseOrderedInput)
 {
+    public WindowOperatorPolicy
+    {
+        if (maxBatchRows <= 0) {
+            throw new IllegalArgumentException("maxBatchRows must be positive");
+        }
+    }
+
     public static WindowOperatorPolicy defaults()
     {
         return new WindowOperatorPolicy(

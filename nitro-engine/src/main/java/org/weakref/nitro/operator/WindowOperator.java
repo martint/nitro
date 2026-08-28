@@ -354,12 +354,19 @@ public final class WindowOperator
         if (!loaded) {
             load();
         }
-        int batchSize = Math.min(policy.maxBatchRows(), rowCount() - currentOutputPosition);
+        int remainingRows = rowCount() - currentOutputPosition;
+        if (remainingRows <= 0) {
+            throw new IllegalStateException("No window rows remain: currentOutputPosition=%s, rowCount=%s, singlePage=%s"
+                    .formatted(currentOutputPosition, rowCount(), singlePage));
+        }
+        int batchSize = Math.min(policy.maxBatchRows(), remainingRows);
         if (!singlePage && inputOrder.isFullyOrdered(orderingColumns.length)) {
-            long firstRow = rowReferences[currentOutputPosition];
-            batchSize = Math.min(
-                    batchSize,
-                    pages.get(pageIndex(firstRow)).rows() - pagePosition(firstRow));
+            int page = pageIndex(rowReferences[currentOutputPosition]);
+            int rowsInPage = 1;
+            while (rowsInPage < batchSize && pageIndex(rowReferences[currentOutputPosition + rowsInPage]) == page) {
+                rowsInPage++;
+            }
+            batchSize = rowsInPage;
         }
         if (lazyOutputs) {
             return lazyBatch(currentOutputPosition, batchSize);
@@ -1438,7 +1445,7 @@ public final class WindowOperator
             long firstRow = rowReferences[startPosition];
             TableOperator.Page page = pages.get(pageIndex(firstRow));
             int pagePosition = pagePosition(firstRow);
-            if (pagePosition == 0 && batchSize == page.rows()) {
+            if (page.mask().all() && pagePosition == 0 && batchSize == page.rows()) {
                 return page.columns()[outputIndex].get(stream).copy(allocator, allocationContext);
             }
         }
