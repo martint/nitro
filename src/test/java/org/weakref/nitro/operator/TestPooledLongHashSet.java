@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.operator;
 
+import jdk.incubator.vector.LongVector;
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.data.PrimitiveArrayPool;
 
@@ -23,6 +24,15 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class TestPooledLongHashSet
 {
+    @Test
+    void testDefaultsUseVectorKeysForFourOrMoreHardwareLanes()
+    {
+        PooledLongHashSetPolicy policy = PooledLongHashSetPolicy.defaults();
+
+        assertThat(policy.keyGroupBits()).isEqualTo(Math.clamp(LongVector.SPECIES_PREFERRED.vectorBitSize(), 64, 512));
+        assertThat(policy.vectorKeys()).isEqualTo(LongVector.SPECIES_PREFERRED.length() >= 4);
+    }
+
     @Test
     void testInsertResizeAndReuse()
     {

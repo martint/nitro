@@ -47,7 +47,7 @@ public record PooledLongHashSetPolicy(
 
     public static PooledLongHashSetPolicy defaults()
     {
-        return new PooledLongHashSetPolicy(0.75f, true, supportsWideKeyGroups(), 5, 50, 128, preferredKeyGroupBits(), false);
+        return new PooledLongHashSetPolicy(0.75f, true, supportsVectorKeyGroups(), 5, 50, 128, preferredKeyGroupBits(), false);
     }
 
     public static PooledLongHashSetPolicy fromSystemProperties()
@@ -57,7 +57,7 @@ public record PooledLongHashSetPolicy(
                 Boolean.parseBoolean(System.getProperty("nitro.distinct.scalarLongVectorTags", "true")),
                 Boolean.parseBoolean(System.getProperty(
                         "nitro.distinct.scalarLongVectorKeys",
-                        Boolean.toString(supportsWideKeyGroups()))),
+                        Boolean.toString(supportsVectorKeyGroups()))),
                 Integer.getInteger("nitro.distinct.scalarLongVectorTagMinNewKeyPercent", 5),
                 Integer.getInteger("nitro.distinct.scalarLongVectorKeyMaxNewKeyPercent", 50),
                 Integer.getInteger("nitro.distinct.scalarLongTagGroupBits", 128),
@@ -70,11 +70,11 @@ public record PooledLongHashSetPolicy(
         return Math.clamp(LongVector.SPECIES_PREFERRED.vectorBitSize(), 64, 512);
     }
 
-    private static boolean supportsWideKeyGroups()
+    private static boolean supportsVectorKeyGroups()
     {
-        // Four-lane key probes do not amortize their vector setup on current AVX2 implementations. Keep the
-        // independently useful compact-tag path enabled there and admit direct key vectors only where an
-        // eight-lane long vector is intrinsified.
-        return LongVector.SPECIES_PREFERRED.vectorBitSize() >= 512;
+        // End-to-end high-cardinality grouping shows that four-lane AVX2 probes repay their setup even where an
+        // isolated probe microbenchmark does not: fewer probe iterations also reduce surrounding grouping and
+        // output pressure. Keep scalar keys only on targets narrower than four long lanes.
+        return LongVector.SPECIES_PREFERRED.vectorBitSize() >= 256;
     }
 }
