@@ -741,7 +741,7 @@ public final class PlanEvaluator
             DictionaryDomainCacheEntry cached = findCachedDomain(cachedDomains, cacheKey);
             if (cached != null) {
                 dictionaryDomainCacheHits++;
-                return wrapDictionaryPeeledStreams(peeling.ids(), peeling.rowCount(), cached.result(), true);
+                return wrapDictionaryPeeledStreams(peeling.mapping(), peeling.rowCount(), cached.result(), true);
             }
             if (cachedDomains != null && !cachedDomains.isEmpty()) {
                 dictionaryDomainCacheChanges++;
@@ -753,7 +753,7 @@ public final class PlanEvaluator
             if (cacheKey != null) {
                 replaceDictionaryDomainCache(call, cacheKey, baseResult);
             }
-            return wrapDictionaryPeeledStreams(peeling.ids(), peeling.rowCount(), baseResult, false);
+            return wrapDictionaryPeeledStreams(peeling.mapping(), peeling.rowCount(), baseResult, false);
         }
         finally {
             allocator.release(allocationContext, peeling.baseMask());
@@ -926,11 +926,13 @@ public final class PlanEvaluator
 
         int[] sharedIds = null;
         int rowCount = -1;
+        DictionaryVector mapping = null;
         for (Streams inputStreams : inputs) {
             if (inputStreams.getOrNull(Stream.VALUES) instanceof DictionaryVector dictionary) {
                 if (sharedIds == null) {
                     sharedIds = dictionary.ids();
                     rowCount = dictionary.length();
+                    mapping = dictionary;
                 }
                 else if (dictionary.length() != rowCount || !sameDictionaryIds(sharedIds, dictionary.ids(), rowCount)) {
                     return null;
@@ -983,7 +985,7 @@ public final class PlanEvaluator
         }
 
         Streams.Builder result = Streams.builder();
-        result.put(Stream.VALUES, wrapBorrowedDictionary(sharedIds, rowCount, baseValues));
+        result.put(Stream.VALUES, wrapBorrowedDictionary(mapping, rowCount, baseValues));
         if (passthroughNulls != null && requestedStreams.contains(Stream.NULLS)) {
             result.put(Stream.NULLS, passthroughNulls);
         }
@@ -1027,7 +1029,7 @@ public final class PlanEvaluator
             }
             peeledInputs.add(peeled);
         }
-        return new DictionaryPeeling(sharedIds, rowCount, baseMask, List.copyOf(peeledInputs));
+        return new DictionaryPeeling(mapping, rowCount, baseMask, List.copyOf(peeledInputs));
     }
 
     /**
@@ -1157,14 +1159,14 @@ public final class PlanEvaluator
     private record EncodedMergeCondition(DictionaryVector mapping, byte[] choices) {}
 
     private Streams wrapDictionaryPeeledStreams(
-            int[] sharedIds,
+            DictionaryVector mapping,
             int rowCount,
             Streams streams,
             boolean cached)
     {
         Streams.Builder wrapped = Streams.builder();
         for (Stream stream : streams.streams()) {
-            DictionaryVector dictionary = wrapBorrowedDictionary(sharedIds, rowCount, streams.get(stream));
+            DictionaryVector dictionary = wrapBorrowedDictionary(mapping, rowCount, streams.get(stream));
             if (cached) {
                 cachedDictionaryResults.add(dictionary);
             }
@@ -1176,6 +1178,16 @@ public final class PlanEvaluator
     private DictionaryVector wrapBorrowedDictionary(int[] ids, int length, Vector values)
     {
         DictionaryVector dictionary = allocator.adopt(allocationContext, DictionaryVector.wrapNested(ids, length, values));
+        borrowedDictionaryResults.add(dictionary);
+        return dictionary;
+    }
+
+    private DictionaryVector wrapBorrowedDictionary(DictionaryVector mapping, int length, Vector values)
+    {
+        requireNonNull(mapping, "mapping is null");
+        DictionaryVector dictionary = values.length() == mapping.values().length()
+                ? allocator.adopt(allocationContext, mapping.sharedMappingWithValues(values))
+                : allocator.adopt(allocationContext, DictionaryVector.wrapNested(mapping.ids(), length, values));
         borrowedDictionaryResults.add(dictionary);
         return dictionary;
     }
@@ -4414,7 +4426,7 @@ public final class PlanEvaluator
     }
 
     private record DictionaryPeeling(
-            int[] ids,
+            DictionaryVector mapping,
             int rowCount,
             Mask baseMask,
             List<Streams> inputs) {}

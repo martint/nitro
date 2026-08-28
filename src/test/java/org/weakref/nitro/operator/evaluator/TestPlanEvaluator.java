@@ -4243,6 +4243,57 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testDictionaryPeelingPreservesExactSharedMapping()
+    {
+        PrimitiveRegistry registry = new PrimitiveRegistry();
+        registry.register("dictionary_identity", new PrimitiveFunction()
+        {
+            @Override
+            public Streams apply(List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
+            {
+                return inputs.getFirst();
+            }
+
+            @Override
+            public Set<Stream> requiredInputStreams(int inputIndex, Set<Stream> requestedOutputStreams)
+            {
+                return ALL_INPUT_STREAMS;
+            }
+        });
+
+        Variable result = new Variable(0);
+        Reference inputValues = new Reference(new Input(0), Stream.VALUES);
+        Reference inputNulls = new Reference(new Input(0), Stream.NULLS);
+        Reference resultValues = new Reference(result, Stream.VALUES);
+        int[] ids = {0, 1, 0, 2, 1, 2};
+        DictionaryVector values = DictionaryVector.wrapWithDomainFrequencies(
+                ids,
+                ids.length,
+                new I64Vector(new long[] {11, 29, 0}),
+                new int[] {2, 2, 2});
+        DictionaryVector nulls = values.sharedMappingWithValues(new BooleanVector(new boolean[] {false, false, true}));
+        PlanEvaluator evaluator = planEvaluator(
+                new EvaluationPlan(
+                        List.of(new Assignment(result, new Call("dictionary_identity", List.of(inputValues)), AllMask.ALL)),
+                        List.of(resultValues)),
+                registry,
+                inputResolver(Map.of(inputValues, values, inputNulls, nulls)),
+                new Allocator(EngineResources.createDefault()));
+
+        Streams streams = evaluator.evaluate(resultValues, Mask.all(ids.length));
+
+        assertThat(streams.values()).isInstanceOf(DictionaryVector.class);
+        assertThat(streams.get(Stream.NULLS)).isInstanceOf(DictionaryVector.class);
+        DictionaryVector resultDictionary = (DictionaryVector) streams.values();
+        DictionaryVector resultNulls = (DictionaryVector) streams.get(Stream.NULLS);
+        assertThat(resultDictionary.hasSameRowMapping(resultNulls)).isTrue();
+        assertThat(resultDictionary.hasDomainFrequencies()).isTrue();
+        assertThat(resultDictionary.domainFrequency(0)).isEqualTo(2);
+        assertThat(resultDictionary.domainFrequency(1)).isEqualTo(2);
+        assertThat(resultDictionary.domainFrequency(2)).isEqualTo(2);
+    }
+
+    @Test
     void testDictionaryPeelingDoesNotAttachFrequenciesToChangedOutputDomain()
     {
         PrimitiveRegistry registry = new PrimitiveRegistry();

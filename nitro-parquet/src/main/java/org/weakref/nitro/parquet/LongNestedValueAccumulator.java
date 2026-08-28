@@ -268,15 +268,6 @@ final class LongNestedValueAccumulator
         if ((long) maxEntries * 2 > (1L << 30)) {
             return null;
         }
-        if (nullable) {
-            boolean[] nullValues = nullValues();
-            for (int position = 0; position < size; position++) {
-                if (nullValues[position]) {
-                    return null;
-                }
-            }
-        }
-
         int tableSize = 1;
         while (tableSize < maxEntries * 2) {
             tableSize <<= 1;
@@ -294,9 +285,23 @@ final class LongNestedValueAccumulator
         Arrays.fill(dictionaryFrequencies, 0, maxEntries, 0);
 
         long[] flatValues = directValues instanceof I64Vector longs ? longs.values() : values;
+        boolean[] flatNulls = nullable ? nullValues() : null;
         int distinct = 0;
+        int nullId = -1;
         int mask = tableSize - 1;
         for (int position = 0; position < size; position++) {
+            if (flatNulls != null && flatNulls[position]) {
+                if (nullId < 0) {
+                    if (distinct == maxEntries || (long) (distinct + 1) * minRowsPerEntry > size) {
+                        return null;
+                    }
+                    nullId = distinct++;
+                    dictionary[nullId] = 0;
+                }
+                dictionaryIds[position] = nullId;
+                dictionaryFrequencies[nullId]++;
+                continue;
+            }
             long value = flatValues[position];
             int slot = mix(value) & mask;
             int entry;
@@ -342,12 +347,23 @@ final class LongNestedValueAccumulator
             allocator.release(context, directValues);
             directValues = null;
         }
-        BooleanVector resultNulls = directNulls;
-        if (nullable && resultNulls == null) {
-            resultNulls = allocator.allocate(context, BooleanVector.class, size, BooleanVector::new);
+        Vector resultNulls = null;
+        if (nullId >= 0) {
+            if (directNulls != null) {
+                allocator.release(context, directNulls);
+            }
+            BooleanVector domainNulls = allocator.allocate(context, BooleanVector.class, distinct, BooleanVector::new);
+            domainNulls.values()[nullId] = true;
+            resultNulls = encoded.sharedMappingWithValues(domainNulls.freezeContent());
+        }
+        else if (nullable) {
+            resultNulls = directNulls;
+            if (resultNulls == null) {
+                resultNulls = allocator.allocate(context, BooleanVector.class, size, BooleanVector::new);
+            }
         }
         directNulls = null;
-        return resultNulls == null ? Streams.ofValues(encoded) : Streams.ofValuesAndNulls(encoded, resultNulls);
+        return resultNulls == null ? Streams.ofValues(encoded) : Streams.of(encoded, resultNulls, null);
     }
 
     private static int mix(long value)

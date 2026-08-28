@@ -105,6 +105,42 @@ class TestLongNestedValueAccumulator
         }
     }
 
+    @Test
+    void testRecoversNullableRepeatedDomainFromPlainValues()
+    {
+        PrimitiveArrayPool arrays = new PrimitiveArrayPool(0, 0);
+        try (Allocator allocator = new Allocator(EngineResources.createDefault());
+                LongPhysicalValueDecoder decoder = new LongPhysicalValueDecoder(Type.INT64, arrays);
+                LongNestedValueAccumulator accumulator = new LongNestedValueAccumulator(false, true)) {
+            long[] input = new long[1_024];
+            for (int position = 0; position < input.length; position++) {
+                input[position] = 100 + (position & 1);
+            }
+            decoder.decodePlain(longs(input), 0, input.length);
+            Allocator.Context context = new Allocator.Context("test");
+            accumulator.reset(allocator, context, input.length);
+            for (int position = 0; position < input.length; position++) {
+                if ((position & 3) == 3) {
+                    accumulator.appendNull();
+                }
+                else {
+                    accumulator.append(decoder, position, -1);
+                }
+            }
+
+            Streams streams = accumulator.materialize(allocator, context);
+            assertThat(streams.values()).isInstanceOf(DictionaryVector.class);
+            DictionaryVector dictionary = (DictionaryVector) streams.values();
+            assertThat(dictionary.values().length()).isEqualTo(3);
+            assertThat(dictionary.hasDomainFrequencies()).isTrue();
+            assertThat(dictionary.hasSameRowMapping((DictionaryVector) streams.get(Stream.NULLS))).isTrue();
+            assertThat(VectorAccess.longValues(dictionary).value(0)).isEqualTo(100);
+            assertThat(VectorAccess.longValues(dictionary).value(1)).isEqualTo(101);
+            assertThat(VectorAccess.booleanValues(streams.get(Stream.NULLS)).value(2)).isFalse();
+            assertThat(VectorAccess.booleanValues(streams.get(Stream.NULLS)).value(3)).isTrue();
+        }
+    }
+
     private static MemorySegment longs(long... values)
     {
         ByteBuffer output = ByteBuffer.allocate(values.length * Long.BYTES).order(ByteOrder.LITTLE_ENDIAN);
