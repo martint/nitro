@@ -18,6 +18,7 @@ import jdk.incubator.vector.VectorOperators;
 import jdk.incubator.vector.VectorSpecies;
 
 final class NestedEventWindow
+        implements NestedEventWindowView
 {
     private static final VectorSpecies<Integer> INT_SPECIES = IntVector.SPECIES_PREFERRED;
 
@@ -73,17 +74,20 @@ final class NestedEventWindow
         this.physicalValuesPresent = physicalValuesPresent;
     }
 
-    int length()
+    @Override
+    public int length()
     {
         return length;
     }
 
-    int repetitionLevel(int index)
+    @Override
+    public int repetitionLevel(int index)
     {
         return repetitionLevels[offset + index];
     }
 
-    int definitionLevel(int index)
+    @Override
+    public int definitionLevel(int index)
     {
         return constantDefinitionLevel ? definitionLevel : definitionLevels[offset + index];
     }
@@ -93,19 +97,27 @@ final class NestedEventWindow
         return repetitionLevels;
     }
 
-    boolean allDefinitionLevelsAtLeast(int count, int minimum)
+    @Override
+    public boolean allDefinitionLevelsAtLeast(int count, int minimum)
     {
-        if (count < 0 || count > length) {
-            throw new IndexOutOfBoundsException("Invalid nested event prefix: " + count);
+        return allDefinitionLevelsAtLeast(0, count, minimum);
+    }
+
+    @Override
+    public boolean allDefinitionLevelsAtLeast(int start, int count, int minimum)
+    {
+        if (start < 0 || count < 0 || start > length - count) {
+            throw new IndexOutOfBoundsException("Invalid nested event subwindow: " + start + ", " + count);
         }
         if (constantDefinitionLevel) {
             return definitionLevel >= minimum;
         }
 
-        int end = offset + count;
-        int vectorEnd = offset + INT_SPECIES.loopBound(count);
+        int first = offset + start;
+        int end = first + count;
+        int vectorEnd = first + INT_SPECIES.loopBound(count);
         IntVector threshold = IntVector.broadcast(INT_SPECIES, minimum);
-        for (int index = offset; index < vectorEnd; index += INT_SPECIES.length()) {
+        for (int index = first; index < vectorEnd; index += INT_SPECIES.length()) {
             if (IntVector.fromArray(INT_SPECIES, definitionLevels, index)
                     .compare(VectorOperators.LT, threshold)
                     .anyTrue()) {

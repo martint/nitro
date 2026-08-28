@@ -206,8 +206,8 @@ class TestNestedArrayReader
                 list,
                 RleReaderPolicy.defaults(),
                 new NestedLeafCursor[] {
-                    new TestingCursor(ids, repetitions, new int[] {4, 2, 1, 4, 0}, new int[] {0, -1, -1, 1, -1}),
-                    new TestingCursor(labels, repetitions, new int[] {4, 2, 1, 3, 0}, new int[] {0, -1, -1, -1, -1})});
+                    new TestingCursor(ids, repetitions, new int[] {4, 2, 1, 4, 0}, new int[] {0, -1, -1, 1, -1}, 2, false),
+                    new TestingCursor(labels, repetitions, new int[] {4, 2, 1, 3, 0}, new int[] {0, -1, -1, -1, -1}, 3, false)});
     }
 
     private static String value(BinaryVector vector, int position)
@@ -244,20 +244,38 @@ class TestNestedArrayReader
         private final int[] repetitions;
         private final int[] definitions;
         private final int[] ordinals;
+        private final int maximumWindowLength;
+        private final boolean scalarAdvanceSupported;
         private final NestedEventWindow window = new NestedEventWindow();
         private int event = -1;
 
         private TestingCursor(PhysicalValueDecoder decoder, int[] repetitions, int[] definitions, int[] ordinals)
         {
+            this(decoder, repetitions, definitions, ordinals, Integer.MAX_VALUE, true);
+        }
+
+        private TestingCursor(
+                PhysicalValueDecoder decoder,
+                int[] repetitions,
+                int[] definitions,
+                int[] ordinals,
+                int maximumWindowLength,
+                boolean scalarAdvanceSupported)
+        {
             this.decoder = decoder;
             this.repetitions = repetitions;
             this.definitions = definitions;
             this.ordinals = ordinals;
+            this.maximumWindowLength = maximumWindowLength;
+            this.scalarAdvanceSupported = scalarAdvanceSupported;
         }
 
         @Override
         public boolean next()
         {
+            if (!scalarAdvanceSupported) {
+                throw new AssertionError("scalar event advance is not supported");
+            }
             return ++event < repetitions.length;
         }
 
@@ -304,7 +322,14 @@ class TestNestedArrayReader
             if (offset == repetitions.length) {
                 return null;
             }
-            window.reset(decoder, repetitions, definitions, ordinals, null, offset, repetitions.length - offset);
+            window.reset(
+                    decoder,
+                    repetitions,
+                    definitions,
+                    ordinals,
+                    null,
+                    offset,
+                    Math.min(maximumWindowLength, repetitions.length - offset));
             return window;
         }
 

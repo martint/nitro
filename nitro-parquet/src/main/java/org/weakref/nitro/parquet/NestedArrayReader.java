@@ -25,6 +25,7 @@ import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.StructVector;
 
+import java.util.Arrays;
 import java.util.List;
 
 import static java.util.Objects.requireNonNull;
@@ -179,8 +180,8 @@ final class NestedArrayReader
             return listNulls == null ? Streams.ofValues(arrays) : Streams.ofValuesAndNulls(arrays, listNulls);
         }
 
-        if (!positioned && elements.eventSource() instanceof NestedLeafEventSource eventSource) {
-            readEventWindows(eventSource, arrays, listNulls, rowCount, mask);
+        if (!positioned && elements.eventWindow() != null) {
+            readEventWindows(elements, arrays, listNulls, rowCount, mask);
             arrays.setElements(elements.materialize(allocator, context));
             return finish(allocator, context, arrays, listNulls, rowCount, mask);
         }
@@ -250,7 +251,7 @@ final class NestedArrayReader
     }
 
     private void readEventWindows(
-            NestedLeafEventSource reader,
+            ElementReader reader,
             ArrayVector arrays,
             BooleanVector listNulls,
             int rowCount,
@@ -267,7 +268,7 @@ final class NestedArrayReader
         boolean selected = false;
 
         while (true) {
-            NestedEventWindow window = reader.eventWindow();
+            NestedEventWindowView window = reader.eventWindow();
             if (window == null) {
                 if (row == rowCount - 1) {
                     arrays.offsets()[rowCount] = elements.size();
@@ -328,7 +329,7 @@ final class NestedArrayReader
     }
 
     private void readAllEventWindows(
-            NestedLeafEventSource reader,
+            ElementReader reader,
             ArrayVector arrays,
             BooleanVector listNulls,
             int rowCount)
@@ -339,7 +340,7 @@ final class NestedArrayReader
         int listDefinitionLevel = list.maximumDefinitionLevel();
 
         while (true) {
-            NestedEventWindow window = reader.eventWindow();
+            NestedEventWindowView window = reader.eventWindow();
             if (window == null) {
                 if (row == rowCount - 1) {
                     arrays.offsets()[rowCount] = outputElementCount;
@@ -484,12 +485,17 @@ final class NestedArrayReader
 
         void appendCurrent();
 
-        default NestedLeafEventSource eventSource()
+        default NestedEventWindowView eventWindow()
         {
             return null;
         }
 
-        default void appendWindow(NestedEventWindow window, int offset, int count)
+        default void advanceEvents(int count)
+        {
+            throw new UnsupportedOperationException("element reader does not support event windows");
+        }
+
+        default void appendWindow(NestedEventWindowView window, int offset, int count)
         {
             throw new UnsupportedOperationException("element reader does not support event windows");
         }
@@ -584,15 +590,21 @@ final class NestedArrayReader
         }
 
         @Override
-        public NestedLeafEventSource eventSource()
+        public NestedEventWindowView eventWindow()
         {
-            return reader instanceof NestedLeafEventSource source ? source : null;
+            return reader instanceof NestedLeafEventSource source ? source.eventWindow() : null;
         }
 
         @Override
-        public void appendWindow(NestedEventWindow window, int offset, int count)
+        public void advanceEvents(int count)
         {
-            window.appendTo(values, offset, count);
+            ((NestedLeafEventSource) reader).advanceEvents(count);
+        }
+
+        @Override
+        public void appendWindow(NestedEventWindowView window, int offset, int count)
+        {
+            ((NestedEventWindow) window).appendTo(values, offset, count);
         }
 
         @Override
@@ -630,6 +642,7 @@ final class NestedArrayReader
         private final NestedLeafCursor[] readers;
         private final NestedValueAccumulator[] values;
         private final NullAccumulator nulls = new NullAccumulator();
+        private final StructEventWindow eventWindow;
 
         private StructElementReader(
                 ParquetSchema.Group element,
@@ -672,6 +685,9 @@ final class NestedArrayReader
                             leaf, true, child.type(), child.value(), materializationPolicy);
                 }
             }
+            eventWindow = Arrays.stream(readers).allMatch(NestedLeafEventSource.class::isInstance)
+                    ? new StructEventWindow(element.maximumDefinitionLevel(), readers.length)
+                    : null;
         }
 
         @Override
@@ -754,6 +770,62 @@ final class NestedArrayReader
         }
 
         @Override
+        public NestedEventWindowView eventWindow()
+        {
+            if (eventWindow == null) {
+                return null;
+            }
+            NestedEventWindow[] windows = eventWindow.windows();
+            int length = Integer.MAX_VALUE;
+            for (int field = 0; field < readers.length; field++) {
+                NestedEventWindow window = ((NestedLeafEventSource) readers[field]).eventWindow();
+                windows[field] = window;
+                if (window == null) {
+                    if (field != 0 || length != Integer.MAX_VALUE) {
+                        throw new IllegalArgumentException("LIST struct leaf event streams have different lengths");
+                    }
+                    for (int remaining = field + 1; remaining < readers.length; remaining++) {
+                        if (((NestedLeafEventSource) readers[remaining]).eventWindow() != null) {
+                            throw new IllegalArgumentException("LIST struct leaf event streams have different lengths");
+                        }
+                    }
+                    return null;
+                }
+                length = Math.min(length, window.length());
+            }
+            eventWindow.reset(length);
+            return eventWindow;
+        }
+
+        @Override
+        public void advanceEvents(int count)
+        {
+            for (NestedLeafCursor reader : readers) {
+                ((NestedLeafEventSource) reader).advanceEvents(count);
+            }
+        }
+
+        @Override
+        public void appendWindow(NestedEventWindowView window, int offset, int count)
+        {
+            StructEventWindow structWindow = (StructEventWindow) window;
+            NestedEventWindow[] windows = structWindow.windows();
+            if (element.repetition() != FieldRepetitionType.REQUIRED) {
+                if (structWindow.allDefinitionLevelsAtLeast(offset, count, element.maximumDefinitionLevel())) {
+                    nulls.append(false, count);
+                }
+                else {
+                    for (int index = offset; index < offset + count; index++) {
+                        nulls.append(structWindow.definitionLevel(index) < element.maximumDefinitionLevel());
+                    }
+                }
+            }
+            for (int field = 0; field < values.length; field++) {
+                windows[field].appendTo(values[field], offset, count);
+            }
+        }
+
+        @Override
         public int size()
         {
             return values[0].size();
@@ -828,6 +900,83 @@ final class NestedArrayReader
         }
     }
 
+    private static final class StructEventWindow
+            implements NestedEventWindowView
+    {
+        private final int elementDefinitionLevel;
+        private final NestedEventWindow[] windows;
+        private int length;
+
+        private StructEventWindow(int elementDefinitionLevel, int fieldCount)
+        {
+            this.elementDefinitionLevel = elementDefinitionLevel;
+            windows = new NestedEventWindow[fieldCount];
+        }
+
+        private NestedEventWindow[] windows()
+        {
+            return windows;
+        }
+
+        private void reset(int length)
+        {
+            this.length = length;
+            NestedEventWindow first = windows[0];
+            for (int field = 1; field < windows.length; field++) {
+                NestedEventWindow candidate = windows[field];
+                if (Arrays.mismatch(
+                        first.repetitionLevels(),
+                        first.offset(),
+                        first.offset() + length,
+                        candidate.repetitionLevels(),
+                        candidate.offset(),
+                        candidate.offset() + length) >= 0) {
+                    throw new IllegalArgumentException("LIST struct leaves disagree about repetition boundaries");
+                }
+                if (first.allDefinitionLevelsAtLeast(length, elementDefinitionLevel) &&
+                        candidate.allDefinitionLevelsAtLeast(length, elementDefinitionLevel)) {
+                    continue;
+                }
+                for (int index = 0; index < length; index++) {
+                    if ((first.definitionLevel(index) < elementDefinitionLevel) !=
+                            (candidate.definitionLevel(index) < elementDefinitionLevel)) {
+                        throw new IllegalArgumentException("LIST struct leaves disagree about element presence");
+                    }
+                }
+            }
+        }
+
+        @Override
+        public int length()
+        {
+            return length;
+        }
+
+        @Override
+        public int repetitionLevel(int index)
+        {
+            return windows[0].repetitionLevel(index);
+        }
+
+        @Override
+        public int definitionLevel(int index)
+        {
+            return windows[0].definitionLevel(index);
+        }
+
+        @Override
+        public boolean allDefinitionLevelsAtLeast(int count, int minimum)
+        {
+            return windows[0].allDefinitionLevelsAtLeast(count, minimum);
+        }
+
+        @Override
+        public boolean allDefinitionLevelsAtLeast(int offset, int count, int minimum)
+        {
+            return windows[0].allDefinitionLevelsAtLeast(offset, count, minimum);
+        }
+    }
+
     private static final class NullAccumulator
             implements AutoCloseable
     {
@@ -851,6 +1000,16 @@ final class NestedArrayReader
         {
             ensureCapacity(size + 1);
             values[size++] = value;
+        }
+
+        void append(boolean value, int count)
+        {
+            if (count < 0) {
+                throw new IllegalArgumentException("count is negative");
+            }
+            ensureCapacity(size + count);
+            Arrays.fill(values, size, size + count, value);
+            size += count;
         }
 
         BooleanVector materialize(Allocator allocator, Allocator.Context context)
