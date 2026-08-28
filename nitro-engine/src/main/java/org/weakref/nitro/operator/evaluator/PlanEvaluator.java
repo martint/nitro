@@ -949,7 +949,7 @@ public final class PlanEvaluator
         List<Streams> baseInputs = new ArrayList<>(inputs.size());
         Vector passthroughNulls = null;
         for (Streams inputStreams : inputs) {
-            Vector peeledValues = peelDictionaryCompatibleVector(inputStreams.getOrNull(Stream.VALUES), sharedIds, rowCount, baseLength);
+            Vector peeledValues = peelDictionaryCompatibleVector(Stream.VALUES, inputStreams.getOrNull(Stream.VALUES), sharedIds, rowCount, baseLength);
             if (peeledValues == null) {
                 return null;
             }
@@ -1086,7 +1086,7 @@ public final class PlanEvaluator
     {
         Streams.Builder peeled = Streams.builder();
         for (Stream stream : streams.streams()) {
-            Vector peeledVector = peelDictionaryCompatibleVector(streams.get(stream), sharedIds, rowCount, baseLength);
+            Vector peeledVector = peelDictionaryCompatibleVector(stream, streams.get(stream), sharedIds, rowCount, baseLength);
             if (peeledVector == null) {
                 return null;
             }
@@ -1095,8 +1095,18 @@ public final class PlanEvaluator
         return peeled.build();
     }
 
-    private Vector peelDictionaryCompatibleVector(Vector vector, int[] sharedIds, int rowCount, int baseLength)
+    private Vector peelDictionaryCompatibleVector(Stream stream, Vector vector, int[] sharedIds, int rowCount, int baseLength)
     {
+        // Companion streams often preserve a different physical encoding from VALUES. A dictionary over a shared
+        // all-false null/error domain is nevertheless compatible with every VALUES mapping and can be normalized
+        // directly onto that domain. Without this, an innocuous companion encoding forces deterministic functions
+        // to repeat work for every logical row.
+        if (stream != Stream.VALUES && VectorAccess.isAllFalseNulls(vector)) {
+            return fillBoolean(false, baseLength);
+        }
+        if (stream == Stream.NULLS && VectorAccess.isAllTrueNulls(vector)) {
+            return fillBoolean(true, baseLength);
+        }
         if (vector instanceof BooleanVector booleans && booleans.length() == rowCount) {
             // BooleanVector caches constant-content classification. Null and error streams produced as
             // known all-false vectors therefore stay O(1) here instead of being rescanned for every batch.

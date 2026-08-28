@@ -1344,6 +1344,46 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testPeelsDictionaryValuesAcrossConstantEncodedCompanionMapping()
+    {
+        AtomicInteger physicalPositions = new AtomicInteger();
+        PrimitiveRegistry registry = new PrimitiveRegistry();
+        registry.register("counted_nullable_domain", new PrimitiveFunction()
+        {
+            @Override
+            public Set<Stream> requiredInputStreams(int inputIndex, Set<Stream> requestedOutputStreams)
+            {
+                return ALL_INPUT_STREAMS;
+            }
+
+            @Override
+            public Streams apply(List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
+            {
+                physicalPositions.addAndGet(mask.count());
+                return Streams.ofValues(new I64Vector(mask.size()));
+            }
+        });
+
+        Variable result = new Variable(0);
+        Reference values = new Reference(new Input(0), Stream.VALUES);
+        Reference output = new Reference(result, Stream.VALUES);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(result, new Call("counted_nullable_domain", List.of(values)), AllMask.ALL)),
+                List.of(output));
+        int[] ids = {0, 1, 0, 1, 1, 0};
+        PlanEvaluator evaluator = planEvaluator(
+                plan,
+                registry,
+                inputResolver(Map.of(
+                        values, DictionaryVector.wrap(ids, new I64Vector(new long[] {11, 22})),
+                        new Reference(new Input(0), Stream.NULLS), DictionaryVector.wrap(new int[] {0, 0, 0, 0, 0, 0}, new BooleanVector(new boolean[] {false})))),
+                new Allocator(EngineResources.createDefault()));
+
+        assertThat(evaluator.evaluate(output, Mask.all(ids.length)).values()).isInstanceOf(DictionaryVector.class);
+        assertThat(physicalPositions).hasValue(2);
+    }
+
+    @Test
     void testRegexpReplaceUtf8SparseMaskKeepsOffsetsAligned()
     {
         // A sparse mask must not shear the output: the BinaryVector offsets are a cumulative chain over ALL
