@@ -121,20 +121,23 @@ final class ConstantNestedDomainEncoder
             int length,
             int[][] dictionaryIds)
     {
+        int nextStart = firstStart + length;
         for (int row = 1; row < rowCount; row++) {
             int start = values.startOffset(row);
-            if (values.endOffset(row) - start != length) {
+            if (start != nextStart || values.endOffset(row) - start != length) {
                 return false;
             }
-            for (int offset = 0; offset < length; offset++) {
-                int left = firstStart + offset;
-                int right = start + offset;
-                for (int stream = 0; stream < dictionaryIds.length; stream++) {
-                    int[] ids = dictionaryIds[stream];
-                    if (ids[left] != ids[right]) {
-                        return false;
-                    }
-                }
+            nextStart = start + length;
+        }
+        if (length == 0) {
+            return true;
+        }
+
+        int firstEnd = firstStart + length;
+        int end = values.endOffset(rowCount - 1);
+        for (int[] ids : dictionaryIds) {
+            if (java.util.Arrays.mismatch(ids, firstStart, end - length, ids, firstEnd, end) >= 0) {
+                return false;
             }
         }
         return true;
