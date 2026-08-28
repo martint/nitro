@@ -140,7 +140,7 @@ public final class JoinSessionOperator
     {
         if (session == null) {
             session = requireNonNull(sessionSupplier.get(), "sessionSupplier returned null");
-            if (!session.outputSchema().equals(outputSchema)) {
+            if (!session.outputSchema().isLayoutCompatibleWith(outputSchema)) {
                 session.close();
                 throw new IllegalArgumentException("join session output schema does not match its pull-stage contract");
             }

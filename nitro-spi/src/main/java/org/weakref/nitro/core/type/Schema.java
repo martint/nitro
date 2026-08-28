@@ -88,4 +88,24 @@ public record Schema(List<Field> fields)
     {
         return fields.get(index);
     }
+
+    /// Whether values described by this schema can cross a physical operator edge expecting [other].
+    ///
+    /// Field names are descriptive metadata and do not affect the value layout. Type bindings and
+    /// nullability remain part of the contract.
+    public boolean isLayoutCompatibleWith(Schema other)
+    {
+        requireNonNull(other, "other is null");
+        if (size() != other.size()) {
+            return false;
+        }
+        for (int index = 0; index < size(); index++) {
+            Field field = field(index);
+            Field otherField = other.field(index);
+            if (!field.type().equals(otherField.type()) || field.nullable() != otherField.nullable()) {
+                return false;
+            }
+        }
+        return true;
+    }
 }
