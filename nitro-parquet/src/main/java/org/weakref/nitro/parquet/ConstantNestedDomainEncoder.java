@@ -49,10 +49,23 @@ final class ConstantNestedDomainEncoder
         int firstStart = values.startOffset(0);
         int firstEnd = values.endOffset(0);
         int length = firstEnd - firstStart;
-        for (int output = 0; output < values.repeatedOutputCount(); output++) {
-            if (!encoded(values.repeatedOutput(output))) {
+        int outputCount = values.repeatedOutputCount();
+        Vector[] valueStreams = new Vector[outputCount];
+        Vector[] nullStreams = new Vector[outputCount];
+        Vector[] errorStreams = new Vector[outputCount];
+        for (int output = 0; output < outputCount; output++) {
+            Streams streams = values.repeatedOutput(output);
+            if (!streams.hasValues() || !encoded(streams.values())) {
                 return null;
             }
+            valueStreams[output] = streams.values();
+            Vector nullStream = streams.getOrNull(Stream.NULLS);
+            Vector errorStream = streams.getOrNull(Stream.ERRORS);
+            if (!encodedSideStream(nullStream) || !encodedSideStream(errorStream)) {
+                return null;
+            }
+            nullStreams[output] = comparableSideStream(nullStream);
+            errorStreams[output] = comparableSideStream(errorStream);
         }
         for (int row = 1; row < rowCount; row++) {
             int start = values.startOffset(row);
@@ -60,8 +73,12 @@ final class ConstantNestedDomainEncoder
                 return null;
             }
             for (int offset = 0; offset < length; offset++) {
-                for (int output = 0; output < values.repeatedOutputCount(); output++) {
-                    if (!sameEncodedPosition(values.repeatedOutput(output), firstStart + offset, start + offset)) {
+                int left = firstStart + offset;
+                int right = start + offset;
+                for (int output = 0; output < outputCount; output++) {
+                    if (!sameEncodedPosition(valueStreams[output], left, right) ||
+                            !sameEncodedSidePosition(nullStreams[output], left, right) ||
+                            !sameEncodedSidePosition(errorStreams[output], left, right)) {
                         return null;
                     }
                 }
@@ -82,27 +99,6 @@ final class ConstantNestedDomainEncoder
         return Streams.of(encoded, encoded.sharedMappingWithValues(domainNulls), null);
     }
 
-    private static boolean encoded(Streams streams)
-    {
-        if (!streams.hasValues() || !encoded(streams.values())) {
-            return false;
-        }
-        return encodedSideStream(streams.getOrNull(Stream.NULLS)) &&
-                encodedSideStream(streams.getOrNull(Stream.ERRORS));
-    }
-
-    private static boolean sameEncodedPosition(Streams streams, int left, int right)
-    {
-        return sameEncodedPosition(streams.values(), left, right) &&
-                sameEncodedSidePosition(streams.getOrNull(Stream.NULLS), left, right) &&
-                sameEncodedSidePosition(streams.getOrNull(Stream.ERRORS), left, right);
-    }
-
-    private static boolean encodedSideStream(Vector vector)
-    {
-        return vector == null || VectorAccess.isAllFalseNulls(vector) || encoded(vector);
-    }
-
     private static boolean encoded(Vector vector)
     {
         return vector instanceof DictionaryVector || vector instanceof RleVector;
@@ -110,7 +106,20 @@ final class ConstantNestedDomainEncoder
 
     private static boolean sameEncodedSidePosition(Vector vector, int left, int right)
     {
-        return vector == null || VectorAccess.isAllFalseNulls(vector) || sameEncodedPosition(vector, left, right);
+        return vector == null || sameEncodedPosition(vector, left, right);
+    }
+
+    private static Vector comparableSideStream(Vector vector)
+    {
+        if (vector == null || VectorAccess.isAllFalseNulls(vector)) {
+            return null;
+        }
+        return vector;
+    }
+
+    private static boolean encodedSideStream(Vector vector)
+    {
+        return vector == null || VectorAccess.isAllFalseNulls(vector) || encoded(vector);
     }
 
     private static boolean sameEncodedPosition(Vector vector, int left, int right)
