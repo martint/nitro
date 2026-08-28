@@ -19,6 +19,7 @@ package org.weakref.nitro.operator;
 /// from their resource owner and never consult process-global configuration.
 public record WindowOperatorPolicy(
         int maxBatchRows,
+        int maxCoalescedRows,
         boolean radixSort,
         boolean fusedFunctions,
         boolean binaryHashPartitionSort,
@@ -33,12 +34,16 @@ public record WindowOperatorPolicy(
         if (maxBatchRows <= 0) {
             throw new IllegalArgumentException("maxBatchRows must be positive");
         }
+        if (maxCoalescedRows <= 0) {
+            throw new IllegalArgumentException("maxCoalescedRows must be positive");
+        }
     }
 
     public static WindowOperatorPolicy defaults()
     {
         return new WindowOperatorPolicy(
                 4_096,
+                16_777_216,
                 true,
                 true,
                 true,
@@ -54,6 +59,7 @@ public record WindowOperatorPolicy(
         WindowOperatorPolicy defaults = defaults();
         return new WindowOperatorPolicy(
                 Integer.getInteger("nitro.window.maxBatchRows", defaults.maxBatchRows()),
+                Integer.getInteger("nitro.window.maxCoalescedRows", defaults.maxCoalescedRows()),
                 Boolean.parseBoolean(System.getProperty(
                         "nitro.window.radixSort",
                         Boolean.toString(defaults.radixSort()))),

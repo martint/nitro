@@ -27,6 +27,7 @@ class TestWindowOperatorPolicy
 
             assertThat(policy).isEqualTo(WindowOperatorPolicy.defaults());
             assertThat(policy.maxBatchRows()).isEqualTo(4_096);
+            assertThat(policy.maxCoalescedRows()).isEqualTo(16_777_216);
             assertThat(policy.radixSort()).isTrue();
             assertThat(policy.fusedFunctions()).isTrue();
             assertThat(policy.binaryHashPartitionSort()).isTrue();

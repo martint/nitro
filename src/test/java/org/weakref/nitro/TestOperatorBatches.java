@@ -898,6 +898,38 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testWindowOperatorCompactsSparseRetainedPages()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        Operator source = TableOperator.retained(
+                Schema.unspecified(1),
+                List.of(
+                        TableOperator.Page.values(
+                                6,
+                                new Vector[] {new I64Vector(new long[] {90, 3, 80, 70, 1, 60})},
+                                Mask.sparse(new int[] {1, 4}, 6)),
+                        TableOperator.Page.values(
+                                5,
+                                new Vector[] {new I64Vector(new long[] {50, 4, 40, 2, 30})},
+                                Mask.sparse(new int[] {1, 3}, 5))));
+
+        try (Operator operator = new WindowOperator(
+                allocator,
+                source,
+                new int[0],
+                new int[] {0},
+                new boolean[] {false},
+                List.of(new RankWindowFunction(new int[] {0}, new boolean[] {false})))) {
+            assertThat(OperatorAssertions.OperatorAssert.toRows(operator))
+                    .containsExactly(
+                            row(1L, 1L),
+                            row(2L, 2L),
+                            row(3L, 3L),
+                            row(4L, 4L));
+        }
+    }
+
+    @Test
     void testWindowOperatorResumesLoadingAfterExecutionSuspension()
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());

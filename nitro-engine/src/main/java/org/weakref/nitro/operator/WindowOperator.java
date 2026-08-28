@@ -31,7 +31,10 @@ import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.execution.EngineResources;
 
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Set;
 
 import static java.util.Objects.requireNonNull;
 
@@ -498,7 +501,12 @@ public final class WindowOperator
                 if (mask.none()) {
                     continue;
                 }
-                if (source.supportsRetainedBatches()) {
+                // A blocking window repeatedly traverses its retained pages while sorting, finding partitions,
+                // evaluating functions, and materializing output. Retaining a sparse batch preserves the source's
+                // larger physical address space and makes every one of those passes indirect. Compact sparse input
+                // once, as WindowSession historically did; retain only dense batches whose logical and physical
+                // positions already coincide.
+                if (source.supportsRetainedBatches() && mask.all()) {
                     Streams[] retainedColumns = new Streams[source.outputCount()];
                     for (int outputIndex = 0; outputIndex < retainedColumns.length; outputIndex++) {
                         retainedColumns[outputIndex] = takeStreams(batch.output(outputIndex));
@@ -513,6 +521,7 @@ public final class WindowOperator
                 pages.add(new TableOperator.Page(mask.count(), columns, Mask.all(mask.count())));
             }
         }
+        coalesceUnorderedPages();
         loaded = true;
         windowOutputs = new Streams[windowFunctions.size()];
         if (pages.size() == 1) {
@@ -545,6 +554,71 @@ public final class WindowOperator
                         : materializeWindow(windowFunctions.get(functionIndex));
             }
         }
+    }
+
+    /**
+     * Sorting and window evaluation revisit an unordered input several times. Normalize compatible pages into one
+     * dense physical domain once so those passes use compact positions and output can borrow contiguous source
+     * ranges instead of gathering every column through packed page/position references.
+     */
+    private void coalesceUnorderedPages()
+    {
+        if (inputOrder.isFullyOrdered(orderingColumns.length) || pages.size() < 2 || !haveConsistentStreams()) {
+            return;
+        }
+
+        int rows = 0;
+        for (TableOperator.Page page : pages) {
+            rows = Math.addExact(rows, page.rows());
+        }
+        // A compact physical domain can represent a very large logical window (for example an RLE or dictionary
+        // stream spanning a billion rows). Flattening that input would discard the encoding and can consume the
+        // entire query memory budget. The engine-selected bound admits the locality optimization only when its
+        // dense row domain is bounded independently of the concrete vector or logical type.
+        if (rows > policy.maxCoalescedRows()) {
+            return;
+        }
+
+        Streams[] columns = new Streams[source.outputCount()];
+        for (int columnIndex = 0; columnIndex < columns.length; columnIndex++) {
+            Streams schema = pages.getFirst().columns()[columnIndex];
+            Streams.Builder result = Streams.builder();
+            for (Stream stream : schema.streams()) {
+                Vector[] segments = new Vector[pages.size()];
+                for (int pageIndex = 0; pageIndex < pages.size(); pageIndex++) {
+                    segments[pageIndex] = pages.get(pageIndex).columns()[columnIndex].get(stream);
+                }
+                result.put(stream, segments[0].materializeRows(allocator, allocationContext, segments));
+            }
+            columns[columnIndex] = result.build();
+        }
+
+        Set<Vector> released = Collections.newSetFromMap(new IdentityHashMap<>());
+        for (TableOperator.Page page : pages) {
+            for (Streams column : page.columns()) {
+                for (Vector vector : column.asMap().values()) {
+                    if (released.add(vector)) {
+                        allocator.release(allocationContext, vector);
+                    }
+                }
+            }
+            allocator.release(allocationContext, page.mask());
+        }
+        pages.clear();
+        pages.add(new TableOperator.Page(rows, columns, Mask.all(rows)));
+    }
+
+    private boolean haveConsistentStreams()
+    {
+        for (int columnIndex = 0; columnIndex < source.outputCount(); columnIndex++) {
+            Set<Stream> streams = pages.getFirst().columns()[columnIndex].streams();
+            for (int pageIndex = 1; pageIndex < pages.size(); pageIndex++) {
+                if (!pages.get(pageIndex).columns()[columnIndex].streams().equals(streams)) {
+                    return false;
+                }
+            }
+        }
+        return true;
     }
 
     /**
