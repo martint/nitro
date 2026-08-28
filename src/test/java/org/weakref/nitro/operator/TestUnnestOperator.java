@@ -188,6 +188,9 @@ public class TestUnnestOperator
         assertThat(repeated.valueRunCount(5)).isEqualTo(3);
         assertThat(repeated.valueRunEnd(0)).isEqualTo(2);
         assertThat(repeated.valueRunEnd(2)).isEqualTo(4);
+        VectorAccess.RepeatedRangeLayout rangeLayout = repeated.rangeLayout();
+        assertThat(rangeLayout.offsets()).isSameAs(domain.offsets());
+        assertThat(rangeLayout.ids()).isSameAs(arrays.ids());
         Operator source = new TableOperator(
                 Schema.unspecified(1),
                 List.of(TableOperator.Page.values(

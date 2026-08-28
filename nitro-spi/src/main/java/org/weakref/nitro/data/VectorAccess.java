@@ -13,9 +13,20 @@
  */
 package org.weakref.nitro.data;
 
+import static java.util.Objects.requireNonNull;
+
 public final class VectorAccess
 {
     private VectorAccess() {}
+
+    /** Direct physical range layout, optionally mapped by dictionary ids. Arrays are borrowed and read-only. */
+    public record RepeatedRangeLayout(int[] offsets, int[] ids)
+    {
+        public RepeatedRangeLayout
+        {
+            requireNonNull(offsets, "offsets is null");
+        }
+    }
 
     /** Encoded-domain view of a variable-length structural vector. */
     public interface RepeatedValues
@@ -49,6 +60,12 @@ public final class VectorAccess
             return positions;
         }
 
+        /** Returns a directly addressable range layout, or {@code null} when resolving a position requires logic. */
+        default RepeatedRangeLayout rangeLayout()
+        {
+            return null;
+        }
+
         int outputCount();
 
         Streams output(int output);
@@ -60,12 +77,17 @@ public final class VectorAccess
         private final RepeatedValues values;
         private final int[] ids;
         private final int length;
+        private final RepeatedRangeLayout rangeLayout;
 
         private DictionaryRepeatedValues(RepeatedValues values, DictionaryVector dictionary)
         {
             this.values = values;
             ids = dictionary.ids();
             length = dictionary.length();
+            RepeatedRangeLayout valuesLayout = values.rangeLayout();
+            rangeLayout = valuesLayout != null && valuesLayout.ids() == null
+                    ? new RepeatedRangeLayout(valuesLayout.offsets(), ids)
+                    : null;
         }
 
         @Override
@@ -114,6 +136,12 @@ public final class VectorAccess
         }
 
         @Override
+        public RepeatedRangeLayout rangeLayout()
+        {
+            return rangeLayout;
+        }
+
+        @Override
         public int outputCount()
         {
             return values.outputCount();
@@ -144,6 +172,12 @@ public final class VectorAccess
                 public int endOffset(int position)
                 {
                     return values.endOffset(position);
+                }
+
+                @Override
+                public RepeatedRangeLayout rangeLayout()
+                {
+                    return new RepeatedRangeLayout(values.offsets(), null);
                 }
 
                 @Override

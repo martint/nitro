@@ -22,6 +22,9 @@ package org.weakref.nitro.data;
 public interface RepeatedVector
         extends FlatVector
 {
+    /** Monotonic child-range boundaries; logical position {@code p} owns {@code [offsets[p], offsets[p + 1])}. */
+    int[] offsets();
+
     int startOffset(int position);
 
     int endOffset(int position);

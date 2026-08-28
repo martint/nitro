@@ -546,6 +546,8 @@ public final class UnnestOperator
         private final Batch batch;
         private final Mask mask;
         private final VectorAccess.RepeatedValues[] repeated;
+        private final int[][] repeatedOffsets;
+        private final int[][] repeatedIds;
         private final VectorAccess.BooleanValues[] collectionNulls;
         private final boolean rowShapeReusable;
         private int selectedIndex;
@@ -564,11 +566,18 @@ public final class UnnestOperator
             this.batch = requireNonNull(batch, "batch is null");
             mask = batch.borrowMask();
             repeated = new VectorAccess.RepeatedValues[mappings.size()];
+            repeatedOffsets = new int[mappings.size()][];
+            repeatedIds = new int[mappings.size()][];
             collectionNulls = new VectorAccess.BooleanValues[mappings.size()];
             boolean rowShapeReusable = true;
             for (int mapping = 0; mapping < mappings.size(); mapping++) {
                 Output input = batch.output(mappings.get(mapping).inputColumn());
                 repeated[mapping] = VectorAccess.repeatedValues(input.borrow(Stream.VALUES));
+                VectorAccess.RepeatedRangeLayout rangeLayout = repeated[mapping].rangeLayout();
+                if (rangeLayout != null) {
+                    repeatedOffsets[mapping] = rangeLayout.offsets();
+                    repeatedIds[mapping] = rangeLayout.ids();
+                }
                 for (OutputMapping output : mappings.get(mapping).outputs()) {
                     if (output.repeatedOutput() >= repeated[mapping].outputCount()) {
                         throw new IllegalArgumentException("Repeated vector output does not match planned UNNEST output");
@@ -690,8 +699,18 @@ public final class UnnestOperator
                     repeatedLengths[mapping] = 0;
                 }
                 else {
-                    repeatedStarts[mapping] = repeated[mapping].startOffset(inputPosition);
-                    repeatedLengths[mapping] = repeated[mapping].length(inputPosition);
+                    int[] offsets = repeatedOffsets[mapping];
+                    if (offsets != null) {
+                        int[] ids = repeatedIds[mapping];
+                        int physicalPosition = ids == null ? inputPosition : ids[inputPosition];
+                        int start = offsets[physicalPosition];
+                        repeatedStarts[mapping] = start;
+                        repeatedLengths[mapping] = offsets[physicalPosition + 1] - start;
+                    }
+                    else {
+                        repeatedStarts[mapping] = repeated[mapping].startOffset(inputPosition);
+                        repeatedLengths[mapping] = repeated[mapping].length(inputPosition);
+                    }
                 }
                 length = Math.max(length, repeatedLengths[mapping]);
                 if (rowShapeReusable) {
