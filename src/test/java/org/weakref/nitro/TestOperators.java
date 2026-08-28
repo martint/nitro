@@ -943,6 +943,78 @@ public class TestOperators
     }
 
     @Test
+    void testTopNOperatorPreservesCurrentBatchWhenAvailabilityCheckSuspends()
+    {
+        Operator delegate = new TableOperator(
+                2,
+                List.of(
+                        TableOperator.Page.values(1, new Vector[] {new I64Vector(new long[] {2}), new I64Vector(new long[] {20})}, Mask.all(1)),
+                        TableOperator.Page.values(1, new Vector[] {new I64Vector(new long[] {1}), new I64Vector(new long[] {10})}, Mask.all(1))));
+        Operator suspendingSource = new Operator()
+        {
+            private int hasNextCalls;
+            private Batch current;
+
+            @Override
+            public int outputCount()
+            {
+                return delegate.outputCount();
+            }
+
+            @Override
+            public Schema outputSchema()
+            {
+                return delegate.outputSchema();
+            }
+
+            @Override
+            public boolean hasNext()
+            {
+                if (++hasNextCalls == 2) {
+                    throw ExecutionSuspension.yield();
+                }
+                return delegate.hasNext();
+            }
+
+            @Override
+            public Batch next()
+            {
+                if (current != null) {
+                    current.close();
+                }
+                current = delegate.next();
+                return current;
+            }
+
+            @Override
+            public void constrain(Mask mask)
+            {
+                delegate.constrain(mask);
+            }
+
+            @Override
+            public boolean supportsConstrainedReborrow()
+            {
+                return true;
+            }
+
+            @Override
+            public void close()
+            {
+                if (current != null) {
+                    current.close();
+                }
+                delegate.close();
+            }
+        };
+
+        try (Operator topN = new TopNOperator(allocator, 1, 0, true, suspendingSource)) {
+            assertThatThrownBy(topN::next).isSameAs(ExecutionSuspension.yield());
+            assertThat(operator(topN)).matchesExactly(List.of(row(2L, 20L)));
+        }
+    }
+
+    @Test
     void testSortOperatorColumnarMultiKeyNullOrdering()
     {
         assertThat(operator(new SortOperator(

@@ -38,6 +38,8 @@ public class TopNOperator
 
     private Boolean denseOrdering;
     private boolean firstBatch = true;
+    private Batch currentInputBatch;
+    private boolean currentInputProcessed;
     private Mask outputMask;
     private boolean done;
 
@@ -177,69 +179,77 @@ public class TopNOperator
     {
         // TODO: flat memory priority queue
         boolean deferSchemaBorrow = source.supportsConstrainedReborrow();
-        while (source.hasNext()) {
-            Batch batch = source.next();
-            state.beginBatch();
-            state.captureSchema(batch, deferSchemaBorrow);
-            Mask mask = batch.borrowMask();
-            if (firstBatch &&
-                    source.supportsConstrainedReborrow() &&
-                    retainedSingleBatchAdmission(mask) &&
-                    !source.hasNext()) {
-                return computeRetainedSingleBatchTopN(batch, mask);
+        while (currentInputBatch != null || source.hasNext()) {
+            if (currentInputBatch == null) {
+                currentInputBatch = source.next();
+                currentInputProcessed = false;
             }
-            firstBatch = false;
-            // Dense ordering vectors win for modest results. For large lazy grouped results, compact
-            // candidate copies avoid materializing every group merely to retain N rows (ClickBench Q33).
-            boolean compactOrderingCandidates = mask.size() > (1 << 16);
+            Batch batch = currentInputBatch;
+            if (!currentInputProcessed) {
+                state.beginBatch();
+                state.captureSchema(batch, deferSchemaBorrow);
+                Mask mask = batch.borrowMask();
+                if (firstBatch &&
+                        source.supportsConstrainedReborrow() &&
+                        retainedSingleBatchAdmission(mask) &&
+                        !source.hasNext()) {
+                    currentInputBatch = null;
+                    return computeRetainedSingleBatchTopN(batch, mask);
+                }
+                firstBatch = false;
+                // Dense ordering vectors win for modest results. For large lazy grouped results, compact
+                // candidate copies avoid materializing every group merely to retain N rows (ClickBench Q33).
+                boolean compactOrderingCandidates = mask.size() > (1 << 16);
 
-            if (denseOrdering == null && !mask.none()) {
-                denseOrdering = n >= policy.columnarOrderingMinLimit() && state.supportsDenseOrdering(batch);
-            }
+                if (denseOrdering == null && !mask.none()) {
+                    denseOrdering = n >= policy.columnarOrderingMinLimit() && state.supportsDenseOrdering(batch);
+                }
 
-            int copied = 0;
-            if (Boolean.TRUE.equals(denseOrdering) && queue.size() < n) {
-                copied = Math.min(n - queue.size(), mask.count());
-                Mask initial = copied == mask.count()
-                        ? mask
-                        : allocator.firstMask(allocationContext, mask, copied);
-                int outputStart = queue.size();
-                try {
-                    state.appendDenseOrderingBatch(batch, initial, outputStart, n);
-                    for (int index = 0; index < copied; index++) {
-                        int slot = outputStart + index;
-                        state.deferPayloadRow(batch, initial.position(index), slot);
+                int copied = 0;
+                if (Boolean.TRUE.equals(denseOrdering) && queue.size() < n) {
+                    copied = Math.min(n - queue.size(), mask.count());
+                    Mask initial = copied == mask.count()
+                            ? mask
+                            : allocator.firstMask(allocationContext, mask, copied);
+                    int outputStart = queue.size();
+                    try {
+                        state.appendDenseOrderingBatch(batch, initial, outputStart, n);
+                        for (int index = 0; index < copied; index++) {
+                            int slot = outputStart + index;
+                            state.deferPayloadRow(batch, initial.position(index), slot);
+                            queue.add(new Entry(slot));
+                        }
+                    }
+                    finally {
+                        if (initial != mask) {
+                            allocator.release(allocationContext, initial);
+                        }
+                    }
+                }
+
+                for (int index = copied; index < mask.count(); index++) {
+                    int position = mask.position(index);
+                    if (queue.size() < n) {
+                        int slot = queue.size();
+                        state.copyRow(batch, position, slot);
                         queue.add(new Entry(slot));
                     }
-                }
-                finally {
-                    if (initial != mask) {
-                        allocator.release(allocationContext, initial);
+                    else {
+                        Entry head = queue.peek();
+                        if (state.compareOrderingValue(batch, position, head.position(), compactOrderingCandidates) > 0) {
+                            queue.poll();
+                            if (Boolean.TRUE.equals(denseOrdering)) {
+                                state.copyDenseOrderingRow(batch, position, head.position(), n);
+                                state.deferPayloadRow(batch, position, head.position());
+                            }
+                            else {
+                                state.copyRow(batch, position, head.position());
+                            }
+                            queue.add(new Entry(head.position()));
+                        }
                     }
                 }
-            }
-
-            for (int index = copied; index < mask.count(); index++) {
-                int position = mask.position(index);
-                if (queue.size() < n) {
-                    int slot = queue.size();
-                    state.copyRow(batch, position, slot);
-                    queue.add(new Entry(slot));
-                }
-                else {
-                    Entry head = queue.peek();
-                    if (state.compareOrderingValue(batch, position, head.position(), compactOrderingCandidates) > 0) {
-                        queue.poll();
-                        if (Boolean.TRUE.equals(denseOrdering)) {
-                            state.copyDenseOrderingRow(batch, position, head.position(), n);
-                            state.deferPayloadRow(batch, position, head.position());
-                        }
-                        else {
-                            state.copyRow(batch, position, head.position());
-                        }
-                        queue.add(new Entry(head.position()));
-                    }
-                }
+                currentInputProcessed = true;
             }
 
             // Non-retained sources may invalidate the current batch as soon as the
@@ -262,6 +272,8 @@ public class TopNOperator
                     batch.close();
                 }
             }
+            currentInputBatch = null;
+            currentInputProcessed = false;
         }
 
         int count = queue.size();
