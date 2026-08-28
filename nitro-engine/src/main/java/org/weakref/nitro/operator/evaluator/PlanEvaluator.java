@@ -134,6 +134,7 @@ public final class PlanEvaluator
     // Cached bases are evaluator-owned beyond the current batch. A result that escapes must copy that base instead
     // of transferring it out of the cache context.
     private final Set<Vector> cachedDictionaryResults = Collections.newSetFromMap(new IdentityHashMap<>());
+    private boolean[] dictionaryDomainSelectionScratch = new boolean[0];
     private TermOrderFrames termOrderFrames;
     private final ArrayList<Streams> maskInvocationInputs = new ArrayList<>();
     private final PrimitiveMaskInvocation maskInvocation = new PrimitiveMaskInvocation(maskInvocationInputs);
@@ -452,6 +453,8 @@ public final class PlanEvaluator
         dictionaryDomainCache.clear();
         cachedDictionaryResults.clear();
         allocator.releaseIfPresent(dictionaryDomainCacheContext);
+        allocator.primitiveArrays().release(dictionaryDomainSelectionScratch);
+        dictionaryDomainSelectionScratch = new boolean[0];
     }
 
     private Streams evaluateUnmemoized(Reference reference, Mask mask, Streams output)
@@ -1061,9 +1064,16 @@ public final class PlanEvaluator
             return allocator.allocateSparseMask(allocationContext, positions, positions.length, baseLength);
         }
 
-        boolean[] selected = new boolean[baseLength];
+        if (dictionaryDomainSelectionScratch.length < baseLength) {
+            allocator.primitiveArrays().release(dictionaryDomainSelectionScratch);
+            dictionaryDomainSelectionScratch = allocator.primitiveArrays().borrowBooleans(baseLength);
+            Arrays.fill(dictionaryDomainSelectionScratch, false);
+        }
+        boolean[] selected = dictionaryDomainSelectionScratch;
         int selectedCount = 0;
-        for (int position : logicalMask) {
+        int logicalPositionCount = logicalMask.selectedCount();
+        for (int index = 0; index < logicalPositionCount; index++) {
+            int position = logicalMask.position(index);
             int domain = ids[position];
             if (!selected[domain]) {
                 selected[domain] = true;
@@ -1074,6 +1084,7 @@ public final class PlanEvaluator
         for (int domain = 0, index = 0; domain < baseLength; domain++) {
             if (selected[domain]) {
                 positions[index++] = domain;
+                selected[domain] = false;
             }
         }
         return allocator.allocateSparseMask(allocationContext, positions, selectedCount, baseLength);

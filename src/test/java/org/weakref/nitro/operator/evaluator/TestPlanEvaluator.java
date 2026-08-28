@@ -4243,6 +4243,44 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testDictionaryPeelingReusesAndClearsWideDomainSelectionScratch()
+    {
+        AtomicReference<List<Integer>> selectedDomains = new AtomicReference<>();
+        PrimitiveRegistry registry = new PrimitiveRegistry();
+        registry.register("record_domains", recordSelectedDomains(selectedDomains, 1));
+
+        Variable result = new Variable(0);
+        Reference input = new Reference(new Input(0), Stream.VALUES);
+        Reference output = new Reference(result, Stream.VALUES);
+        int[] ids = new int[256];
+        long[] domain = new long[128];
+        for (int position = 0; position < ids.length; position++) {
+            ids[position] = position % domain.length;
+        }
+        for (int position = 0; position < domain.length; position++) {
+            domain[position] = position;
+        }
+
+        try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
+            PlanEvaluator evaluator = planEvaluator(
+                    new EvaluationPlan(
+                            List.of(new Assignment(result, new Call("record_domains", List.of(input)), AllMask.ALL)),
+                            List.of(output)),
+                    registry,
+                    inputResolver(Map.of(input, DictionaryVector.wrap(ids, new I64Vector(domain)))),
+                    allocator);
+
+            evaluator.evaluate(output, Mask.sparse(new int[] {2, 70, 130, 255}, ids.length));
+            assertThat(selectedDomains.get()).containsExactly(2, 70, 127);
+
+            evaluator.resetForReuse();
+            evaluator.evaluate(output, Mask.sparse(new int[] {1, 80, 129}, ids.length));
+            assertThat(selectedDomains.get()).containsExactly(1, 80);
+            evaluator.close();
+        }
+    }
+
+    @Test
     void testDictionaryPeelingPreservesExactSharedMapping()
     {
         PrimitiveRegistry registry = new PrimitiveRegistry();
