@@ -183,6 +183,39 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testStructuralConstructionPreservesSharedRunDomain()
+    {
+        Variable constructed = new Variable(0);
+        Reference values = new Reference(constructed, Stream.VALUES);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(
+                        constructed,
+                        new Construct(
+                                testingStructType(),
+                                List.of(
+                                        new Reference(new Input(0), Stream.VALUES),
+                                        new Reference(new Input(1), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(values));
+        PlanEvaluator evaluator = planEvaluator(
+                plan,
+                primitiveRegistry(),
+                inputResolver(Map.of(
+                        new Reference(new Input(0), Stream.VALUES), new RleVector(new int[] {4}, new I64Vector(new long[] {7})),
+                        new Reference(new Input(0), Stream.ERRORS), new BooleanVector(4),
+                        new Reference(new Input(1), Stream.VALUES), new RleVector(new int[] {4}, new I64Vector(new long[] {11})))),
+                new Allocator(EngineResources.createDefault()));
+
+        RleVector result = (RleVector) evaluator.evaluate(values, Mask.all(4)).values();
+
+        assertThat(result.counts()).containsExactly(4);
+        StructVector physical = (StructVector) result.values();
+        assertThat(physical.length()).isEqualTo(1);
+        assertThat(((I64Vector) physical.field(0).values()).values()).containsExactly(7);
+        assertThat(((I64Vector) physical.field(1).values()).values()).containsExactly(11);
+    }
+
+    @Test
     void testStructuralConstructionPreservesRichChildError()
     {
         ErrorValue diagnostic = new ErrorValue("test", 17, "BAD_ARGUMENT", "USER_ERROR", "bad argument");
@@ -5026,7 +5059,7 @@ public class TestPlanEvaluator
             @Override
             public Set<Class<? extends org.weakref.nitro.data.Vector>> supportedVectorTypes()
             {
-                return Set.of(StructVector.class);
+                return Set.of(StructVector.class, RleVector.class);
             }
         };
     }

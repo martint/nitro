@@ -92,6 +92,7 @@ public final class PlanEvaluator
     private static final Set<Stream> VALUES_ONLY = Set.of(Stream.VALUES);
     private static final Set<Stream> NULLS_ONLY = Set.of(Stream.NULLS);
     private static final Set<Stream> ERRORS_ONLY = Set.of(Stream.ERRORS);
+    private static final List<Stream> COMPANION_STREAMS = List.of(Stream.NULLS, Stream.ERRORS);
     private static final byte UNKNOWN_DICTIONARY_MATCH = 0;
     private static final byte DICTIONARY_MISMATCH = 1;
     private static final byte DICTIONARY_MATCH = 2;
@@ -539,9 +540,12 @@ public final class PlanEvaluator
 
         Streams result = Streams.empty();
         if (requestedStreams.contains(Stream.VALUES)) {
-            Vector values = construct.type().vectorConstructor()
-                    .orElseThrow(() -> new IllegalArgumentException("Type does not provide structural construction: " + construct.type().identity()))
-                    .construct(vectorAllocator, arguments, length);
+            Vector values = tryConstructRle(construct, arguments);
+            if (values == null) {
+                values = construct.type().vectorConstructor()
+                        .orElseThrow(() -> new IllegalArgumentException("Type does not provide structural construction: " + construct.type().identity()))
+                        .construct(vectorAllocator, arguments, length);
+            }
             checkArgument(
                     values.length() == length,
                     "Type vector constructor returned length %s for requested length %s",
@@ -571,6 +575,50 @@ public final class PlanEvaluator
             }
         }
         return completeRequestedStreams(requestedStreams, result, mask);
+    }
+
+    /**
+     * Structural construction is position-wise. When every argument carries the same run mapping, construct the
+     * physical run domain once and preserve that mapping instead of interleaving every logical row. Known-empty
+     * companion streams do not constrain the mapping and can be omitted from the physical-domain arguments.
+     */
+    private Vector tryConstructRle(Construct construct, List<Streams> arguments)
+    {
+        if (!construct.type().supportedVectorTypes().contains(RleVector.class) || arguments.isEmpty()) {
+            return null;
+        }
+
+        int[] counts = null;
+        List<Streams> physicalArguments = new ArrayList<>(arguments.size());
+        for (Streams argument : arguments) {
+            if (!(argument.values() instanceof RleVector values)) {
+                return null;
+            }
+            if (counts == null) {
+                counts = values.counts();
+            }
+            else if (!Arrays.equals(counts, values.counts())) {
+                return null;
+            }
+
+            Streams.Builder physical = Streams.builder().put(Stream.VALUES, values.values());
+            for (Stream stream : COMPANION_STREAMS) {
+                Vector companion = argument.getOrNull(stream);
+                if (companion == null || VectorAccess.isAllFalseNulls(companion)) {
+                    continue;
+                }
+                if (!(companion instanceof RleVector runs) || !Arrays.equals(counts, runs.counts())) {
+                    return null;
+                }
+                physical.put(stream, runs.values());
+            }
+            physicalArguments.add(physical.build());
+        }
+
+        Vector physicalValues = construct.type().vectorConstructor()
+                .orElseThrow(() -> new IllegalArgumentException("Type does not provide structural construction: " + construct.type().identity()))
+                .construct(vectorAllocator, physicalArguments, counts.length);
+        return vectorAllocator.runLength(counts, physicalValues);
     }
 
     private Streams evaluateCall(Reference reference, Call call, Mask mask, Streams output)
