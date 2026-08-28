@@ -162,6 +162,40 @@ class TestKeyOnlyGroupingSession
     }
 
     @Test
+    void testCompactsPhysicallySparseDistinctInputWhenOwnershipIsOffered()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                KeyOnlyGroupingSession session = new KeyOnlyGroupingSession(
+                        allocator,
+                        Schema.unspecified(1),
+                        List.of(0),
+                        List.of(0),
+                        resources.operatorResources())) {
+            allocator.beginExecution();
+            AtomicBoolean closed = new AtomicBoolean();
+            I64Vector values = new I64Vector(new long[] {1, 99, 99, 99, 2, 99, 99, 3});
+            Batch input = new Batch(
+                    Mask.sparse(new int[] {0, 4, 7}, values.length()),
+                    _ -> {},
+                    mask -> mask,
+                    _ -> {},
+                    () -> closed.set(true),
+                    new Output[] {Output.of(Streams.ofValuesAndNulls(values, new BooleanVector(new boolean[values.length()])))});
+
+            assertThat(session.addInputWithOwnership(input, 0)).isEqualTo(BatchAggregationSession.InputOwnership.CALLER);
+            assertThat(closed).isFalse();
+            try (Batch output = session.getOutput()) {
+                assertThat(output.borrowMask().all()).isTrue();
+                assertThat(output.output(0).borrow(Stream.VALUES)).isNotSameAs(values);
+                assertThat(selectedValues(output)).containsExactly(1L, 2L, 3L);
+            }
+            input.close();
+            assertThat(closed).isTrue();
+        }
+    }
+
+    @Test
     void testDictionaryDomainGroupingPreservesNullAndValueRepresentatives()
     {
         try (EngineResources resources = EngineResources.createDefault();
@@ -258,6 +292,34 @@ class TestKeyOnlyGroupingSession
             }
             assertThat(control.passthroughFlushes).isEqualTo(1);
             assertThat(control.passthroughInputRows).isEqualTo(3);
+        }
+    }
+
+    @Test
+    void testAdaptiveBypassCompactsPhysicallySparseInput()
+    {
+        TestingPartialAggregationControl control = new TestingPartialAggregationControl(false);
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                KeyOnlyGroupingSession session = new KeyOnlyGroupingSession(
+                        allocator,
+                        Schema.unspecified(1),
+                        List.of(0),
+                        List.of(0),
+                        resources.operatorResources(),
+                        control)) {
+            allocator.beginExecution();
+            I64Vector values = new I64Vector(new long[] {7, 99, 99, 99, 7, 99, 99, 8});
+            try (Batch input = new Batch(
+                    Mask.sparse(new int[] {0, 4, 7}, values.length()),
+                    Output.of(Streams.ofValuesAndNulls(values, new BooleanVector(new boolean[values.length()]))))) {
+                assertThat(session.addInputWithOwnership(input, 30)).isEqualTo(BatchAggregationSession.InputOwnership.CALLER);
+                try (Batch output = session.getOutput()) {
+                    assertThat(output.borrowMask().all()).isTrue();
+                    assertThat(output.output(0).borrow(Stream.VALUES)).isNotSameAs(values);
+                    assertThat(selectedValues(output)).containsExactly(7L, 7L, 8L);
+                }
+            }
         }
     }
 

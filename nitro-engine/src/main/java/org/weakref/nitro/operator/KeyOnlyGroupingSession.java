@@ -159,7 +159,9 @@ public final class KeyOnlyGroupingSession
                 }
             }
             if (!aggregationEnabled) {
-                pendingOutput = mayRetainInput ? outputBuilder.buildRetaining(batch) : null;
+                pendingOutput = shouldRetainInput(mayRetainInput, inputMask.selectedCount(), inputMask)
+                        ? outputBuilder.buildRetaining(batch)
+                        : null;
                 InputOwnership ownership = pendingOutput == null ? InputOwnership.CALLER : InputOwnership.SESSION;
                 if (pendingOutput == null) {
                     pendingOutput = outputBuilder.build(batch, inputMask);
@@ -215,8 +217,9 @@ public final class KeyOnlyGroupingSession
         if (selectedCount == 0) {
             return InputOwnership.CALLER;
         }
+        boolean retainInput = shouldRetainInput(mayRetainInput, selectedCount, inputMask);
         if (selectedCount == inputMask.selectedCount()) {
-            pendingOutput = mayRetainInput ? outputBuilder.buildRetaining(batch) : null;
+            pendingOutput = retainInput ? outputBuilder.buildRetaining(batch) : null;
             if (pendingOutput != null) {
                 return InputOwnership.SESSION;
             }
@@ -229,9 +232,6 @@ public final class KeyOnlyGroupingSession
                 selectedCount,
                 inputMask.size());
         try {
-            boolean retainInput = mayRetainInput &&
-                    (long) selectedCount * 100 >=
-                            (long) inputMask.selectedCount() * distinctKeySetPolicy.keyOnlySparseRetentionMinPercent();
             pendingOutput = retainInput ? outputBuilder.buildRetaining(batch, distinctMask) : null;
             if (pendingOutput != null) {
                 return InputOwnership.SESSION;
@@ -242,6 +242,16 @@ public final class KeyOnlyGroupingSession
             allocator.release(allocationContext, distinctMask);
         }
         return InputOwnership.CALLER;
+    }
+
+    private boolean shouldRetainInput(boolean mayRetainInput, int outputPositions, Mask inputMask)
+    {
+        // Retention keeps the complete physical vector tree alive. Compare the output with the addressable domain,
+        // not merely with an already sparse filter mask, or a locally dense result can carry a mostly unused source
+        // batch across the next execution boundary.
+        return mayRetainInput &&
+                (long) outputPositions * 100 >=
+                        (long) inputMask.size() * distinctKeySetPolicy.keyOnlySparseRetentionMinPercent();
     }
 
     /**
