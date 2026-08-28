@@ -69,7 +69,7 @@ class TestBatchFeedOperator
                 Set.of(SourceCapability.STABLE_BATCH_BORROW, SourceCapability.CONSTRAINED_REBORROW))) {
             assertThat(feed.supportsStableBatchBorrow()).isTrue();
             assertThat(feed.supportsConstrainedReborrow()).isTrue();
-            assertThat(feed.supportsOpenBatchHasNext()).isTrue();
+            assertThat(feed.supportsOpenBatchHasNext()).isFalse();
             feed.addInput(new TestingSourceBatch(firstClosed));
             assertThat(feed.hasNext()).isTrue();
             try (Batch ignored = feed.next()) {

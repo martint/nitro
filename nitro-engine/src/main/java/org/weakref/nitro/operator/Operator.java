@@ -128,12 +128,13 @@ public interface Operator
     }
 
     /**
-     * Returns whether {@link #hasNext()} may be called while the most recent batch remains open without advancing
-     * or invalidating that batch.
+     * Returns whether {@link #hasNext()} may be called while the most recent batch remains open and reliably answer
+     * availability for the whole input stream, without advancing or invalidating that batch.
      * <p>
      * This is weaker than {@link #supportsRetainedBatches()}: an operator whose availability is already known from
      * instance-owned execution state can answer without touching its input, even when its output batch cannot
-     * outlive the next {@link #next()} call.
+     * outlive the next {@link #next()} call. An externally scheduled feed must return {@code false} while temporary
+     * depletion is indistinguishable from end of input.
      */
     default boolean supportsOpenBatchHasNext()
     {

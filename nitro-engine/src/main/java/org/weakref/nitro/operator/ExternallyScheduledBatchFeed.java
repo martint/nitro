@@ -114,7 +114,9 @@ final class ExternallyScheduledBatchFeed
     @Override
     public boolean supportsOpenBatchHasNext()
     {
-        return true;
+        // Exhausting the currently scheduled batch does not mean that the external host will not offer another
+        // batch. Keep downstream horizon-sensitive operators conservative across that scheduling boundary.
+        return false;
     }
 
     @Override

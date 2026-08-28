@@ -35,6 +35,14 @@ import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
 class TestHashJoinSession
 {
     @Test
+    void testExternallyScheduledFeedDoesNotAdvertiseWholeStreamLookahead()
+    {
+        try (ExternallyScheduledBatchFeed feed = new ExternallyScheduledBatchFeed(Schema.unspecified(1))) {
+            assertThat(feed.supportsOpenBatchHasNext()).isFalse();
+        }
+    }
+
+    @Test
     void testPublishedOutputSurvivesFollowingProbeBatch()
     {
         try (EngineResources resources = EngineResources.createDefault();

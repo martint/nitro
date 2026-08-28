@@ -205,7 +205,9 @@ public final class BatchFeedOperator
     @Override
     public boolean supportsOpenBatchHasNext()
     {
-        return true;
+        // The host may offer another batch after this one is drained, so temporary feed depletion is not an
+        // authoritative end-of-stream answer for horizon-sensitive downstream operators.
+        return false;
     }
 
     @Override
