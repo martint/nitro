@@ -13,6 +13,8 @@
  */
 package org.weakref.nitro.operator;
 
+import jdk.incubator.vector.LongVector;
+
 /// Engine-selected physical policy for the pooled scalar-long distinct hash table.
 public record PooledLongHashSetPolicy(
         float loadFactor,
@@ -21,6 +23,7 @@ public record PooledLongHashSetPolicy(
         int minimumVectorTagNewKeyPercent,
         int maximumVectorKeyNewKeyPercent,
         int tagGroupBits,
+        int keyGroupBits,
         boolean debug)
 {
     public PooledLongHashSetPolicy
@@ -37,11 +40,14 @@ public record PooledLongHashSetPolicy(
         if (tagGroupBits != 64 && tagGroupBits != 128 && tagGroupBits != 256 && tagGroupBits != 512) {
             throw new IllegalArgumentException("tagGroupBits must be 64, 128, 256, or 512");
         }
+        if (keyGroupBits != 64 && keyGroupBits != 128 && keyGroupBits != 256 && keyGroupBits != 512) {
+            throw new IllegalArgumentException("keyGroupBits must be 64, 128, 256, or 512");
+        }
     }
 
     public static PooledLongHashSetPolicy defaults()
     {
-        return new PooledLongHashSetPolicy(0.75f, true, true, 5, 50, 128, false);
+        return new PooledLongHashSetPolicy(0.75f, true, supportsWideKeyGroups(), 5, 50, 128, preferredKeyGroupBits(), false);
     }
 
     public static PooledLongHashSetPolicy fromSystemProperties()
@@ -49,10 +55,26 @@ public record PooledLongHashSetPolicy(
         return new PooledLongHashSetPolicy(
                 Float.parseFloat(System.getProperty("nitro.distinct.scalarLongLoadFactor", "0.75")),
                 Boolean.parseBoolean(System.getProperty("nitro.distinct.scalarLongVectorTags", "true")),
-                Boolean.parseBoolean(System.getProperty("nitro.distinct.scalarLongVectorKeys", "true")),
+                Boolean.parseBoolean(System.getProperty(
+                        "nitro.distinct.scalarLongVectorKeys",
+                        Boolean.toString(supportsWideKeyGroups()))),
                 Integer.getInteger("nitro.distinct.scalarLongVectorTagMinNewKeyPercent", 5),
                 Integer.getInteger("nitro.distinct.scalarLongVectorKeyMaxNewKeyPercent", 50),
                 Integer.getInteger("nitro.distinct.scalarLongTagGroupBits", 128),
+                Integer.getInteger("nitro.distinct.scalarLongKeyGroupBits", preferredKeyGroupBits()),
                 Boolean.getBoolean("nitro.debug.scalarLongDistinct"));
+    }
+
+    private static int preferredKeyGroupBits()
+    {
+        return Math.clamp(LongVector.SPECIES_PREFERRED.vectorBitSize(), 64, 512);
+    }
+
+    private static boolean supportsWideKeyGroups()
+    {
+        // Four-lane key probes do not amortize their vector setup on current AVX2 implementations. Keep the
+        // independently useful compact-tag path enabled there and admit direct key vectors only where an
+        // eight-lane long vector is intrinsified.
+        return LongVector.SPECIES_PREFERRED.vectorBitSize() >= 512;
     }
 }

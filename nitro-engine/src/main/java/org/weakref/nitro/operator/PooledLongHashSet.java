@@ -25,15 +25,15 @@ import java.util.function.LongConsumer;
 /** Compact exact scalar-long set whose backing arrays participate in the shared primitive pool. */
 final class PooledLongHashSet
 {
-    private static final VectorSpecies<Long> KEY_SPECIES = LongVector.SPECIES_512;
-    private static final int KEY_GROUP_SIZE = KEY_SPECIES.length();
     private static final int MIN_CAPACITY = 16;
     private static final int MAX_CAPACITY = 1 << 30;
 
     private final PrimitiveArrayPool arrayPool;
     private final PooledLongHashSetPolicy policy;
     private final VectorSpecies<Byte> tagSpecies;
+    private final VectorSpecies<Long> keySpecies;
     private final int tagGroupSize;
+    private final int keyGroupSize;
     private boolean vectorTags;
     private boolean vectorKeys;
     private long[] keys;
@@ -61,7 +61,15 @@ final class PooledLongHashSet
             case 512 -> ByteVector.SPECIES_512;
             default -> throw new IllegalArgumentException("Unsupported tag group bits: " + policy.tagGroupBits());
         };
+        this.keySpecies = switch (policy.keyGroupBits()) {
+            case 64 -> LongVector.SPECIES_64;
+            case 128 -> LongVector.SPECIES_128;
+            case 256 -> LongVector.SPECIES_256;
+            case 512 -> LongVector.SPECIES_512;
+            default -> throw new IllegalArgumentException("Unsupported key group bits: " + policy.keyGroupBits());
+        };
         this.tagGroupSize = tagSpecies.length();
+        this.keyGroupSize = keySpecies.length();
         this.vectorTags = policy.vectorTags() && vectorTags;
         this.vectorKeys = this.vectorTags && policy.vectorKeys();
         allocate(capacity(expectedSize));
@@ -342,9 +350,9 @@ final class PooledLongHashSet
     private boolean addVectorKeys(long key)
     {
         long hash = hash64(key);
-        int group = ((int) hash) & mask & ~(KEY_GROUP_SIZE - 1);
+        int group = ((int) hash) & mask & ~(keyGroupSize - 1);
         while (true) {
-            LongVector groupKeys = LongVector.fromArray(KEY_SPECIES, keys, group);
+            LongVector groupKeys = LongVector.fromArray(keySpecies, keys, group);
             if (groupKeys.compare(VectorOperators.EQ, key).anyTrue()) {
                 return false;
             }
@@ -360,7 +368,7 @@ final class PooledLongHashSet
                 }
                 return true;
             }
-            group = (group + KEY_GROUP_SIZE) & mask;
+            group = (group + keyGroupSize) & mask;
         }
     }
 
@@ -397,16 +405,16 @@ final class PooledLongHashSet
     private boolean containsVectorKeys(long key)
     {
         long hash = hash64(key);
-        int group = ((int) hash) & mask & ~(KEY_GROUP_SIZE - 1);
+        int group = ((int) hash) & mask & ~(keyGroupSize - 1);
         while (true) {
-            LongVector groupKeys = LongVector.fromArray(KEY_SPECIES, keys, group);
+            LongVector groupKeys = LongVector.fromArray(keySpecies, keys, group);
             if (groupKeys.compare(VectorOperators.EQ, key).anyTrue()) {
                 return true;
             }
             if (groupKeys.compare(VectorOperators.EQ, 0L).anyTrue()) {
                 return false;
             }
-            group = (group + KEY_GROUP_SIZE) & mask;
+            group = (group + keyGroupSize) & mask;
         }
     }
 
@@ -439,16 +447,16 @@ final class PooledLongHashSet
     private void insertVectorKeysRehash(long key)
     {
         long hash = hash64(key);
-        int group = ((int) hash) & mask & ~(KEY_GROUP_SIZE - 1);
+        int group = ((int) hash) & mask & ~(keyGroupSize - 1);
         while (true) {
-            long emptyBits = LongVector.fromArray(KEY_SPECIES, keys, group)
+            long emptyBits = LongVector.fromArray(keySpecies, keys, group)
                     .compare(VectorOperators.EQ, 0L)
                     .toLong();
             if (emptyBits != 0) {
                 keys[group + Long.numberOfTrailingZeros(emptyBits)] = key;
                 return;
             }
-            group = (group + KEY_GROUP_SIZE) & mask;
+            group = (group + keyGroupSize) & mask;
         }
     }
 

@@ -53,11 +53,11 @@ class TestPooledLongHashSet
         PooledLongHashSet scalar = new PooledLongHashSet(
                 16,
                 pool,
-                new PooledLongHashSetPolicy(0.5f, false, false, 100, 100, 64, false));
+                new PooledLongHashSetPolicy(0.5f, false, false, 100, 100, 64, 256, false));
         PooledLongHashSet vector = new PooledLongHashSet(
                 16,
                 pool,
-                new PooledLongHashSetPolicy(0.9f, true, true, 0, 100, 256, false));
+                new PooledLongHashSetPolicy(0.9f, true, true, 0, 100, 256, 256, false));
 
         assertThat(scalar.vectorTagsEnabled()).isFalse();
         assertThat(vector.vectorTagsEnabled()).isTrue();
@@ -70,7 +70,7 @@ class TestPooledLongHashSet
     void testObservedNoveltySelectsScalarVectorKeysOrTags()
     {
         PrimitiveArrayPool pool = new PrimitiveArrayPool(1 << 20, 0);
-        PooledLongHashSetPolicy policy = new PooledLongHashSetPolicy(0.75f, true, true, 5, 50, 128, false);
+        PooledLongHashSetPolicy policy = new PooledLongHashSetPolicy(0.75f, true, true, 5, 50, 128, 256, false);
 
         PooledLongHashSet lowNovelty = new PooledLongHashSet(16, pool, policy, false);
         for (int key = 1; key <= 2; key++) {
@@ -103,5 +103,26 @@ class TestPooledLongHashSet
         lowNovelty.releaseBuffers();
         moderateNovelty.releaseBuffers();
         highNovelty.releaseBuffers();
+    }
+
+    @Test
+    void testVectorKeyWidthsPreserveSetSemantics()
+    {
+        for (int keyGroupBits : new int[] {64, 128, 256, 512}) {
+            PrimitiveArrayPool pool = new PrimitiveArrayPool(1 << 20, 0);
+            PooledLongHashSet set = new PooledLongHashSet(
+                    16,
+                    pool,
+                    new PooledLongHashSetPolicy(0.75f, true, true, 0, 100, 128, keyGroupBits, false));
+
+            for (long value = -1_000; value <= 1_000; value++) {
+                assertThat(set.add(value)).isTrue();
+                assertThat(set.add(value)).isFalse();
+            }
+            for (long value = -1_000; value <= 1_000; value++) {
+                assertThat(set.contains(value)).isTrue();
+            }
+            set.releaseBuffers();
+        }
     }
 }
