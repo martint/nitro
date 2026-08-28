@@ -372,7 +372,10 @@ final class FlatGroupingTable
             ensureBatchNormalizedCapacity(size);
             Arrays.fill(batchNormalizedValid, 0, size, (byte) 0);
         }
-        for (int position : mask) {
+        int[] positions = mask.selectedPositions();
+        int positionCount = mask.selectedCount();
+        for (int index = 0; index < positionCount; index++) {
+            int position = positions == null ? index : positions[index];
             batchHashes[position] = prepareBatchHash(values, nulls, position, batchNormalizedHashesValid);
         }
         batchHashesValid = true;

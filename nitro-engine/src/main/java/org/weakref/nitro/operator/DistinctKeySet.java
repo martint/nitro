@@ -1027,7 +1027,10 @@ final class DistinctKeySet
                 }
                 table.prepareBatchHashes(values, nulls, mask);
                 int count = 0;
-                for (int position : mask) {
+                int[] positions = mask.selectedPositions();
+                int positionCount = mask.selectedCount();
+                for (int index = 0; index < positionCount; index++) {
+                    int position = positions == null ? index : positions[index];
                     if (!nullFree && hasNull(nulls, position)) {
                         continue;
                     }
