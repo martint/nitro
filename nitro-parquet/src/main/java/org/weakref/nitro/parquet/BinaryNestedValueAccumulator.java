@@ -49,8 +49,11 @@ final class BinaryNestedValueAccumulator
     private int dictionaryGeneration;
     private int dictionarySize;
     private int dictionaryBytes;
+    private int dictionaryFixedWidth;
+    private boolean dictionaryFrequenciesPrepared;
     private int size;
     private int bytes;
+    private int nullCount;
     private boolean hasNulls;
 
     BinaryNestedValueAccumulator(boolean utf8, boolean nullable)
@@ -80,8 +83,11 @@ final class BinaryNestedValueAccumulator
         dictionaryGeneration = -1;
         dictionarySize = 0;
         dictionaryBytes = 0;
+        dictionaryFixedWidth = -1;
+        dictionaryFrequenciesPrepared = false;
         size = 0;
         bytes = 0;
+        nullCount = 0;
         hasNulls = false;
     }
 
@@ -156,6 +162,7 @@ final class BinaryNestedValueAccumulator
             throw new IllegalArgumentException("Required nested value is missing");
         }
         hasNulls = true;
+        nullCount++;
         ensurePositionCapacity(size + 1);
         if (dictionaryCandidate) {
             dictionaryIds[size] = -1;
@@ -303,6 +310,7 @@ final class BinaryNestedValueAccumulator
         dictionaryData = grow(dictionaryData, dictionaryBytes);
         dictionaryFrequencies = grow(dictionaryFrequencies, dictionarySize);
         decoder.copyDictionary(dictionaryOffsets, dictionaryData);
+        dictionaryFixedWidth = fixedDictionaryWidth();
         return true;
     }
 
@@ -312,16 +320,26 @@ final class BinaryNestedValueAccumulator
             return false;
         }
         int outputDictionarySize = dictionarySize + (hasNulls ? 1 : 0);
-        Arrays.fill(dictionaryFrequencies, 0, dictionarySize, 0);
-        long logicalBytes = 0;
-        for (int position = 0; position < size; position++) {
-            int id = dictionaryIds[position];
-            if (id >= 0) {
-                dictionaryFrequencies[id]++;
-            }
+        long logicalBytes;
+        if (dictionaryFixedWidth >= 0) {
+            // Fixed-width binary dictionaries do not need a separate logical-id pass to estimate their flat size.
+            // Frequencies are accumulated while the owned output ids are copied below.
+            logicalBytes = (long) (size - nullCount) * dictionaryFixedWidth;
+            dictionaryFrequenciesPrepared = false;
         }
-        for (int id = 0; id < dictionarySize; id++) {
-            logicalBytes += (long) dictionaryFrequencies[id] * (dictionaryOffsets[id + 1] - dictionaryOffsets[id]);
+        else {
+            Arrays.fill(dictionaryFrequencies, 0, dictionarySize, 0);
+            logicalBytes = 0;
+            for (int position = 0; position < size; position++) {
+                int id = dictionaryIds[position];
+                if (id >= 0) {
+                    dictionaryFrequencies[id]++;
+                }
+            }
+            for (int id = 0; id < dictionarySize; id++) {
+                logicalBytes += (long) dictionaryFrequencies[id] * (dictionaryOffsets[id + 1] - dictionaryOffsets[id]);
+            }
+            dictionaryFrequenciesPrepared = true;
         }
         long dictionaryFootprint = dictionaryBytes +
                 (long) Integer.BYTES * (dictionarySize + 1L + size + outputDictionarySize) +
@@ -336,7 +354,9 @@ final class BinaryNestedValueAccumulator
         int nullId = outputDictionarySize - 1;
         I32Vector ids = I32Vector.allocate(allocator, context, size);
         I32Vector frequencies = I32Vector.allocate(allocator, context, outputDictionarySize);
-        System.arraycopy(dictionaryFrequencies, 0, frequencies.values(), 0, dictionarySize);
+        if (!dictionaryFrequenciesPrepared) {
+            Arrays.fill(dictionaryFrequencies, 0, dictionarySize, 0);
+        }
         if (hasNulls) {
             frequencies.values()[nullId] = 0;
         }
@@ -346,7 +366,11 @@ final class BinaryNestedValueAccumulator
             if (id == nullId && hasNulls) {
                 frequencies.values()[nullId]++;
             }
+            else if (!dictionaryFrequenciesPrepared) {
+                dictionaryFrequencies[id]++;
+            }
         }
+        System.arraycopy(dictionaryFrequencies, 0, frequencies.values(), 0, dictionarySize);
         BinaryVector dictionary = BinaryVector.allocate(allocator, context, outputDictionarySize, dictionaryBytes);
         System.arraycopy(dictionaryOffsets, 0, dictionary.offsets(), 0, dictionarySize + 1);
         if (hasNulls) {
@@ -381,6 +405,20 @@ final class BinaryNestedValueAccumulator
         Arrays.fill(dictionaryNulls.values(), 0, outputDictionarySize, false);
         dictionaryNulls.values()[nullId] = true;
         return Streams.of(result, result.sharedMappingWithValues(dictionaryNulls.freezeContent()), null);
+    }
+
+    private int fixedDictionaryWidth()
+    {
+        if (dictionarySize == 0) {
+            return 0;
+        }
+        int width = dictionaryOffsets[1] - dictionaryOffsets[0];
+        for (int id = 1; id < dictionarySize; id++) {
+            if (dictionaryOffsets[id + 1] - dictionaryOffsets[id] != width) {
+                return -1;
+            }
+        }
+        return width;
     }
 
     private void ensureFlat()
@@ -494,8 +532,11 @@ final class BinaryNestedValueAccumulator
             dictionaryGeneration = -1;
             dictionarySize = 0;
             dictionaryBytes = 0;
+            dictionaryFixedWidth = -1;
+            dictionaryFrequenciesPrepared = false;
             size = 0;
             bytes = 0;
+            nullCount = 0;
         }
     }
 }

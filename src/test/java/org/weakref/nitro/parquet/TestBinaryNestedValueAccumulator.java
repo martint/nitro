@@ -48,7 +48,10 @@ class TestBinaryNestedValueAccumulator
 
             Streams streams = accumulator.materialize(allocator, new Allocator.Context("test"));
             assertThat(streams.values()).isInstanceOf(DictionaryVector.class);
-            assertThat(((DictionaryVector) streams.values()).values().length()).isEqualTo(2);
+            DictionaryVector dictionary = (DictionaryVector) streams.values();
+            assertThat(dictionary.values().length()).isEqualTo(2);
+            assertThat(dictionary.domainFrequency(0)).isEqualTo(500);
+            assertThat(dictionary.domainFrequency(1)).isEqualTo(500);
             assertThat(streams.get(Stream.NULLS).length()).isEqualTo(1_000);
             assertThat(VectorAccess.booleanValues(streams.get(Stream.NULLS)).value(0)).isFalse();
         }
