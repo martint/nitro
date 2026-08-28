@@ -15,6 +15,9 @@ package org.weakref.nitro.operator;
 
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.core.type.Schema;
+import org.weakref.nitro.core.type.TypeBinding;
+import org.weakref.nitro.core.type.TypeIdentity;
+import org.weakref.nitro.core.type.TypeOperators;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
@@ -22,11 +25,14 @@ import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.PrimitiveArrayPool;
+import org.weakref.nitro.data.Streams;
+import org.weakref.nitro.data.StructVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.execution.EngineResources;
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -38,6 +44,87 @@ class TestDistinctKeySet
     private final OperatorCodeGenerationResources codeGeneration = engineResources.operatorCodeGeneration();
     private final AdaptiveLongGroupingPolicy adaptiveLongGroupingPolicy = engineResources.operatorResources().adaptiveLongGroupingPolicy();
     private final FlatKeyTablePolicy flatKeyTablePolicy = engineResources.operatorResources().flatKeyTablePolicy();
+
+    @Test
+    void testStructuralDistinctReusesProbeAcrossRepeatedRows()
+    {
+        StructVector rows = new StructVector(8);
+        rows.setField("first", Streams.ofValues(new I64Vector(new long[] {1, 1, 2, 1, 2, 2, 1, 2})));
+        rows.setField("second", Streams.ofValues(new I64Vector(new long[] {10, 10, 20, 10, 20, 20, 10, 20})));
+        TypeBinding scalar = Schema.unspecified(1).field(0).type();
+        TypeBinding rowType = new TestingStructType(List.of(scalar, scalar));
+
+        try (Allocator allocator = new Allocator(engineResources)) {
+            DistinctKeySet keys = DistinctKeySet.create(
+                    new Vector[] {rows},
+                    List.of(rowType),
+                    allocator,
+                    new Allocator.Context("structural-distinct"),
+                    arrayPool,
+                    codeGeneration,
+                    DistinctKeySetPolicy.defaults(),
+                    adaptiveLongGroupingPolicy,
+                    flatKeyTablePolicy);
+            try {
+                int[] positions = new int[rows.length()];
+                int distinct = keys.addBatch(
+                        new Vector[] {rows},
+                        new Vector[] {null},
+                        Mask.all(rows.length()),
+                        positions);
+                assertThat(Arrays.copyOf(positions, distinct)).containsExactly(0, 2);
+                assertThat(keys.addBatch(
+                        new Vector[] {rows},
+                        new Vector[] {null},
+                        Mask.all(rows.length()),
+                        positions)).isZero();
+            }
+            finally {
+                keys.releaseBuffers();
+            }
+        }
+    }
+
+    @Test
+    void testStructuralDistinctConsumesSharedDictionaryDomain()
+    {
+        StructVector domain = new StructVector(3);
+        domain.setField("first", Streams.ofValues(new I64Vector(new long[] {10, 20, 30})));
+        domain.setField("second", Streams.ofValues(new I64Vector(new long[] {100, 200, 300})));
+        DictionaryVector rows = DictionaryVector.wrap(new int[] {2, 0, 2, 1, 0, 1}, domain);
+        TypeBinding scalar = Schema.unspecified(1).field(0).type();
+        TypeBinding rowType = new TestingStructType(List.of(scalar, scalar));
+
+        try (Allocator allocator = new Allocator(engineResources)) {
+            DistinctKeySet keys = DistinctKeySet.create(
+                    new Vector[] {rows},
+                    List.of(rowType),
+                    allocator,
+                    new Allocator.Context("dictionary-structural-distinct"),
+                    arrayPool,
+                    codeGeneration,
+                    DistinctKeySetPolicy.defaults(),
+                    adaptiveLongGroupingPolicy,
+                    flatKeyTablePolicy);
+            try {
+                int[] positions = new int[rows.length()];
+                int distinct = keys.addBatch(
+                        new Vector[] {rows},
+                        new Vector[] {null},
+                        Mask.all(rows.length()),
+                        positions);
+                assertThat(Arrays.copyOf(positions, distinct)).containsExactly(1, 3, 0);
+                assertThat(keys.addBatch(
+                        new Vector[] {rows},
+                        new Vector[] {null},
+                        Mask.sparse(new int[] {0, 2, 4}, rows.length()),
+                        positions)).isZero();
+            }
+            finally {
+                keys.releaseBuffers();
+            }
+        }
+    }
 
     @Test
     void testGeneratedPhysicalFlatDistinctReportsFirstPositions()
@@ -809,5 +896,38 @@ class TestDistinctKeySet
             vector.setBytes(position, encoded[position]);
         }
         return vector;
+    }
+
+    private record TestingStructType(List<TypeBinding> nestedValueTypes)
+            implements TypeBinding
+    {
+        private TestingStructType
+        {
+            nestedValueTypes = List.copyOf(nestedValueTypes);
+        }
+
+        @Override
+        public TypeIdentity identity()
+        {
+            return new TypeIdentity("testing:struct-distinct");
+        }
+
+        @Override
+        public Class<?> carrierType()
+        {
+            return Object.class;
+        }
+
+        @Override
+        public TypeOperators operators()
+        {
+            return TypeOperators.UNSPECIFIED;
+        }
+
+        @Override
+        public Set<Class<? extends Vector>> supportedVectorTypes()
+        {
+            return Set.of(StructVector.class, DictionaryVector.class);
+        }
     }
 }

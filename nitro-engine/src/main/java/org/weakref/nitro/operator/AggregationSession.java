@@ -15,7 +15,6 @@ package org.weakref.nitro.operator;
 
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
-import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.VectorAccess;
@@ -52,7 +51,6 @@ public final class AggregationSession
     private final Streams[] reusableResults;
 
     private Object[] state;
-    private I64Vector singleGroupIds;
     private boolean materialized;
     private boolean finished;
     private boolean closed;
@@ -81,7 +79,7 @@ public final class AggregationSession
         deferResultMaterialization = aggregationResources.policy().deferResultMaterialization();
         units = program.units();
         unitArray = units.toArray(PhysicalAggregationUnit[]::new);
-        distinctAggregationPlan = DistinctAggregationPlan.plan(unitArray, false, inputSchema);
+        distinctAggregationPlan = DistinctAggregationPlan.plan(unitArray, false, false, inputSchema);
         outputsByUnit = outputsByUnit(program);
         reusableResults = new Streams[program.outputs().size()];
     }
@@ -125,15 +123,9 @@ public final class AggregationSession
             }
         }
         if (distinctAggregationPlan.distinctAggregationGroups().length > 0) {
-            singleGroupIds = allocator.allocateOrGrow(
-                    allocationContext,
-                    singleGroupIds,
-                    I64Vector.class,
-                    mask.size(),
-                    I64Vector::new);
             for (DistinctAggregationPlan.Group distinctGroup : distinctAggregationPlan.distinctAggregationGroups()) {
                 Mask distinctMask = distinctGroup.select(
-                        singleGroupIds,
+                        null,
                         mask,
                         streamAccessor,
                         1,

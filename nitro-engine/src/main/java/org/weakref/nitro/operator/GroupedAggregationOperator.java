@@ -452,6 +452,7 @@ public class GroupedAggregationOperator
         this.aggregations = program.units().toArray(PhysicalAggregationUnit[]::new);
         DistinctAggregationPlan distinctAggregationPlan = DistinctAggregationPlan.plan(
                 this.aggregations,
+                true,
                 groupPartitionedLongDistinct,
                 source.outputSchema());
         this.plainAggregationIndexes = distinctAggregationPlan.plainAggregationIndexes();

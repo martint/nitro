@@ -964,6 +964,10 @@ final class DistinctKeySet
         private final FlatGroupingTable table;
         private int[] probePositions;
         private long[] generatedHashScratch;
+        private int[] dictionaryFirstLogicalPositions = new int[0];
+        private int[] dictionaryDomainPositions = new int[0];
+        private final Vector[] dictionaryDomainValues = new Vector[1];
+        private final Vector[] dictionaryDomainNulls = new Vector[1];
         private boolean emptyBinarySeen;
 
         private FlatDistinctIndex(FlatKeyLayout layout, int expectedSize, PrimitiveArrayPool arrayPool, DistinctKeySetPolicy policy)
@@ -997,6 +1001,10 @@ final class DistinctKeySet
         @Override
         public int addBatch(Vector[] values, Vector[] nulls, Mask mask, int[] distinctPositions)
         {
+            int encodedCount = addSingleDictionaryBatch(values, nulls, mask, distinctPositions);
+            if (encodedCount >= 0) {
+                return encodedCount;
+            }
             boolean nullFree = true;
             for (Vector nullsVector : nulls) {
                 if (!VectorAccess.isAllFalseNulls(nullsVector)) {
@@ -1040,6 +1048,76 @@ final class DistinctKeySet
             finally {
                 table.endBatch();
             }
+        }
+
+        private int addSingleDictionaryBatch(Vector[] values, Vector[] nulls, Mask mask, int[] distinctPositions)
+        {
+            if (values.length != 1 ||
+                    !(values[0] instanceof DictionaryVector dictionary) ||
+                    dictionary.dictionaryDepth() != 1) {
+                return -1;
+            }
+            Vector baseNulls;
+            if (nulls[0] == null) {
+                baseNulls = null;
+            }
+            else if (nulls[0] instanceof DictionaryVector nullDictionary &&
+                    nullDictionary.dictionaryDepth() == 1 &&
+                    StructuralDistinctIndex.sameMapping(dictionary, nullDictionary)) {
+                baseNulls = nullDictionary.values();
+            }
+            else if (VectorAccess.isAllFalseNulls(nulls[0])) {
+                baseNulls = null;
+            }
+            else {
+                return -1;
+            }
+
+            int domainSize = dictionary.values().length();
+            if (dictionaryFirstLogicalPositions.length < domainSize) {
+                int[] previousFirstPositions = dictionaryFirstLogicalPositions;
+                int[] previousDomainPositions = dictionaryDomainPositions;
+                dictionaryFirstLogicalPositions = arrayPool.borrowInts(domainSize);
+                dictionaryDomainPositions = arrayPool.borrowInts(domainSize);
+                arrayPool.release(previousFirstPositions);
+                arrayPool.release(previousDomainPositions);
+            }
+            Arrays.fill(dictionaryFirstLogicalPositions, 0, domainSize, -1);
+            int domainCount = 0;
+            int[] ids = dictionary.ids();
+            for (int logicalPosition : mask) {
+                int domainPosition = ids[logicalPosition];
+                if (dictionaryFirstLogicalPositions[domainPosition] < 0) {
+                    dictionaryFirstLogicalPositions[domainPosition] = logicalPosition;
+                    dictionaryDomainPositions[domainCount++] = domainPosition;
+                }
+            }
+            if (domainCount == 0) {
+                return 0;
+            }
+            Mask domainMask;
+            if (domainCount == domainSize) {
+                domainMask = Mask.all(domainSize);
+            }
+            else {
+                int[] selectedDomainPositions = Arrays.copyOf(dictionaryDomainPositions, domainCount);
+                Arrays.sort(selectedDomainPositions);
+                domainMask = Mask.sparse(selectedDomainPositions, domainSize);
+            }
+            dictionaryDomainValues[0] = dictionary.values();
+            dictionaryDomainNulls[0] = baseNulls;
+            int distinctCount;
+            try {
+                distinctCount = addBatch(dictionaryDomainValues, dictionaryDomainNulls, domainMask, distinctPositions);
+            }
+            finally {
+                dictionaryDomainValues[0] = null;
+                dictionaryDomainNulls[0] = null;
+            }
+            for (int index = 0; index < distinctCount; index++) {
+                distinctPositions[index] = dictionaryFirstLogicalPositions[distinctPositions[index]];
+            }
+            return distinctCount;
         }
 
         private int addGeneratedPhysicalBatch(Vector[] values, Vector[] nulls, Mask mask, int[] distinctPositions)
@@ -1130,7 +1208,9 @@ final class DistinctKeySet
         {
             return table.retainedBytes() +
                     (probePositions == null ? 0 : (long) probePositions.length * Integer.BYTES) +
-                    (generatedHashScratch == null ? 0 : (long) generatedHashScratch.length * Long.BYTES);
+                    (generatedHashScratch == null ? 0 : (long) generatedHashScratch.length * Long.BYTES) +
+                    (long) dictionaryFirstLogicalPositions.length * Integer.BYTES +
+                    (long) dictionaryDomainPositions.length * Integer.BYTES;
         }
 
         @Override
@@ -1141,6 +1221,10 @@ final class DistinctKeySet
             probePositions = null;
             arrayPool.release(generatedHashScratch);
             generatedHashScratch = null;
+            arrayPool.release(dictionaryFirstLogicalPositions);
+            arrayPool.release(dictionaryDomainPositions);
+            dictionaryFirstLogicalPositions = new int[0];
+            dictionaryDomainPositions = new int[0];
         }
     }
 
@@ -3042,6 +3126,12 @@ final class DistinctKeySet
         private final StructuralKeyKernel[] kernels;
         private final boolean retainNulls;
         private final ObjectOpenHashSet<StructuralDistinctKey> keys = new ObjectOpenHashSet<>();
+        private final ObjectOpenHashSet<StructuralDistinctKey> batchKeys = new ObjectOpenHashSet<>();
+        private final StructuralDistinctKey probe;
+        private int[] firstLogicalPositions = new int[0];
+        private int[] domainPositions = new int[0];
+        private Vector[] domainValues = new Vector[0];
+        private Vector[] domainNulls = new Vector[0];
 
         private StructuralDistinctIndex(
                 Allocator allocator,
@@ -3053,6 +3143,7 @@ final class DistinctKeySet
             this.allocationContext = allocationContext;
             this.kernels = kernels.clone();
             this.retainNulls = retainNulls;
+            this.probe = new StructuralDistinctKey(this.kernels);
         }
 
         @Override
@@ -3067,7 +3158,7 @@ final class DistinctKeySet
             if (!retainNulls && hasNull(nulls, position)) {
                 return false;
             }
-            StructuralDistinctKey probe = new StructuralDistinctKey(kernels, values, nulls, position);
+            probe.reset(values, nulls, position);
             if (keys.contains(probe)) {
                 return false;
             }
@@ -3081,18 +3172,117 @@ final class DistinctKeySet
         @Override
         public int addBatch(Vector[] values, Vector[] nulls, Mask mask, int[] distinctPositions)
         {
-            ObjectOpenHashSet<StructuralDistinctKey> newKeys = new ObjectOpenHashSet<>();
+            int encodedCount = addSharedDictionaryBatch(values, nulls, mask, distinctPositions);
+            if (encodedCount >= 0) {
+                return encodedCount;
+            }
+            return addPhysicalBatch(values, nulls, mask, distinctPositions);
+        }
+
+        private int addSharedDictionaryBatch(Vector[] values, Vector[] nulls, Mask mask, int[] distinctPositions)
+        {
+            if (values.length == 0 || !(values[0] instanceof DictionaryVector first) || first.dictionaryDepth() != 1) {
+                return -1;
+            }
+            int[] ids = first.ids();
+            for (int key = 1; key < values.length; key++) {
+                if (!(values[key] instanceof DictionaryVector dictionary) ||
+                        dictionary.dictionaryDepth() != 1 ||
+                        !sameMapping(first, dictionary)) {
+                    return -1;
+                }
+            }
+            for (Vector nullVector : nulls) {
+                if (nullVector == null || VectorAccess.isAllFalseNulls(nullVector)) {
+                    continue;
+                }
+                if (!(nullVector instanceof DictionaryVector dictionary) ||
+                        dictionary.dictionaryDepth() != 1 ||
+                        !sameMapping(first, dictionary)) {
+                    return -1;
+                }
+            }
+
+            int domainSize = first.values().length();
+            if (firstLogicalPositions.length < domainSize) {
+                int[] previousFirstPositions = firstLogicalPositions;
+                int[] previousDomainPositions = domainPositions;
+                firstLogicalPositions = allocator.primitiveArrays().borrowInts(domainSize);
+                domainPositions = allocator.primitiveArrays().borrowInts(domainSize);
+                allocator.primitiveArrays().release(previousFirstPositions);
+                allocator.primitiveArrays().release(previousDomainPositions);
+            }
+            Arrays.fill(firstLogicalPositions, 0, domainSize, -1);
+            int domainCount = 0;
+            for (int logicalPosition : mask) {
+                int domainPosition = ids[logicalPosition];
+                if (firstLogicalPositions[domainPosition] < 0) {
+                    firstLogicalPositions[domainPosition] = logicalPosition;
+                    domainPositions[domainCount++] = domainPosition;
+                }
+            }
+            if (domainCount == 0) {
+                return 0;
+            }
+            if (domainValues.length != values.length) {
+                domainValues = new Vector[values.length];
+                domainNulls = new Vector[values.length];
+            }
+            for (int key = 0; key < values.length; key++) {
+                domainValues[key] = ((DictionaryVector) values[key]).values();
+                Vector nullVector = nulls[key];
+                domainNulls[key] = nullVector instanceof DictionaryVector dictionary ? dictionary.values() : null;
+            }
+            Mask domainMask;
+            if (domainCount == domainSize) {
+                domainMask = Mask.all(domainSize);
+            }
+            else {
+                int[] selectedDomainPositions = Arrays.copyOf(domainPositions, domainCount);
+                Arrays.sort(selectedDomainPositions);
+                domainMask = Mask.sparse(selectedDomainPositions, domainSize);
+            }
+            int distinctCount;
+            try {
+                distinctCount = addPhysicalBatch(
+                        domainValues,
+                        domainNulls,
+                        domainMask,
+                        distinctPositions);
+            }
+            finally {
+                Arrays.fill(domainValues, null);
+                Arrays.fill(domainNulls, null);
+            }
+            for (int index = 0; index < distinctCount; index++) {
+                distinctPositions[index] = firstLogicalPositions[distinctPositions[index]];
+            }
+            return distinctCount;
+        }
+
+        private static boolean sameMapping(DictionaryVector left, DictionaryVector right)
+        {
+            return left.length() == right.length() &&
+                    (left.ids() == right.ids() ||
+                            Arrays.mismatch(left.ids(), 0, left.length(), right.ids(), 0, right.length()) < 0);
+        }
+
+        private int addPhysicalBatch(Vector[] values, Vector[] nulls, Mask mask, int[] distinctPositions)
+        {
+            batchKeys.clear();
             int distinctCount = 0;
             for (int position : mask) {
                 if (!retainNulls && hasNull(nulls, position)) {
                     continue;
                 }
-                StructuralDistinctKey probe = new StructuralDistinctKey(kernels, values, nulls, position);
-                if (!keys.contains(probe) && newKeys.add(probe)) {
+                probe.reset(values, nulls, position);
+                if (!keys.contains(probe) && !batchKeys.contains(probe)) {
+                    batchKeys.add(new StructuralDistinctKey(kernels, values, nulls, position));
                     distinctPositions[distinctCount++] = position;
                 }
             }
             if (distinctCount == 0) {
+                batchKeys.clear();
                 return 0;
             }
 
@@ -3102,6 +3292,7 @@ final class DistinctKeySet
             for (int position = 0; position < distinctCount; position++) {
                 keys.add(new StructuralDistinctKey(kernels, ownedValues, ownedNulls, position));
             }
+            batchKeys.clear();
             return distinctCount;
         }
 
@@ -3129,6 +3320,11 @@ final class DistinctKeySet
         public void releaseBuffers()
         {
             keys.clear();
+            batchKeys.clear();
+            allocator.primitiveArrays().release(firstLogicalPositions);
+            allocator.primitiveArrays().release(domainPositions);
+            firstLogicalPositions = new int[0];
+            domainPositions = new int[0];
         }
     }
 
@@ -3137,9 +3333,14 @@ final class DistinctKeySet
         private static final int NULL_HASH = 0x9E3779B9;
 
         private final StructuralKeyKernel[] kernels;
-        private final Vector[] values;
-        private final Vector[] nulls;
-        private final int position;
+        private Vector[] values;
+        private Vector[] nulls;
+        private int position;
+
+        private StructuralDistinctKey(StructuralKeyKernel[] kernels)
+        {
+            this.kernels = kernels;
+        }
 
         private StructuralDistinctKey(
                 StructuralKeyKernel[] kernels,
@@ -3148,6 +3349,13 @@ final class DistinctKeySet
                 int position)
         {
             this.kernels = kernels;
+            this.values = values;
+            this.nulls = nulls;
+            this.position = position;
+        }
+
+        private void reset(Vector[] values, Vector[] nulls, int position)
+        {
             this.values = values;
             this.nulls = nulls;
             this.position = position;

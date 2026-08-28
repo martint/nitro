@@ -42,7 +42,11 @@ final class DistinctAggregationPlan
         this.distinctAggregationGroups = distinctAggregationGroups;
     }
 
-    static DistinctAggregationPlan plan(PhysicalAggregationUnit[] aggregations, boolean groupPartitionedLongDistinct, Schema sourceSchema)
+    static DistinctAggregationPlan plan(
+            PhysicalAggregationUnit[] aggregations,
+            boolean grouped,
+            boolean groupPartitionedLongDistinct,
+            Schema sourceSchema)
     {
         List<Integer> plainAggregationIndexes = new ArrayList<>();
         List<Integer> filteredAggregationIndexes = new ArrayList<>();
@@ -66,6 +70,7 @@ final class DistinctAggregationPlan
                 .map(entry -> new Group(
                         entry.getKey().inputColumns(),
                         entry.getValue().stream().mapToInt(Integer::intValue).toArray(),
+                        grouped,
                         groupPartitionedLongDistinct,
                         distinctTypes(sourceSchema, entry.getKey().inputColumns())))
                 .toArray(Group[]::new);
@@ -134,6 +139,7 @@ final class DistinctAggregationPlan
         private static final int[] EMPTY_POSITIONS = new int[0];
         private final int[] inputColumns;
         private final int[] aggregationIndexes;
+        private final boolean grouped;
         private final boolean groupPartitionedLongDistinct;
         private final List<TypeBinding> inputTypes;
         private final Vector[] values;
@@ -142,14 +148,20 @@ final class DistinctAggregationPlan
         private PrimitiveArrayPool arrayPool;
         private int[] distinctPositions = EMPTY_POSITIONS;
 
-        private Group(int[] inputColumns, int[] aggregationIndexes, boolean groupPartitionedLongDistinct, List<TypeBinding> inputTypes)
+        private Group(
+                int[] inputColumns,
+                int[] aggregationIndexes,
+                boolean grouped,
+                boolean groupPartitionedLongDistinct,
+                List<TypeBinding> inputTypes)
         {
             this.inputColumns = inputColumns.clone();
             this.aggregationIndexes = aggregationIndexes;
+            this.grouped = grouped;
             this.groupPartitionedLongDistinct = groupPartitionedLongDistinct;
             this.inputTypes = List.copyOf(inputTypes);
-            this.values = new Vector[inputColumns.length + 1];
-            this.nulls = new Vector[inputColumns.length + 1];
+            this.values = new Vector[inputColumns.length + (grouped ? 1 : 0)];
+            this.nulls = new Vector[this.values.length];
         }
 
         int[] aggregationIndexes()
@@ -174,7 +186,10 @@ final class DistinctAggregationPlan
                 return allocator.allocateSparseMask(allocationContext, EMPTY_POSITIONS, mask.size());
             }
 
-            values[0] = groups;
+            int inputOffset = grouped ? 1 : 0;
+            if (grouped) {
+                values[0] = groups;
+            }
             if (distinctPositions.length < mask.selectedCount()) {
                 int[] previous = distinctPositions;
                 distinctPositions = arrayPool.borrowInts(mask.selectedCount());
@@ -183,8 +198,8 @@ final class DistinctAggregationPlan
 
             try {
                 for (int index = 0; index < inputColumns.length; index++) {
-                    values[index + 1] = streamAccessor.values(inputColumns[index]);
-                    nulls[index + 1] = streamAccessor.nulls(inputColumns[index]);
+                    values[index + inputOffset] = streamAccessor.values(inputColumns[index]);
+                    nulls[index + inputOffset] = streamAccessor.nulls(inputColumns[index]);
                 }
                 if (distinctKeySet == null) {
                     distinctKeySet = groupPartitionedLongDistinct && inputColumns.length == 1
@@ -201,7 +216,7 @@ final class DistinctAggregationPlan
                             : DistinctKeySet.createWithUnboundPrefix(
                                     values,
                                     false,
-                                    1,
+                                    inputOffset,
                                     inputTypes,
                                     allocator,
                                     allocationContext,
@@ -211,7 +226,9 @@ final class DistinctAggregationPlan
                                     adaptiveLongGroupingPolicy,
                                     flatKeyTablePolicy);
                 }
-                int selectedCount = distinctKeySet.addGroupedBatch(values, nulls, mask, groupCount, distinctPositions);
+                int selectedCount = grouped
+                        ? distinctKeySet.addGroupedBatch(values, nulls, mask, groupCount, distinctPositions)
+                        : distinctKeySet.addBatch(values, nulls, mask, distinctPositions);
                 return allocator.allocateSparseMask(allocationContext, distinctPositions, selectedCount, mask.size());
             }
             finally {
