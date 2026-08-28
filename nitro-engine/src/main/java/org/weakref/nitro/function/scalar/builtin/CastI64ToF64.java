@@ -63,9 +63,7 @@ public final class CastI64ToF64
                     output != null ? output.getOrNull(Stream.NULLS) : null,
                     requiredLength);
             boolean[] nullValues = nulls.values();
-            for (int position : mask) {
-                nullValues[position] = inputNulls.value(position);
-            }
+            copyNulls(mask, inputNulls, nullValues);
             result = result.with(Stream.NULLS, nulls);
         }
         if (!requestValues) {
@@ -79,9 +77,39 @@ public final class CastI64ToF64
                 requiredLength,
                 F64Vector::new);
         double[] outputValues = values.values();
-        for (int position : mask) {
-            outputValues[position] = (double) epochDays.value(position);
-        }
+        castValues(mask, epochDays, outputValues);
         return result.with(Stream.VALUES, values);
+    }
+
+    private static void copyNulls(Mask mask, VectorAccess.BooleanValues input, boolean[] output)
+    {
+        int count = mask.count();
+        int[] positions = mask.selectedPositions();
+        if (positions == null) {
+            for (int position = 0; position < count; position++) {
+                output[position] = input.value(position);
+            }
+            return;
+        }
+        for (int index = 0; index < count; index++) {
+            int position = positions[index];
+            output[position] = input.value(position);
+        }
+    }
+
+    private static void castValues(Mask mask, VectorAccess.LongValues input, double[] output)
+    {
+        int count = mask.count();
+        int[] positions = mask.selectedPositions();
+        if (positions == null) {
+            for (int position = 0; position < count; position++) {
+                output[position] = (double) input.value(position);
+            }
+            return;
+        }
+        for (int index = 0; index < count; index++) {
+            int position = positions[index];
+            output[position] = (double) input.value(position);
+        }
     }
 }
