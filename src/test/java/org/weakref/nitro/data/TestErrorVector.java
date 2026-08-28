@@ -33,6 +33,37 @@ class TestErrorVector
     }
 
     @Test
+    void testAllocatesDiagnosticStorageOnlyWhenAnErrorIsRecorded()
+    {
+        try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
+            Allocator.Context context = new Allocator.Context("test");
+            ErrorVector errors = allocator.allocate(context, ErrorVector.class, 16, ErrorVector::new);
+            long booleanBytes = errors.retainedBytes();
+
+            assertThat(errors.error(0)).isNull();
+            assertThat(errors.retainedBytes()).isEqualTo(booleanBytes);
+            assertThat(allocator.residentBytes()).isEqualTo(booleanBytes);
+
+            errors.setError(3, new ErrorValue("test", 1, "FAILURE", "USER_ERROR", "failure"));
+
+            assertThat(errors.retainedBytes()).isEqualTo(booleanBytes + 16L * Long.BYTES);
+            assertThat(allocator.residentBytes()).isEqualTo(errors.retainedBytes());
+        }
+    }
+
+    @Test
+    void testLazyAndAllocatedEmptyDiagnosticsHaveTheSameContent()
+    {
+        ErrorVector lazy = new ErrorVector(2);
+        ErrorVector allocated = new ErrorVector(2);
+        allocated.setError(0, new ErrorValue("test", 1, "FAILURE", "USER_ERROR", "failure"));
+        allocated.clearError(0);
+
+        assertThat(lazy.hasSameContent(allocated)).isTrue();
+        assertThat(lazy.contentFingerprint()).isEqualTo(allocated.contentFingerprint());
+    }
+
+    @Test
     void testCopiesDiagnosticsThroughGenericVectorOperations()
     {
         ErrorValue first = new ErrorValue("test", 1, "FIRST", "USER_ERROR", "first");

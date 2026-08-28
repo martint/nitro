@@ -23,31 +23,35 @@ import static java.util.Objects.requireNonNull;
  */
 public final class ErrorVector
         extends BooleanVector
+        implements DynamicRetainedBytesVector
 {
-    private final ErrorValue[] errors;
+    private ErrorValue[] errors;
+    private Allocator retainedBytesAllocator;
+    private Allocator.Context retainedBytesContext;
 
     public ErrorVector(int size)
     {
         super(size);
-        errors = new ErrorValue[size];
     }
 
     public ErrorValue error(int position)
     {
-        return errors[position];
+        return errors == null ? null : errors[position];
     }
 
     public void setError(int position, ErrorValue error)
     {
         invalidateContentSummary();
-        errors[position] = requireNonNull(error, "error is null");
+        ensureDiagnosticStorage()[position] = requireNonNull(error, "error is null");
         values()[position] = true;
     }
 
     public void clearError(int position)
     {
         invalidateContentSummary();
-        errors[position] = null;
+        if (errors != null) {
+            errors[position] = null;
+        }
         values()[position] = false;
     }
 
@@ -55,27 +59,39 @@ public final class ErrorVector
     public void markAllFalse()
     {
         super.markAllFalse();
-        Arrays.fill(errors, null);
+        if (errors != null) {
+            Arrays.fill(errors, null);
+        }
     }
 
     @Override
     public void markAllTrue()
     {
         super.markAllTrue();
-        Arrays.fill(errors, null);
+        if (errors != null) {
+            Arrays.fill(errors, null);
+        }
     }
 
     @Override
     public long retainedBytes()
     {
-        return super.retainedBytes() + (long) errors.length * Long.BYTES;
+        return super.retainedBytes() + (errors == null ? 0 : (long) errors.length * Long.BYTES);
+    }
+
+    @Override
+    public void bindRetainedBytesAccounting(Allocator allocator, Allocator.Context context)
+    {
+        retainedBytesAllocator = requireNonNull(allocator, "allocator is null");
+        retainedBytesContext = requireNonNull(context, "context is null");
     }
 
     @Override
     public long contentFingerprint()
     {
         long hash = super.contentFingerprint();
-        for (ErrorValue error : errors) {
+        for (int position = 0; position < length(); position++) {
+            ErrorValue error = errors == null ? null : errors[position];
             hash = (hash ^ (error == null ? 0 : error.hashCode())) * 0x100000001b3L;
         }
         return hash == NO_CONTENT_FINGERPRINT ? hash + 1 : hash;
@@ -86,7 +102,7 @@ public final class ErrorVector
     {
         return other instanceof ErrorVector errorsVector &&
                 super.hasSameContent(errorsVector) &&
-                Arrays.equals(errors, errorsVector.errors);
+                diagnosticsEqual(errorsVector);
     }
 
     @Override
@@ -180,14 +196,23 @@ public final class ErrorVector
             throw new IllegalArgumentException("ErrorVector target must have the same representation");
         }
         super.copyInto(errorTarget);
-        System.arraycopy(errors, 0, errorTarget.errors, 0, errors.length);
+        if (errors == null) {
+            if (errorTarget.errors != null) {
+                Arrays.fill(errorTarget.errors, null);
+            }
+        }
+        else {
+            System.arraycopy(errors, 0, errorTarget.ensureDiagnosticStorage(), 0, errors.length);
+        }
     }
 
     @Override
     public void clearForReuse()
     {
         super.clearForReuse();
-        Arrays.fill(errors, null);
+        if (errors != null) {
+            Arrays.fill(errors, null);
+        }
     }
 
     @Override
@@ -200,7 +225,38 @@ public final class ErrorVector
     {
         target.invalidateContentSummary();
         target.values()[targetPosition] = values()[sourcePosition];
-        target.errors[targetPosition] = errors[sourcePosition];
+        ErrorValue error = errors == null ? null : errors[sourcePosition];
+        if (error != null) {
+            target.ensureDiagnosticStorage()[targetPosition] = error;
+        }
+        else if (target.errors != null) {
+            target.errors[targetPosition] = null;
+        }
+    }
+
+    private ErrorValue[] ensureDiagnosticStorage()
+    {
+        if (errors == null) {
+            long previousRetainedBytes = retainedBytes();
+            errors = new ErrorValue[length()];
+            if (retainedBytesAllocator != null) {
+                retainedBytesAllocator.retainedBytesChanged(retainedBytesContext, this, previousRetainedBytes);
+            }
+        }
+        return errors;
+    }
+
+    private boolean diagnosticsEqual(ErrorVector other)
+    {
+        if (errors == null && other.errors == null) {
+            return true;
+        }
+        for (int position = 0; position < length(); position++) {
+            if (!java.util.Objects.equals(error(position), other.error(position))) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static ErrorVector writable(Allocator allocator, Allocator.Context allocationContext, Vector existing, int size)
