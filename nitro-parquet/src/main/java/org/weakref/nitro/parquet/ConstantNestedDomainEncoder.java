@@ -84,30 +84,33 @@ final class ConstantNestedDomainEncoder
 
     private static boolean encoded(Streams streams)
     {
-        for (Stream stream : streams.streams()) {
-            Vector vector = streams.get(stream);
-            if (stream != Stream.VALUES && VectorAccess.isAllFalseNulls(vector)) {
-                continue;
-            }
-            if (!(vector instanceof DictionaryVector) && !(vector instanceof RleVector)) {
-                return false;
-            }
+        if (!streams.hasValues() || !encoded(streams.values())) {
+            return false;
         }
-        return streams.hasValues();
+        return encodedSideStream(streams.getOrNull(Stream.NULLS)) &&
+                encodedSideStream(streams.getOrNull(Stream.ERRORS));
     }
 
     private static boolean sameEncodedPosition(Streams streams, int left, int right)
     {
-        for (Stream stream : streams.streams()) {
-            Vector vector = streams.get(stream);
-            if (stream != Stream.VALUES && VectorAccess.isAllFalseNulls(vector)) {
-                continue;
-            }
-            if (!sameEncodedPosition(vector, left, right)) {
-                return false;
-            }
-        }
-        return true;
+        return sameEncodedPosition(streams.values(), left, right) &&
+                sameEncodedSidePosition(streams.getOrNull(Stream.NULLS), left, right) &&
+                sameEncodedSidePosition(streams.getOrNull(Stream.ERRORS), left, right);
+    }
+
+    private static boolean encodedSideStream(Vector vector)
+    {
+        return vector == null || VectorAccess.isAllFalseNulls(vector) || encoded(vector);
+    }
+
+    private static boolean encoded(Vector vector)
+    {
+        return vector instanceof DictionaryVector || vector instanceof RleVector;
+    }
+
+    private static boolean sameEncodedSidePosition(Vector vector, int left, int right)
+    {
+        return vector == null || VectorAccess.isAllFalseNulls(vector) || sameEncodedPosition(vector, left, right);
     }
 
     private static boolean sameEncodedPosition(Vector vector, int left, int right)
