@@ -140,6 +140,20 @@ public final class RleVector
         return idx;
     }
 
+    /** Returns the first logical position after the requested run. */
+    public int runEnd(int runIndex)
+    {
+        if (runIndex < 0 || runIndex >= counts.length) {
+            throw new IndexOutOfBoundsException("Run " + runIndex + " is out of bounds for RLE vector with " + counts.length + " runs");
+        }
+        int[] ends = runEnds;
+        if (ends == null) {
+            ends = computeRunEnds();
+            runEnds = ends;
+        }
+        return ends[runIndex];
+    }
+
     @Override
     public int length()
     {

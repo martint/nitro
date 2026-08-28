@@ -29,6 +29,15 @@ public final class VectorAccess
             return endOffset(position) - startOffset(position);
         }
 
+        /**
+         * Returns the first logical position at which the repeated value may differ from {@code position}.
+         * Implementations may conservatively return {@code position + 1}.
+         */
+        default int valueRunEnd(int position)
+        {
+            return position + 1;
+        }
+
         int outputCount();
 
         Streams output(int output);
@@ -74,11 +83,45 @@ public final class VectorAccess
             case RleVector rle -> {
                 RepeatedValues values = repeatedValues(rle.values());
                 int[] hint = {0};
-                yield mappedRepeatedValues(values, position -> {
-                    int run = rle.runIndexFromHint(position, hint[0]);
-                    hint[0] = run;
-                    return run;
-                });
+                yield new RepeatedValues()
+                {
+                    private int run(int position)
+                    {
+                        int run = rle.runIndexFromHint(position, hint[0]);
+                        hint[0] = run;
+                        return run;
+                    }
+
+                    @Override
+                    public int startOffset(int position)
+                    {
+                        return values.startOffset(run(position));
+                    }
+
+                    @Override
+                    public int endOffset(int position)
+                    {
+                        return values.endOffset(run(position));
+                    }
+
+                    @Override
+                    public int valueRunEnd(int position)
+                    {
+                        return rle.runEnd(run(position));
+                    }
+
+                    @Override
+                    public int outputCount()
+                    {
+                        return values.outputCount();
+                    }
+
+                    @Override
+                    public Streams output(int output)
+                    {
+                        return values.output(output);
+                    }
+                };
             }
             default -> throw new IllegalArgumentException("Expected repeated structural vector but found " + vector.getClass().getSimpleName());
         };

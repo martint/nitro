@@ -28,6 +28,7 @@ import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.MapVector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.StructVector;
@@ -199,6 +200,60 @@ public class TestUnnestOperator
 
         assertThat(operator(unnest)).matchesExactly(List.of(
                 row(10L), row(11L), row(20L), row(10L), row(11L)));
+    }
+
+    @Test
+    void testExpandsRleArraysAcrossRunBoundaries()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        ArrayVector domain = array(new int[] {0, 2, 3}, 10, 11, 20);
+        RleVector arrays = new RleVector(new int[] {2, 1}, domain);
+        Operator source = new TableOperator(
+                Schema.unspecified(1),
+                List.of(TableOperator.Page.values(3, new Vector[] {arrays}, Mask.all(3))));
+        Field output = Schema.unspecified(1).field(0);
+
+        Operator unnest = new UnnestOperator(
+                allocator,
+                source,
+                new int[0],
+                List.of(UnnestOperator.Mapping.direct(0, List.of(output))),
+                Optional.empty(),
+                false,
+                new UnnestOperatorPolicy(16));
+
+        assertThat(operator(unnest)).matchesExactly(List.of(
+                row(10L), row(11L),
+                row(10L), row(11L),
+                row(20L)));
+    }
+
+    @Test
+    void testRleArraysRespectCollectionNulls()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        ArrayVector value = array(new int[] {0, 2}, 10, 11);
+        RleVector arrays = new RleVector(new int[] {3}, value);
+        Operator source = new TableOperator(
+                Schema.unspecified(1),
+                List.of(new TableOperator.Page(
+                        3,
+                        new Streams[] {Streams.ofValuesAndNulls(arrays, new BooleanVector(new boolean[] {false, true, false}))},
+                        Mask.all(3))));
+        Field output = Schema.unspecified(1).field(0);
+
+        Operator unnest = new UnnestOperator(
+                allocator,
+                source,
+                new int[0],
+                List.of(UnnestOperator.Mapping.direct(0, List.of(output))),
+                Optional.empty(),
+                false,
+                new UnnestOperatorPolicy(16));
+
+        assertThat(operator(unnest)).matchesExactly(List.of(
+                row(10L), row(11L),
+                row(10L), row(11L)));
     }
 
     @Test

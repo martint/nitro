@@ -546,9 +546,14 @@ public final class UnnestOperator
         private final Mask mask;
         private final VectorAccess.RepeatedValues[] repeated;
         private final VectorAccess.BooleanValues[] collectionNulls;
+        private final boolean rowShapeReusable;
         private int selectedIndex;
         private int elementIndex;
         private int rowLength = -1;
+        private int cachedRowStart = -1;
+        private int cachedRowEnd = -1;
+        private int cachedRowLength;
+        private boolean cachedOuterPadding;
         private boolean outerPadding;
         private boolean hasOrdinalityNulls;
         private boolean closed;
@@ -559,6 +564,7 @@ public final class UnnestOperator
             mask = batch.borrowMask();
             repeated = new VectorAccess.RepeatedValues[mappings.size()];
             collectionNulls = new VectorAccess.BooleanValues[mappings.size()];
+            boolean rowShapeReusable = true;
             for (int mapping = 0; mapping < mappings.size(); mapping++) {
                 Output input = batch.output(mappings.get(mapping).inputColumn());
                 repeated[mapping] = VectorAccess.repeatedValues(input.borrow(Stream.VALUES));
@@ -567,8 +573,12 @@ public final class UnnestOperator
                         throw new IllegalArgumentException("Repeated vector output does not match planned UNNEST output");
                     }
                 }
-                collectionNulls[mapping] = VectorAccess.booleanValues(input.borrowOrNull(Stream.NULLS));
+                Vector nulls = input.borrowOrNull(Stream.NULLS);
+                boolean nullFree = VectorAccess.isAllFalseNulls(nulls);
+                collectionNulls[mapping] = VectorAccess.booleanValues(nullFree ? null : nulls);
+                rowShapeReusable &= nullFree;
             }
+            this.rowShapeReusable = rowShapeReusable;
             skipRowsWithoutOutput();
         }
 
@@ -666,7 +676,13 @@ public final class UnnestOperator
 
         private int prepareRow(int inputPosition)
         {
+            if (rowShapeReusable && inputPosition >= cachedRowStart && inputPosition < cachedRowEnd) {
+                outerPadding = cachedOuterPadding;
+                return cachedRowLength;
+            }
+
             int length = 0;
+            int rowEnd = Integer.MAX_VALUE;
             for (int mapping = 0; mapping < mappings.size(); mapping++) {
                 if (collectionNulls[mapping].value(inputPosition)) {
                     repeatedStarts[mapping] = 0;
@@ -677,9 +693,19 @@ public final class UnnestOperator
                     repeatedLengths[mapping] = repeated[mapping].length(inputPosition);
                 }
                 length = Math.max(length, repeatedLengths[mapping]);
+                if (rowShapeReusable) {
+                    rowEnd = Math.min(rowEnd, repeated[mapping].valueRunEnd(inputPosition));
+                }
             }
             outerPadding = outer && length == 0;
-            return outer ? Math.max(1, length) : length;
+            int result = outer ? Math.max(1, length) : length;
+            if (rowShapeReusable) {
+                cachedRowStart = inputPosition;
+                cachedRowEnd = rowEnd;
+                cachedRowLength = result;
+                cachedOuterPadding = outerPadding;
+            }
+            return result;
         }
 
         private void skipRowsWithoutOutput()
