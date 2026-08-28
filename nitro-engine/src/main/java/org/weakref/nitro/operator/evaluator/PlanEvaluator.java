@@ -1055,13 +1055,17 @@ public final class PlanEvaluator
         Mask.DictionaryDomainSelection domainSelection = logicalMask.dictionaryDomainSelection(mapping);
         if (domainSelection != null && domainSelection.domainSize() == baseLength) {
             long selectedBits = domainSelection.selectedDomainBits();
-            int[] positions = new int[Long.bitCount(selectedBits)];
+            Mask result = allocator.allocateUninitializedSparseMask(
+                    allocationContext,
+                    Long.bitCount(selectedBits),
+                    baseLength);
+            int[] positions = result.positionsArrayForOverwrite(result.count());
             for (int domain = 0, index = 0; domain < baseLength; domain++) {
                 if (((selectedBits >>> domain) & 1L) != 0) {
                     positions[index++] = domain;
                 }
             }
-            return allocator.allocateSparseMask(allocationContext, positions, positions.length, baseLength);
+            return result;
         }
 
         if (dictionaryDomainSelectionScratch.length < baseLength) {
@@ -1072,22 +1076,23 @@ public final class PlanEvaluator
         boolean[] selected = dictionaryDomainSelectionScratch;
         int selectedCount = 0;
         int logicalPositionCount = logicalMask.selectedCount();
+        int[] logicalPositions = logicalMask.selectedPositions();
         for (int index = 0; index < logicalPositionCount; index++) {
-            int position = logicalMask.position(index);
-            int domain = ids[position];
+            int domain = ids[logicalPositions[index]];
             if (!selected[domain]) {
                 selected[domain] = true;
                 selectedCount++;
             }
         }
-        int[] positions = new int[selectedCount];
+        Mask result = allocator.allocateUninitializedSparseMask(allocationContext, selectedCount, baseLength);
+        int[] positions = result.positionsArrayForOverwrite(selectedCount);
         for (int domain = 0, index = 0; domain < baseLength; domain++) {
             if (selected[domain]) {
                 positions[index++] = domain;
                 selected[domain] = false;
             }
         }
-        return allocator.allocateSparseMask(allocationContext, positions, selectedCount, baseLength);
+        return result;
     }
 
     private boolean dictionaryPeelTooSparse(int rowCount, int baseLength)
