@@ -804,7 +804,7 @@ final class NestedNitroParquetBatchSource
 
         this.files = new ParquetFile[splits.size()];
         for (int index = 0; index < files.length; index++) {
-            files[index] = ParquetFile.open(splits.get(index).input());
+            files[index] = ParquetFile.open(splits.get(index).input(), resources.metadataCache());
         }
         this.readers = new ProjectedReader[schema.size()];
         this.sourceColumns = new SourceColumnHandle[schema.size()];

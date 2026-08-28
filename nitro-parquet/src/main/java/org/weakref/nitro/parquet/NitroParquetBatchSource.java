@@ -783,7 +783,7 @@ public final class NitroParquetBatchSource
         for (int file = 0; file < splits.size(); file++) {
             SourceSplit split = splits.get(file);
             switch (split) {
-                case InputSourceSplit inputSplit -> files[file] = ParquetFile.open(inputSplit.input());
+                case InputSourceSplit inputSplit -> files[file] = ParquetFile.open(inputSplit.input(), metadataCache);
                 case PathSourceSplit pathSplit -> {
                     Path path = pathSplit.path();
                     mappedFileLeases[file] = resources.acquireMappedFile(path);

@@ -14,6 +14,7 @@
 package org.weakref.nitro.parquet;
 
 import java.io.IOException;
+import java.util.Optional;
 
 /**
  * Seekable Parquet input supplied by the embedding connector.
@@ -30,6 +31,18 @@ public interface ParquetInput
     String id();
 
     long size();
+
+    /**
+     * Stable version of the object addressed by {@link #id()}, when the connector can provide one.
+     *
+     * <p>The value must change whenever the object's contents can change without changing its identifier. An object
+     * store ETag, generation, or last-modified value are suitable versions. Nitro uses the identifier, size, and
+     * version together to share parsed Parquet metadata. Inputs without a stable version remain uncached.
+     */
+    default Optional<String> metadataVersion()
+    {
+        return Optional.empty();
+    }
 
     ParquetInputRange readRange(long offset, int length)
             throws IOException;

@@ -36,7 +36,27 @@ final class ParquetMetadataCache
     ParquetFile.Metadata get(Path path, long size, FileTime modifiedTime, Loader loader)
             throws IOException
     {
-        Key key = new Key(path.toAbsolutePath().normalize(), size, requireNonNull(modifiedTime, "modifiedTime is null"));
+        return get(
+                new PathIdentity(path.toAbsolutePath().normalize()),
+                size,
+                requireNonNull(modifiedTime, "modifiedTime is null"),
+                loader);
+    }
+
+    ParquetFile.Metadata get(String inputId, long size, String version, Loader loader)
+            throws IOException
+    {
+        return get(
+                new InputIdentity(requireNonNull(inputId, "inputId is null")),
+                size,
+                requireNonNull(version, "version is null"),
+                loader);
+    }
+
+    private ParquetFile.Metadata get(Object identity, long size, Object version, Loader loader)
+            throws IOException
+    {
+        Key key = new Key(identity, size, version);
         CompletableFuture<ParquetFile.Metadata> future;
         boolean load = false;
         synchronized (this) {
@@ -80,5 +100,9 @@ final class ParquetMetadataCache
                 throws IOException;
     }
 
-    private record Key(Path path, long size, FileTime modifiedTime) {}
+    private record Key(Object identity, long size, Object version) {}
+
+    private record PathIdentity(Path path) {}
+
+    private record InputIdentity(String id) {}
 }

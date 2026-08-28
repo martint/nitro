@@ -165,17 +165,30 @@ public final class ParquetFile
 
     public static ParquetFile open(ParquetInput input)
     {
-        input = requireNonNull(input, "input is null");
-        String inputId = requireNonNull(input.id(), "input id is null");
+        return open(input, null);
+    }
+
+    static ParquetFile open(ParquetInput input, ParquetMetadataCache metadataCache)
+    {
+        ParquetInput parquetInput = requireNonNull(input, "input is null");
+        String inputId = requireNonNull(parquetInput.id(), "input id is null");
         try {
-            return new ParquetFile(input, readMetadata(input));
+            java.util.Optional<String> metadataVersion = parquetInput.metadataVersion();
+            Metadata metadata = metadataCache == null || metadataVersion.isEmpty()
+                    ? readMetadata(parquetInput)
+                    : metadataCache.get(
+                            inputId,
+                            parquetInput.size(),
+                            metadataVersion.orElseThrow(),
+                            () -> readMetadata(parquetInput));
+            return new ParquetFile(parquetInput, metadata);
         }
         catch (IOException e) {
-            closeAfterFailure(input, e);
+            closeAfterFailure(parquetInput, e);
             throw new UncheckedIOException("Unable to open Parquet input: " + inputId, e);
         }
         catch (RuntimeException e) {
-            closeAfterFailure(input, e);
+            closeAfterFailure(parquetInput, e);
             throw e;
         }
     }
