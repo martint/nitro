@@ -21,6 +21,7 @@ import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.MapVector;
 import org.weakref.nitro.data.Mask;
@@ -116,6 +117,10 @@ class TestNestedMapReader
         int rowCount = 128;
         Allocator.Context context = new Allocator.Context("test");
         try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
+            I32Vector recycledIds = I32Vector.allocate(allocator, context, rowCount);
+            Arrays.fill(recycledIds.values(), 1);
+            allocator.release(context, recycledIds);
+
             MapVector maps = allocator.allocateMap(context, rowCount);
             for (int position = 0; position <= rowCount; position++) {
                 maps.offsets()[position] = position * 2;
@@ -136,6 +141,7 @@ class TestNestedMapReader
             assertThat(encoded).isNotNull();
             assertThat(encoded.values()).isInstanceOfSatisfying(DictionaryVector.class, dictionary -> {
                 assertThat(dictionary.length()).isEqualTo(rowCount);
+                assertThat(dictionary.ids()).containsOnly(0);
                 assertThat(dictionary.values()).isInstanceOfSatisfying(MapVector.class, domain -> {
                     assertThat(domain.length()).isOne();
                     assertThat(domain.offsets()).containsExactly(0, 2);

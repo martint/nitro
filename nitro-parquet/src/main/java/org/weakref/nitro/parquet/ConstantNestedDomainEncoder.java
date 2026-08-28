@@ -70,6 +70,7 @@ final class ConstantNestedDomainEncoder
 
         Vector domain = allocator.copyVector(context, values, new int[] {0}).freezeContent();
         I32Vector ids = I32Vector.allocate(allocator, context, rowCount);
+        java.util.Arrays.fill(ids.values(), 0, rowCount, 0);
         I32Vector frequencies = I32Vector.allocate(allocator, context, 1);
         frequencies.values()[0] = rowCount;
         DictionaryVector encoded = DictionaryVector.wrapOwnedIdsWithDomainFrequencies(ids, rowCount, domain, frequencies);
