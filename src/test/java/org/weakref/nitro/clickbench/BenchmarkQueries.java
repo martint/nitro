@@ -37,6 +37,13 @@ import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 import java.nio.file.Path;
 import java.util.concurrent.TimeUnit;
 
+/**
+ * Operator benchmarks named with ClickBench's published zero-based query IDs.
+ *
+ * <p>The underlying support methods retain their historical one-based names, so benchmark {@code queryNN} invokes
+ * support method {@code query(NN + 1)}. The non-query full-column reader probe is exposed separately as
+ * {@link #allColumnsScan()}.
+ */
 @State(Scope.Thread)
 @Fork(1)
 @Warmup(iterations = 3, time = 1000, timeUnit = TimeUnit.MILLISECONDS)
@@ -57,193 +64,193 @@ public class BenchmarkQueries
     }
 
     @Benchmark
-    public void query00()
+    public void allColumnsScan()
     {
         consume(ClickBenchHitsSupport.query00(allocator, clickBenchHitsDirectory));
     }
 
     @Benchmark
-    public void query01()
+    public void query00()
     {
         consume(ClickBenchHitsSupport.query01(allocator, clickBenchHitsDirectory));
     }
 
     @Benchmark
-    public void query02()
+    public void query01()
     {
         consume(ClickBenchHitsSupport.query02(allocator, primitiveRegistry, clickBenchHitsDirectory));
     }
 
     @Benchmark
-    public void query03()
+    public void query02()
     {
         consume(ClickBenchHitsSupport.query03(allocator, clickBenchHitsDirectory));
     }
 
     @Benchmark
-    public void query04()
+    public void query03()
     {
         consume(ClickBenchHitsSupport.query04(allocator, clickBenchHitsDirectory));
     }
 
     @Benchmark
-    public void query05()
+    public void query04()
     {
         consume(ClickBenchHitsSupport.query05(allocator, clickBenchHitsDirectory));
     }
 
     @Benchmark
-    public void query06()
+    public void query05()
     {
         consume(ClickBenchHitsSupport.query06(allocator, clickBenchHitsDirectory));
     }
 
     @Benchmark
-    public void query07()
+    public void query06()
     {
         consume(ClickBenchHitsSupport.query07(allocator, clickBenchHitsDirectory));
     }
 
     @Benchmark
-    public void query08()
+    public void query07()
     {
         consume(ClickBenchHitsSupport.query08(allocator, primitiveRegistry, clickBenchHitsDirectory));
     }
 
     @Benchmark
-    public void query09()
+    public void query08()
     {
         consume(ClickBenchHitsSupport.query09(allocator, clickBenchHitsDirectory));
     }
 
     @Benchmark
-    public void query10()
+    public void query09()
     {
         consume(ClickBenchHitsSupport.query10(allocator, clickBenchHitsDirectory));
     }
 
     @Benchmark
-    public void query11()
+    public void query10()
     {
         consume(ClickBenchHitsSupport.query11(allocator, primitiveRegistry, clickBenchHitsDirectory));
     }
 
     @Benchmark
-    public void query12()
+    public void query11()
     {
         consume(ClickBenchHitsSupport.query12(allocator, primitiveRegistry, clickBenchHitsDirectory));
     }
 
     @Benchmark
-    public void query13()
+    public void query12()
     {
         consume(ClickBenchHitsSupport.query13(allocator, primitiveRegistry, clickBenchHitsDirectory));
     }
 
     @Benchmark
-    public void query14()
+    public void query13()
     {
         consume(ClickBenchHitsSupport.query14(allocator, primitiveRegistry, clickBenchHitsDirectory));
     }
 
     @Benchmark
-    public void query15()
+    public void query14()
     {
         consume(ClickBenchHitsSupport.query15(allocator, primitiveRegistry, clickBenchHitsDirectory));
     }
 
     @Benchmark
-    public void query16()
+    public void query15()
     {
         consume(ClickBenchHitsSupport.query16(allocator, clickBenchHitsDirectory));
     }
 
     @Benchmark
-    public void query17()
+    public void query16()
     {
         consume(ClickBenchHitsSupport.query17(allocator, clickBenchHitsDirectory));
     }
 
     @Benchmark
-    public void query18()
+    public void query17()
     {
         consume(ClickBenchHitsSupport.query18(allocator, clickBenchHitsDirectory));
     }
 
     @Benchmark
-    public void query19()
+    public void query18()
     {
         consume(ClickBenchHitsSupport.query19(allocator, primitiveRegistry, clickBenchHitsDirectory));
     }
 
     @Benchmark
-    public void query20()
+    public void query19()
     {
         consume(ClickBenchHitsSupport.query20(allocator, primitiveRegistry, clickBenchHitsDirectory));
     }
 
     @Benchmark
-    public void query22()
+    public void query21()
     {
         consume(ClickBenchHitsSupport.query22(allocator, primitiveRegistry, clickBenchHitsDirectory));
     }
 
     @Benchmark
-    public void query23()
+    public void query22()
     {
         consume(ClickBenchHitsSupport.query23(allocator, primitiveRegistry, clickBenchHitsDirectory));
     }
 
     @Benchmark
-    public void query24()
+    public void query23()
     {
         consume(ClickBenchHitsSupport.query24(allocator, primitiveRegistry, clickBenchHitsDirectory));
     }
 
     @Benchmark
-    public void query25()
+    public void query24()
     {
         consume(ClickBenchHitsSupport.query25(allocator, primitiveRegistry, clickBenchHitsDirectory));
     }
 
     @Benchmark
-    public void query21()
+    public void query20()
     {
         consume(ClickBenchHitsSupport.query21(allocator, primitiveRegistry, clickBenchHitsDirectory));
     }
 
     @Benchmark
-    public void query26()
+    public void query25()
     {
         consume(ClickBenchHitsSupport.query26(allocator, primitiveRegistry, clickBenchHitsDirectory));
     }
 
     @Benchmark
-    public void query27()
+    public void query26()
     {
         consume(ClickBenchHitsSupport.query27(allocator, primitiveRegistry, clickBenchHitsDirectory));
     }
 
     @Benchmark
-    public void query28()
+    public void query27()
     {
         consume(ClickBenchHitsSupport.query28(allocator, primitiveRegistry, clickBenchHitsDirectory));
     }
 
     @Benchmark
-    public void query29()
+    public void query28()
     {
         consume(ClickBenchHitsSupport.query29(allocator, primitiveRegistry, clickBenchHitsDirectory));
     }
 
     @Benchmark
-    public void query30()
+    public void query29()
     {
         consume(ClickBenchHitsSupport.query30(allocator, primitiveRegistry, clickBenchHitsDirectory));
     }
 
     @Benchmark
-    public void query31()
+    public void query30()
     {
         try (Allocator queryAllocator = new Allocator(engineResources)) {
             consume(queryAllocator, ClickBenchHitsSupport.query31(queryAllocator, primitiveRegistry, clickBenchHitsDirectory));
@@ -251,7 +258,7 @@ public class BenchmarkQueries
     }
 
     @Benchmark
-    public void query32()
+    public void query31()
     {
         try (Allocator queryAllocator = new Allocator(engineResources)) {
             consume(queryAllocator, ClickBenchHitsSupport.query32(queryAllocator, primitiveRegistry, clickBenchHitsDirectory));
@@ -259,7 +266,7 @@ public class BenchmarkQueries
     }
 
     @Benchmark
-    public void query33()
+    public void query32()
     {
         try (Allocator queryAllocator = new Allocator(engineResources)) {
             consume(queryAllocator, ClickBenchHitsSupport.query33(queryAllocator, clickBenchHitsDirectory));
@@ -267,61 +274,61 @@ public class BenchmarkQueries
     }
 
     @Benchmark
-    public void query34()
+    public void query33()
     {
         consume(ClickBenchHitsSupport.query34(allocator, clickBenchHitsDirectory));
     }
 
     @Benchmark
-    public void query35()
+    public void query34()
     {
         consume(ClickBenchHitsSupport.query35(allocator, clickBenchHitsDirectory));
     }
 
     @Benchmark
-    public void query36()
+    public void query35()
     {
         consume(ClickBenchHitsSupport.query36(allocator, primitiveRegistry, clickBenchHitsDirectory));
     }
 
     @Benchmark
-    public void query37()
+    public void query36()
     {
         consume(ClickBenchHitsSupport.query37(allocator, primitiveRegistry, clickBenchHitsDirectory));
     }
 
     @Benchmark
-    public void query38()
+    public void query37()
     {
         consume(ClickBenchHitsSupport.query38(allocator, primitiveRegistry, clickBenchHitsDirectory));
     }
 
     @Benchmark
-    public void query39()
+    public void query38()
     {
         consume(ClickBenchHitsSupport.query39(allocator, primitiveRegistry, clickBenchHitsDirectory));
     }
 
     @Benchmark
-    public void query40()
+    public void query39()
     {
         consume(ClickBenchHitsSupport.query40(allocator, primitiveRegistry, clickBenchHitsDirectory));
     }
 
     @Benchmark
-    public void query41()
+    public void query40()
     {
         consume(ClickBenchHitsSupport.query41(allocator, primitiveRegistry, clickBenchHitsDirectory));
     }
 
     @Benchmark
-    public void query42()
+    public void query41()
     {
         consume(ClickBenchHitsSupport.query42(allocator, primitiveRegistry, clickBenchHitsDirectory));
     }
 
     @Benchmark
-    public void query43()
+    public void query42()
     {
         consume(ClickBenchHitsSupport.query43(allocator, primitiveRegistry, clickBenchHitsDirectory));
     }

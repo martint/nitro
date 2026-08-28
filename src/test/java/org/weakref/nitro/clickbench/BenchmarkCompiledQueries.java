@@ -46,6 +46,8 @@ import java.util.function.Supplier;
  * query plan (compiled pipelines are cached by source), so after warmup the measured iterations only execute. These
  * lowerings preserve query semantics but are not evidence for full SQL-engine parity when Trino selects distributed
  * exchanges or partial/final aggregation; the ordinary operator harnesses carry those SQL-plan-shaped comparisons.
+ * Benchmark parameters use ClickBench's published zero-based IDs even though the underlying compiled-query methods
+ * retain their historical one-based names.
  */
 @State(Scope.Thread)
 @Fork(1)
@@ -56,11 +58,11 @@ import java.util.function.Supplier;
 @BenchmarkMode(Mode.AverageTime)
 public class BenchmarkCompiledQueries
 {
-    @Param({"01", "02", "03", "04", "05", "06", "07", "08", "09", "10",
-            "11", "12", "13", "14", "15", "16", "17", "18", "19", "20",
-            "21", "22", "23", "24", "25", "26", "27", "28", "29", "30",
-            "31", "32", "33", "34", "35", "36", "37", "38", "39", "40",
-            "41", "42", "43"})
+    @Param({"00", "01", "02", "03", "04", "05", "06", "07", "08", "09",
+            "10", "11", "12", "13", "14", "15", "16", "17", "18", "19",
+            "20", "21", "22", "23", "24", "25", "26", "27", "28", "29",
+            "30", "31", "32", "33", "34", "35", "36", "37", "38", "39",
+            "40", "41", "42"})
     public String query;
 
     private Allocator allocator;
@@ -74,49 +76,49 @@ public class BenchmarkCompiledQueries
                 .orElseThrow(() -> new IllegalStateException("ClickBench hits data not found (set -Dnitro.clickbench.hits.path)"));
         Path hits = tables.directory();
 
-        ported("01", CompiledClickBenchQueries.query01());
-        ported("02", CompiledClickBenchQueries.query02());
-        ported("03", CompiledClickBenchQueries.query03());
-        ported("04", CompiledClickBenchQueries.query04());
-        ported("05", CompiledClickBenchQueries.query05());
-        ported("06", CompiledClickBenchQueries.query06());
-        ported("07", CompiledClickBenchQueries.query07());
-        ported("08", CompiledClickBenchQueries.query08());
-        ported("09", CompiledClickBenchQueries.query09());
-        ported("10", CompiledClickBenchQueries.query10());
-        ported("11", CompiledClickBenchQueries.query11());
-        ported("12", CompiledClickBenchQueries.query12());
-        ported("13", CompiledClickBenchQueries.query13());
-        ported("14", CompiledClickBenchQueries.query14());
-        ported("15", CompiledClickBenchQueries.query15());
-        ported("16", CompiledClickBenchQueries.query16());
-        ported("17", CompiledClickBenchQueries.query17());
-        ported("18", CompiledClickBenchQueries.query18());
-        ported("19", CompiledClickBenchQueries.query19());
-        ported("20", CompiledClickBenchQueries.query20());
-        ported("21", CompiledClickBenchQueries.query21());
-        ported("22", CompiledClickBenchQueries.query22());
-        ported("23", CompiledClickBenchQueries.query23());
-        ported("24", CompiledClickBenchQueries.query24());
-        composite("25", CompiledClickBenchQueries.query25());
-        ported("26", CompiledClickBenchQueries.query26());
-        composite("27", CompiledClickBenchQueries.query27());
-        ported("28", CompiledClickBenchQueries.query28());
-        ported("29", CompiledClickBenchQueries.query29());
-        ported("30", CompiledClickBenchQueries.query30());
-        ported("31", CompiledClickBenchQueries.query31());
-        ported("32", CompiledClickBenchQueries.query32());
-        ported("33", CompiledClickBenchQueries.query33());
-        ported("34", CompiledClickBenchQueries.query34());
-        ported("35", CompiledClickBenchQueries.query35());
-        composite("36", CompiledClickBenchQueries.query36());
-        ported("37", CompiledClickBenchQueries.query37(hits));
-        ported("38", CompiledClickBenchQueries.query38(hits));
-        ported("39", CompiledClickBenchQueries.query39(hits));
-        ported("40", CompiledClickBenchQueries.query40(hits));
-        ported("41", CompiledClickBenchQueries.query41(hits));
-        ported("42", CompiledClickBenchQueries.query42(hits));
-        ported("43", CompiledClickBenchQueries.query43(hits));
+        ported("00", CompiledClickBenchQueries.query01());
+        ported("01", CompiledClickBenchQueries.query02());
+        ported("02", CompiledClickBenchQueries.query03());
+        ported("03", CompiledClickBenchQueries.query04());
+        ported("04", CompiledClickBenchQueries.query05());
+        ported("05", CompiledClickBenchQueries.query06());
+        ported("06", CompiledClickBenchQueries.query07());
+        ported("07", CompiledClickBenchQueries.query08());
+        ported("08", CompiledClickBenchQueries.query09());
+        ported("09", CompiledClickBenchQueries.query10());
+        ported("10", CompiledClickBenchQueries.query11());
+        ported("11", CompiledClickBenchQueries.query12());
+        ported("12", CompiledClickBenchQueries.query13());
+        ported("13", CompiledClickBenchQueries.query14());
+        ported("14", CompiledClickBenchQueries.query15());
+        ported("15", CompiledClickBenchQueries.query16());
+        ported("16", CompiledClickBenchQueries.query17());
+        ported("17", CompiledClickBenchQueries.query18());
+        ported("18", CompiledClickBenchQueries.query19());
+        ported("19", CompiledClickBenchQueries.query20());
+        ported("20", CompiledClickBenchQueries.query21());
+        ported("21", CompiledClickBenchQueries.query22());
+        ported("22", CompiledClickBenchQueries.query23());
+        ported("23", CompiledClickBenchQueries.query24());
+        composite("24", CompiledClickBenchQueries.query25());
+        ported("25", CompiledClickBenchQueries.query26());
+        composite("26", CompiledClickBenchQueries.query27());
+        ported("27", CompiledClickBenchQueries.query28());
+        ported("28", CompiledClickBenchQueries.query29());
+        ported("29", CompiledClickBenchQueries.query30());
+        ported("30", CompiledClickBenchQueries.query31());
+        ported("31", CompiledClickBenchQueries.query32());
+        ported("32", CompiledClickBenchQueries.query33());
+        ported("33", CompiledClickBenchQueries.query34());
+        ported("34", CompiledClickBenchQueries.query35());
+        composite("35", CompiledClickBenchQueries.query36());
+        ported("36", CompiledClickBenchQueries.query37(hits));
+        ported("37", CompiledClickBenchQueries.query38(hits));
+        ported("38", CompiledClickBenchQueries.query39(hits));
+        ported("39", CompiledClickBenchQueries.query40(hits));
+        ported("40", CompiledClickBenchQueries.query41(hits));
+        ported("41", CompiledClickBenchQueries.query42(hits));
+        ported("42", CompiledClickBenchQueries.query43(hits));
     }
 
     /** A single-stage query: the hits fact is streamed batch-by-batch, as the operator harnesses stream it. */

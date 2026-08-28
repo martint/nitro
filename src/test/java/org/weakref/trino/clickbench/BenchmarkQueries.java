@@ -29,6 +29,13 @@ import org.weakref.nitro.trino.TrinoClickBenchSupport;
 import java.nio.file.Path;
 import java.util.concurrent.TimeUnit;
 
+/**
+ * Trino operator controls named with ClickBench's published zero-based query IDs.
+ *
+ * <p>The underlying support methods retain their historical one-based names, so benchmark {@code queryNN} invokes
+ * support method {@code query(NN + 1)}. The non-query full-column reader probe is exposed separately as
+ * {@link #allColumnsScan()}.
+ */
 @State(Scope.Thread)
 @Fork(1)
 @Warmup(iterations = 3, time = 1000, timeUnit = TimeUnit.MILLISECONDS)
@@ -54,265 +61,265 @@ public class BenchmarkQueries
     }
 
     @Benchmark
-    public void query00()
+    public void allColumnsScan()
     {
         support.consumeQuery00(clickBenchHitsPath);
     }
 
     @Benchmark
-    public Object query01()
+    public Object query00()
     {
         return support.query01(clickBenchHitsPath);
     }
 
     @Benchmark
-    public Object query02()
+    public Object query01()
     {
         return support.query02(clickBenchHitsPath);
     }
 
     @Benchmark
-    public Object query03()
+    public Object query02()
     {
         return support.query03(clickBenchHitsPath);
     }
 
     @Benchmark
-    public Object query04()
+    public Object query03()
     {
         return support.query04(clickBenchHitsPath);
     }
 
     @Benchmark
-    public Object query05()
+    public Object query04()
     {
         return support.query05(clickBenchHitsPath);
     }
 
     @Benchmark
-    public Object query06()
+    public Object query05()
     {
         return support.query06(clickBenchHitsPath);
     }
 
     @Benchmark
-    public Object query07()
+    public Object query06()
     {
         return support.query07(clickBenchHitsPath);
     }
 
     @Benchmark
-    public Object query08()
+    public Object query07()
     {
         return support.query08(clickBenchHitsPath);
     }
 
     @Benchmark
-    public Object query09()
+    public Object query08()
     {
         return support.query09(clickBenchHitsPath);
     }
 
     @Benchmark
-    public Object query10()
+    public Object query09()
     {
         return support.query10(clickBenchHitsPath);
     }
 
     @Benchmark
-    public Object query11()
+    public Object query10()
     {
         return support.query11(clickBenchHitsPath);
     }
 
     @Benchmark
-    public Object query12()
+    public Object query11()
     {
         return support.query12(clickBenchHitsPath);
     }
 
     @Benchmark
-    public Object query13()
+    public Object query12()
     {
         return support.query13(clickBenchHitsPath);
     }
 
     @Benchmark
-    public Object query14()
+    public Object query13()
     {
         return support.query14(clickBenchHitsPath);
     }
 
     @Benchmark
-    public Object query15()
+    public Object query14()
     {
         return support.query15(clickBenchHitsPath);
     }
 
     @Benchmark
-    public Object query16()
+    public Object query15()
     {
         return support.query16(clickBenchHitsPath);
     }
 
     @Benchmark
-    public Object query17()
+    public Object query16()
     {
         return support.query17(clickBenchHitsPath);
     }
 
     @Benchmark
-    public Object query18()
+    public Object query17()
     {
         return support.query18(clickBenchHitsPath);
     }
 
     @Benchmark
-    public Object query19()
+    public Object query18()
     {
         return support.query19(clickBenchHitsPath);
     }
 
     @Benchmark
-    public Object query20()
+    public Object query19()
     {
         return support.query20(clickBenchHitsPath);
     }
 
     @Benchmark
-    public Object query21()
+    public Object query20()
     {
         return support.query21(clickBenchHitsPath);
     }
 
     @Benchmark
-    public Object query22()
+    public Object query21()
     {
         return support.query22(clickBenchHitsPath);
     }
 
     @Benchmark
-    public Object query23()
+    public Object query22()
     {
         return support.query23(clickBenchHitsPath);
     }
 
     @Benchmark
-    public Object query24()
+    public Object query23()
     {
         return support.query24(clickBenchHitsPath);
     }
 
     @Benchmark
-    public Object query25()
+    public Object query24()
     {
         return support.query25(clickBenchHitsPath);
     }
 
     @Benchmark
-    public Object query26()
+    public Object query25()
     {
         return support.query26(clickBenchHitsPath);
     }
 
     @Benchmark
-    public Object query27()
+    public Object query26()
     {
         return support.query27(clickBenchHitsPath);
     }
 
     @Benchmark
-    public Object query28()
+    public Object query27()
     {
         return support.query28(clickBenchHitsPath);
     }
 
     @Benchmark
-    public Object query29()
+    public Object query28()
     {
         return support.query29(clickBenchHitsPath);
     }
 
     @Benchmark
-    public Object query30()
+    public Object query29()
     {
         return support.query30(clickBenchHitsPath);
     }
 
     @Benchmark
-    public Object query31()
+    public Object query30()
     {
         return support.query31(clickBenchHitsPath);
     }
 
     @Benchmark
-    public Object query32()
+    public Object query31()
     {
         return support.query32(clickBenchHitsPath);
     }
 
     @Benchmark
-    public Object query33()
+    public Object query32()
     {
         return support.query33(clickBenchHitsPath);
     }
 
     @Benchmark
-    public Object query34()
+    public Object query33()
     {
         return support.query34(clickBenchHitsPath);
     }
 
     @Benchmark
-    public Object query35()
+    public Object query34()
     {
         return support.query35(clickBenchHitsPath);
     }
 
     @Benchmark
-    public Object query36()
+    public Object query35()
     {
         return support.query36(clickBenchHitsPath);
     }
 
     @Benchmark
-    public Object query37()
+    public Object query36()
     {
         return support.query37(clickBenchHitsPath);
     }
 
     @Benchmark
-    public Object query38()
+    public Object query37()
     {
         return support.query38(clickBenchHitsPath);
     }
 
     @Benchmark
-    public Object query39()
+    public Object query38()
     {
         return support.query39(clickBenchHitsPath);
     }
 
     @Benchmark
-    public Object query40()
+    public Object query39()
     {
         return support.query40(clickBenchHitsPath);
     }
 
     @Benchmark
-    public Object query41()
+    public Object query40()
     {
         return support.query41(clickBenchHitsPath);
     }
 
     @Benchmark
-    public Object query42()
+    public Object query41()
     {
         return support.query42(clickBenchHitsPath);
     }
 
     @Benchmark
-    public Object query43()
+    public Object query42()
     {
         return support.query43(clickBenchHitsPath);
     }
