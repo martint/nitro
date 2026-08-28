@@ -951,6 +951,5 @@ class TestCoreIntegrationSlice
         {
             closed = true;
         }
-
     }
 }
