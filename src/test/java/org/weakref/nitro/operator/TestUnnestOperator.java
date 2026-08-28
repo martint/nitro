@@ -36,6 +36,7 @@ import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.execution.EngineResources;
 
+import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 
@@ -181,14 +182,18 @@ public class TestUnnestOperator
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());
         ArrayVector domain = array(new int[] {0, 2, 3}, 10, 11, 20);
-        DictionaryVector arrays = DictionaryVector.wrap(new int[] {0, 1, 0}, domain);
-        assertThat(VectorAccess.repeatedValues(arrays).supportsValueRuns()).isFalse();
+        DictionaryVector arrays = DictionaryVector.wrap(new int[] {0, 0, 1, 1, 0}, domain);
+        VectorAccess.RepeatedValues repeated = VectorAccess.repeatedValues(arrays);
+        assertThat(repeated.supportsValueRuns()).isTrue();
+        assertThat(repeated.valueRunCount(5)).isEqualTo(3);
+        assertThat(repeated.valueRunEnd(0)).isEqualTo(2);
+        assertThat(repeated.valueRunEnd(2)).isEqualTo(4);
         Operator source = new TableOperator(
                 Schema.unspecified(1),
                 List.of(TableOperator.Page.values(
-                        3,
+                        5,
                         new Vector[] {arrays},
-                        Mask.all(3))));
+                        Mask.all(5))));
         Field output = Schema.unspecified(1).field(0);
 
         Operator unnest = new UnnestOperator(
@@ -201,7 +206,10 @@ public class TestUnnestOperator
                 new UnnestOperatorPolicy(16));
 
         assertThat(operator(unnest)).matchesExactly(List.of(
-                row(10L), row(11L), row(20L), row(10L), row(11L)));
+                row(10L), row(11L),
+                row(10L), row(11L),
+                row(20L), row(20L),
+                row(10L), row(11L)));
     }
 
     @Test
@@ -210,7 +218,9 @@ public class TestUnnestOperator
         Allocator allocator = new Allocator(EngineResources.createDefault());
         ArrayVector domain = array(new int[] {0, 2, 3}, 10, 11, 20);
         RleVector arrays = new RleVector(new int[] {2, 1}, domain);
-        assertThat(VectorAccess.repeatedValues(arrays).supportsValueRuns()).isTrue();
+        VectorAccess.RepeatedValues repeated = VectorAccess.repeatedValues(arrays);
+        assertThat(repeated.supportsValueRuns()).isTrue();
+        assertThat(repeated.valueRunCount(3)).isEqualTo(2);
         Operator source = new TableOperator(
                 Schema.unspecified(1),
                 List.of(TableOperator.Page.values(3, new Vector[] {arrays}, Mask.all(3))));
@@ -229,6 +239,26 @@ public class TestUnnestOperator
                 row(10L), row(11L),
                 row(10L), row(11L),
                 row(20L)));
+    }
+
+    @Test
+    void testValueRunAdmissionUsesObservedRunDensity()
+    {
+        ArrayVector domain = array(new int[] {0, 1, 2}, 10, 20);
+        int[] clusteredIds = new int[16];
+        Arrays.fill(clusteredIds, 8, 16, 1);
+        int[] alternatingIds = new int[16];
+        for (int position = 0; position < alternatingIds.length; position++) {
+            alternatingIds[position] = position & 1;
+        }
+
+        UnnestOperatorPolicy policy = new UnnestOperatorPolicy(16, 16, 4);
+        assertThat(policy.admitsValueRuns(
+                VectorAccess.repeatedValues(DictionaryVector.wrap(clusteredIds, domain)),
+                clusteredIds.length)).isTrue();
+        assertThat(policy.admitsValueRuns(
+                VectorAccess.repeatedValues(DictionaryVector.wrap(alternatingIds, domain)),
+                alternatingIds.length)).isFalse();
     }
 
     @Test

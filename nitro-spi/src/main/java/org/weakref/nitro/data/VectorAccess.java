@@ -43,9 +43,87 @@ public final class VectorAccess
             return false;
         }
 
+        /** Returns the number of physical-value runs in the first {@code positions} logical positions. */
+        default int valueRunCount(int positions)
+        {
+            return positions;
+        }
+
         int outputCount();
 
         Streams output(int output);
+    }
+
+    private static final class DictionaryRepeatedValues
+            implements RepeatedValues
+    {
+        private final RepeatedValues values;
+        private final int[] ids;
+        private final int length;
+
+        private DictionaryRepeatedValues(RepeatedValues values, DictionaryVector dictionary)
+        {
+            this.values = values;
+            ids = dictionary.ids();
+            length = dictionary.length();
+        }
+
+        @Override
+        public int startOffset(int position)
+        {
+            return values.startOffset(ids[position]);
+        }
+
+        @Override
+        public int endOffset(int position)
+        {
+            return values.endOffset(ids[position]);
+        }
+
+        @Override
+        public int valueRunEnd(int position)
+        {
+            int dictionaryId = ids[position];
+            int end = position + 1;
+            while (end < length && ids[end] == dictionaryId) {
+                end++;
+            }
+            return end;
+        }
+
+        @Override
+        public boolean supportsValueRuns()
+        {
+            return true;
+        }
+
+        @Override
+        public int valueRunCount(int positions)
+        {
+            int limit = Math.min(positions, length);
+            if (limit == 0) {
+                return 0;
+            }
+            int runs = 1;
+            for (int position = 1; position < limit; position++) {
+                if (ids[position] != ids[position - 1]) {
+                    runs++;
+                }
+            }
+            return runs;
+        }
+
+        @Override
+        public int outputCount()
+        {
+            return values.outputCount();
+        }
+
+        @Override
+        public Streams output(int output)
+        {
+            return values.output(output);
+        }
     }
 
     /**
@@ -82,8 +160,7 @@ public final class VectorAccess
             };
             case DictionaryVector dictionary -> {
                 RepeatedValues values = repeatedValues(dictionary.values());
-                int[] ids = dictionary.ids();
-                yield mappedRepeatedValues(values, position -> ids[position]);
+                yield new DictionaryRepeatedValues(values, dictionary);
             }
             case RleVector rle -> {
                 RepeatedValues values = repeatedValues(rle.values());
@@ -122,6 +199,15 @@ public final class VectorAccess
                     }
 
                     @Override
+                    public int valueRunCount(int positions)
+                    {
+                        if (positions == 0) {
+                            return 0;
+                        }
+                        return rle.runIndexFromHint(positions - 1, 0) + 1;
+                    }
+
+                    @Override
                     public int outputCount()
                     {
                         return values.outputCount();
@@ -135,36 +221,6 @@ public final class VectorAccess
                 };
             }
             default -> throw new IllegalArgumentException("Expected repeated structural vector but found " + vector.getClass().getSimpleName());
-        };
-    }
-
-    private static RepeatedValues mappedRepeatedValues(RepeatedValues values, java.util.function.IntUnaryOperator mapping)
-    {
-        return new RepeatedValues()
-        {
-            @Override
-            public int startOffset(int position)
-            {
-                return values.startOffset(mapping.applyAsInt(position));
-            }
-
-            @Override
-            public int endOffset(int position)
-            {
-                return values.endOffset(mapping.applyAsInt(position));
-            }
-
-            @Override
-            public int outputCount()
-            {
-                return values.outputCount();
-            }
-
-            @Override
-            public Streams output(int output)
-            {
-                return values.output(output);
-            }
         };
     }
 

@@ -13,14 +13,23 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.data.VectorAccess;
+
 import static com.google.common.base.Preconditions.checkArgument;
 
 /** Immutable, composition-owned physical policy for repeated-value expansion. */
-public record UnnestOperatorPolicy(int maxRowsPerBatch)
+public record UnnestOperatorPolicy(int maxRowsPerBatch, int valueRunSampleSize, int minimumAverageValueRunLength)
 {
     public UnnestOperatorPolicy
     {
         checkArgument(maxRowsPerBatch > 0, "maxRowsPerBatch must be positive");
+        checkArgument(valueRunSampleSize > 0, "valueRunSampleSize must be positive");
+        checkArgument(minimumAverageValueRunLength > 1, "minimumAverageValueRunLength must be greater than one");
+    }
+
+    public UnnestOperatorPolicy(int maxRowsPerBatch)
+    {
+        this(maxRowsPerBatch, 1_024, 4);
     }
 
     public static UnnestOperatorPolicy defaults()
@@ -28,9 +37,22 @@ public record UnnestOperatorPolicy(int maxRowsPerBatch)
         return new UnnestOperatorPolicy(65_536);
     }
 
+    boolean admitsValueRuns(VectorAccess.RepeatedValues values, int positionCount)
+    {
+        if (!values.supportsValueRuns()) {
+            return false;
+        }
+        int sampledPositions = Math.min(positionCount, valueRunSampleSize);
+        int sampledRuns = values.valueRunCount(sampledPositions);
+        return (long) sampledRuns * minimumAverageValueRunLength <= sampledPositions;
+    }
+
     /** Standalone composition adapter; production operators receive the resulting immutable instance. */
     public static UnnestOperatorPolicy fromSystemProperties()
     {
-        return new UnnestOperatorPolicy(Integer.getInteger("nitro.unnest.maxRowsPerBatch", 65_536));
+        return new UnnestOperatorPolicy(
+                Integer.getInteger("nitro.unnest.maxRowsPerBatch", 65_536),
+                Integer.getInteger("nitro.unnest.valueRunSampleSize", 1_024),
+                Integer.getInteger("nitro.unnest.minimumAverageValueRunLength", 4));
     }
 }

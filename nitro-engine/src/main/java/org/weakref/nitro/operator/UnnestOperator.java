@@ -116,6 +116,7 @@ public final class UnnestOperator
     private final Optional<Field> ordinalityField;
     private final boolean outer;
     private final int maxRowsPerBatch;
+    private final UnnestOperatorPolicy policy;
     private final Schema outputSchema;
     private final int[] replicatePositions;
     private final int[][] nestedPositions;
@@ -165,7 +166,7 @@ public final class UnnestOperator
         this.ordinalityField = requireNonNull(ordinalityField, "ordinalityField is null");
         this.outer = outer;
         checkArgument(!this.mappings.isEmpty(), "mappings is empty");
-        policy = requireNonNull(policy, "policy is null");
+        this.policy = requireNonNull(policy, "policy is null");
         this.maxRowsPerBatch = policy.maxRowsPerBatch();
 
         Schema sourceSchema = source.outputSchema();
@@ -576,7 +577,7 @@ public final class UnnestOperator
                 Vector nulls = input.borrowOrNull(Stream.NULLS);
                 boolean nullFree = VectorAccess.isAllFalseNulls(nulls);
                 collectionNulls[mapping] = VectorAccess.booleanValues(nullFree ? null : nulls);
-                rowShapeReusable &= nullFree && repeated[mapping].supportsValueRuns();
+                rowShapeReusable &= nullFree && policy.admitsValueRuns(repeated[mapping], mask.size());
             }
             this.rowShapeReusable = rowShapeReusable;
             skipRowsWithoutOutput();
