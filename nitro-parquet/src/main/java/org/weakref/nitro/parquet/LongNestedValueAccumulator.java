@@ -289,8 +289,16 @@ final class LongNestedValueAccumulator
         int distinct = 0;
         int nullId = -1;
         int mask = tableSize - 1;
+        long previousValue = 0;
+        int previousId = -1;
+        boolean previousNull = false;
         for (int position = 0; position < size; position++) {
             if (flatNulls != null && flatNulls[position]) {
+                if (previousNull) {
+                    dictionaryIds[position] = previousId;
+                    dictionaryFrequencies[previousId]++;
+                    continue;
+                }
                 if (nullId < 0) {
                     if (distinct == maxEntries || (long) (distinct + 1) * minRowsPerEntry > size) {
                         return null;
@@ -300,9 +308,16 @@ final class LongNestedValueAccumulator
                 }
                 dictionaryIds[position] = nullId;
                 dictionaryFrequencies[nullId]++;
+                previousId = nullId;
+                previousNull = true;
                 continue;
             }
             long value = flatValues[position];
+            if (!previousNull && previousId >= 0 && value == previousValue) {
+                dictionaryIds[position] = previousId;
+                dictionaryFrequencies[previousId]++;
+                continue;
+            }
             int slot = mix(value) & mask;
             int entry;
             while ((entry = recoverySlots[slot]) != 0 && recoveryKeys[slot] != value) {
@@ -323,6 +338,9 @@ final class LongNestedValueAccumulator
             }
             dictionaryIds[position] = id;
             dictionaryFrequencies[id]++;
+            previousValue = value;
+            previousId = id;
+            previousNull = false;
         }
 
         long dictionaryFootprint = (long) Long.BYTES * distinct +
