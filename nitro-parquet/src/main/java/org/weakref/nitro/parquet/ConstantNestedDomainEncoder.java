@@ -50,39 +50,30 @@ final class ConstantNestedDomainEncoder
         int firstEnd = values.endOffset(0);
         int length = firstEnd - firstStart;
         int outputCount = values.repeatedOutputCount();
-        Vector[] valueStreams = new Vector[outputCount];
-        Vector[] nullStreams = new Vector[outputCount];
-        Vector[] errorStreams = new Vector[outputCount];
+        Vector[] comparisonStreams = new Vector[outputCount * 3];
+        int comparisonStreamCount = 0;
         for (int output = 0; output < outputCount; output++) {
             Streams streams = values.repeatedOutput(output);
             if (!streams.hasValues() || !encoded(streams.values())) {
                 return null;
             }
-            valueStreams[output] = streams.values();
+            comparisonStreams[comparisonStreamCount++] = streams.values();
             Vector nullStream = streams.getOrNull(Stream.NULLS);
             Vector errorStream = streams.getOrNull(Stream.ERRORS);
             if (!encodedSideStream(nullStream) || !encodedSideStream(errorStream)) {
                 return null;
             }
-            nullStreams[output] = comparableSideStream(nullStream);
-            errorStreams[output] = comparableSideStream(errorStream);
+            nullStream = comparableSideStream(nullStream);
+            errorStream = comparableSideStream(errorStream);
+            if (nullStream != null) {
+                comparisonStreams[comparisonStreamCount++] = nullStream;
+            }
+            if (errorStream != null) {
+                comparisonStreams[comparisonStreamCount++] = errorStream;
+            }
         }
-        for (int row = 1; row < rowCount; row++) {
-            int start = values.startOffset(row);
-            if (values.endOffset(row) - start != length) {
-                return null;
-            }
-            for (int offset = 0; offset < length; offset++) {
-                int left = firstStart + offset;
-                int right = start + offset;
-                for (int output = 0; output < outputCount; output++) {
-                    if (!sameEncodedPosition(valueStreams[output], left, right) ||
-                            !sameEncodedSidePosition(nullStreams[output], left, right) ||
-                            !sameEncodedSidePosition(errorStreams[output], left, right)) {
-                        return null;
-                    }
-                }
-            }
+        if (!constantRows(values, rowCount, firstStart, length, comparisonStreams, comparisonStreamCount)) {
+            return null;
         }
 
         Vector domain = allocator.copyVector(context, values, new int[] {0}).freezeContent();
@@ -99,14 +90,85 @@ final class ConstantNestedDomainEncoder
         return Streams.of(encoded, encoded.sharedMappingWithValues(domainNulls), null);
     }
 
+    private static boolean constantRows(
+            RepeatedVector values,
+            int rowCount,
+            int firstStart,
+            int length,
+            Vector[] comparisonStreams,
+            int comparisonStreamCount)
+    {
+        int[][] dictionaryIds = new int[comparisonStreamCount][];
+        boolean dictionaryOnly = true;
+        for (int stream = 0; stream < comparisonStreamCount; stream++) {
+            if (comparisonStreams[stream] instanceof DictionaryVector dictionary) {
+                dictionaryIds[stream] = dictionary.ids();
+            }
+            else {
+                dictionaryOnly = false;
+                break;
+            }
+        }
+        return dictionaryOnly
+                ? constantDictionaryRows(values, rowCount, firstStart, length, dictionaryIds)
+                : constantEncodedRows(values, rowCount, firstStart, length, comparisonStreams, comparisonStreamCount);
+    }
+
+    private static boolean constantDictionaryRows(
+            RepeatedVector values,
+            int rowCount,
+            int firstStart,
+            int length,
+            int[][] dictionaryIds)
+    {
+        for (int row = 1; row < rowCount; row++) {
+            int start = values.startOffset(row);
+            if (values.endOffset(row) - start != length) {
+                return false;
+            }
+            for (int offset = 0; offset < length; offset++) {
+                int left = firstStart + offset;
+                int right = start + offset;
+                for (int stream = 0; stream < dictionaryIds.length; stream++) {
+                    int[] ids = dictionaryIds[stream];
+                    if (ids[left] != ids[right]) {
+                        return false;
+                    }
+                }
+            }
+        }
+        return true;
+    }
+
+    private static boolean constantEncodedRows(
+            RepeatedVector values,
+            int rowCount,
+            int firstStart,
+            int length,
+            Vector[] comparisonStreams,
+            int comparisonStreamCount)
+    {
+        for (int row = 1; row < rowCount; row++) {
+            int start = values.startOffset(row);
+            if (values.endOffset(row) - start != length) {
+                return false;
+            }
+            for (int offset = 0; offset < length; offset++) {
+                int left = firstStart + offset;
+                int right = start + offset;
+                for (int stream = 0; stream < comparisonStreamCount; stream++) {
+                    if (!sameEncodedPosition(comparisonStreams[stream], left, right)) {
+                        return false;
+                    }
+                }
+            }
+        }
+        return true;
+    }
+
     private static boolean encoded(Vector vector)
     {
         return vector instanceof DictionaryVector || vector instanceof RleVector;
-    }
-
-    private static boolean sameEncodedSidePosition(Vector vector, int left, int right)
-    {
-        return vector == null || sameEncodedPosition(vector, left, right);
     }
 
     private static Vector comparableSideStream(Vector vector)

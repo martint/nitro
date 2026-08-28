@@ -152,6 +152,11 @@ class TestNestedMapReader
                 });
                 assertThat(dictionary.domainFrequency(0)).isEqualTo(rowCount);
             });
+
+            DictionaryVector keyMapping = (DictionaryVector) maps.repeatedOutput(0).values();
+            keyMapping.ids()[keyMapping.length() - 1] = 0;
+            assertThat(ConstantNestedDomainEncoder.tryEncode(
+                    allocator, context, maps, null, rowCount, 64)).isNull();
         }
     }
 
