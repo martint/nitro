@@ -27,12 +27,16 @@ import java.util.Map;
 final class StructuralHashJoinIndex
         extends JoinIndex
 {
+    private static final long NO_MATCH_ROW_REFERENCE = -1;
+
     private final Map<StructuralHashRowKey, LongArrayList> rowsByKey;
     private final StructuralKeyKernel[] kernels;
     private final StructuralHashRowKey reusableProbeKey;
     private final Vector[] probeDomainValues;
     private LongList[] probeDomainMatches = new LongList[0];
+    private long[] probeDomainSingleRefs = new long[0];
     private final boolean ownsStorage;
+    private boolean uniqueKeys = true;
 
     StructuralHashJoinIndex(StructuralKeyKernel[] kernels)
     {
@@ -50,6 +54,7 @@ final class StructuralHashJoinIndex
         this.reusableProbeKey = new StructuralHashRowKey(kernels);
         this.probeDomainValues = new Vector[kernels.length];
         this.ownsStorage = false;
+        this.uniqueKeys = prepared.uniqueKeys;
     }
 
     StructuralHashJoinIndex newProbeView()
@@ -71,7 +76,9 @@ final class StructuralHashJoinIndex
         }
         StructuralHashRowKey key = new StructuralHashRowKey(kernels);
         key.set(values, nulls, position);
-        rowsByKey.computeIfAbsent(key, ignored -> new LongArrayList()).add(rowReference);
+        LongArrayList rows = rowsByKey.computeIfAbsent(key, ignored -> new LongArrayList());
+        uniqueKeys &= rows.isEmpty();
+        rows.add(rowReference);
     }
 
     @Override
@@ -108,6 +115,62 @@ final class StructuralHashJoinIndex
         }
 
         super.matchRows(values, nulls, hasNulls, positions, positionCount, matches, singleMatches);
+    }
+
+    @Override
+    boolean supportsSingleMatchRefs()
+    {
+        return uniqueKeys;
+    }
+
+    @Override
+    void matchSingleRows(
+            Vector[] values,
+            Vector[] nulls,
+            boolean hasNulls,
+            int[] positions,
+            int positionCount,
+            long[] refs)
+    {
+        DictionaryVector mapping = alignedDictionaryMapping(values, nulls, hasNulls);
+        if (mapping != null) {
+            matchSingleDictionaryRows(mapping, positions, positionCount, refs);
+            return;
+        }
+
+        if (alignedSingleRunValues(values, nulls, hasNulls)) {
+            java.util.Arrays.fill(refs, 0, positionCount, singleReference(probeDomainValues, 0));
+            return;
+        }
+
+        for (int index = 0; index < positionCount; index++) {
+            int position = positions[index];
+            refs[index] = hasNulls && hasNull(values, nulls, position)
+                    ? NO_MATCH_ROW_REFERENCE
+                    : singleReference(values, position);
+        }
+    }
+
+    private void matchSingleDictionaryRows(DictionaryVector mapping, int[] positions, int positionCount, long[] refs)
+    {
+        int domainSize = mapping.values().length();
+        if (probeDomainSingleRefs.length < domainSize) {
+            probeDomainSingleRefs = new long[domainSize];
+        }
+        for (int domainPosition = 0; domainPosition < domainSize; domainPosition++) {
+            probeDomainSingleRefs[domainPosition] = singleReference(probeDomainValues, domainPosition);
+        }
+
+        int[] ids = mapping.ids();
+        for (int index = 0; index < positionCount; index++) {
+            refs[index] = probeDomainSingleRefs[ids[positions[index]]];
+        }
+    }
+
+    private long singleReference(Vector[] values, int position)
+    {
+        LongList matches = matchesNoNulls(values, position);
+        return matches.isEmpty() ? NO_MATCH_ROW_REFERENCE : matches.getLong(0);
     }
 
     private void matchDictionaryRows(DictionaryVector mapping, int[] positions, int positionCount, LongList[] matches)

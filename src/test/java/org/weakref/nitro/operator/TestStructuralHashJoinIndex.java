@@ -100,6 +100,46 @@ class TestStructuralHashJoinIndex
     }
 
     @Test
+    void testUniqueStructuralDomainSupportsSingleMatchProbe()
+    {
+        AtomicInteger hashCalls = new AtomicInteger();
+        StructuralHashJoinIndex index = new StructuralHashJoinIndex(new StructuralKeyKernel[] {countingLongKernel(hashCalls)});
+        Vector[] build = {new I64Vector(new long[] {11, 22})};
+        index.add(build, new Vector[0], 0, 100);
+        index.add(build, new Vector[0], 1, 200);
+        assertThat(index.supportsSingleMatchRefs()).isTrue();
+
+        hashCalls.set(0);
+        DictionaryVector probe = new DictionaryVector(
+                new int[] {0, 1, 0, 2},
+                new I64Vector(new long[] {11, 22, 33}));
+        long[] refs = new long[4];
+        index.matchSingleRows(
+                new Vector[] {probe},
+                new Vector[0],
+                false,
+                new int[] {0, 1, 2, 3},
+                4,
+                refs);
+
+        assertThat(refs).containsExactly(100, 200, 100, -1);
+        assertThat(hashCalls).hasValue(3);
+        assertThat(index.newProbeView().supportsSingleMatchRefs()).isTrue();
+    }
+
+    @Test
+    void testDuplicateStructuralDomainRejectsSingleMatchProbe()
+    {
+        StructuralHashJoinIndex index = new StructuralHashJoinIndex(new StructuralKeyKernel[] {countingLongKernel(new AtomicInteger())});
+        Vector[] build = {new I64Vector(new long[] {11, 11})};
+        index.add(build, new Vector[0], 0, 100);
+        index.add(build, new Vector[0], 1, 200);
+
+        assertThat(index.supportsSingleMatchRefs()).isFalse();
+        assertThat(index.newProbeView().supportsSingleMatchRefs()).isFalse();
+    }
+
+    @Test
     void testProbeViewsShareImmutableRowsWithIndependentProbeKeys()
     {
         StructuralKeyKernel kernel = new StructuralKeyKernel()

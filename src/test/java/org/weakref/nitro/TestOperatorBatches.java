@@ -2654,6 +2654,77 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testHashJoinOperatorOwnsExclusiveEncodedOuterMapping()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        DictionaryVector encodedKeys = DictionaryVector.wrap(
+                new int[] {0, 1, 0, 1},
+                new I64Vector(new long[] {11, 22}));
+        Operator outer = new TableOperator(1, List.of(new TableOperator.Page(
+                4,
+                new Streams[] {Streams.ofValues(encodedKeys)},
+                Mask.all(4))));
+        Operator inner = new ConstantTableOperator(allocator, 1, List.of(row(11L), row(22L)));
+
+        try (Operator join = new HashJoinOperator(allocator, outer, 0, inner, 0).withOutputs(0);
+                Batch batch = join.next()) {
+            assertThat(batch.borrowMask().count()).isEqualTo(4);
+            assertThat(batch.output(0).borrow(Stream.VALUES)).isInstanceOfSatisfying(DictionaryVector.class, output -> {
+                assertThat(output.hasOwnedMapping()).isTrue();
+                assertThat(output.values()).isSameAs(encodedKeys);
+            });
+            assertThat(longValues(batch.output(0).borrow(Stream.VALUES), 4)).containsExactly(11L, 22L, 11L, 22L);
+        }
+    }
+
+    @Test
+    void testHashJoinOperatorSharesBorrowedMappingAcrossMultipleOuterOutputs()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        int[] sourceIds = {0, 1, 0, 1};
+        DictionaryVector encodedKeys = DictionaryVector.wrap(sourceIds, new I64Vector(new long[] {11, 22}));
+        DictionaryVector encodedPayload = encodedKeys.sharedMappingWithValues(new I64Vector(new long[] {101, 202}));
+        Operator outer = new TableOperator(2, List.of(new TableOperator.Page(
+                4,
+                new Streams[] {Streams.ofValues(encodedKeys), Streams.ofValues(encodedPayload)},
+                Mask.all(4))));
+        Operator inner = new ConstantTableOperator(allocator, 1, List.of(row(11L), row(22L)));
+
+        try (Operator join = new HashJoinOperator(allocator, outer, 0, inner, 0).withOutputs(0, 1);
+                Batch batch = join.next()) {
+            DictionaryVector keys = (DictionaryVector) batch.output(0).borrow(Stream.VALUES);
+            DictionaryVector payload = (DictionaryVector) batch.output(1).borrow(Stream.VALUES);
+            assertThat(keys.hasOwnedMapping()).isFalse();
+            assertThat(payload.hasOwnedMapping()).isFalse();
+            assertThat(keys.ids()).isSameAs(payload.ids());
+            assertThat(longValues(payload, 4)).containsExactly(101L, 202L, 101L, 202L);
+        }
+    }
+
+    @Test
+    void testHashJoinOperatorKeepsDenseSingleMatchOuterRangeIndexed()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        List<org.weakref.nitro.data.Row> outerRows = new ArrayList<>();
+        List<org.weakref.nitro.data.Row> innerRows = new ArrayList<>();
+        for (long key = 0; key < 10_001; key++) {
+            outerRows.add(row(key, key + 100));
+            innerRows.add(row(key));
+        }
+        Operator outer = new ConstantTableOperator(allocator, 2, outerRows);
+        Operator inner = new ConstantTableOperator(allocator, 1, innerRows);
+
+        try (Operator join = new HashJoinOperator(allocator, outer, 0, inner, 0).withOutputs(1);
+                Batch batch = join.next()) {
+            assertThat(batch.output(0).borrow(Stream.VALUES)).isInstanceOf(DictionaryVector.class);
+            assertThat(batch.borrowMask().count()).isEqualTo(10_000);
+            VectorAccess.LongValues values = VectorAccess.longValues(batch.output(0).borrow(Stream.VALUES));
+            assertThat(values.value(0)).isEqualTo(100);
+            assertThat(values.value(9_999)).isEqualTo(10_099);
+        }
+    }
+
+    @Test
     void testHashJoinOperatorPreservesInnerNullsAcrossMultipleInnerPages()
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());

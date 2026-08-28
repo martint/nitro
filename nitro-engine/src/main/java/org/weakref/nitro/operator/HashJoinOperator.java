@@ -281,6 +281,7 @@ public class HashJoinOperator
     private int probeOutputMode;
     private Mask currentOutputMask;
     private int[] currentOuterDictionaryIds;
+    private I32Vector currentOwnedOuterDictionaryIds;
     // When encoded outer columns share the same dictionary/RLE mapping chain, composing that chain separately for
     // every VALUES/NULLS/ERRORS stream repeats the same random gathers and allocates one int[] per stream. Retain one
     // representative chain and its composed ids for the current output batch; columns with the same mapping identity
@@ -695,6 +696,7 @@ public class HashJoinOperator
         outerConstrained = false;
         outerConstraintApplied = false;
         currentOuterDictionaryIds = null;
+        currentOwnedOuterDictionaryIds = null;
         clearComposedOuterMappings();
         currentInnerLogicalDictionaryIds = null;
         currentInnerSourceDictionaryIds = null;
@@ -2566,7 +2568,7 @@ public class HashJoinOperator
             // result): keep the baseline dictionary-wrap, which borrows the live outer column once
             // and indexes it by the matched output positions. No constraint is pushed and no deferral
             // happens past the source's advance.
-            return wrapOuterOutput(sourceOutput);
+            return wrapOuterOutput(outputIndex, sourceOutput);
         }
 
         // Outer can satisfy a constrained re-borrow: narrow it to the matched rows so a lazy projected payload
@@ -2587,7 +2589,7 @@ public class HashJoinOperator
             }
             return result == null ? buffers.emptyLike(outputSchema(outputIndex)) : result;
         }
-        return wrapOuterOutput(sourceOutput);
+        return wrapOuterOutput(outputIndex, sourceOutput);
     }
 
     private boolean shouldMaterializeOuter(Output sourceOutput)
@@ -2601,7 +2603,9 @@ public class HashJoinOperator
             // can make downstream access contiguous. A probe-outer join preserves every probe row: copying every
             // flat payload column cannot compact the logical domain and only duplicates the data. Retain one shared
             // position mapping instead; downstream operators can decide whether their own access justifies a copy.
-            return singleMatchProbe && !probeOuterJoin;
+            return singleMatchProbe &&
+                    !probeOuterJoin &&
+                    (currentOuterBatchFullyConsumed() || !hasDenseOuterRange());
         }
 
         int sampleSize = Math.min(currentOutputCount, outputPolicy.outerMaterializationSampleSize());
@@ -2622,6 +2626,16 @@ public class HashJoinOperator
             }
         }
         return (long) distinct * outputPolicy.outerMaterializationMinimumReuse() > sampleSize;
+    }
+
+    private boolean hasDenseOuterRange()
+    {
+        // A single-match probe emits at most one row per probe position and visits probe positions in ascending
+        // order. Equal output and endpoint spans therefore prove that this batch is one contiguous source slice;
+        // an indexed view is cheaper than copying a fixed-width payload merely to make that slice start at zero.
+        return singleMatchProbe &&
+                currentOutputCount > 0 &&
+                outputOuterPositions[currentOutputCount - 1] - outputOuterPositions[0] == currentOutputCount - 1;
     }
 
     private int[] outerMaterializationPositions(int size)
@@ -2652,22 +2666,39 @@ public class HashJoinOperator
         }
     }
 
-    private Streams wrapOuterOutput(Output sourceOutput)
+    private Streams wrapOuterOutput(int outputIndex, Output sourceOutput)
     {
+        boolean ownsMapping = hasExclusiveOuterMapping(outputIndex, sourceOutput);
         if (sourceOutput.isValuesOnly()) {
-            return Streams.ofValues(allocator.adopt(allocationContext, buildOuterDictionaryStream(sourceOutput.borrow(Stream.VALUES))));
+            return Streams.ofValues(allocator.adopt(allocationContext, buildOuterDictionaryStream(sourceOutput.borrow(Stream.VALUES), ownsMapping)));
         }
         Streams.Builder streams = Streams.builder();
         if (sourceOutput.hasValues()) {
-            streams.put(Stream.VALUES, allocator.adopt(allocationContext, buildOuterDictionaryStream(sourceOutput.borrow(Stream.VALUES))));
+            streams.put(Stream.VALUES, allocator.adopt(allocationContext, buildOuterDictionaryStream(sourceOutput.borrow(Stream.VALUES), ownsMapping)));
         }
         if (sourceOutput.hasNulls() && !sourceOutput.isKnownAllFalse(Stream.NULLS)) {
-            streams.put(Stream.NULLS, allocator.adopt(allocationContext, buildOuterDictionaryStream(sourceOutput.borrow(Stream.NULLS))));
+            streams.put(Stream.NULLS, allocator.adopt(allocationContext, buildOuterDictionaryStream(sourceOutput.borrow(Stream.NULLS), false)));
         }
         if (sourceOutput.hasErrors() && !sourceOutput.isKnownAllFalse(Stream.ERRORS)) {
-            streams.put(Stream.ERRORS, allocator.adopt(allocationContext, buildOuterDictionaryStream(sourceOutput.borrow(Stream.ERRORS))));
+            streams.put(Stream.ERRORS, allocator.adopt(allocationContext, buildOuterDictionaryStream(sourceOutput.borrow(Stream.ERRORS), false)));
         }
         return streams.build();
+    }
+
+    private boolean hasExclusiveOuterMapping(int outputIndex, Output sourceOutput)
+    {
+        if (!sourceOutput.isValuesOnly()) {
+            return false;
+        }
+        int outerOutputs = 0;
+        int selectedOuterOutput = -1;
+        for (int outputChannel : outputChannels) {
+            if (outputChannel < outerOutputCount) {
+                outerOutputs++;
+                selectedOuterOutput = outputChannel;
+            }
+        }
+        return outerOutputs == 1 && selectedOuterOutput == outputIndex;
     }
 
     private int[] outerDictionaryIds()
@@ -2681,7 +2712,7 @@ public class HashJoinOperator
         return currentOuterDictionaryIds;
     }
 
-    private Vector buildOuterDictionaryStream(Vector source)
+    private Vector buildOuterDictionaryStream(Vector source, boolean ownsMapping)
     {
         if (source instanceof DictionaryVector || source instanceof org.weakref.nitro.data.RleVector) {
             int composeDepth = composeEncodedOuterDictionaryDepth;
@@ -2689,7 +2720,9 @@ public class HashJoinOperator
                 composeDepth = outputPolicy.adaptiveComposeDepth();
             }
             if (outputPolicy.wrapEncodedOuterDictionaries() && encodingDepth(source) < composeDepth) {
-                return DictionaryVector.wrapNested(outerDictionaryIds(), currentOutputCount, source);
+                return ownsMapping
+                        ? DictionaryVector.wrapOwnedIds(ownedOuterDictionaryIds(), currentOutputCount, source)
+                        : DictionaryVector.wrapNested(outerDictionaryIds(), currentOutputCount, source);
             }
             if (outputPolicy.cacheComposedOuterDictionaryIds()) {
                 for (int index = 0; index < composedOuterMappingCount; index++) {
@@ -2715,7 +2748,18 @@ public class HashJoinOperator
         }
         // Flat source: wrapComposedDictionary leaves the ids untouched, so every flat outer column can share
         // the single cached id snapshot instead of allocating a per-column copy.
-        return DictionaryVector.wrap(outerDictionaryIds(), currentOutputCount, source);
+        return ownsMapping
+                ? DictionaryVector.wrapOwnedIds(ownedOuterDictionaryIds(), currentOutputCount, source)
+                : DictionaryVector.wrap(outerDictionaryIds(), currentOutputCount, source);
+    }
+
+    private I32Vector ownedOuterDictionaryIds()
+    {
+        if (currentOwnedOuterDictionaryIds == null) {
+            currentOwnedOuterDictionaryIds = allocator.allocate(allocationContext, I32Vector.class, currentOutputCount, I32Vector::new);
+            System.arraycopy(outputOuterPositions, 0, currentOwnedOuterDictionaryIds.values(), 0, currentOutputCount);
+        }
+        return currentOwnedOuterDictionaryIds;
     }
 
     private void clearComposedOuterMappings()
