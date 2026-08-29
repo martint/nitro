@@ -84,6 +84,7 @@ class TestHashJoinOperatorResources
         assertThat(indexPolicy.rangeAdmissionMinSampleRows()).isEqualTo(16);
         assertThat(indexPolicy.directRangeMaxCardinalityRatio()).isEqualTo(2);
         assertThat(indexPolicy.directRangeBuildInitialCapacity()).isEqualTo(1024);
+        assertThat(indexPolicy.sparseDirectDuplicateMinExpectedDomainRatio()).isEqualTo(1);
         assertThat(indexPolicy.directRangeBuild()).isTrue();
         assertThat(indexPolicy.directRangeBuildMinRows()).isEqualTo(256);
         assertThat(indexPolicy.compressKeyOnlyDuplicates()).isTrue();

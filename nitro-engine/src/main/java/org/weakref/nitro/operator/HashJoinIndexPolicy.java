@@ -98,7 +98,7 @@ public record HashJoinIndexPolicy(
                 true,
                 true,
                 true,
-                4,
+                1,
                 1 << 20,
                 false,
                 false,
