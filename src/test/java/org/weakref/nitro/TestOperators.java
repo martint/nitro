@@ -5709,6 +5709,59 @@ public class TestOperators
     }
 
     @Test
+    void testMarkDistinctOperatorSizesInitialStateFromSelectedRows()
+    {
+        int addressablePositions = 1_000_000;
+        int[] selected = {0, addressablePositions / 2, addressablePositions - 1};
+        long[] values = new long[addressablePositions];
+        values[selected[0]] = 11;
+        values[selected[1]] = 22;
+        values[selected[2]] = 33;
+
+        Operator source = new Operator()
+        {
+            private boolean hasNext = true;
+
+            @Override
+            public int outputCount()
+            {
+                return 1;
+            }
+
+            @Override
+            public boolean hasNext()
+            {
+                return hasNext;
+            }
+
+            @Override
+            public Batch next()
+            {
+                hasNext = false;
+                return new Batch(Mask.sparse(selected, addressablePositions), Output.of(Streams.ofValues(new I64Vector(values))));
+            }
+
+            @Override
+            public void constrain(Mask mask) {}
+
+            @Override
+            public void close() {}
+        };
+
+        Allocator.Context distinctContext = new Allocator.Context("MarkDistinctOperator");
+        try (MarkDistinctOperator operator = new MarkDistinctOperator(
+                allocator,
+                0,
+                source,
+                EngineResources.from(allocator).operatorResources());
+                Batch output = operator.next()) {
+            assertThat(output.borrowMask().selectedPositions()).containsExactly(selected);
+            assertThat(allocator.currentBytes(distinctContext)).isLessThan(1_000_000);
+        }
+        assertThat(allocator.currentBytes(distinctContext)).isZero();
+    }
+
+    @Test
     void testGroupedAggregationWithMixedDistinctAccumulator()
     {
         assertThat(operator(

@@ -198,7 +198,8 @@ public class MarkDistinctOperator
                         codeGeneration,
                         distinctKeySetPolicy,
                         adaptiveLongGroupingPolicy,
-                        flatKeyTablePolicy);
+                        flatKeyTablePolicy,
+                        sourceMask.selectedCount());
             }
             distinctKeySet.reserveAdditional(sourceMask.selectedCount());
             selectedCount = distinctKeySet.addBatch(values, nulls, sourceMask, distinctPositions);
