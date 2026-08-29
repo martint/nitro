@@ -617,6 +617,13 @@ public final class DictionaryVector
         return allocator.allocateDictionary(allocationContext, Arrays.copyOf(ids, length), values.copy(allocator, allocationContext));
     }
 
+    /** Copies the logical rows into the underlying flat representation, removing this dictionary mapping. */
+    public Vector copyFlat(Allocator allocator, Allocator.Context allocationContext)
+    {
+        int[] logicalIds = length == ids.length ? ids : Arrays.copyOf(ids, length);
+        return values.copy(allocator, allocationContext, logicalIds);
+    }
+
     @Override
     public Vector copy(Allocator allocator, Allocator.Context allocationContext, int[] positions)
     {

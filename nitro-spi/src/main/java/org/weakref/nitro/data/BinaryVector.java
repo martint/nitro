@@ -207,17 +207,18 @@ public final class BinaryVector
                 allocationContext,
                 poolFamily(positionCount),
                 byteCapacity,
+                allocator.maximumVariableWidthVectorCapacity(allocationContext, byteCapacity),
                 false,
                 BinaryVector.class,
-                () -> allocateStorage(allocator, positionCount, byteCapacity));
+                () -> allocateStorage(allocator, allocationContext, positionCount, byteCapacity));
     }
 
-    private static BinaryVector allocateStorage(Allocator allocator, int positionCount, int byteCapacity)
+    private static BinaryVector allocateStorage(Allocator allocator, Allocator.Context allocationContext, int positionCount, int byteCapacity)
     {
         PrimitiveArrayPool storagePool = allocator.primitiveArrays();
         int[] offsets = storagePool.borrowInts(positionCount + 1);
         Arrays.fill(offsets, 0);
-        byte[] data = allocator.borrowVariableWidthStorage(byteCapacity);
+        byte[] data = allocator.borrowVariableWidthStorage(allocationContext, byteCapacity);
         return new BinaryVector(positionCount, offsets, data, true);
     }
 

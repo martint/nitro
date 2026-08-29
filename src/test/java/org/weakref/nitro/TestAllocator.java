@@ -29,6 +29,7 @@ import org.weakref.nitro.data.NativeBufferAdvice;
 import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Streams;
+import org.weakref.nitro.data.VariableWidthStorageReusePolicy;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.execution.EngineResources;
@@ -803,6 +804,26 @@ class TestAllocator
     }
 
     @Test
+    void testDictionaryCanCopyLogicalRowsIntoFlatRepresentation()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            BinaryVector values = new BinaryVector(2, 6);
+            values.setBytes(0, new byte[] {1, 2});
+            values.setBytes(1, new byte[] {3, 4, 5, 6});
+            DictionaryVector dictionary = DictionaryVector.wrap(new int[] {1, 0, 1}, values);
+            Allocator.Context context = new Allocator.Context("flat-dictionary-copy");
+
+            BinaryVector flat = (BinaryVector) dictionary.copyFlat(allocator, context);
+
+            assertThat(flat.length()).isEqualTo(3);
+            assertThat(flat.copyBytes(0)).containsExactly(3, 4, 5, 6);
+            assertThat(flat.copyBytes(1)).containsExactly(1, 2);
+            assertThat(flat.copyBytes(2)).containsExactly(3, 4, 5, 6);
+        }
+    }
+
+    @Test
     void testDictionaryTracksAllocatorOwnedIdsAndDomainFrequencies()
     {
         try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
@@ -866,6 +887,33 @@ class TestAllocator
 
             assertThat(vector.byteCapacity()).isBetween(64, 512);
             assertThat(allocator.primitiveArrays().borrowBytes(1 << 20)).isSameAs(oversized);
+        }
+    }
+
+    @Test
+    void testVariableWidthStorageUsesAllocationLifetimePolicy()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            byte[] moderatelyOversized = new byte[512 << 10];
+            allocator.primitiveArrays().release(moderatelyOversized);
+            Object poolGroup = new Object();
+            Allocator.Context producerContext = new Allocator.Context("producer", poolGroup);
+            BinaryVector oversized = BinaryVector.allocate(allocator, producerContext, 10, 64 << 10);
+            assertThat(oversized.byteCapacity()).isEqualTo(512 << 10);
+            allocator.release(producerContext, oversized);
+            Allocator.Context longLivedContext = new Allocator.Context(
+                    "long-lived",
+                    poolGroup,
+                    VariableWidthStorageReusePolicy.maximumOversizeRatio(2));
+
+            BinaryVector longLived = BinaryVector.allocate(allocator, longLivedContext, 10, 64 << 10);
+
+            assertThat(longLived.byteCapacity()).isBetween(64 << 10, 128 << 10);
+
+            Allocator.Context ordinaryContext = new Allocator.Context("ordinary", poolGroup);
+            BinaryVector ordinary = BinaryVector.allocate(allocator, ordinaryContext, 10, 64 << 10);
+            assertThat(ordinary).isSameAs(oversized);
         }
     }
 

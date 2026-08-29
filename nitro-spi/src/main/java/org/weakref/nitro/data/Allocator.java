@@ -95,12 +95,32 @@ public class Allocator
         return primitiveArrays;
     }
 
-    byte[] borrowVariableWidthStorage(int minimumLength)
+    byte[] borrowVariableWidthStorage(Context context, int minimumLength)
     {
-        long maximumLength = (long) minimumLength * policy.maxVariableWidthStorageOversizeRatio();
+        requireNonNull(context, "context is null");
         return primitiveArrays.borrowBytesBetween(
                 minimumLength,
-                (int) Math.min(Integer.MAX_VALUE, maximumLength));
+                maximumVariableWidthStorageLength(context, minimumLength));
+    }
+
+    int maximumVariableWidthStorageLength(Context context, int minimumLength)
+    {
+        requireNonNull(context, "context is null");
+        int maximumOversizeRatio = context.variableWidthStorageReusePolicy()
+                .maximumOversizeRatioOrElse(policy.maxVariableWidthStorageOversizeRatio());
+        long maximumLength = (long) minimumLength * maximumOversizeRatio;
+        return (int) Math.min(Integer.MAX_VALUE, maximumLength);
+    }
+
+    int maximumVariableWidthVectorCapacity(Context context, int minimumCapacity)
+    {
+        requireNonNull(context, "context is null");
+        if (context.variableWidthStorageReusePolicy().maximumOversizeRatio().isEmpty()) {
+            return Integer.MAX_VALUE;
+        }
+        long maximumCapacity = (long) minimumCapacity *
+                context.variableWidthStorageReusePolicy().maximumOversizeRatio().getAsInt();
+        return (int) Math.min(Integer.MAX_VALUE, maximumCapacity);
     }
 
     public PrimitiveArrayPool nativeBuffers()
@@ -437,8 +457,28 @@ public class Allocator
 
     public <T extends Vector> T allocatePooled(Context context, Object poolFamily, int minimumPoolCapacity, boolean exactCapacityMatch, Class<T> vectorType, Supplier<T> allocator)
     {
+        return allocatePooled(
+                context,
+                poolFamily,
+                minimumPoolCapacity,
+                exactCapacityMatch ? minimumPoolCapacity : Integer.MAX_VALUE,
+                exactCapacityMatch,
+                vectorType,
+                allocator);
+    }
+
+    public <T extends Vector> T allocatePooled(
+            Context context,
+            Object poolFamily,
+            int minimumPoolCapacity,
+            int maximumPoolCapacity,
+            boolean exactCapacityMatch,
+            Class<T> vectorType,
+            Supplier<T> allocator)
+    {
+        checkArgument(maximumPoolCapacity >= minimumPoolCapacity, "maximumPoolCapacity is less than minimumPoolCapacity");
         ContextState state = state(context);
-        T vector = state.borrowVector(poolFamily, minimumPoolCapacity, exactCapacityMatch, vectorType);
+        T vector = state.borrowVector(poolFamily, minimumPoolCapacity, maximumPoolCapacity, exactCapacityMatch, vectorType);
         boolean reused = vector != null;
         if (!reused) {
             vector = requireNonNull(allocator.get(), "allocator returned null");
@@ -2012,10 +2052,25 @@ public class Allocator
 
         public <T extends Vector> T borrowVector(Object family, int minimumCapacity, boolean exactCapacityMatch, Class<T> vectorType)
         {
-            T vector = borrowVector(pool, family, minimumCapacity, exactCapacityMatch, vectorType);
+            return borrowVector(
+                    family,
+                    minimumCapacity,
+                    exactCapacityMatch ? minimumCapacity : Integer.MAX_VALUE,
+                    exactCapacityMatch,
+                    vectorType);
+        }
+
+        public <T extends Vector> T borrowVector(
+                Object family,
+                int minimumCapacity,
+                int maximumCapacity,
+                boolean exactCapacityMatch,
+                Class<T> vectorType)
+        {
+            T vector = borrowVector(pool, family, minimumCapacity, maximumCapacity, exactCapacityMatch, vectorType);
             borrowedVectorResident = vector != null;
             if (vector == null && compatibilityActive()) {
-                vector = borrowVector(compatibilityPool, family, minimumCapacity, exactCapacityMatch, vectorType);
+                vector = borrowVector(compatibilityPool, family, minimumCapacity, maximumCapacity, exactCapacityMatch, vectorType);
                 borrowedVectorResident = vector != null;
             }
             if (vector != null) {
@@ -2029,6 +2084,7 @@ public class Allocator
                 PoolState source,
                 Object family,
                 int minimumCapacity,
+                int maximumCapacity,
                 boolean exactCapacityMatch,
                 Class<T> vectorType)
         {
@@ -2037,7 +2093,7 @@ public class Allocator
                 return null;
             }
             Map.Entry<Integer, ArrayDeque<Vector>> entry = vectors.ceilingEntry(minimumCapacity);
-            if (entry == null || (exactCapacityMatch && entry.getKey() != minimumCapacity)) {
+            if (entry == null || entry.getKey() > maximumCapacity || (exactCapacityMatch && entry.getKey() != minimumCapacity)) {
                 return null;
             }
             T vector = vectorType.cast(entry.getValue().removeFirst());
@@ -2821,8 +2877,27 @@ public class Allocator
         }
     }
 
-    public record Context(String name, Object scopeId, Object poolGroup, Object compatibilityGroup)
+    public record Context(
+            String name,
+            Object scopeId,
+            Object poolGroup,
+            Object compatibilityGroup,
+            VariableWidthStorageReusePolicy variableWidthStorageReusePolicy)
     {
+        public Context
+        {
+            requireNonNull(name, "name is null");
+            requireNonNull(scopeId, "scopeId is null");
+            requireNonNull(poolGroup, "poolGroup is null");
+            requireNonNull(compatibilityGroup, "compatibilityGroup is null");
+            requireNonNull(variableWidthStorageReusePolicy, "variableWidthStorageReusePolicy is null");
+        }
+
+        public Context(String name, Object scopeId, Object poolGroup, Object compatibilityGroup)
+        {
+            this(name, scopeId, poolGroup, compatibilityGroup, VariableWidthStorageReusePolicy.allocatorDefault());
+        }
+
         public Context(String name)
         {
             this(name, new Object());
@@ -2836,6 +2911,16 @@ public class Allocator
         public Context(String name, Object poolGroup)
         {
             this(name, new Object(), requireNonNull(poolGroup, "poolGroup is null"), poolGroup);
+        }
+
+        public Context(String name, Object poolGroup, VariableWidthStorageReusePolicy variableWidthStorageReusePolicy)
+        {
+            this(
+                    name,
+                    new Object(),
+                    requireNonNull(poolGroup, "poolGroup is null"),
+                    poolGroup,
+                    requireNonNull(variableWidthStorageReusePolicy, "variableWidthStorageReusePolicy is null"));
         }
 
         public Context(String name, Object poolGroup, Object compatibilityGroup)
