@@ -1489,7 +1489,7 @@ final class FlatGroupingTable
                 if (totalBytes > Integer.MAX_VALUE) {
                     throw new IllegalStateException("Grouped binary output exceeds maximum byte capacity: " + totalBytes);
                 }
-                binaryValues = BinaryVector.allocateOrGrow(allocator, allocationContext, existing, size, (int) totalBytes);
+                binaryValues = BinaryVector.allocateOrGrowExact(allocator, allocationContext, existing, size, (int) totalBytes);
                 Arrays.fill(binaryValues.offsets(), 0);
                 binaryValues.clearTraits();
                 binaryValues.addTraits(field.binaryTraits());

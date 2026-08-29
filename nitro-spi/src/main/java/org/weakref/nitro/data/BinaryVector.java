@@ -239,6 +239,30 @@ public final class BinaryVector
     }
 
     /**
+     * Allocates or grows an output whose final payload size is already known. Unlike the incremental producer path,
+     * this does not add geometric write headroom: a completed grouped or compacted result may cross an asynchronous
+     * boundary, where unused capacity remains resident for the full consumer lifetime.
+     */
+    public static BinaryVector allocateOrGrowExact(Allocator allocator, Allocator.Context allocationContext, BinaryVector existing, int positionCount, int byteCapacity)
+    {
+        if (existing == null) {
+            return allocate(allocator, allocationContext, positionCount, byteCapacity);
+        }
+        if (existing.length() < positionCount || existing.byteCapacity() < byteCapacity) {
+            BinaryVector grown = allocate(allocator, allocationContext, positionCount, byteCapacity);
+            int copiedPositions = Math.min(existing.length(), positionCount);
+            System.arraycopy(existing.offsets(), 0, grown.offsets(), 0, copiedPositions + 1);
+            int liveBytes = existing.offsets()[copiedPositions];
+            System.arraycopy(existing.data(), 0, grown.data(), 0, liveBytes);
+            grown.addTraits(existing.traits());
+            allocator.discard(allocationContext, existing);
+            return grown;
+        }
+        existing.contentGeneration++;
+        return existing;
+    }
+
+    /**
      * As {@link #allocateOrGrow(Allocator, Allocator.Context, BinaryVector, int, int)}, but a non-negative
      * {@code bytesUsed} tells how many bytes of {@code existing}'s data are live so the grow can copy exactly that
      * many instead of scanning the offsets backward from the (often far larger) allocated capacity. Incremental

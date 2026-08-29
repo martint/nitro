@@ -2257,7 +2257,7 @@ class FlatKeyLayout
         }
 
         BinaryVector existing = output instanceof BinaryVector binary ? binary : null;
-        BinaryVector result = BinaryVector.allocateOrGrow(allocator, allocationContext, existing, size, (int) totalBytes);
+        BinaryVector result = BinaryVector.allocateOrGrowExact(allocator, allocationContext, existing, size, (int) totalBytes);
         Arrays.fill(result.offsets(), 0);
         result.clearTraits();
         result.addTraits(field(fieldIndex).binaryTraits());
@@ -2468,7 +2468,7 @@ class FlatKeyLayout
         if (totalBytes > Integer.MAX_VALUE) {
             throw new IllegalStateException("Grouped binary output exceeds maximum byte capacity: " + totalBytes);
         }
-        BinaryVector result = BinaryVector.allocateOrGrow(allocator, allocationContext, output, size, (int) totalBytes);
+        BinaryVector result = BinaryVector.allocateOrGrowExact(allocator, allocationContext, output, size, (int) totalBytes);
         Arrays.fill(result.offsets(), 0);
         result.clearTraits();
         result.addTraits(field(fieldIndex).binaryTraits());

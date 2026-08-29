@@ -531,7 +531,7 @@ final class FlatTypeHandlers
                 throw new IllegalStateException("Grouped binary output exceeds maximum byte capacity: " + totalBytes);
             }
 
-            BinaryVector result = BinaryVector.allocateOrGrow(allocator, allocationContext, (BinaryVector) output, size, (int) totalBytes);
+            BinaryVector result = BinaryVector.allocateOrGrowExact(allocator, allocationContext, (BinaryVector) output, size, (int) totalBytes);
             Arrays.fill(result.offsets(), 0);
             result.clearTraits();
             result.addTraits(field.binaryTraits());
@@ -612,7 +612,7 @@ final class FlatTypeHandlers
                 throw new IllegalStateException("Grouped binary output exceeds maximum byte capacity: " + totalBytes);
             }
 
-            BinaryVector result = BinaryVector.allocateOrGrow(allocator, allocationContext, (BinaryVector) output, size, (int) totalBytes);
+            BinaryVector result = BinaryVector.allocateOrGrowExact(allocator, allocationContext, (BinaryVector) output, size, (int) totalBytes);
             Arrays.fill(result.offsets(), 0);
             result.clearTraits();
             result.addTraits(binaryTraits);

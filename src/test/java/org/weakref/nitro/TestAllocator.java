@@ -48,6 +48,45 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class TestAllocator
 {
     @Test
+    void testExactBinaryOutputDoesNotAddIncrementalGrowthHeadroom()
+    {
+        try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
+            Allocator.Context growingContext = new Allocator.Context("growing-binary-output");
+            Allocator.Context exactContext = new Allocator.Context("exact-binary-output");
+
+            BinaryVector growing = BinaryVector.allocateOrGrow(allocator, growingContext, null, 10, 1_000);
+            BinaryVector exact = BinaryVector.allocateOrGrowExact(allocator, exactContext, null, 10, 1_000);
+
+            assertThat(growing.byteCapacity()).isGreaterThan(1_000);
+            assertThat(exact.byteCapacity()).isEqualTo(1_000);
+            allocator.release(growingContext, growing);
+            allocator.release(exactContext, exact);
+        }
+    }
+
+    @Test
+    void testExactBinaryOutputUsesRequestedPositionCountWhenGrowingPayload()
+    {
+        try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
+            Allocator.Context context = new Allocator.Context("exact-binary-output");
+            BinaryVector existing = BinaryVector.allocate(allocator, context, 10, 10);
+            for (int position = 0; position <= existing.length(); position++) {
+                existing.offsets()[position] = position;
+            }
+            for (int index = 0; index < existing.data().length; index++) {
+                existing.data()[index] = (byte) index;
+            }
+
+            BinaryVector grown = BinaryVector.allocateOrGrowExact(allocator, context, existing, 3, 20);
+
+            assertThat(grown.length()).isEqualTo(3);
+            assertThat(grown.offsets()).containsExactly(0, 1, 2, 3);
+            assertThat(grown.data()).startsWith((byte) 0, (byte) 1, (byte) 2);
+            allocator.release(context, grown);
+        }
+    }
+
+    @Test
     void testOverwritesCheckedOutSparseMaskWithoutChangingOwnership()
     {
         try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
