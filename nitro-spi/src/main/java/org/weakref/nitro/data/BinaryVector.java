@@ -209,14 +209,15 @@ public final class BinaryVector
                 byteCapacity,
                 false,
                 BinaryVector.class,
-                () -> allocateStorage(allocator.primitiveArrays(), positionCount, byteCapacity));
+                () -> allocateStorage(allocator, positionCount, byteCapacity));
     }
 
-    private static BinaryVector allocateStorage(PrimitiveArrayPool storagePool, int positionCount, int byteCapacity)
+    private static BinaryVector allocateStorage(Allocator allocator, int positionCount, int byteCapacity)
     {
+        PrimitiveArrayPool storagePool = allocator.primitiveArrays();
         int[] offsets = storagePool.borrowInts(positionCount + 1);
         Arrays.fill(offsets, 0);
-        byte[] data = storagePool.borrowBytesAtLeast(byteCapacity);
+        byte[] data = allocator.borrowVariableWidthStorage(byteCapacity);
         return new BinaryVector(positionCount, offsets, data, true);
     }
 

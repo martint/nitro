@@ -79,10 +79,22 @@ public final class PrimitiveArrayPool
     /** Borrows the smallest retained byte array that can satisfy {@code minimumLength}. */
     public synchronized byte[] borrowBytesAtLeast(int minimumLength)
     {
+        return borrowBytesBetween(minimumLength, Integer.MAX_VALUE);
+    }
+
+    /** Borrows the smallest retained byte array within the requested inclusive capacity range. */
+    public synchronized byte[] borrowBytesBetween(int minimumLength, int maximumLength)
+    {
         checkOpen();
+        if (minimumLength < 0) {
+            throw new IllegalArgumentException("minimumLength is negative");
+        }
+        if (maximumLength < minimumLength) {
+            throw new IllegalArgumentException("maximumLength is less than minimumLength");
+        }
         Key best = null;
         for (Key key : buckets.keySet()) {
-            if (key.family == byte[].class && key.capacity >= minimumLength &&
+            if (key.family == byte[].class && key.capacity >= minimumLength && key.capacity <= maximumLength &&
                     (best == null || key.capacity < best.capacity)) {
                 best = key;
             }

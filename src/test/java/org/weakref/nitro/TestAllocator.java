@@ -822,6 +822,22 @@ class TestAllocator
     }
 
     @Test
+    void testVariableWidthStorageRejectsGrosslyOversizedPooledArray()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            byte[] oversized = new byte[1 << 20];
+            allocator.primitiveArrays().release(oversized);
+            Allocator.Context context = new Allocator.Context("variable-width");
+
+            BinaryVector vector = BinaryVector.allocate(allocator, context, 10, 64);
+
+            assertThat(vector.byteCapacity()).isBetween(64, 512);
+            assertThat(allocator.primitiveArrays().borrowBytes(1 << 20)).isSameAs(oversized);
+        }
+    }
+
+    @Test
     void testAllocatorUsesOwnerSuppliedPolicy()
     {
         AllocatorPolicy policy = new AllocatorPolicy(
@@ -845,7 +861,8 @@ class TestAllocator
                 true,
                 false,
                 true,
-                true);
+                true,
+                2);
         NativeBufferAdvice nativeBufferAdvice = NativeBufferAdvice.disabled();
         try (AllocationResources resources = new AllocationResources(
                 new PrimitiveArrayPool(1 << 20, 0),

@@ -39,13 +39,17 @@ public record AllocatorPolicy(
         boolean fastVectorPoolOrderRemove,
         boolean sharedAllFalseBoolean,
         boolean directVectorFactory,
-        boolean indexedVectorTreeTraversal)
+        boolean indexedVectorTreeTraversal,
+        int maxVariableWidthStorageOversizeRatio)
 {
     public AllocatorPolicy
     {
         requireNonNull(booleanCopies, "booleanCopies is null");
         requireNonNull(maskFiltering, "maskFiltering is null");
         requireNonNull(aggregateStateVectorRetention, "aggregateStateVectorRetention is null");
+        if (maxVariableWidthStorageOversizeRatio < 1) {
+            throw new IllegalArgumentException("maxVariableWidthStorageOversizeRatio is less than 1");
+        }
     }
 
     public static AllocatorPolicy defaults()
@@ -71,7 +75,8 @@ public record AllocatorPolicy(
                 true,
                 true,
                 true,
-                true);
+                true,
+                8);
     }
 
     public static AllocatorPolicy fromSystemProperties()
@@ -106,7 +111,10 @@ public record AllocatorPolicy(
                 booleanProperty("nitro.allocator.fastVectorPoolOrderRemove", defaults.fastVectorPoolOrderRemove()),
                 booleanProperty("nitro.allocator.sharedAllFalseBoolean", defaults.sharedAllFalseBoolean()),
                 booleanProperty("nitro.allocator.directVectorFactory", defaults.directVectorFactory()),
-                booleanProperty("nitro.allocator.indexedVectorTreeTraversal", defaults.indexedVectorTreeTraversal()));
+                booleanProperty("nitro.allocator.indexedVectorTreeTraversal", defaults.indexedVectorTreeTraversal()),
+                Integer.getInteger(
+                        "nitro.allocator.maxVariableWidthStorageOversizeRatio",
+                        defaults.maxVariableWidthStorageOversizeRatio()));
     }
 
     public AllocatorPolicy withAggregateStateVectorRetention(AggregateStateVectorRetention retention)
@@ -132,7 +140,8 @@ public record AllocatorPolicy(
                 fastVectorPoolOrderRemove,
                 sharedAllFalseBoolean,
                 directVectorFactory,
-                indexedVectorTreeTraversal);
+                indexedVectorTreeTraversal,
+                maxVariableWidthStorageOversizeRatio);
     }
 
     private static boolean booleanProperty(String name, boolean defaultValue)

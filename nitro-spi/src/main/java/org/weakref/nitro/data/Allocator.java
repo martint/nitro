@@ -94,6 +94,14 @@ public class Allocator
         return primitiveArrays;
     }
 
+    byte[] borrowVariableWidthStorage(int minimumLength)
+    {
+        long maximumLength = (long) minimumLength * policy.maxVariableWidthStorageOversizeRatio();
+        return primitiveArrays.borrowBytesBetween(
+                minimumLength,
+                (int) Math.min(Integer.MAX_VALUE, maximumLength));
+    }
+
     public PrimitiveArrayPool nativeBuffers()
     {
         return allocationResources.nativeBuffers();
