@@ -14,7 +14,6 @@
 package org.weakref.nitro.operator;
 
 import it.unimi.dsi.fastutil.ints.Int2IntOpenHashMap;
-import it.unimi.dsi.fastutil.ints.IntArrayList;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.DictionaryVector;
@@ -102,24 +101,27 @@ public final class NativeBatchPartitioner
         checkArgument(keyKernels != null, "partition keys were not configured");
         Streams[] columns = columns(source);
 
-        IntArrayList[] assignments = new IntArrayList[partitionCount];
-        for (int partition = 0; partition < partitionCount; partition++) {
-            assignments[partition] = new IntArrayList();
-        }
-        for (int position : source.borrowMask()) {
-            long hash = 0;
-            for (int key = 0; key < keyKernels.length; key++) {
-                Streams streams = columns[partitionChannels[key]];
-                Vector nulls = streams.getOrNull(Stream.NULLS);
-                long fieldHash = nulls != null && OperatorVectorSupport.isNull(nulls, position)
-                        ? NULL_HASH
-                        : keyKernels[key].hash(streams.get(Stream.VALUES), nulls, position);
-                hash = 31 * hash + fieldHash;
+        Mask mask = source.borrowMask();
+        int[] assignments = allocator.primitiveArrays().borrowInts(mask.selectedCount());
+        try {
+            int selected = 0;
+            for (int position : mask) {
+                long hash = 0;
+                for (int key = 0; key < keyKernels.length; key++) {
+                    Streams streams = columns[partitionChannels[key]];
+                    Vector nulls = streams.getOrNull(Stream.NULLS);
+                    long fieldHash = nulls != null && OperatorVectorSupport.isNull(nulls, position)
+                            ? NULL_HASH
+                            : keyKernels[key].hash(streams.get(Stream.VALUES), nulls, position);
+                    hash = 31 * hash + fieldHash;
+                }
+                assignments[selected++] = mix(hash) & partitionMask;
             }
-            assignments[mix(hash) & partitionMask].add(position);
+            return copyPartitions(columns, mask, assignments);
         }
-
-        return copyPartitions(columns, assignments);
+        finally {
+            allocator.primitiveArrays().release(assignments);
+        }
     }
 
     /**
@@ -135,16 +137,11 @@ public final class NativeBatchPartitioner
                 partitionBySelectedPosition.length == mask.selectedCount(),
                 "assignment count does not match selected position count");
 
-        IntArrayList[] assignments = new IntArrayList[partitionCount];
-        for (int partition = 0; partition < partitionCount; partition++) {
-            assignments[partition] = new IntArrayList();
-        }
         for (int selectedPosition = 0; selectedPosition < partitionBySelectedPosition.length; selectedPosition++) {
             int partition = partitionBySelectedPosition[selectedPosition];
             checkArgument(partition >= 0 && partition < partitionCount, "partition is out of bounds: %s", partition);
-            assignments[partition].add(mask.position(selectedPosition));
         }
-        return copyPartitions(columns(source), assignments);
+        return copyPartitions(columns(source), mask, partitionBySelectedPosition);
     }
 
     private Streams[] columns(Batch source)
@@ -160,13 +157,30 @@ public final class NativeBatchPartitioner
         return columns;
     }
 
-    private List<Partition> copyPartitions(Streams[] columns, IntArrayList[] assignments)
+    private List<Partition> copyPartitions(Streams[] columns, Mask mask, int[] partitionBySelectedPosition)
     {
+        int[] counts = new int[partitionCount];
+        for (int selected = 0; selected < partitionBySelectedPosition.length; selected++) {
+            counts[partitionBySelectedPosition[selected]]++;
+        }
+
+        int[][] positions = new int[partitionCount][];
+        int[] offsets = new int[partitionCount];
+        for (int partition = 0; partition < partitionCount; partition++) {
+            if (counts[partition] > 0) {
+                positions[partition] = allocator.primitiveArrays().borrowInts(counts[partition]);
+            }
+        }
+        for (int selected = 0; selected < partitionBySelectedPosition.length; selected++) {
+            int partition = partitionBySelectedPosition[selected];
+            positions[partition][offsets[partition]++] = mask.position(selected);
+        }
+
         List<Partition> result = new ArrayList<>(partitionCount);
         try {
             for (int partition = 0; partition < partitionCount; partition++) {
-                if (!assignments[partition].isEmpty()) {
-                    result.add(new Partition(partition, copy(columns, assignments[partition])));
+                if (counts[partition] > 0) {
+                    result.add(new Partition(partition, copy(columns, positions[partition], counts[partition])));
                 }
             }
             return List.copyOf(result);
@@ -175,12 +189,17 @@ public final class NativeBatchPartitioner
             result.forEach(partition -> partition.batch().close());
             throw failure;
         }
+        finally {
+            for (int[] partitionPositions : positions) {
+                if (partitionPositions != null) {
+                    allocator.primitiveArrays().release(partitionPositions);
+                }
+            }
+        }
     }
 
-    private Batch copy(Streams[] columns, IntArrayList assignment)
+    private Batch copy(Streams[] columns, int[] positions, int count)
     {
-        int count = assignment.size();
-        int[] positions = assignment.elements();
         Allocator.Context context = new Allocator.Context("NativeBatchPartitioner.partition");
         Map<int[], DictionaryRemapping> dictionaryRemappings = new IdentityHashMap<>();
         try {
