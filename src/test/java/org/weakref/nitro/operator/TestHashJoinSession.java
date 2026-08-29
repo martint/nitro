@@ -35,6 +35,29 @@ import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
 class TestHashJoinSession
 {
     @Test
+    void testRetainedBatchCanTransferExclusiveAllocatorOwnershipAsynchronously()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            Allocator.Context context = new Allocator.Context("retained-output");
+            I64Vector values = allocator.allocate(context, I64Vector.class, 3, I64Vector::new);
+            Batch source = new Batch(
+                    Mask.all(3),
+                    new Output(
+                            Set.of(Stream.VALUES),
+                            _ -> values,
+                            (_, vector) -> vector,
+                            (_, vector) -> allocator.release(context, vector)));
+
+            try (Batch retained = RetainedBatch.retain(allocator, source, 1);
+                    Allocator.AsyncVectorTreeLease detached = retained.tryDetachRetainedVectorsForAsyncRelease(allocator).orElseThrow()) {
+                assertThat(retained.output(0).borrow(Stream.VALUES)).isSameAs(values);
+                assertThat(allocator.residentBytes()).isZero();
+            }
+        }
+    }
+
+    @Test
     void testExternallyScheduledFeedDoesNotAdvertiseWholeStreamLookahead()
     {
         try (ExternallyScheduledBatchFeed feed = new ExternallyScheduledBatchFeed(Schema.unspecified(1))) {

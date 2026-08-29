@@ -13,8 +13,10 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
 
+import java.util.Optional;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
@@ -41,6 +43,7 @@ public final class Batch
     private final Runnable closeAction;
     private final Lifecycle lifecycle;
     private final BatchBufferScope bufferScope;
+    private final AsyncOwnershipTransfer asyncOwnershipTransfer;
     private boolean maskTaken;
     private boolean closed;
 
@@ -86,7 +89,7 @@ public final class Batch
             Batch outputDelegate,
             Lifecycle lifecycle)
     {
-        this(mask, constrainer, maskTakeResolver, maskReleaseResolver, closeAction, outputs, outputDelegate, lifecycle, null);
+        this(mask, constrainer, maskTakeResolver, maskReleaseResolver, closeAction, outputs, outputDelegate, lifecycle, null, null);
     }
 
     private Batch(
@@ -98,12 +101,14 @@ public final class Batch
             Output[] outputs,
             Batch outputDelegate,
             Lifecycle lifecycle,
-            BatchBufferScope bufferScope)
+            BatchBufferScope bufferScope,
+            AsyncOwnershipTransfer asyncOwnershipTransfer)
     {
         this.mask = requireNonNull(mask, "mask is null");
         this.ownedMask = mask;
         this.lifecycle = lifecycle;
         this.bufferScope = bufferScope;
+        this.asyncOwnershipTransfer = asyncOwnershipTransfer;
         this.constrainer = lifecycle == null ? requireNonNull(constrainer, "constrainer is null") : null;
         this.maskTakeResolver = lifecycle == null && bufferScope == null ? requireNonNull(maskTakeResolver, "maskTakeResolver is null") : null;
         this.maskReleaseResolver = lifecycle == null && bufferScope == null ? requireNonNull(maskReleaseResolver, "maskReleaseResolver is null") : null;
@@ -125,7 +130,23 @@ public final class Batch
                 requireNonNull(outputs, "outputs is null"),
                 null,
                 null,
-                requireNonNull(bufferScope, "bufferScope is null"));
+                requireNonNull(bufferScope, "bufferScope is null"),
+                null);
+    }
+
+    static Batch retained(Mask mask, Runnable closeAction, AsyncOwnershipTransfer asyncOwnershipTransfer, Output[] outputs)
+    {
+        return new Batch(
+                mask,
+                _ -> {},
+                Function.identity(),
+                _ -> {},
+                closeAction,
+                requireNonNull(outputs, "outputs is null"),
+                null,
+                null,
+                null,
+                requireNonNull(asyncOwnershipTransfer, "asyncOwnershipTransfer is null"));
     }
 
     /**
@@ -181,6 +202,7 @@ public final class Batch
         closeAction = source.closeAction;
         lifecycle = source.lifecycle;
         bufferScope = source.bufferScope;
+        asyncOwnershipTransfer = source.asyncOwnershipTransfer;
         maskTaken = source.maskTaken;
     }
 
@@ -195,6 +217,20 @@ public final class Batch
         Batch transferred = new Batch(this);
         closed = true;
         return transferred;
+    }
+
+    /**
+     * Promotes vector ownership held exclusively by this batch for release across an asynchronous boundary.
+     * Ordinary batches and retained batches whose vector trees are shared return empty without changing ownership.
+     */
+    public Optional<Allocator.AsyncVectorTreeLease> tryDetachRetainedVectorsForAsyncRelease(Allocator allocator)
+    {
+        checkOpen();
+        requireNonNull(allocator, "allocator is null");
+        if (asyncOwnershipTransfer == null) {
+            return Optional.empty();
+        }
+        return asyncOwnershipTransfer.tryDetach(allocator);
     }
 
     public Mask borrowMask()
@@ -332,5 +368,10 @@ public final class Batch
         void releaseMask(Mask mask);
 
         void close();
+    }
+
+    interface AsyncOwnershipTransfer
+    {
+        Optional<Allocator.AsyncVectorTreeLease> tryDetach(Allocator allocator);
     }
 }

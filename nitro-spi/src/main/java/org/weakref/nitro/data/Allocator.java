@@ -1453,6 +1453,33 @@ public class Allocator
         return new AsyncVectorTreeLease(this, detached);
     }
 
+    private synchronized Optional<AsyncVectorTreeLease> detachVectorTreeLeaseForAsyncRelease(VectorTreeLease treeLease)
+    {
+        requireNonNull(treeLease, "treeLease is null");
+        if (treeLease.allocator != this || treeLease.closed) {
+            return Optional.empty();
+        }
+        for (Vector vector : treeLease.vectors) {
+            VectorLeaseState lease = vectorLeases.get(vector);
+            if (lease == null || lease.references != 1) {
+                return Optional.empty();
+            }
+        }
+
+        List<Vector> detached = new java.util.ArrayList<>(treeLease.vectors.size());
+        for (Vector vector : treeLease.vectors) {
+            VectorLeaseState lease = vectorLeases.remove(vector);
+            boolean recyclable = !lease.ownerDiscarded &&
+                    lease.owner.lastDiscardEpoch <= lease.ownerEpoch &&
+                    lease.owner.maxRetained(vector) > 0;
+            releaseResident(vector.retainedBytes());
+            asyncVectorLeases.put(vector, new AsyncVectorLeaseState(recyclable));
+            detached.add(vector);
+        }
+        treeLease.closed = true;
+        return Optional.of(new AsyncVectorTreeLease(this, detached));
+    }
+
     /**
      * Returns whether every non-shared vector reachable from {@code root} is owned or leased by this allocator.
      * Boundaries use this to distinguish a detachable local result from a borrowed upstream vector tree that must
@@ -2810,6 +2837,15 @@ public class Allocator
         {
             this.allocator = requireNonNull(allocator, "allocator is null");
             this.vectors = List.copyOf(requireNonNull(vectors, "vectors is null"));
+        }
+
+        /**
+         * Converts this exclusive producer-local lease into ownership that may be released by an asynchronous
+         * consumer. Conversion fails without changing ownership when any vector is shared by another local lease.
+         */
+        public Optional<AsyncVectorTreeLease> tryDetachForAsyncRelease()
+        {
+            return allocator.detachVectorTreeLeaseForAsyncRelease(this);
         }
 
         @Override

@@ -56,7 +56,14 @@ final class RetainedBatch
             lease = allocator.leaseVectorTree(roots);
             source.close();
             Allocator.VectorTreeLease retained = lease;
-            return new Batch(mask, _ -> {}, Function.identity(), _ -> {}, retained::close, outputs);
+            if (!roots.stream().allMatch(allocator::ownsVectorTree)) {
+                return new Batch(mask, _ -> {}, Function.identity(), _ -> {}, retained::close, outputs);
+            }
+            return Batch.retained(
+                    mask,
+                    retained::close,
+                    owner -> owner == allocator ? retained.tryDetachForAsyncRelease() : java.util.Optional.empty(),
+                    outputs);
         }
         catch (RuntimeException | Error failure) {
             if (lease != null) {

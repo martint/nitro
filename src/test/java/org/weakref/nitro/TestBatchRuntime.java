@@ -1250,6 +1250,47 @@ public class TestBatchRuntime
     }
 
     @Test
+    void testExclusiveVectorTreeLeasePromotesToAsyncOwnership()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            Allocator.Context owner = new Allocator.Context("Owner");
+            I64Vector values = I64Vector.allocate(allocator, owner, 32_768);
+            long[] storage = values.values();
+
+            Allocator.VectorTreeLease retained = allocator.leaseVectorTree(List.of(values));
+            Allocator.AsyncVectorTreeLease detached = retained.tryDetachForAsyncRelease().orElseThrow();
+
+            assertThat(allocator.residentBytes()).isZero();
+            retained.close();
+            detached.close();
+
+            try (Allocator consumer = new Allocator(resources)) {
+                assertThat(I64Vector.allocate(consumer, owner, 32_768).values()).isSameAs(storage);
+            }
+        }
+    }
+
+    @Test
+    void testSharedVectorTreeLeaseCannotPromoteToAsyncOwnership()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            Allocator.Context owner = new Allocator.Context("Owner");
+            I64Vector values = allocator.allocate(owner, I64Vector.class, 4, I64Vector::new);
+            Allocator.VectorTreeLease first = allocator.leaseVectorTree(List.of(values));
+            Allocator.VectorTreeLease second = allocator.leaseVectorTree(List.of(values));
+
+            assertThat(first.tryDetachForAsyncRelease()).isEmpty();
+            assertThat(allocator.canDetachVectorTreeForAsyncRelease(values)).isFalse();
+
+            first.close();
+            second.close();
+            assertThat(allocator.canDetachVectorTreeForAsyncRelease(values)).isTrue();
+        }
+    }
+
+    @Test
     void testVectorTreeLeaseRestoresLiveOwnerWithoutPooling()
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());
