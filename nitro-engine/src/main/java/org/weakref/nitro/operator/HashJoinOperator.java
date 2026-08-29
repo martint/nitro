@@ -262,8 +262,9 @@ public class HashJoinOperator
     private JoinIndex joinIndex;
 
     private Mask currentOuterMask;
-    // A constrained re-borrow keeps this join-owned mask reachable from the open upstream batch. Release it only
-    // after that batch closes; the upstream allocation context cannot return a mask owned by this join context.
+    // A constrained re-borrow keeps this join-owned mask reachable from the open upstream batch. Once that batch
+    // closes, the join refills the same allocator-accounted mask for the next batch instead of round-tripping it
+    // through the general mask pool. The upstream allocation context cannot own or release this join scratch.
     private Mask currentOuterConstraintMask;
     private Batch currentOuterBatch;
     private int currentOuterMaskIndex;
@@ -2897,16 +2898,15 @@ public class HashJoinOperator
         }
         outerConstrained = true;
         outerConstraintApplied = true;
-        if (currentOuterConstraintMask != null) {
-            throw new IllegalStateException("Current outer batch already has a join-owned constraint");
-        }
         Mask constraint = matchedOuterMask();
         try {
             probeSource.constrain(constraint);
             currentOuterConstraintMask = constraint;
         }
         catch (RuntimeException | Error failure) {
-            allocator.release(allocationContext, constraint);
+            if (currentOuterConstraintMask == null) {
+                allocator.release(allocationContext, constraint);
+            }
             throw failure;
         }
     }
@@ -2915,12 +2915,7 @@ public class HashJoinOperator
     {
         Batch batch = currentOuterBatch;
         currentOuterBatch = null;
-        try {
-            batch.close();
-        }
-        finally {
-            releaseCurrentOuterConstraintMask();
-        }
+        batch.close();
     }
 
     private void releaseCurrentOuterConstraintMask()
@@ -2949,11 +2944,7 @@ public class HashJoinOperator
     private Mask matchedOuterMask()
     {
         int totalPositions = currentOuterMask.size();
-        if (currentOutputCount == 0 || currentOutputMask.none()) {
-            return allocator.allocateEmptyMask(allocationContext, totalPositions);
-        }
-
-        int count = currentOutputMask.count();
+        int count = currentOutputCount == 0 || currentOutputMask.none() ? 0 : currentOutputMask.count();
         int capacity = Math.min(count, currentOuterMask.count());
         if (matchedOuterPositions.length < capacity) {
             int[] previousPositions = matchedOuterPositions;
@@ -2970,7 +2961,11 @@ public class HashJoinOperator
                 previous = outerPosition;
             }
         }
-        return allocator.allocateSparseMask(allocationContext, matchedOuterPositions, selectedCount, totalPositions);
+        if (currentOuterConstraintMask == null) {
+            return allocator.allocateSparseMask(allocationContext, matchedOuterPositions, selectedCount, totalPositions);
+        }
+        allocator.overwriteSparseMask(allocationContext, currentOuterConstraintMask, matchedOuterPositions, selectedCount, totalPositions);
+        return currentOuterConstraintMask;
     }
 
     private static Set<Stream> sideStreams(Output output)

@@ -138,6 +138,43 @@ class TestHashJoinSession
     }
 
     @Test
+    void testReusesJoinOwnedOuterConstraintAcrossProbeBatches()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                HashJoinSession session = new HashJoinSession(
+                        resources.operatorResources(),
+                        allocator,
+                        Schema.unspecified(1),
+                        new int[] {0},
+                        table(1, 2),
+                        new int[] {0},
+                        false)) {
+            allocator.beginExecution();
+            List<Mask> constraints = new ArrayList<>();
+
+            for (int batch = 0; batch < 2; batch++) {
+                I64Vector probeValues = new I64Vector(new long[] {1, 3});
+                session.addInput(new Batch(
+                        Mask.all(2),
+                        constraints::add,
+                        mask -> mask,
+                        new Output(Set.of(Stream.VALUES), _ -> probeValues)));
+
+                assertThat(session.hasOutput()).isTrue();
+                try (Batch output = session.getOutput()) {
+                    assertThat(VectorAccess.longValues(output.output(0).borrow(Stream.VALUES)).value(0)).isOne();
+                }
+                assertThat(session.hasOutput()).isFalse();
+            }
+
+            assertThat(constraints).hasSize(2);
+            assertThat(constraints.get(1)).isSameAs(constraints.get(0));
+            assertThat(constraints.get(1)).containsExactly(0);
+        }
+    }
+
+    @Test
     void testReleasesSupersededRetainedBuildConstraints()
     {
         try (EngineResources resources = EngineResources.createDefault();

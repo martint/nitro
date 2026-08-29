@@ -734,6 +734,34 @@ public class Allocator
         return mask;
     }
 
+    /**
+     * Replaces the selection of a mask that remains exclusively owned by {@code context}. This is intended for
+     * operator-lifetime scratch whose contents are retained by another operator only until the current batch closes;
+     * callers must not overwrite the mask while that batch is open. Keeping the mask checked out avoids a release and
+     * re-borrow through the general capacity-ordered pool on every batch while preserving allocator accounting.
+     */
+    public void overwriteSparseMask(Context context, Mask mask, int[] activePositions, int selectedCount, int totalPositions)
+    {
+        requireNonNull(mask, "mask is null");
+        requireNonNull(activePositions, "activePositions is null");
+        checkArgument(selectedCount >= 0 && selectedCount <= totalPositions, "invalid selected count");
+        checkArgument(activePositions.length >= selectedCount, "activePositions capacity is too small");
+        ContextState state = state(context);
+        checkArgument(mask.trackedBy(state), "mask is not owned by context");
+
+        if (selectedCount == 0) {
+            mask.clear(totalPositions);
+        }
+        else if (selectedCount == totalPositions && isAllPositions(activePositions, totalPositions)) {
+            mask.selectAll(totalPositions);
+        }
+        else {
+            int[] positions = mask.positionsArrayForOverwrite(selectedCount);
+            System.arraycopy(activePositions, 0, positions, 0, selectedCount);
+            mask.setSelection(totalPositions, selectedCount, false);
+        }
+    }
+
     public Mask allocateEmptyMask(Context context, int totalPositions)
     {
         ContextState state = state(context);

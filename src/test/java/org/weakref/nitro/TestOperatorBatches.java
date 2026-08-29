@@ -5215,7 +5215,7 @@ public class TestOperatorBatches
     }
 
     @Test
-    void testHashJoinOperatorReleasesOuterConstraintWithConsumedBatch()
+    void testHashJoinOperatorRetainsOuterConstraintUntilClose()
     {
         try (EngineResources resources = EngineResources.createDefault();
                 Allocator allocator = new Allocator(resources)) {
@@ -5225,24 +5225,30 @@ public class TestOperatorBatches
                     1,
                     Mask.all(3),
                     () -> new Output[] {new Output(Set.of(Stream.VALUES), _ -> outerValues)});
-            try (Operator join = new HashJoinOperator(
+            Operator join = new HashJoinOperator(
                     allocator,
                     outer,
                     0,
                     new ConstantTableOperator(allocator, 1, List.of(row(2L))),
-                    0)) {
+                    0);
+            long constrainedBatchBytes;
+            try {
                 try (Batch output = join.next()) {
                     assertThat(output.borrowMask().count()).isOne();
                     assertThat(longValue(output.output(0).borrow(Stream.VALUES), 0)).isEqualTo(2L);
                 }
 
                 Allocator.Context joinContext = new Allocator.Context("HashJoinOperator");
-                long constrainedBatchBytes = allocator.currentBytes(joinContext);
+                constrainedBatchBytes = allocator.currentBytes(joinContext);
                 try (Batch terminal = join.next()) {
                     assertThat(terminal.borrowMask().none()).isTrue();
                 }
-                assertThat(allocator.currentBytes(joinContext)).isLessThan(constrainedBatchBytes);
+                assertThat(allocator.currentBytes(joinContext)).isEqualTo(constrainedBatchBytes);
             }
+            finally {
+                join.close();
+            }
+            assertThat(allocator.currentBytes(new Allocator.Context("HashJoinOperator"))).isLessThan(constrainedBatchBytes);
         }
     }
 

@@ -48,6 +48,22 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class TestAllocator
 {
     @Test
+    void testOverwritesCheckedOutSparseMaskWithoutChangingOwnership()
+    {
+        try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
+            Allocator.Context context = new Allocator.Context("retained-mask");
+            Mask mask = allocator.allocateSparseMask(context, new int[] {1, 3}, 4);
+            long bytes = allocator.currentBytes(context);
+
+            allocator.overwriteSparseMask(context, mask, new int[] {0, 2, 4}, 3, 5);
+
+            assertThat(mask).containsExactly(0, 2, 4);
+            assertThat(allocator.currentBytes(context)).isEqualTo(bytes);
+            allocator.release(context, mask);
+        }
+    }
+
+    @Test
     void testComplementMaskPreservesCompactDictionaryDomainAcrossPoolReuse()
     {
         try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
