@@ -2785,6 +2785,37 @@ class FlatKeyLayout
                 distinctPositions);
     }
 
+    int assignGeneratedDictionaryDistinctSelectedBatch(
+            int count,
+            int[] selectedPositions,
+            FlatGroupingTable table,
+            Vector[] values,
+            Vector[] nulls,
+            long nextGroupId,
+            long[] hashScratch,
+            int[] distinctPositions)
+    {
+        DictionaryHashBatchKernel kernel = generatedDictionaryHashKernel(count);
+        if (kernel == null) {
+            return -1;
+        }
+        return kernel.assignDistinctSelected(
+                count,
+                dictionaryHashedIds,
+                dictionaryEntryHashes,
+                fieldLong,
+                fieldBoolean,
+                fieldBinaryHashes,
+                fieldNullAccess,
+                table,
+                values,
+                nulls,
+                nextGroupId,
+                hashScratch,
+                distinctPositions,
+                selectedPositions);
+    }
+
     private DictionaryHashBatchKernel generatedDictionaryHashKernel(int count)
     {
         int hybridMinimumFields = anyVariableWidth

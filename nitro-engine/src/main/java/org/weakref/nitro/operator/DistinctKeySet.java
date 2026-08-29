@@ -1221,13 +1221,20 @@ final class DistinctKeySet
 
         private int addGeneratedPhysicalBatch(Vector[] values, Vector[] nulls, Mask mask, int[] distinctPositions)
         {
-            if (!mask.all()) {
-                return -1;
-            }
-            if (generatedHashScratch == null || generatedHashScratch.length < mask.size()) {
+            int positionCount = mask.selectedCount();
+            if (generatedHashScratch == null || generatedHashScratch.length < positionCount) {
                 long[] previous = generatedHashScratch;
-                generatedHashScratch = arrayPool.borrowLongs(mask.size());
+                generatedHashScratch = arrayPool.borrowLongs(positionCount);
                 arrayPool.release(previous);
+            }
+            if (!mask.all()) {
+                return table.assignGeneratedDictionaryDistinctSelectedBatch(
+                        values,
+                        nulls,
+                        mask,
+                        generatedHashScratch,
+                        distinctPositions,
+                        table.recordCount());
             }
             return table.assignGeneratedDictionaryDistinctBatch(
                     values,

@@ -449,6 +449,34 @@ final class FlatGroupingTable
                 distinctPositions);
     }
 
+    int assignGeneratedDictionaryDistinctSelectedBatch(
+            Vector[] values,
+            Vector[] nulls,
+            Mask mask,
+            long[] hashScratch,
+            int[] distinctPositions,
+            long nextGroupId)
+    {
+        prepareSingleDictionaryGroupCache(mask.selectedCount(), false);
+        considerSparseCompositeAdmission(mask);
+        if (!policy.generatedDictionaryHashProbeBatch() ||
+                mask.none() ||
+                mask.all() ||
+                skipBatchHashPrecompute() ||
+                layout.batchSupportsNormalizedIntKey()) {
+            return -1;
+        }
+        return layout.assignGeneratedDictionaryDistinctSelectedBatch(
+                mask.selectedCount(),
+                mask.selectedPositions(),
+                this,
+                values,
+                nulls,
+                nextGroupId,
+                hashScratch,
+                distinctPositions);
+    }
+
     long assignNormalizedIntBatch(
             Vector[] values,
             Vector[] nulls,

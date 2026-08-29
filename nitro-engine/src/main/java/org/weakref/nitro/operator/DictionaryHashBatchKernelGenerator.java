@@ -66,6 +66,10 @@ final class DictionaryHashBatchKernelGenerator
             CD_int,
             CD_int, CD_INT_ARRAY_ARRAY, CD_LONG_ARRAY_ARRAY, CD_LONG_VALUES_ARRAY, CD_BOOLEAN_VALUES_ARRAY, CD_BINARY_HASHES_ARRAY, CD_BOOLEAN_VALUES_ARRAY,
             CD_TABLE, CD_VECTOR_ARRAY, CD_VECTOR_ARRAY, CD_long, CD_LONG_ARRAY, CD_INT_ARRAY);
+    private static final MethodTypeDesc ASSIGN_DISTINCT_SELECTED_TYPE = MethodTypeDesc.of(
+            CD_int,
+            CD_int, CD_INT_ARRAY_ARRAY, CD_LONG_ARRAY_ARRAY, CD_LONG_VALUES_ARRAY, CD_BOOLEAN_VALUES_ARRAY, CD_BINARY_HASHES_ARRAY, CD_BOOLEAN_VALUES_ARRAY,
+            CD_TABLE, CD_VECTOR_ARRAY, CD_VECTOR_ARRAY, CD_long, CD_LONG_ARRAY, CD_INT_ARRAY, CD_INT_ARRAY);
     private static final MethodTypeDesc BOOLEAN_VALUE_TYPE = MethodTypeDesc.of(CD_boolean, CD_int);
     private static final MethodTypeDesc LONG_VALUE_TYPE = MethodTypeDesc.of(CD_long, CD_int);
     private static final MethodTypeDesc BINARY_HASH_TYPE = MethodTypeDesc.of(CD_long, CD_int);
@@ -103,6 +107,15 @@ final class DictionaryHashBatchKernelGenerator
     private static final int DISTINCT_TILE_END = 20;
     private static final int DISTINCT_TILE_START = 21;
     private static final int DISTINCT_COUNT = 22;
+
+    private static final int SELECTED_POSITIONS = 15;
+    private static final int SELECTED_INDEX = 16;
+    private static final int SELECTED_POSITION = 17;
+    private static final int SELECTED_HASH = 18;
+    private static final int SELECTED_GROUP_ID = 20;
+    private static final int SELECTED_TILE_END = 22;
+    private static final int SELECTED_TILE_START = 23;
+    private static final int SELECTED_COUNT = 24;
 
     private final ConcurrentHashMap<KernelShape, DictionaryHashBatchKernel> kernels = new ConcurrentHashMap<>();
     private boolean closed;
@@ -174,6 +187,16 @@ final class DictionaryHashBatchKernelGenerator
                     ASSIGN_DISTINCT_TYPE,
                     ClassFile.ACC_PUBLIC,
                     code -> emitAssignDistinct(
+                            code,
+                            shape,
+                            fieldCount,
+                            kernelShape.assignTileRows(),
+                            kernelShape.discriminatingHashField()));
+            builder.withMethodBody(
+                    "assignDistinctSelected",
+                    ASSIGN_DISTINCT_SELECTED_TYPE,
+                    ClassFile.ACC_PUBLIC,
+                    code -> emitAssignDistinctSelected(
                             code,
                             shape,
                             fieldCount,
@@ -462,6 +485,104 @@ final class DictionaryHashBatchKernelGenerator
         code.goto_(tileTop);
         code.labelBinding(exit);
         code.iload(DISTINCT_COUNT);
+        code.ireturn();
+    }
+
+    /** Emits the same tiled hash/probe loop over a compact array of selected physical positions. */
+    private static void emitAssignDistinctSelected(CodeBuilder code, long shape, int fieldCount, int assignTileRows, int discriminatingHashField)
+    {
+        code.loadConstant(0);
+        code.istore(SELECTED_TILE_START);
+        code.loadConstant(0);
+        code.istore(SELECTED_COUNT);
+        Label tileTop = code.newLabel();
+        Label exit = code.newLabel();
+        code.labelBinding(tileTop);
+        code.iload(SELECTED_TILE_START);
+        code.iload(COUNT);
+        code.if_icmpge(exit);
+
+        code.iload(SELECTED_TILE_START);
+        code.loadConstant(assignTileRows);
+        code.iadd();
+        code.istore(SELECTED_TILE_END);
+        Label boundedTile = code.newLabel();
+        code.iload(SELECTED_TILE_END);
+        code.iload(COUNT);
+        code.if_icmple(boundedTile);
+        code.iload(COUNT);
+        code.istore(SELECTED_TILE_END);
+        code.labelBinding(boundedTile);
+
+        code.iload(SELECTED_TILE_START);
+        code.istore(SELECTED_INDEX);
+        Label hashTop = code.newLabel();
+        Label probeStart = code.newLabel();
+        code.labelBinding(hashTop);
+        code.iload(SELECTED_INDEX);
+        code.iload(SELECTED_TILE_END);
+        code.if_icmpge(probeStart);
+        code.aload(SELECTED_POSITIONS);
+        code.iload(SELECTED_INDEX);
+        code.iaload();
+        code.istore(SELECTED_POSITION);
+        emitRowHash(code, shape, fieldCount, discriminatingHashField, SELECTED_POSITION, SELECTED_HASH);
+        code.aload(DISTINCT_HASH_SCRATCH);
+        code.iload(SELECTED_INDEX);
+        code.lload(SELECTED_HASH);
+        code.lastore();
+        code.iinc(SELECTED_INDEX, 1);
+        code.goto_(hashTop);
+
+        code.labelBinding(probeStart);
+        code.iload(SELECTED_TILE_START);
+        code.istore(SELECTED_INDEX);
+        Label probeTop = code.newLabel();
+        Label tileDone = code.newLabel();
+        code.labelBinding(probeTop);
+        code.iload(SELECTED_INDEX);
+        code.iload(SELECTED_TILE_END);
+        code.if_icmpge(tileDone);
+        code.aload(SELECTED_POSITIONS);
+        code.iload(SELECTED_INDEX);
+        code.iaload();
+        code.istore(SELECTED_POSITION);
+        code.aload(DISTINCT_HASH_SCRATCH);
+        code.iload(SELECTED_INDEX);
+        code.laload();
+        code.lstore(SELECTED_HASH);
+        code.aload(ASSIGN_TABLE);
+        code.aload(ASSIGN_VALUES);
+        code.aload(ASSIGN_NULLS);
+        code.iload(SELECTED_POSITION);
+        code.lload(ASSIGN_NEXT_GROUP_ID);
+        code.lload(SELECTED_HASH);
+        code.invokevirtual(CD_TABLE, "assignGroupWithHash", ASSIGN_HASH_TYPE);
+        code.lstore(SELECTED_GROUP_ID);
+        Label existing = code.newLabel();
+        code.lload(SELECTED_GROUP_ID);
+        code.lload(ASSIGN_NEXT_GROUP_ID);
+        code.lcmp();
+        code.ifne(existing);
+        code.aload(DISTINCT_OUTPUT);
+        code.iload(SELECTED_COUNT);
+        code.iload(SELECTED_POSITION);
+        code.iastore();
+        code.iinc(SELECTED_COUNT, 1);
+        code.lload(ASSIGN_NEXT_GROUP_ID);
+        code.loadConstant(1L);
+        code.ladd();
+        code.lstore(ASSIGN_NEXT_GROUP_ID);
+        code.labelBinding(existing);
+
+        code.iinc(SELECTED_INDEX, 1);
+        code.goto_(probeTop);
+        code.labelBinding(tileDone);
+        code.iload(SELECTED_TILE_END);
+        code.istore(SELECTED_TILE_START);
+        code.goto_(tileTop);
+        code.labelBinding(exit);
+        code.iload(SELECTED_COUNT);
         code.ireturn();
     }
 

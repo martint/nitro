@@ -172,6 +172,55 @@ class TestDistinctKeySet
     }
 
     @Test
+    void testGeneratedPhysicalFlatDistinctConsumesSparsePositions()
+    {
+        int size = 512;
+        String[] labels = new String[size];
+        long[] first = new long[size];
+        long[] second = new long[size];
+        int[] selected = new int[size / 2];
+        for (int position = 0; position < size; position++) {
+            labels[position] = "label-" + (position % 8);
+            first[position] = position % 16;
+            second[position] = position / 16;
+            if ((position & 1) == 0) {
+                selected[position / 2] = position;
+            }
+        }
+        // Both rows are selected; the generated sparse driver must report the first physical position.
+        labels[258] = labels[256];
+        first[258] = first[256];
+        second[258] = second[256];
+        Vector[] values = {utf8(labels), new I64Vector(first), new I64Vector(second)};
+        Vector[] nulls = {null, null, null};
+
+        try (Allocator allocator = new Allocator(engineResources)) {
+            DistinctKeySet keys = DistinctKeySet.create(
+                    values,
+                    List.of(),
+                    allocator,
+                    new Allocator.Context("generated-sparse-flat-distinct"),
+                    arrayPool,
+                    codeGeneration,
+                    DistinctKeySetPolicy.defaults(),
+                    adaptiveLongGroupingPolicy,
+                    flatKeyTablePolicy);
+            try {
+                int[] positions = new int[size];
+                int distinct = keys.addBatch(values, nulls, Mask.sparse(selected, size), positions);
+                assertThat(distinct).isEqualTo(selected.length - 1);
+                assertThat(Arrays.copyOf(positions, distinct))
+                        .contains(256)
+                        .doesNotContain(258);
+                assertThat(keys.addBatch(values, nulls, Mask.sparse(selected, size), positions)).isZero();
+            }
+            finally {
+                keys.releaseBuffers();
+            }
+        }
+    }
+
+    @Test
     void testFlatDistinctUsesProviderCanonicalLongStorage()
     {
         BinaryVector labels = new BinaryVector(3, 3);

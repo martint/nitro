@@ -62,4 +62,20 @@ interface DictionaryHashBatchKernel
             long nextGroupId,
             long[] hashScratch,
             int[] distinctPositions);
+
+    int assignDistinctSelected(
+            int count,
+            int[][] dictionaryIds,
+            long[][] entryHashes,
+            VectorAccess.LongValues[] longValues,
+            VectorAccess.BooleanValues[] booleanValues,
+            BinaryHashes[] binaryHashes,
+            VectorAccess.BooleanValues[] nulls,
+            FlatGroupingTable table,
+            Vector[] values,
+            Vector[] nullVectors,
+            long nextGroupId,
+            long[] hashScratch,
+            int[] distinctPositions,
+            int[] selectedPositions);
 }
