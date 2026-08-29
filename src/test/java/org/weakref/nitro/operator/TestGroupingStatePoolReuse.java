@@ -24,6 +24,7 @@ import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.PrimitiveArrayPool;
+import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.execution.EngineResources;
@@ -116,21 +117,27 @@ public class TestGroupingStatePoolReuse
             DictionaryVector dictionary = new DictionaryVector(
                     new int[] {0, 1, 2, 3, 0, 2},
                     new I64Vector(new long[] {1, -1, 2, -2}));
-            state.initializeSchema(new Vector[] {dictionary}, new Vector[] {null}, Mask.all(dictionary.length()));
+            BooleanVector nulls = new BooleanVector(new boolean[] {false, false, false, false, true, false});
+            state.initializeSchema(new Vector[] {dictionary}, new Vector[] {nulls}, Mask.all(dictionary.length()));
 
             int[] counts = new int[5];
             int[] domainGroups = new int[5];
-            int[] representatives = new int[4];
+            int[] representatives = new int[5];
             assertThat(state.assignSingleDictionaryDomain(
                     dictionary,
-                    null,
+                    nulls,
                     Mask.all(dictionary.length()),
                     counts,
                     domainGroups,
                     representatives)).isEqualTo(5);
-            assertThat(counts).containsExactly(2, 1, 2, 1, 0);
+            assertThat(counts).containsExactly(1, 1, 2, 1, 1);
             assertThat(domainGroups).startsWith(0, 0, 1, 1);
-            assertThat(state.groupCount()).isEqualTo(2);
+            assertThat(domainGroups[4]).isEqualTo(2);
+            assertThat(state.groupCount()).isEqualTo(3);
+
+            Streams grouped = state.groupedValues(0, Mask.all(3), null, allocator, context);
+            assertThat(((I64Vector) grouped.values()).values()).containsExactly(1, 2, 1);
+            assertThat(((BooleanVector) grouped.get(Stream.NULLS)).values()).containsExactly(false, false, true);
 
             state.releaseBuffers();
             allocator.release(context);

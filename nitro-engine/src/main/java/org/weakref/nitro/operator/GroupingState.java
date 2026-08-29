@@ -2741,7 +2741,7 @@ final class GroupingState
         int domainSize = dictionary.values().length();
         int slots = domainSize + 1;
         Arrays.fill(counts, 0, slots, 0);
-        Arrays.fill(representatives, 0, domainSize, -1);
+        Arrays.fill(representatives, 0, slots, -1);
 
         int[] ids = dictionary.ids();
         int used = 0;
@@ -2762,9 +2762,7 @@ final class GroupingState
                 int domain = OperatorVectorSupport.isNull(nullVector, position) ? domainSize : ids[position];
                 if (counts[domain]++ == 0) {
                     used++;
-                    if (domain < domainSize) {
-                        representatives[domain] = position;
-                    }
+                    representatives[domain] = position;
                 }
             }
         }
@@ -2817,7 +2815,20 @@ final class GroupingState
             }
         }
         if (counts[domainSize] != 0) {
-            domainGroups[domainSize] = toIntExact(nullGroup());
+            if (structuralGrouping != null) {
+                long groupId = structuralGrouping.assignGroup(
+                        new Vector[] {dictionary},
+                        new Vector[] {nullVector},
+                        representatives[domainSize],
+                        nextGroupId);
+                if (groupId == nextGroupId) {
+                    nextGroupId++;
+                }
+                domainGroups[domainSize] = toIntExact(groupId);
+            }
+            else {
+                domainGroups[domainSize] = toIntExact(nullGroup());
+            }
         }
         accountRetainedState();
         return slots;
@@ -3689,8 +3700,9 @@ final class GroupingState
             Vector[] ownedNulls = copyNullableVectors(nulls, positions);
             for (int position = 0; position < newGroupCount; position++) {
                 StructuralGroupingKey key = new StructuralGroupingKey(kernels, ownedValues, ownedNulls, position);
-                groups.put(key, nextGroupId + position);
-                representatives.add(key);
+                long groupId = nextGroupId + position;
+                groups.put(key, groupId);
+                setRepresentative(groupId, key);
             }
             return nextGroupId + newGroupCount;
         }
@@ -3733,10 +3745,39 @@ final class GroupingState
             Vector[] ownedValues = copyVectors(values, positions);
             for (int position = 0; position < newGroupCount; position++) {
                 StructuralGroupingKey key = new StructuralGroupingKey(kernels, ownedValues, nulls, position);
-                groups.put(key, nextGroupId + position);
-                representatives.add(key);
+                long groupId = nextGroupId + position;
+                groups.put(key, groupId);
+                setRepresentative(groupId, key);
             }
             return nextGroupId + newGroupCount;
+        }
+
+        private long assignGroup(Vector[] values, Vector[] nulls, int position, long nextGroupId)
+        {
+            reusableProbe.set(values, nulls, position);
+            long groupId = groups.getLong(reusableProbe);
+            if (groupId != -1) {
+                return groupId;
+            }
+
+            int[] positions = {position};
+            Vector[] ownedValues = copyVectors(values, positions);
+            Vector[] ownedNulls = copyNullableVectors(nulls, positions);
+            StructuralGroupingKey key = new StructuralGroupingKey(kernels, ownedValues, ownedNulls, 0);
+            groups.put(key, nextGroupId);
+            setRepresentative(nextGroupId, key);
+            return nextGroupId;
+        }
+
+        private void setRepresentative(long groupId, StructuralGroupingKey key)
+        {
+            int index = toIntExact(groupId);
+            while (representatives.size() <= index) {
+                representatives.add(null);
+            }
+            if (representatives.set(index, key) != null) {
+                throw new IllegalStateException("Structural group already has a representative: " + groupId);
+            }
         }
 
         private boolean contains(Vector[] values, Vector[] nulls, int position)
