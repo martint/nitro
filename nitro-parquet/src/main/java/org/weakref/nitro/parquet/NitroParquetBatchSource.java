@@ -2578,12 +2578,14 @@ public final class NitroParquetBatchSource
                         outputResolver);
                 continue;
             }
-            // Allocate at the fixed window batch capacity, not the (variable) partial-slice length, so the vector pool
-            // hits every time instead of missing on each window's final short slice. Only [0, sliceCount) is written
-            // and only that range is exposed (the batch mask below is sliceCount positions); consumers honor the mask,
-            // never the backing length.
+            // Fixed-width vectors use the stable window capacity so the pool hits every time. Variable-width output
+            // must use its exact logical size: its offsets and payload are retained across downstream aggregation and
+            // exchange boundaries, where a short survivor slice must not carry a mostly unused million-row backing.
+            int outputCapacity = readers[c].kind() == ColumnReader.Kind.BINARY
+                    ? sliceCount
+                    : batchPolicy.maxRows();
             BooleanVector nullVector = nullable[c]
-                    ? allocator.allocate(allocationContext, BooleanVector.class, batchPolicy.maxRows(), BooleanVector::new)
+                    ? allocator.allocate(allocationContext, BooleanVector.class, outputCapacity, BooleanVector::new)
                     : null;
             Vector valueVector;
             if (readers[c].kind() == ColumnReader.Kind.INT) {
@@ -2605,7 +2607,7 @@ public final class NitroParquetBatchSource
                                 windowSlicePositions,
                                 sliceCount,
                                 0,
-                                batchPolicy.maxRows());
+                                sliceCount);
             }
             else if (readers[c].isDouble()) {
                 valueVector = longBitsToDoubles(windowLong[c], start, sliceCount, batchPolicy.maxRows());

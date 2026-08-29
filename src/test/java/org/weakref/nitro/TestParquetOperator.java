@@ -1418,6 +1418,7 @@ public class TestParquetOperator
                 try (var batch = ready.batch()) {
                     var keys = VectorAccess.longValues(batch.column(0).borrow(Stream.VALUES));
                     org.weakref.nitro.data.Vector payload = batch.column(1).borrow(Stream.VALUES);
+                    assertThat(payload.length()).isEqualTo(batch.selection().count());
                     BinaryVector binary = binaryValues(payload);
                     int[] ids = payload instanceof DictionaryVector dictionary ? dictionary.ids() : null;
                     for (int index = 0; index < batch.selection().count(); index++) {
@@ -1466,6 +1467,7 @@ public class TestParquetOperator
                 try (var batch = ready.batch()) {
                     var keys = VectorAccess.longValues(batch.column(0).borrow(Stream.VALUES));
                     org.weakref.nitro.data.Vector payload = batch.column(1).borrow(Stream.VALUES);
+                    assertThat(payload.length()).isEqualTo(batch.selection().count());
                     BinaryVector binary = binaryValues(payload);
                     int[] ids = payload instanceof DictionaryVector dictionary ? dictionary.ids() : null;
                     for (int index = 0; index < batch.selection().count(); index++) {
