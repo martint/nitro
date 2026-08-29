@@ -178,6 +178,7 @@ public final class KeyOnlyGroupingSession
                 values[key] = output.borrow(Stream.VALUES);
                 nulls[key] = output.borrowOrNull(Stream.NULLS);
             }
+            candidateMask = dictionaryDomainCandidates(inputMask);
             if (distinctKeySet == null) {
                 distinctKeySet = DistinctKeySet.create(
                         values,
@@ -189,9 +190,9 @@ public final class KeyOnlyGroupingSession
                         operatorResources.codeGeneration(),
                         distinctKeySetPolicy,
                         operatorResources.adaptiveLongGroupingPolicy(),
-                        operatorResources.flatKeyTablePolicy());
+                        operatorResources.flatKeyTablePolicy(),
+                        candidateMask.selectedCount());
             }
-            candidateMask = dictionaryDomainCandidates(inputMask);
             ensureDistinctPositionCapacity(candidateMask.selectedCount());
             distinctKeySet.reserveAdditional(candidateMask.selectedCount());
             long start = System.nanoTime();

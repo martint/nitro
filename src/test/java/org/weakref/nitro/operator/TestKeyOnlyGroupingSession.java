@@ -196,6 +196,39 @@ class TestKeyOnlyGroupingSession
     }
 
     @Test
+    void testSizesInitialDistinctStateFromSelectedRows()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                KeyOnlyGroupingSession session = new KeyOnlyGroupingSession(
+                        allocator,
+                        Schema.unspecified(1),
+                        List.of(0),
+                        List.of(0),
+                        resources.operatorResources())) {
+            allocator.beginExecution();
+            int addressablePositions = 1_000_000;
+            long[] values = new long[addressablePositions];
+            values[0] = 11;
+            values[addressablePositions / 2] = 22;
+            values[addressablePositions - 1] = 33;
+            try (Batch input = new Batch(
+                    Mask.sparse(new int[] {0, addressablePositions / 2, addressablePositions - 1}, addressablePositions),
+                    Output.of(Streams.ofValuesAndNulls(
+                            new I64Vector(values),
+                            new BooleanVector(new boolean[addressablePositions]))))) {
+                session.addInput(input);
+            }
+            try (Batch output = session.getOutput()) {
+                assertThat(selectedValues(output)).containsExactly(11L, 22L, 33L);
+            }
+
+            // The retained grouping state follows the three selected rows, not the million-position vector domain.
+            assertThat(session.retainedBytes()).isLessThan(1_000_000);
+        }
+    }
+
+    @Test
     void testDictionaryDomainGroupingPreservesNullAndValueRepresentatives()
     {
         try (EngineResources resources = EngineResources.createDefault();

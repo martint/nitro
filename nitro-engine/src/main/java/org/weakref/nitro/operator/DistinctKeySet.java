@@ -232,6 +232,42 @@ final class DistinctKeySet
                 flatKeyTablePolicy);
     }
 
+    /**
+     * Creates a distinct-key set sized for the rows that can actually reach it. The physical vectors may retain a
+     * much larger addressable domain after an upstream filter, so using their length here can eagerly allocate and
+     * clear a table for rows excluded by the mask.
+     */
+    public static DistinctKeySet create(
+            Vector[] samples,
+            boolean retainNulls,
+            List<TypeBinding> keyTypes,
+            Allocator allocator,
+            Allocator.Context allocationContext,
+            PrimitiveArrayPool arrayPool,
+            OperatorCodeGenerationResources codeGeneration,
+            DistinctKeySetPolicy policy,
+            AdaptiveLongGroupingPolicy adaptiveLongGroupingPolicy,
+            FlatKeyTablePolicy flatKeyTablePolicy,
+            int expectedSize)
+    {
+        if (expectedSize < 0) {
+            throw new IllegalArgumentException("expectedSize is negative");
+        }
+        return createWithUnboundPrefix(
+                samples,
+                retainNulls,
+                0,
+                keyTypes,
+                allocator,
+                allocationContext,
+                arrayPool,
+                codeGeneration,
+                policy,
+                adaptiveLongGroupingPolicy,
+                flatKeyTablePolicy,
+                expectedSize);
+    }
+
     static DistinctKeySet createWithUnboundPrefix(
             Vector[] samples,
             boolean retainNulls,
@@ -244,6 +280,35 @@ final class DistinctKeySet
             DistinctKeySetPolicy policy,
             AdaptiveLongGroupingPolicy adaptiveLongGroupingPolicy,
             FlatKeyTablePolicy flatKeyTablePolicy)
+    {
+        return createWithUnboundPrefix(
+                samples,
+                retainNulls,
+                unboundKeyPrefix,
+                keyTypes,
+                allocator,
+                allocationContext,
+                arrayPool,
+                codeGeneration,
+                policy,
+                adaptiveLongGroupingPolicy,
+                flatKeyTablePolicy,
+                samples[0].length());
+    }
+
+    private static DistinctKeySet createWithUnboundPrefix(
+            Vector[] samples,
+            boolean retainNulls,
+            int unboundKeyPrefix,
+            List<TypeBinding> keyTypes,
+            Allocator allocator,
+            Allocator.Context allocationContext,
+            PrimitiveArrayPool arrayPool,
+            OperatorCodeGenerationResources codeGeneration,
+            DistinctKeySetPolicy policy,
+            AdaptiveLongGroupingPolicy adaptiveLongGroupingPolicy,
+            FlatKeyTablePolicy flatKeyTablePolicy,
+            int expectedSize)
     {
         validateKeyVectors(keyTypes, unboundKeyPrefix, samples);
         StructuralKeyKernel[] kernels = structuralKeyKernels(samples.length, unboundKeyPrefix, keyTypes, codeGeneration);
@@ -265,7 +330,8 @@ final class DistinctKeySet
                 codeGeneration,
                 policy,
                 adaptiveLongGroupingPolicy,
-                flatKeyTablePolicy);
+                flatKeyTablePolicy,
+                expectedSize);
         if (retainNulls) {
             index = new RetainNullsDistinctIndex(index, samples.length, arrayPool, policy);
         }
@@ -307,14 +373,15 @@ final class DistinctKeySet
             OperatorCodeGenerationResources codeGeneration,
             DistinctKeySetPolicy policy,
             AdaptiveLongGroupingPolicy adaptiveLongGroupingPolicy,
-            FlatKeyTablePolicy flatKeyTablePolicy)
+            FlatKeyTablePolicy flatKeyTablePolicy,
+            int expectedSize)
     {
         if (samples.length == 1 && isIntegerVector(samples[0])) {
-            return new LongDistinctIndex(Math.max(16, samples[0].length()), arrayPool, policy);
+            return new LongDistinctIndex(Math.max(16, expectedSize), arrayPool, policy);
         }
         if (samples.length == 2 && isIntegerVector(samples[0]) && isIntegerVector(samples[1])) {
             return new LongPairDistinctIndex(
-                    Math.max(16, samples[0].length()),
+                    Math.max(16, expectedSize),
                     policy.adaptiveCompactLongPair() && admitsAdaptiveCompactLongPair(samples, policy),
                     arrayPool,
                     codeGeneration,
@@ -327,22 +394,22 @@ final class DistinctKeySet
                 allIntegerVectors(samples)) {
             return new AdaptiveMultiLongDistinctIndex(
                     samples.length,
-                    Math.max(16, samples[0].length()),
+                    Math.max(16, expectedSize),
                     arrayPool,
                     codeGeneration,
                     policy,
                     adaptiveLongGroupingPolicy);
         }
         if (samples.length == 3 && isIntegerVector(samples[0]) && isIntegerVector(samples[1]) && isIntegerVector(samples[2])) {
-            return new LongTripleDistinctIndex(Math.max(16, samples[0].length()));
+            return new LongTripleDistinctIndex(Math.max(16, expectedSize));
         }
         if (samples.length == 4 && isIntegerVector(samples[0]) && isIntegerVector(samples[1]) && isIntegerVector(samples[2]) && isIntegerVector(samples[3])) {
-            return new LongQuadDistinctIndex(Math.max(16, samples[0].length()));
+            return new LongQuadDistinctIndex(Math.max(16, expectedSize));
         }
         if (samples.length >= 5 && samples.length <= AbstractMultiLongGroupingTable.MAX_ARITY && allIntegerVectors(samples)) {
             return new MultiLongDistinctIndex(
                     samples.length,
-                    Math.max(16, samples[0].length()),
+                    Math.max(16, expectedSize),
                     arrayPool,
                     codeGeneration,
                     adaptiveLongGroupingPolicy);
@@ -355,7 +422,7 @@ final class DistinctKeySet
                 flatKeyTablePolicy,
                 flatKeyTypes(samples.length, keyTypes, unboundKeyPrefix));
         if (layout != null) {
-            return new FlatDistinctIndex(layout, Math.max(16, samples[0].length()), arrayPool, policy);
+            return new FlatDistinctIndex(layout, Math.max(16, expectedSize), arrayPool, policy);
         }
         return new ObjectDistinctIndex(samples.length);
     }
