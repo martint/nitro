@@ -1362,6 +1362,34 @@ public class TestParquetOperator
     }
 
     @Test
+    void testNitroParquetLocalSplitAppliesOrdinalLogicalBinding()
+            throws IOException
+    {
+        java.nio.file.Path file = writeParquetFile("ordinal-logical-binding.parquet", false, List.of(
+                new ParquetRow(10, true, 100L),
+                new ParquetRow(20, false, null),
+                new ParquetRow(30, true, 300L)));
+        Schema schema = new Schema(List.of(new Field("logical_x", STRUCT_BIGINT, false)));
+
+        try (AllocationResources allocationResources = AllocationResources.createDefault();
+                Allocator allocator = new Allocator(allocationResources);
+                NitroParquetBatchSource source = NitroParquetBatchSource.forSplitsByOrdinal(
+                        NitroParquetScanResources.createDefault(),
+                        allocator,
+                        List.of(NitroParquetBatchSource.Split.wholeFile(file)),
+                        schema,
+                        List.of(0),
+                        Map.of(0, multiplyingLongBinding(2)))) {
+            SourcePoll.Ready ready = (SourcePoll.Ready) source.poll();
+            try (var batch = ready.batch()) {
+                VectorAccess.LongValues x = VectorAccess.longValues(batch.column(0).borrow(Stream.VALUES));
+                assertThat(new long[] {x.value(0), x.value(1), x.value(2)})
+                        .containsExactly(20, 40, 60);
+            }
+        }
+    }
+
+    @Test
     void testNitroParquetSourcePrunesMixedPayloadRowGroups()
             throws IOException
     {

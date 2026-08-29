@@ -403,7 +403,7 @@ public final class NitroParquetBatchSource
             List<Split> splits,
             Schema schema,
             ParquetColumnNameMatching columnNameMatching,
-            Map<Integer, ParquetPrimitiveValueBinding> logicalValueBindings)
+            Map<Integer, ? extends ParquetValueBinding> logicalValueBindings)
     {
         return new NitroParquetBatchSource(
                 resources,
@@ -412,7 +412,7 @@ public final class NitroParquetBatchSource
                 schema,
                 columnNameMatching,
                 null,
-                logicalValueBindings);
+                primitiveBindings(copyValueBindings(logicalValueBindings)));
     }
 
     public static NitroParquetBatchSource forSplitsByOrdinal(
@@ -422,6 +422,17 @@ public final class NitroParquetBatchSource
             Schema schema,
             List<Integer> sourceOrdinals)
     {
+        return forSplitsByOrdinal(resources, allocator, splits, schema, sourceOrdinals, Map.of());
+    }
+
+    public static NitroParquetBatchSource forSplitsByOrdinal(
+            NitroParquetScanResources resources,
+            Allocator allocator,
+            List<Split> splits,
+            Schema schema,
+            List<Integer> sourceOrdinals,
+            Map<Integer, ? extends ParquetValueBinding> logicalValueBindings)
+    {
         return new NitroParquetBatchSource(
                 resources,
                 allocator,
@@ -429,7 +440,7 @@ public final class NitroParquetBatchSource
                 schema,
                 ParquetColumnNameMatching.EXACT,
                 List.copyOf(sourceOrdinals),
-                Map.of());
+                primitiveBindings(copyValueBindings(logicalValueBindings)));
     }
 
     public static BatchSource forInputs(
