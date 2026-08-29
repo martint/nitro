@@ -141,6 +141,34 @@ final class DistinctKeySet
             AdaptiveLongGroupingPolicy adaptiveLongGroupingPolicy,
             FlatKeyTablePolicy flatKeyTablePolicy)
     {
+        return createGroupedLong(
+                samples,
+                keyTypes,
+                allocator,
+                allocationContext,
+                arrayPool,
+                codeGeneration,
+                policy,
+                adaptiveLongGroupingPolicy,
+                flatKeyTablePolicy,
+                samples[0].length());
+    }
+
+    public static DistinctKeySet createGroupedLong(
+            Vector[] samples,
+            List<TypeBinding> keyTypes,
+            Allocator allocator,
+            Allocator.Context allocationContext,
+            PrimitiveArrayPool arrayPool,
+            OperatorCodeGenerationResources codeGeneration,
+            DistinctKeySetPolicy policy,
+            AdaptiveLongGroupingPolicy adaptiveLongGroupingPolicy,
+            FlatKeyTablePolicy flatKeyTablePolicy,
+            int expectedSize)
+    {
+        if (expectedSize < 0) {
+            throw new IllegalArgumentException("expectedSize is negative");
+        }
         if (samples.length != 2 || !(samples[0] instanceof I64Vector) || !isIntegerVector(samples[1])) {
             return createWithUnboundPrefix(
                     samples,
@@ -153,7 +181,8 @@ final class DistinctKeySet
                     codeGeneration,
                     policy,
                     adaptiveLongGroupingPolicy,
-                    flatKeyTablePolicy);
+                    flatKeyTablePolicy,
+                    expectedSize);
         }
         validateKeyVectors(keyTypes, 1, samples);
         StructuralKeyKernel[] kernels = structuralKeyKernels(samples.length, 1, keyTypes, codeGeneration);
@@ -296,7 +325,7 @@ final class DistinctKeySet
                 samples[0].length());
     }
 
-    private static DistinctKeySet createWithUnboundPrefix(
+    static DistinctKeySet createWithUnboundPrefix(
             Vector[] samples,
             boolean retainNulls,
             int unboundKeyPrefix,

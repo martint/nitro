@@ -212,7 +212,8 @@ final class DistinctAggregationPlan
                                     codeGeneration,
                                     distinctKeySetPolicy,
                                     adaptiveLongGroupingPolicy,
-                                    flatKeyTablePolicy)
+                                    flatKeyTablePolicy,
+                                    mask.selectedCount())
                             : DistinctKeySet.createWithUnboundPrefix(
                                     values,
                                     false,
@@ -224,7 +225,8 @@ final class DistinctAggregationPlan
                                     codeGeneration,
                                     distinctKeySetPolicy,
                                     adaptiveLongGroupingPolicy,
-                                    flatKeyTablePolicy);
+                                    flatKeyTablePolicy,
+                                    mask.selectedCount());
                 }
                 int selectedCount = grouped
                         ? distinctKeySet.addGroupedBatch(values, nulls, mask, groupCount, distinctPositions)
