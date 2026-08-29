@@ -1264,6 +1264,68 @@ public class TestParquetOperator
     }
 
     @Test
+    void testLateResidualRuntimeFilterAlignsDeferredDictionaryColumn()
+            throws IOException
+    {
+        List<ParquetRow> rows = new ArrayList<>();
+        for (int position = 0; position < 20_003; position++) {
+            rows.add(new ParquetRow(position, true, (long) (position % 1_823)));
+        }
+        java.nio.file.Path file = writeParquetFile("late-runtime-filter-deferred-dictionary.parquet", true, rows);
+        assertDictionaryEncoding(file, "maybe");
+        Schema schema = new Schema(List.of(
+                new Field("x", BIGINT, false),
+                new Field("maybe", BIGINT, true)));
+
+        try (AllocationResources allocationResources = AllocationResources.createDefault();
+                Allocator allocator = new Allocator(allocationResources);
+                NitroParquetBatchSource source = new NitroParquetBatchSource(
+                        executableRuntimeFilterResources(),
+                        allocator,
+                        List.of(file),
+                        schema)) {
+            int firstBatchRows;
+            try (var first = ((SourcePoll.Ready) source.poll()).batch()) {
+                firstBatchRows = first.selection().count();
+                // Resolve only the companion column. The dictionary filter column remains physically behind.
+                first.column(0).borrow(Stream.VALUES);
+            }
+
+            assertThat(source.addRuntimeFilter(new RuntimeFilter(
+                    source.column(1),
+                    new TestingTypedLongDomain(source.column(1).type(), DynamicFilter.fromRange(1, 100, 100)),
+                    false)))
+                    .isEqualTo(RuntimeFilterAcceptance.ACCEPTED_WITH_RESIDUAL);
+
+            int positions = 0;
+            SourcePoll poll = source.poll();
+            while (poll instanceof SourcePoll.Ready ready) {
+                try (var batch = ready.batch()) {
+                    var rowIds = VectorAccess.longValues(batch.column(0).borrow(Stream.VALUES));
+                    var filtered = VectorAccess.longValues(batch.column(1).borrow(Stream.VALUES));
+                    for (int index = 0; index < batch.selection().count(); index++) {
+                        int position = batch.selection().position(index);
+                        long rowId = rowIds.value(position);
+                        assertThat(rowId).isGreaterThanOrEqualTo(firstBatchRows);
+                        assertThat(rowId % 1_823).isEqualTo(100);
+                        assertThat(filtered.value(position)).isEqualTo(100);
+                        positions++;
+                    }
+                }
+                poll = source.poll();
+            }
+            assertThat(poll).isSameAs(SourcePoll.Finished.FINISHED);
+            int expectedPositions = 0;
+            for (int position = firstBatchRows; position < rows.size(); position++) {
+                if (position % 1_823 == 100) {
+                    expectedPositions++;
+                }
+            }
+            assertThat(positions).isEqualTo(expectedPositions);
+        }
+    }
+
+    @Test
     void testLateEnforcedRuntimeFilterRemainsResidualMidPage()
             throws IOException
     {

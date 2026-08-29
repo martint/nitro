@@ -364,6 +364,11 @@ public final class NitroParquetBatchSource
     // batch; its skipped rows accumulate here and drain in one call the next time it is pulled, so whole data pages
     // (far larger than a batch) are byte-skipped instead of walked a batch at a time. Persists across batches.
     private long[] lazyPendingAdvance;
+    // Installing the first row-level runtime filter after lazy batches have been published changes the source from
+    // independently positioned lazy readers to lockstep filter windows. Before decoding that first window, every
+    // deferred reader must catch up to nextRow; otherwise a never-pulled column would apply the new predicate to an
+    // earlier logical batch and could interpret dictionary ids against the wrong page dictionary.
+    private boolean lateFilterAlignmentPending;
     private int lazyFragmentedNumericPayloadColumns = -1;
     private final boolean[][] directNullScratch;
     private final boolean[] directNullResolved;
@@ -1009,6 +1014,7 @@ public final class NitroParquetBatchSource
                 return false;
             }
         }
+        boolean firstRowLevelFilter = !hasFilters;
         filtersByColumn[column] = filter;
         lateRowLevelFiltersByColumn[column] |= nextRow > 0;
         requiredFiltersByColumn[column] = enforcementRequired;
@@ -1022,6 +1028,7 @@ public final class NitroParquetBatchSource
                 ? filter
                 : null;
         hasFilters = true;
+        lateFilterAlignmentPending |= firstRowLevelFilter && nextRow > 0;
         return true;
     }
 
@@ -1138,6 +1145,7 @@ public final class NitroParquetBatchSource
     {
         checkOpen();
         advancePastRejectedRowGroups();
+        alignReadersForLateRowLevelFiltering();
         if (!(filtersActive() ? ensureWindow() : nextRow < totalRows)) {
             return SourcePoll.Finished.FINISHED;
         }
@@ -1976,6 +1984,39 @@ public final class NitroParquetBatchSource
             }
             pending -= rows;
         }
+    }
+
+    /** Align independently deferred lazy readers before switching permanently to lockstep filtered windows. */
+    private void alignReadersForLateRowLevelFiltering()
+    {
+        if (!lateFilterAlignmentPending) {
+            return;
+        }
+        // Closing invokes finishLazyBatch(), which accounts for every unresolved column in lazyPendingAdvance.
+        closeCurrentBatch();
+        if (lazyPendingAdvance != null) {
+            for (int column = 0; column < readers.length; column++) {
+                long pending = lazyPendingAdvance[column];
+                if (pending == 0) {
+                    continue;
+                }
+                // A reader whose path was never decided has performed no value decode. Plain skip is therefore the
+                // least expensive way to establish its cursor; decided readers must retain their established path.
+                boolean skip = lazyPathDecided[column] && lazySkipColumn[column];
+                drainPendingAdvance(column, readers[column], skip, pending);
+                lazyPendingAdvance[column] = 0;
+            }
+        }
+        // A sibling null reader is independent of the value reader. Align an existing sibling now; an uncreated
+        // sibling retains its accumulated offset for the ordinary first-use drain.
+        for (int column = 0; column < nullReaders.length; column++) {
+            long pending = directNullPendingAdvance[column];
+            if (pending > 0 && nullReaders[column] != null) {
+                nullReaders[column].skipNulls(pending);
+                directNullPendingAdvance[column] = 0;
+            }
+        }
+        lateFilterAlignmentPending = false;
     }
 
     /** A reusable identity array {@code [0, 1, ..., count)} used as the survivor set when a constrained batch kept all rows. */
