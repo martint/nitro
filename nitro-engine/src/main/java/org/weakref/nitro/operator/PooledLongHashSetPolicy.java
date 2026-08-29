@@ -47,14 +47,14 @@ public record PooledLongHashSetPolicy(
 
     public static PooledLongHashSetPolicy defaults()
     {
-        return new PooledLongHashSetPolicy(0.75f, true, supportsVectorKeyGroups(), 5, 50, 128, preferredKeyGroupBits(), false);
+        return new PooledLongHashSetPolicy(0.75f, false, supportsVectorKeyGroups(), 5, 50, 128, preferredKeyGroupBits(), false);
     }
 
     public static PooledLongHashSetPolicy fromSystemProperties()
     {
         return new PooledLongHashSetPolicy(
                 Float.parseFloat(System.getProperty("nitro.distinct.scalarLongLoadFactor", "0.75")),
-                Boolean.parseBoolean(System.getProperty("nitro.distinct.scalarLongVectorTags", "true")),
+                Boolean.parseBoolean(System.getProperty("nitro.distinct.scalarLongVectorTags", "false")),
                 Boolean.parseBoolean(System.getProperty(
                         "nitro.distinct.scalarLongVectorKeys",
                         Boolean.toString(supportsVectorKeyGroups()))),

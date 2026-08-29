@@ -31,6 +31,7 @@ class TestPooledLongHashSet
 
         assertThat(policy.keyGroupBits()).isEqualTo(Math.clamp(LongVector.SPECIES_PREFERRED.vectorBitSize(), 64, 512));
         assertThat(policy.vectorKeys()).isEqualTo(LongVector.SPECIES_PREFERRED.length() >= 4);
+        assertThat(policy.vectorTags()).isFalse();
     }
 
     @Test
