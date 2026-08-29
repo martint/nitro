@@ -4550,6 +4550,58 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testSourceMaskOptimizationIndexesLargeLiteralSets()
+    {
+        PrimitiveRegistry registry = primitiveRegistry();
+        registry.register(
+                "test_slice_alias",
+                new SubstringUtf8(),
+                new SubstringUtf8BinarySliceProjection());
+        registry.register(
+                "test_membership_alias",
+                new InUtf8(),
+                new InUtf8SourceMaskOptimization());
+
+        List<Assignment> assignments = new ArrayList<>();
+        Variable start = new Variable(0);
+        Variable length = new Variable(1);
+        Variable substring = new Variable(2);
+        assignments.add(new Assignment(start, new Literal(1L), AllMask.ALL));
+        assignments.add(new Assignment(length, new Literal(5L), AllMask.ALL));
+        assignments.add(new Assignment(
+                substring,
+                new Call("test_slice_alias", List.of(
+                        new Reference(new Input(0), Stream.VALUES),
+                        new Reference(start, Stream.VALUES),
+                        new Reference(length, Stream.VALUES))),
+                AllMask.ALL));
+
+        List<Reference> arguments = new ArrayList<>();
+        arguments.add(new Reference(substring, Stream.VALUES));
+        for (int index = 0; index < 32; index++) {
+            Variable literal = new Variable(assignments.size());
+            assignments.add(new Assignment(literal, new Literal("%05d".formatted(index)), AllMask.ALL));
+            arguments.add(new Reference(literal, Stream.VALUES));
+        }
+        Variable matches = new Variable(assignments.size());
+        assignments.add(new Assignment(matches, new Call("test_membership_alias", arguments), AllMask.ALL));
+
+        PlanEvaluator evaluator = planEvaluator(
+                new EvaluationPlan(assignments, List.of()),
+                registry,
+                inputResolver(Map.of(
+                        new Reference(new Input(0), Stream.VALUES), utf8Vector("00000-x", "00017-x", "00031-x", "99999-x", "00001-x"),
+                        new Reference(new Input(0), Stream.NULLS), new BooleanVector(new boolean[] {false, false, false, false, true}))),
+                new Allocator(EngineResources.createDefault()));
+
+        Mask result = evaluator.evaluate(new ReferenceMask(new Reference(matches, Stream.VALUES)), Mask.all(5));
+        assertThat(result).containsExactly(0, 1, 2);
+
+        Mask falseResult = evaluator.evaluate(new NotMask(new ReferenceMask(new Reference(matches, Stream.VALUES))), Mask.all(5));
+        assertThat(falseResult).containsExactly(3);
+    }
+
+    @Test
     void testConditionalSourceMaskOptimizationAvoidsFlatProjectionMaterialization()
     {
         PrimitiveRegistry registry = primitiveRegistry();
