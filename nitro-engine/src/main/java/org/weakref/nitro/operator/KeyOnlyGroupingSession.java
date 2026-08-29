@@ -60,6 +60,8 @@ public final class KeyOnlyGroupingSession
     private long aggregatedInputBytes;
     private long aggregatedInputRows;
     private long aggregatedOutputRows;
+    private long observedDistinctInputRows;
+    private long observedDistinctOutputRows;
     private boolean finished;
     private boolean closed;
 
@@ -172,6 +174,7 @@ public final class KeyOnlyGroupingSession
         }
         int selectedCount;
         Mask candidateMask = inputMask;
+        int candidateCount = 0;
         try {
             for (int key = 0; key < groupByColumns.length; key++) {
                 Output output = batch.output(groupByColumns[key]);
@@ -179,6 +182,7 @@ public final class KeyOnlyGroupingSession
                 nulls[key] = output.borrowOrNull(Stream.NULLS);
             }
             candidateMask = dictionaryDomainCandidates(inputMask);
+            candidateCount = candidateMask.selectedCount();
             if (distinctKeySet == null) {
                 distinctKeySet = DistinctKeySet.create(
                         values,
@@ -191,10 +195,10 @@ public final class KeyOnlyGroupingSession
                         distinctKeySetPolicy,
                         operatorResources.adaptiveLongGroupingPolicy(),
                         operatorResources.flatKeyTablePolicy(),
-                        candidateMask.selectedCount());
+                        candidateCount);
             }
-            ensureDistinctPositionCapacity(candidateMask.selectedCount());
-            distinctKeySet.reserveAdditional(candidateMask.selectedCount());
+            ensureDistinctPositionCapacity(candidateCount);
+            distinctKeySet.reserveAdditional(estimatedAdditionalKeys(candidateCount));
             long start = System.nanoTime();
             try {
                 selectedCount = distinctKeySet.addBatch(values, nulls, candidateMask, distinctPositions);
@@ -210,6 +214,8 @@ public final class KeyOnlyGroupingSession
             Arrays.fill(values, null);
             Arrays.fill(nulls, null);
         }
+        observedDistinctInputRows = Math.addExact(observedDistinctInputRows, candidateCount);
+        observedDistinctOutputRows = Math.addExact(observedDistinctOutputRows, selectedCount);
         if (partialAggregationControl != null) {
             aggregatedInputBytes = Math.addExact(aggregatedInputBytes, inputBytes);
             aggregatedInputRows = Math.addExact(aggregatedInputRows, inputMask.count());
@@ -243,6 +249,20 @@ public final class KeyOnlyGroupingSession
             allocator.release(allocationContext, distinctMask);
         }
         return InputOwnership.CALLER;
+    }
+
+    private int estimatedAdditionalKeys(int inputRows)
+    {
+        if (observedDistinctInputRows == 0) {
+            return inputRows;
+        }
+        long estimatedKeys = (long) Math.ceil(inputRows * ((double) observedDistinctOutputRows / observedDistinctInputRows));
+        long keysWithHeadroom = Math.ceilDiv(
+                estimatedKeys * distinctKeySetPolicy.keyOnlyReservationHeadroomPercent(),
+                100);
+        return toIntExact(Math.min(
+                inputRows,
+                Math.max(distinctKeySetPolicy.keyOnlyMinimumReservation(), keysWithHeadroom)));
     }
 
     private boolean shouldRetainInput(boolean mayRetainInput, int outputPositions, Mask inputMask)
@@ -422,6 +442,8 @@ public final class KeyOnlyGroupingSession
             distinctKeySet.releaseBuffers();
             distinctKeySet = null;
         }
+        observedDistinctInputRows = 0;
+        observedDistinctOutputRows = 0;
         allocator.releasePooledMemory(allocationContext);
     }
 }

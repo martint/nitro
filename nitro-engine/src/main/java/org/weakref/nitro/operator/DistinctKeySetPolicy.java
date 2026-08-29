@@ -45,6 +45,8 @@ public record DistinctKeySetPolicy(
         boolean keyOnlyDictionaryDomain,
         int keyOnlyDictionaryDomainMinimumReduction,
         int keyOnlySparseRetentionMinPercent,
+        int keyOnlyReservationHeadroomPercent,
+        int keyOnlyMinimumReservation,
         boolean independentDictionaryTupleDomain,
         int independentDictionaryTupleDomainMinimumReduction,
         int independentDictionaryTupleDomainMaxEntries)
@@ -69,6 +71,12 @@ public record DistinctKeySetPolicy(
         }
         if (keyOnlySparseRetentionMinPercent <= 0 || keyOnlySparseRetentionMinPercent > 100) {
             throw new IllegalArgumentException("keyOnlySparseRetentionMinPercent must be in [1, 100]");
+        }
+        if (keyOnlyReservationHeadroomPercent < 100 || keyOnlyReservationHeadroomPercent > 1_000) {
+            throw new IllegalArgumentException("keyOnlyReservationHeadroomPercent must be in [100, 1000]");
+        }
+        if (keyOnlyMinimumReservation <= 0) {
+            throw new IllegalArgumentException("keyOnlyMinimumReservation must be positive");
         }
         if (independentDictionaryTupleDomainMinimumReduction <= 0 || independentDictionaryTupleDomainMaxEntries <= 0) {
             throw new IllegalArgumentException("Independent dictionary tuple-domain admission values must be positive");
@@ -101,6 +109,8 @@ public record DistinctKeySetPolicy(
                 true,
                 4,
                 75,
+                125,
+                16,
                 true,
                 4,
                 65_536);
@@ -132,6 +142,8 @@ public record DistinctKeySetPolicy(
                 booleanProperty("nitro.distinct.keyOnlyDictionaryDomain", true),
                 Integer.getInteger("nitro.distinct.keyOnlyDictionaryDomainMinimumReduction", 4),
                 Integer.getInteger("nitro.distinct.keyOnlySparseRetentionMinPercent", 75),
+                Integer.getInteger("nitro.distinct.keyOnlyReservationHeadroomPercent", 125),
+                Integer.getInteger("nitro.distinct.keyOnlyMinimumReservation", 16),
                 booleanProperty("nitro.distinct.independentDictionaryTupleDomain", true),
                 Integer.getInteger("nitro.distinct.independentDictionaryTupleDomainMinimumReduction", 4),
                 Integer.getInteger("nitro.distinct.independentDictionaryTupleDomainMaxEntries", 65_536));

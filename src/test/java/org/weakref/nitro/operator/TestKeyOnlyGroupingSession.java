@@ -95,6 +95,35 @@ class TestKeyOnlyGroupingSession
     }
 
     @Test
+    void testDuplicateHeavyBatchesDoNotReserveForEveryInputRow()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                KeyOnlyGroupingSession session = new KeyOnlyGroupingSession(
+                        allocator,
+                        Schema.unspecified(1),
+                        List.of(0),
+                        List.of(0),
+                        resources.operatorResources())) {
+            allocator.beginExecution();
+            try (Batch input = batch(new long[16], new boolean[16])) {
+                session.addInput(input);
+            }
+            try (Batch output = session.getOutput()) {
+                assertThat(selectedValues(output)).containsExactly(0L);
+            }
+
+            try (Batch input = batch(new long[4_096], new boolean[4_096])) {
+                session.addInput(input);
+            }
+            assertThat(session.hasOutput()).isFalse();
+
+            // Reservation follows observed key novelty instead of treating every repeated row as a new key.
+            assertThat(session.retainedBytes()).isLessThan(16_384);
+        }
+    }
+
+    @Test
     void testRetainsAllDistinctInputWhenOwnershipIsOffered()
     {
         try (EngineResources resources = EngineResources.createDefault();

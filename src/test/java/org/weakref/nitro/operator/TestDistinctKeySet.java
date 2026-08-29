@@ -750,6 +750,8 @@ class TestDistinctKeySet
                 defaults.keyOnlyDictionaryDomain(),
                 defaults.keyOnlyDictionaryDomainMinimumReduction(),
                 defaults.keyOnlySparseRetentionMinPercent(),
+                defaults.keyOnlyReservationHeadroomPercent(),
+                defaults.keyOnlyMinimumReservation(),
                 defaults.independentDictionaryTupleDomain(),
                 defaults.independentDictionaryTupleDomainMinimumReduction(),
                 defaults.independentDictionaryTupleDomainMaxEntries());
