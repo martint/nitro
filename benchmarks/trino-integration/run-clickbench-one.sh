@@ -19,7 +19,7 @@ fi
 
 NITRO=/home/martin/src/nitro.opt
 CORK=/root/notes/cork
-PROFILER=/root/.m2/repository/tools/profiler/async-profiler/4.3/async-profiler-4.3.jar
+PROFILER=/root/.m2/repository/remote-cache/tools/profiler/async-profiler/4.3/async-profiler-4.3.jar
 REACTOR_CLASSPATH=$(find "$CORK" -type d \( -path '*/target/classes' -o -path '*/target/test-classes' \) -printf '%p:' | sort)
 DEPENDENCY_CLASSPATH=$(tr ':' '\n' < "$CORK/testing/trino-cork-benchmarks/target/benchmark-classpath.txt" | while IFS= read -r dependency; do
     relative=${dependency#/root/.m2/repository/}
