@@ -35,6 +35,7 @@ import org.weakref.nitro.execution.EngineResources;
 import org.weakref.nitro.operator.aggregation.CountStateVector;
 import org.weakref.nitro.operator.aggregation.SumStateVector;
 
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -73,11 +74,42 @@ class TestAllocator
             Allocator allocator = new Allocator(resources);
             Allocator.Context context = new Allocator.Context("late-generation-release");
             I64Vector vector = allocator.allocate(context, I64Vector.class, 8, I64Vector::new);
-            Allocator.AsyncVectorTreeLease lease = allocator.detachVectorTreeForAsyncRelease(java.util.List.of(vector));
+            Allocator.AsyncVectorTreeLease lease = allocator.detachVectorTreeForAsyncRelease(List.of(vector));
 
             allocator.close();
             allocator.release(context, vector);
             lease.close();
+        }
+    }
+
+    @Test
+    void testIndexedVectorOwnershipFollowsLeaseAndDetachLifecycles()
+    {
+        try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
+            for (int index = 0; index < 1_000; index++) {
+                Allocator.Context context = new Allocator.Context("completed-" + index);
+                I64Vector completed = allocator.allocate(context, I64Vector.class, 8, I64Vector::new);
+                allocator.release(context, completed);
+            }
+
+            Allocator.Context context = new Allocator.Context("active");
+            I64Vector leasedVector = allocator.allocate(context, I64Vector.class, 8, I64Vector::new);
+            assertThat(allocator.ownsVectorTree(leasedVector)).isTrue();
+            assertThat(allocator.canDetachVectorTreeForAsyncRelease(leasedVector)).isTrue();
+
+            try (Allocator.VectorTreeLease ignored = allocator.leaseVectorTree(List.of(leasedVector))) {
+                assertThat(allocator.ownsVectorTree(leasedVector)).isTrue();
+                assertThat(allocator.canDetachVectorTreeForAsyncRelease(leasedVector)).isFalse();
+            }
+            assertThat(allocator.ownsVectorTree(leasedVector)).isTrue();
+            assertThat(allocator.canDetachVectorTreeForAsyncRelease(leasedVector)).isTrue();
+
+            I64Vector detachedVector = allocator.allocate(context, I64Vector.class, 8, I64Vector::new);
+            try (Allocator.AsyncVectorTreeLease ignored = allocator.detachVectorTreeForAsyncRelease(List.of(detachedVector))) {
+                assertThat(allocator.ownsVectorTree(detachedVector)).isTrue();
+                assertThat(allocator.canDetachVectorTreeForAsyncRelease(detachedVector)).isTrue();
+            }
+            assertThat(allocator.ownsVectorTree(detachedVector)).isFalse();
         }
     }
 
