@@ -53,7 +53,11 @@ public record CompositeGroupingPolicy(
         int adaptiveFlatLookaheadStartBatch,
         int adaptiveFlatLookaheadBatches,
         int adaptiveFlatLookaheadMinRows,
-        int adaptiveFlatLookaheadMinNewPercent)
+        int adaptiveFlatLookaheadMinNewPercent,
+        boolean structuralRunReuse,
+        int structuralRunReuseMinRows,
+        int structuralRunReuseSampleSize,
+        int structuralRunReuseMinEqualPercent)
 {
     public CompositeGroupingPolicy
     {
@@ -76,7 +80,11 @@ public record CompositeGroupingPolicy(
                 adaptiveFlatLookaheadStartBatch <= 0 ||
                 adaptiveFlatLookaheadBatches <= 0 ||
                 adaptiveFlatLookaheadMinRows < 0 ||
-                adaptiveFlatLookaheadMinNewPercent < 0) {
+                adaptiveFlatLookaheadMinNewPercent < 0 ||
+                structuralRunReuseMinRows < 0 ||
+                structuralRunReuseSampleSize <= 0 ||
+                structuralRunReuseMinEqualPercent < 0 ||
+                structuralRunReuseMinEqualPercent > 100) {
             throw new IllegalArgumentException("Composite grouping thresholds are invalid");
         }
     }
@@ -119,7 +127,11 @@ public record CompositeGroupingPolicy(
                 4,
                 64,
                 1 << 13,
-                20);
+                20,
+                true,
+                1 << 8,
+                64,
+                50);
     }
 
     public CompositeGroupingPolicy withAdaptiveFlatLookaheadBatches(int batches)
@@ -160,7 +172,11 @@ public record CompositeGroupingPolicy(
                 adaptiveFlatLookaheadStartBatch,
                 batches,
                 adaptiveFlatLookaheadMinRows,
-                adaptiveFlatLookaheadMinNewPercent);
+                adaptiveFlatLookaheadMinNewPercent,
+                structuralRunReuse,
+                structuralRunReuseMinRows,
+                structuralRunReuseSampleSize,
+                structuralRunReuseMinEqualPercent);
     }
 
     /**
@@ -209,7 +225,11 @@ public record CompositeGroupingPolicy(
                 adaptiveFlatLookaheadStartBatch,
                 adaptiveFlatLookaheadBatches,
                 adaptiveFlatLookaheadMinRows,
-                adaptiveFlatLookaheadMinNewPercent);
+                adaptiveFlatLookaheadMinNewPercent,
+                structuralRunReuse,
+                structuralRunReuseMinRows,
+                structuralRunReuseSampleSize,
+                structuralRunReuseMinEqualPercent);
     }
 
     public static CompositeGroupingPolicy fromSystemProperties()
@@ -297,7 +317,17 @@ public record CompositeGroupingPolicy(
                         defaults.adaptiveFlatLookaheadMinRows()),
                 Integer.getInteger(
                         "nitro.group.adaptiveFlatLookaheadMinNewPercent",
-                        defaults.adaptiveFlatLookaheadMinNewPercent()));
+                        defaults.adaptiveFlatLookaheadMinNewPercent()),
+                booleanProperty("nitro.group.structuralRunReuse", defaults.structuralRunReuse()),
+                Integer.getInteger(
+                        "nitro.group.structuralRunReuseMinRows",
+                        defaults.structuralRunReuseMinRows()),
+                Integer.getInteger(
+                        "nitro.group.structuralRunReuseSampleSize",
+                        defaults.structuralRunReuseSampleSize()),
+                Integer.getInteger(
+                        "nitro.group.structuralRunReuseMinEqualPercent",
+                        defaults.structuralRunReuseMinEqualPercent()));
     }
 
     private static boolean booleanProperty(String name, boolean defaultValue)

@@ -34,9 +34,11 @@ import org.weakref.nitro.execution.EngineResources;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.stream.LongStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -54,54 +56,7 @@ public class TestGroupingStatePoolReuse
             throws ReflectiveOperationException
     {
         BindingSemantics semantics = new BindingSemantics();
-        TypeOperators operators = new TypeOperators(
-                Optional.empty(),
-                Optional.empty(),
-                Optional.empty(),
-                Optional.empty(),
-                Optional.empty(),
-                Optional.empty(),
-                Optional.of(MethodHandles.lookup().findStatic(
-                        TestGroupingStatePoolReuse.class,
-                        "unexpectedVectorIdentical",
-                        MethodType.methodType(boolean.class, Vector.class, int.class, Vector.class, int.class))),
-                Optional.of(MethodHandles.lookup().findStatic(
-                        TestGroupingStatePoolReuse.class,
-                        "unexpectedVectorHash",
-                        MethodType.methodType(long.class, Vector.class, int.class))),
-                Optional.empty());
-        TypeBinding type = new TypeBinding()
-        {
-            @Override
-            public TypeIdentity identity()
-            {
-                return new TypeIdentity("testing:bound-key");
-            }
-
-            @Override
-            public Class<?> carrierType()
-            {
-                return long.class;
-            }
-
-            @Override
-            public TypeOperators operators()
-            {
-                return operators;
-            }
-
-            @Override
-            public Optional<TypeKeyBinder> keyBinder()
-            {
-                return Optional.of(semantics::bind);
-            }
-
-            @Override
-            public Set<Class<? extends Vector>> supportedVectorTypes()
-            {
-                return Set.of(I64Vector.class);
-            }
-        };
+        TypeBinding type = boundKeyType(semantics);
 
         try (EngineResources resources = EngineResources.createDefault();
                 Allocator allocator = new Allocator(resources)) {
@@ -129,6 +84,64 @@ public class TestGroupingStatePoolReuse
 
             state.releaseBuffers();
             allocator.release(context);
+        }
+    }
+
+    @Test
+    public void testStructuralRunReuseIsAdmittedOnlyForClusteredInput()
+            throws ReflectiveOperationException
+    {
+        int rows = 1_024;
+        long[] clustered = new long[rows];
+        Arrays.fill(clustered, 0, rows / 2, 11);
+        Arrays.fill(clustered, rows / 2, rows, 22);
+        long[] distinct = LongStream.range(0, rows).toArray();
+
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            allocator.beginExecution();
+            BindingSemantics clusteredSemantics = new BindingSemantics();
+            Allocator.Context clusteredContext = new Allocator.Context("clusteredBoundKeyTest");
+            GroupingState clusteredState = new GroupingState(
+                    resources.primitiveArrays(),
+                    resources.operatorCodeGeneration(),
+                    resources.groupingState(),
+                    resources.operatorResources().adaptiveLongGroupingPolicy(),
+                    resources.operatorResources().flatKeyTablePolicy(),
+                    List.of(boundKeyType(clusteredSemantics)),
+                    allocator,
+                    clusteredContext);
+            clusteredState.assignGroups(
+                    new Vector[] {new I64Vector(clustered)},
+                    new Vector[] {null},
+                    Mask.all(rows),
+                    new I64Vector(rows));
+            assertThat(clusteredState.groupCount()).isEqualTo(2);
+            assertThat(clusteredSemantics.hashCalls).isLessThan(rows / 4);
+
+            BindingSemantics distinctSemantics = new BindingSemantics();
+            Allocator.Context distinctContext = new Allocator.Context("distinctBoundKeyTest");
+            GroupingState distinctState = new GroupingState(
+                    resources.primitiveArrays(),
+                    resources.operatorCodeGeneration(),
+                    resources.groupingState(),
+                    resources.operatorResources().adaptiveLongGroupingPolicy(),
+                    resources.operatorResources().flatKeyTablePolicy(),
+                    List.of(boundKeyType(distinctSemantics)),
+                    allocator,
+                    distinctContext);
+            distinctState.assignGroups(
+                    new Vector[] {new I64Vector(distinct)},
+                    new Vector[] {null},
+                    Mask.all(rows),
+                    new I64Vector(rows));
+            assertThat(distinctState.groupCount()).isEqualTo(rows);
+            assertThat(distinctSemantics.hashCalls).isGreaterThanOrEqualTo(rows);
+
+            clusteredState.releaseBuffers();
+            distinctState.releaseBuffers();
+            allocator.release(clusteredContext);
+            allocator.release(distinctContext);
         }
     }
 
@@ -360,36 +373,95 @@ public class TestGroupingStatePoolReuse
         throw new AssertionError("row-wise vector hash must not be used after binding");
     }
 
+    private static TypeBinding boundKeyType(BindingSemantics semantics)
+            throws ReflectiveOperationException
+    {
+        TypeOperators operators = new TypeOperators(
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.of(MethodHandles.lookup().findStatic(
+                        TestGroupingStatePoolReuse.class,
+                        "unexpectedVectorIdentical",
+                        MethodType.methodType(boolean.class, Vector.class, int.class, Vector.class, int.class))),
+                Optional.of(MethodHandles.lookup().findStatic(
+                        TestGroupingStatePoolReuse.class,
+                        "unexpectedVectorHash",
+                        MethodType.methodType(long.class, Vector.class, int.class))),
+                Optional.empty());
+        return new TypeBinding()
+        {
+            @Override
+            public TypeIdentity identity()
+            {
+                return new TypeIdentity("testing:bound-key");
+            }
+
+            @Override
+            public Class<?> carrierType()
+            {
+                return long.class;
+            }
+
+            @Override
+            public TypeOperators operators()
+            {
+                return operators;
+            }
+
+            @Override
+            public Optional<TypeKeyBinder> keyBinder()
+            {
+                return Optional.of(semantics::bind);
+            }
+
+            @Override
+            public Set<Class<? extends Vector>> supportedVectorTypes()
+            {
+                return Set.of(I64Vector.class);
+            }
+        };
+    }
+
     private static final class BindingSemantics
     {
         private int bindCalls;
+        private int hashCalls;
+        private int identicalCalls;
 
         private BoundTypeKey bind(Vector vector)
         {
             bindCalls++;
-            return new AbsoluteBoundKey(((I64Vector) vector).values());
+            return new AbsoluteBoundKey(this, ((I64Vector) vector).values());
         }
     }
 
     private static final class AbsoluteBoundKey
             implements BoundTypeKey
     {
+        private final BindingSemantics semantics;
         private final long[] values;
 
-        private AbsoluteBoundKey(long[] values)
+        private AbsoluteBoundKey(BindingSemantics semantics, long[] values)
         {
+            this.semantics = semantics;
             this.values = values;
         }
 
         @Override
         public long hash(int position)
         {
+            semantics.hashCalls++;
             return Long.hashCode(Math.abs(values[position]));
         }
 
         @Override
         public boolean identical(int position, BoundTypeKey other, int otherPosition)
         {
+            semantics.identicalCalls++;
             AbsoluteBoundKey right = (AbsoluteBoundKey) other;
             return Math.abs(values[position]) == Math.abs(right.values[otherPosition]);
         }

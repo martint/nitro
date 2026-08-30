@@ -1246,7 +1246,8 @@ final class GroupingState
             structuralGrouping = new StructuralGroupingIndex(
                     requireNonNull(allocator, "allocator is null"),
                     requireNonNull(allocationContext, "allocationContext is null"),
-                    structuralKeyKernels);
+                    structuralKeyKernels,
+                    compositePolicy);
             int[] sharedIds = mask != null &&
                     compositePolicy.sharedDictionaryComposite() &&
                     values.length > 1 &&
@@ -3811,6 +3812,7 @@ final class GroupingState
         private final Allocator allocator;
         private final Allocator.Context allocationContext;
         private final StructuralKeyKernel[] kernels;
+        private final CompositeGroupingPolicy policy;
         private final Object2LongOpenHashMap<StructuralGroupingKey> groups = new Object2LongOpenHashMap<>();
         private final ArrayList<StructuralGroupingKey> representatives = new ArrayList<>();
         private final StructuralGroupingKey reusableProbe;
@@ -3819,11 +3821,13 @@ final class GroupingState
         private StructuralGroupingIndex(
                 Allocator allocator,
                 Allocator.Context allocationContext,
-                StructuralKeyKernel[] kernels)
+                StructuralKeyKernel[] kernels,
+                CompositeGroupingPolicy policy)
         {
             this.allocator = allocator;
             this.allocationContext = allocationContext;
             this.kernels = kernels.clone();
+            this.policy = requireNonNull(policy, "policy is null");
             this.reusableProbe = new StructuralGroupingKey(this.kernels);
             groups.defaultReturnValue(-1);
         }
@@ -3836,24 +3840,37 @@ final class GroupingState
                 long nextGroupId)
         {
             StructuralKeyKernel.Bound[] boundKeys = bind(values);
+            boolean reuseRuns = admitsRunReuse(boundKeys, nulls, mask);
             groups.ensureCapacity(groups.size() + mask.count());
             Object2LongOpenHashMap<StructuralGroupingKey> newGroups = new Object2LongOpenHashMap<>();
             newGroups.defaultReturnValue(-1);
             int[] newGroupPositions = new int[mask.count()];
             int newGroupCount = 0;
             long[] output = result.values();
+            int previousPosition = -1;
+            long previousGroupId = -1;
             for (int position : mask) {
-                reusableProbe.set(values, nulls, boundKeys, position);
-                long groupId = groups.getLong(reusableProbe);
-                if (groupId == -1) {
-                    groupId = newGroups.getLong(reusableProbe);
+                long groupId;
+                if (reuseRuns && previousPosition >= 0 &&
+                        identical(boundKeys, nulls, previousPosition, position)) {
+                    groupId = previousGroupId;
+                }
+                else {
+                    reusableProbe.set(values, nulls, boundKeys, position);
+                    groupId = groups.getLong(reusableProbe);
                     if (groupId == -1) {
-                        groupId = nextGroupId + newGroupCount;
-                        newGroups.put(new StructuralGroupingKey(kernels, values, nulls, boundKeys, position), groupId);
-                        newGroupPositions[newGroupCount++] = position;
+                        groupId = newGroups.getLong(reusableProbe);
+                        if (groupId == -1) {
+                            groupId = nextGroupId + newGroupCount;
+                            newGroups.put(
+                                    new StructuralGroupingKey(kernels, values, nulls, boundKeys, position), groupId);
+                            newGroupPositions[newGroupCount++] = position;
+                        }
                     }
                 }
                 output[position] = groupId;
+                previousPosition = position;
+                previousGroupId = groupId;
             }
             if (newGroupCount == 0) {
                 return nextGroupId;
@@ -3871,6 +3888,52 @@ final class GroupingState
                 setRepresentative(groupId, key);
             }
             return nextGroupId + newGroupCount;
+        }
+
+        private boolean admitsRunReuse(
+                StructuralKeyKernel.Bound[] boundKeys,
+                Vector[] nulls,
+                Mask mask)
+        {
+            int rowCount = mask.count();
+            if (!policy.structuralRunReuse() || rowCount < 2 || rowCount < policy.structuralRunReuseMinRows()) {
+                return false;
+            }
+            int comparisons = Math.min(policy.structuralRunReuseSampleSize(), rowCount - 1);
+            int equal = 0;
+            for (int sample = 0; sample < comparisons; sample++) {
+                int selectedIndex = (int) ((long) sample * (rowCount - 1) / comparisons);
+                if (identical(
+                        boundKeys,
+                        nulls,
+                        mask.position(selectedIndex),
+                        mask.position(selectedIndex + 1))) {
+                    equal++;
+                }
+            }
+            return (long) equal * 100 >= (long) comparisons * policy.structuralRunReuseMinEqualPercent();
+        }
+
+        private boolean identical(
+                StructuralKeyKernel.Bound[] boundKeys,
+                Vector[] nulls,
+                int leftPosition,
+                int rightPosition)
+        {
+            for (int keyIndex = 0; keyIndex < kernels.length; keyIndex++) {
+                boolean leftNull = OperatorVectorSupport.isNull(nulls[keyIndex], leftPosition);
+                boolean rightNull = OperatorVectorSupport.isNull(nulls[keyIndex], rightPosition);
+                if (leftNull || rightNull) {
+                    if (leftNull != rightNull) {
+                        return false;
+                    }
+                    continue;
+                }
+                if (!boundKeys[keyIndex].identical(leftPosition, boundKeys[keyIndex], rightPosition)) {
+                    return false;
+                }
+            }
+            return true;
         }
 
         private long assignDictionaryDomain(
