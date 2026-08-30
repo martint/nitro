@@ -760,6 +760,61 @@ class TestFlatGroupingTable
     }
 
     @Test
+    void testGeneratedHybridHashDefersReusableFlatBinaryDomain()
+    {
+        int size = 128;
+        String[] repeated = new String[size];
+        long[] first = new long[size];
+        long[] second = new long[size];
+        for (int position = 0; position < size; position++) {
+            repeated[position] = "value-" + position % 8;
+            first[position] = position;
+            second[position] = position * 31L;
+        }
+        Vector[] lowCardinality = {
+                utf8(repeated),
+                new I64Vector(first),
+                new I64Vector(second)};
+        FlatKeyLayout lowCardinalityLayout = FlatKeyLayout.tryCreate(
+                lowCardinality,
+                false,
+                arrayPool,
+                codeGeneration,
+                flatKeyTablePolicy);
+        try {
+            lowCardinalityLayout.beginBatch(lowCardinality, null);
+            assertThat(lowCardinalityLayout.prepareGeneratedDictionaryBatchHashes(size, new long[size])).isFalse();
+            lowCardinalityLayout.endBatch();
+        }
+        finally {
+            lowCardinalityLayout.releaseBuffers();
+        }
+
+        String[] unique = new String[size];
+        for (int position = 0; position < size; position++) {
+            unique[position] = "unique-value-" + position;
+        }
+        Vector[] highCardinality = {
+                utf8(unique),
+                new I64Vector(first),
+                new I64Vector(second)};
+        FlatKeyLayout highCardinalityLayout = FlatKeyLayout.tryCreate(
+                highCardinality,
+                false,
+                arrayPool,
+                codeGeneration,
+                flatKeyTablePolicy);
+        try {
+            highCardinalityLayout.beginBatch(highCardinality, null);
+            assertThat(highCardinalityLayout.prepareGeneratedDictionaryBatchHashes(size, new long[size])).isTrue();
+            highCardinalityLayout.endBatch();
+        }
+        finally {
+            highCardinalityLayout.releaseBuffers();
+        }
+    }
+
+    @Test
     void testGeneratedDictionaryHashBatchMatchesLogicalHashAcrossNullShapes()
     {
         int size = 128;

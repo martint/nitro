@@ -2826,6 +2826,9 @@ class FlatKeyLayout
                 handlers.length < 2 ||
                 handlers.length > 15 ||
                 dictionaryHashedIds == null ||
+                // Repeated flat binary values already have cheap batch-local ids. Keeping their
+                // hash probe separate exposes more independent work than one large fused kernel.
+                hasReusableFlatBinaryField() ||
                 (normalizedIntKeyEnabled && normalizedIntKeyShape)) {
             return null;
         }
@@ -2906,6 +2909,19 @@ class FlatKeyLayout
                     Arrays.toString(comparisonOrder));
         }
         return kernel;
+    }
+
+    private boolean hasReusableFlatBinaryField()
+    {
+        for (int field = 0; field < handlers.length; field++) {
+            if (fieldKinds[field] == FlatTypeHandler.Kind.BINARY &&
+                    adaptiveFlatValueIdFields[field] &&
+                    batchDictionaryIds[field] == null &&
+                    fieldBinaryBase[field] != null) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private long fieldHash(int fieldIndex, int channel, Vector value, int position)
