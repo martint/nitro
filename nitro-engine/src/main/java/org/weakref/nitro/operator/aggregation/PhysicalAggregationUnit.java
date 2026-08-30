@@ -75,6 +75,12 @@ public interface PhysicalAggregationUnit
 
     void accumulate(Object state, Vector groups, Mask mask, StreamAccessor streams);
 
+    /** Whether {@link #accumulate(Object, Vector, Mask, StreamAccessor)} accepts encoded group-id vectors. */
+    default boolean supportsEncodedGroupedInput()
+    {
+        return false;
+    }
+
     default void accumulateDistinctSelected(Object state, Vector groups, Mask mask, StreamAccessor streams)
     {
         accumulate(state, groups, mask, streams);

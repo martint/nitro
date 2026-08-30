@@ -75,6 +75,19 @@ public interface AggregationImplementation
     void addRawInput(Object state, Vector groups, Mask mask, AggregationInput input);
 
     /**
+     * Whether grouped input may receive group ids as an encoded vector instead of a flat logical-row vector.
+     *
+     * <p>The encoding is only an alternate physical representation of the same logical group ids. Implementations
+     * may consume a compatible encoded input domain directly and must fall back to ordinary logical-position
+     * processing for incompatible input encodings. This capability describes a calling convention, not aggregate
+     * identity or semantics.
+     */
+    default boolean supportsEncodedGroupedInput()
+    {
+        return false;
+    }
+
+    /**
      * Optionally binds a direct single-position update to one physical input batch.
      *
      * <p>Window execution uses this capability for running frames. Returning {@code null} retains the ordinary

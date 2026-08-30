@@ -31,6 +31,8 @@ import org.weakref.nitro.operator.aggregation.Accumulator;
 import org.weakref.nitro.operator.aggregation.CountAll;
 import org.weakref.nitro.operator.aggregation.CountColumn;
 import org.weakref.nitro.operator.aggregation.FilteredAccumulator;
+import org.weakref.nitro.operator.aggregation.MinUtf8;
+import org.weakref.nitro.operator.aggregation.StreamAccessor;
 import org.weakref.nitro.operator.aggregation.Sum;
 
 import java.nio.charset.StandardCharsets;
@@ -552,6 +554,38 @@ class TestFusedGroupedAggregation
     }
 
     @Test
+    void registeredAggregationReceivesEncodedGroupIds()
+    {
+        int size = 16_384;
+        int[] ids = new int[size];
+        String[] values = {"delta", "alpha", "charlie", "bravo"};
+        for (int position = 0; position < size; position++) {
+            ids[position] = (position * 3 + 1) & 3;
+        }
+        DictionaryVector keys = DictionaryVector.wrapNested(ids, size, utf8(values));
+        DictionaryVector input = keys.sharedMappingWithValues(utf8(values));
+        EncodedMinUtf8 minimum = new EncodedMinUtf8(1);
+
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        Operator operator = new GroupedAggregationOperator(
+                allocator,
+                List.of(0),
+                List.of(minimum),
+                new TableOperator(2, List.of(TableOperator.Page.values(
+                        size,
+                        new Vector[] {keys, input},
+                        Mask.all(size)))));
+        try (operator) {
+            while (operator.hasNext()) {
+                try (Batch ignored = operator.next()) {
+                    assertThat(ignored.borrowMask().count()).isEqualTo(values.length);
+                }
+            }
+        }
+        assertThat(minimum.encodedGroupsObserved).isTrue();
+    }
+
+    @Test
     void keyOnlyDictionaryGroupingDiscardsLogicalGroupIds()
     {
         int size = 100_000;
@@ -798,6 +832,35 @@ class TestFusedGroupedAggregation
         assertThat(actualSum).isEqualTo(expectedSum);
         if (checkCount) {
             assertThat(actualCount).isEqualTo(expectedCount);
+        }
+    }
+
+    private static final class EncodedMinUtf8
+            extends MinUtf8
+    {
+        private boolean encodedGroupsObserved;
+
+        private EncodedMinUtf8(int inputColumn)
+        {
+            super(inputColumn);
+        }
+
+        @Override
+        public boolean supportsEncodedGroupedInput()
+        {
+            return true;
+        }
+
+        @Override
+        public void accumulate(Streams state, Vector groups, Mask mask, StreamAccessor streams)
+        {
+            encodedGroupsObserved |= groups instanceof DictionaryVector;
+            VectorAccess.LongValues groupValues = VectorAccess.longValues(groups);
+            I64Vector flatGroups = new I64Vector(groups.length());
+            for (int position : mask) {
+                flatGroups.values()[position] = groupValues.value(position);
+            }
+            super.accumulate(state, flatGroups, mask, streams);
         }
     }
 }

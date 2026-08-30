@@ -424,6 +424,25 @@ public final class DictionaryVector
         return new DictionaryVector(ids, null, length, siblingValues, false, false, false, mappingIdentity, domainPresenceBits, hasDomainPresence, domainFrequencies, false);
     }
 
+    /** Creates a non-owning sibling value stream with exact physical-domain membership supplied by its caller. */
+    public DictionaryVector sharedMappingWithValuesAndDomainPresence(Vector siblingValues, long siblingDomainPresenceBits)
+    {
+        validateDomainPresence(length, siblingValues, siblingDomainPresenceBits);
+        return new DictionaryVector(
+                ids,
+                null,
+                length,
+                siblingValues,
+                false,
+                false,
+                false,
+                mappingIdentity,
+                siblingDomainPresenceBits,
+                true,
+                null,
+                false);
+    }
+
     /**
      * Returns whether this mapping is backed by allocator-owned vectors that can follow a replacement value tree
      * through transfer and release. Raw-array dictionaries cannot safely use {@link #ownedMappingWithValues(Vector)}
@@ -485,6 +504,19 @@ public final class DictionaryVector
     public boolean hasSameRowMapping(DictionaryVector other)
     {
         return other != null && mappingIdentity == other.mappingIdentity && length == other.length;
+    }
+
+    /**
+     * Returns whether two dictionaries have the same logical-row mapping, comparing IDs when they do not share an
+     * established mapping identity. Unlike {@link #hasSameRowMapping(DictionaryVector)}, this is an O(rows) proof
+     * and does not make either mapping's storage or lifetime interchangeable with the other.
+     */
+    public boolean hasEquivalentRowMapping(DictionaryVector other)
+    {
+        return hasSameRowMapping(other) ||
+                (other != null &&
+                        length == other.length &&
+                        Arrays.equals(ids, 0, length, other.ids, 0, length));
     }
 
     /**

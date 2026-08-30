@@ -125,6 +125,7 @@ public class GroupedAggregationOperator
     private int[] dictionaryDomainCounts = new int[0];
     private int[] dictionaryDomainGroups = new int[0];
     private int[] dictionaryDomainRepresentatives = new int[0];
+    private I64Vector reusableDictionaryDomainGroups;
     private VectorAccess.LongValues[] dictionaryDomainInputValues = new VectorAccess.LongValues[0];
     private VectorAccess.BooleanValues[] dictionaryDomainInputNulls = new VectorAccess.BooleanValues[0];
     private int[][] dictionaryDomainInputCounts = new int[0][];
@@ -967,7 +968,10 @@ public class GroupedAggregationOperator
      */
     private boolean tryEncodedKeyDomainAggregation(Batch batch, Mask mask)
     {
-        if (!dictionaryDomainAggregation || fusedSpecs == null ||
+        boolean generatedUpdates = fusedSpecs != null;
+        boolean encodedGroupedInput = supportsEncodedGroupedInput();
+        if (!dictionaryDomainAggregation || (!generatedUpdates && !encodedGroupedInput) ||
+                groupByColumns.length != 1 ||
                 filteredAggregationIndexes.length != 0 || distinctAggregationGroups.length != 0) {
             return false;
         }
@@ -987,7 +991,13 @@ public class GroupedAggregationOperator
             dictionaryDomainRepresentatives = new int[capacity];
         }
         Vector keyNulls = keyOutput.borrowOrNull(Stream.NULLS);
-        if (!bindDictionaryDomainInputs(batch, dictionary, keyNulls, mask, slots)) {
+        if (!generatedUpdates && !VectorAccess.isAllFalseNulls(keyNulls)) {
+            return false;
+        }
+        if (!generatedUpdates && dictionary.values().length() > Long.SIZE) {
+            return false;
+        }
+        if (generatedUpdates && !bindDictionaryDomainInputs(batch, dictionary, keyNulls, mask, slots)) {
             return false;
         }
 
@@ -1024,37 +1034,78 @@ public class GroupedAggregationOperator
         finally {
             phaseMetrics.recordStatePreparation(System.nanoTime() - start);
         }
-        if (!fusedStateVectorsBound) {
-            refreshFusedStateVectors();
-        }
         start = System.nanoTime();
         try {
-            for (int update = 0; update < fusedSpecs.length; update++) {
-                LongStateUpdate state = (LongStateUpdate) fusedStateVectors[update];
-                GroupedAggregationUpdate spec = fusedSpecs[update];
-                int[] frequencies = dictionaryDomainInputCounts[update] == null
-                        ? dictionaryDomainCounts
-                        : dictionaryDomainInputCounts[update];
-                for (int domain = 0; domain < domainSlots; domain++) {
-                    int frequency = frequencies[domain];
-                    if (frequency != 0) {
-                        if (spec.readsValue()) {
-                            state.updateRepeated(
-                                    dictionaryDomainGroups[domain],
-                                    dictionaryDomainInputValues[update].value(domain),
-                                    frequency);
-                        }
-                        else {
-                            // Constant contributions are declared as additive deltas by the existing generated
-                            // update convention (COUNT and null-aware COUNT). Preserve that contract directly.
-                            state.update(dictionaryDomainGroups[domain], spec.constantValue() * frequency);
+            if (generatedUpdates) {
+                if (!fusedStateVectorsBound) {
+                    refreshFusedStateVectors();
+                }
+                for (int update = 0; update < fusedSpecs.length; update++) {
+                    LongStateUpdate state = (LongStateUpdate) fusedStateVectors[update];
+                    GroupedAggregationUpdate spec = fusedSpecs[update];
+                    int[] frequencies = dictionaryDomainInputCounts[update] == null
+                            ? dictionaryDomainCounts
+                            : dictionaryDomainInputCounts[update];
+                    for (int domain = 0; domain < domainSlots; domain++) {
+                        int frequency = frequencies[domain];
+                        if (frequency != 0) {
+                            if (spec.readsValue()) {
+                                state.updateRepeated(
+                                        dictionaryDomainGroups[domain],
+                                        dictionaryDomainInputValues[update].value(domain),
+                                        frequency);
+                            }
+                            else {
+                                // Constant contributions are declared as additive deltas by the existing generated
+                                // update convention (COUNT and null-aware COUNT). Preserve that contract directly.
+                                state.update(dictionaryDomainGroups[domain], spec.constantValue() * frequency);
+                            }
                         }
                     }
+                }
+            }
+            else {
+                int domainSize = dictionary.values().length();
+                reusableDictionaryDomainGroups = allocator.reallocateIfNecessary(
+                        allocationContext,
+                        reusableDictionaryDomainGroups,
+                        I64Vector.class,
+                        domainSize,
+                        I64Vector::new);
+                long[] groupValues = reusableDictionaryDomainGroups.values();
+                for (int domain = 0; domain < domainSize; domain++) {
+                    groupValues[domain] = dictionaryDomainGroups[domain];
+                }
+                long domainPresence = 0;
+                for (int domain = 0; domain < domainSize; domain++) {
+                    if (dictionaryDomainCounts[domain] != 0) {
+                        domainPresence |= 1L << domain;
+                    }
+                }
+                DictionaryVector encodedGroups = dictionary.sharedMappingWithValuesAndDomainPresence(
+                        reusableDictionaryDomainGroups,
+                        domainPresence);
+                org.weakref.nitro.operator.aggregation.StreamAccessor streams = StreamAccessors.forBatch(batch);
+                for (int aggregationIndex : plainAggregationIndexes) {
+                    aggregations[aggregationIndex].accumulate(states[aggregationIndex], encodedGroups, mask, streams);
                 }
             }
         }
         finally {
             phaseMetrics.recordAccumulation(System.nanoTime() - start);
+        }
+        return true;
+    }
+
+    private boolean supportsEncodedGroupedInput()
+    {
+        if (plainAggregationIndexes.length == 0) {
+            return false;
+        }
+        for (int aggregationIndex : plainAggregationIndexes) {
+            if (!aggregations[aggregationIndex].supportsEncodedGroupedInput()) {
+                return false;
+            }
         }
         return true;
     }

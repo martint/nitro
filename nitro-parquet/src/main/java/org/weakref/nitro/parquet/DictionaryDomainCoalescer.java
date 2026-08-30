@@ -18,8 +18,6 @@ import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
 
-import java.util.Arrays;
-
 /** Preserves a common encoded row domain across independently encoded sibling Parquet leaves. */
 final class DictionaryDomainCoalescer
 {
@@ -71,7 +69,6 @@ final class DictionaryDomainCoalescer
 
     static boolean sameIds(DictionaryVector left, DictionaryVector right, int length)
     {
-        return left.hasSameRowMapping(right) ||
-                Arrays.equals(left.ids(), 0, length, right.ids(), 0, length);
+        return left.length() == length && right.length() == length && left.hasEquivalentRowMapping(right);
     }
 }

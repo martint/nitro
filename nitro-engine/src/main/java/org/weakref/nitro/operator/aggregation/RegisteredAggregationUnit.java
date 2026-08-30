@@ -185,6 +185,12 @@ public class RegisteredAggregationUnit
     }
 
     @Override
+    public boolean supportsEncodedGroupedInput()
+    {
+        return implementation.supportsEncodedGroupedInput();
+    }
+
+    @Override
     public boolean supportsInitialInput()
     {
         return inputMode == InputMode.RAW &&
