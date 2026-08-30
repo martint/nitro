@@ -258,6 +258,30 @@ public class GroupOperator
         return groupingState.copyGroupedValuePosition(groupedKeyIndex(outputIndex), output, sourcePosition, outputPosition, size, allocator, allocationContext);
     }
 
+    @Override
+    public boolean supportsGroupedKeyPositionComparison(int outputIndex)
+    {
+        return groupingState.supportsGroupedValuePositionComparison(groupedKeyIndex(outputIndex));
+    }
+
+    @Override
+    public boolean groupedKeyPositionIsNull(int outputIndex, int position)
+    {
+        return groupingState.groupedValuePositionIsNull(groupedKeyIndex(outputIndex), position);
+    }
+
+    @Override
+    public int compareGroupedKeyPosition(int outputIndex, int position, Vector otherValues, int otherPosition)
+    {
+        return groupingState.compareGroupedValuePosition(groupedKeyIndex(outputIndex), position, otherValues, otherPosition);
+    }
+
+    @Override
+    public int compareGroupedKeyPositions(int outputIndex, int leftPosition, int rightPosition)
+    {
+        return groupingState.compareGroupedValuePositions(groupedKeyIndex(outputIndex), leftPosition, rightPosition);
+    }
+
     private int groupedKeyIndex(int outputIndex)
     {
         for (int index = 0; index < groupByColumns.length; index++) {

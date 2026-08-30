@@ -4175,6 +4175,65 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testTopNComparesGroupedKeysWithoutMaterializingTheGroupedColumn()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        AtomicInteger maximumMaterializedPositions = new AtomicInteger();
+        AtomicInteger directComparisons = new AtomicInteger();
+        List<org.weakref.nitro.data.Row> rows = new ArrayList<>();
+        for (int value = 127; value >= 0; value--) {
+            rows.add(row("key-%03d".formatted(value), 1L));
+        }
+        GroupOperator grouped = new GroupOperator(
+                allocator,
+                0,
+                new ConstantTableOperator(
+                        allocator,
+                        2,
+                        rows))
+        {
+            @Override
+            public Streams groupedKeyOutput(int outputIndex, Mask mask, Streams output, Allocator outputAllocator, Allocator.Context allocationContext)
+            {
+                maximumMaterializedPositions.accumulateAndGet(mask.count(), Math::max);
+                return super.groupedKeyOutput(outputIndex, mask, output, outputAllocator, allocationContext);
+            }
+
+            @Override
+            public int compareGroupedKeyPosition(int outputIndex, int position, Vector otherValues, int otherPosition)
+            {
+                directComparisons.incrementAndGet();
+                return super.compareGroupedKeyPosition(outputIndex, position, otherValues, otherPosition);
+            }
+
+            @Override
+            public int compareGroupedKeyPositions(int outputIndex, int leftPosition, int rightPosition)
+            {
+                directComparisons.incrementAndGet();
+                return super.compareGroupedKeyPositions(outputIndex, leftPosition, rightPosition);
+            }
+        };
+
+        try (Operator operator = new TopNOperator(
+                allocator,
+                2,
+                0,
+                false,
+                new GroupedAggregationOperator(
+                        allocator,
+                        0,
+                        List.of(1),
+                        List.of(new CountAll()),
+                        grouped))) {
+            assertThat(OperatorAssertions.OperatorAssert.toRows(operator)).containsExactly(
+                    row("key-000", 1L),
+                    row("key-001", 1L));
+        }
+        assertThat(directComparisons).hasPositiveValue();
+        assertThat(maximumMaterializedPositions).hasValue(2);
+    }
+
+    @Test
     void testTopNSessionRetainsCandidatesAcrossHostBatches()
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());

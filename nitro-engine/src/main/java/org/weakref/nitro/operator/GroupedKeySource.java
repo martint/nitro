@@ -15,6 +15,7 @@ package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Streams;
+import org.weakref.nitro.data.Vector;
 
 interface GroupedKeySource
 {
@@ -23,5 +24,25 @@ interface GroupedKeySource
     default Streams copyGroupedKeyPosition(int outputIndex, Streams output, int sourcePosition, int outputPosition, int size, Allocator allocator, Allocator.Context allocationContext)
     {
         return null;
+    }
+
+    default boolean supportsGroupedKeyPositionComparison(int outputIndex)
+    {
+        return false;
+    }
+
+    default boolean groupedKeyPositionIsNull(int outputIndex, int position)
+    {
+        throw new UnsupportedOperationException("Grouped-key position comparison is not supported");
+    }
+
+    default int compareGroupedKeyPosition(int outputIndex, int position, Vector otherValues, int otherPosition)
+    {
+        throw new UnsupportedOperationException("Grouped-key position comparison is not supported");
+    }
+
+    default int compareGroupedKeyPositions(int outputIndex, int leftPosition, int rightPosition)
+    {
+        throw new UnsupportedOperationException("Grouped-key position comparison is not supported");
     }
 }

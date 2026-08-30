@@ -1715,21 +1715,28 @@ public class GroupedAggregationOperator
                                     allocator,
                                     allocationContext),
                     (existing, sourcePosition, outputPosition, size) -> groupedKeyCopyPosition(groupedOutput, existing, sourcePosition, outputPosition, size));
-            if (groupByColumns != null && inlineGroupingState.supportsGroupedValuePositionComparison(groupedKeyIndexes[groupedOutput])) {
-                int groupedKeyIndex = groupedKeyIndexes[groupedOutput];
+            int groupedKeyIndex = groupByColumns == null ? groupedColumns[groupedOutput] : groupedKeyIndexes[groupedOutput];
+            boolean supportsPositionComparison = groupByColumns == null
+                    ? groupedKeySource.supportsGroupedKeyPositionComparison(groupedKeyIndex)
+                    : inlineGroupingState.supportsGroupedValuePositionComparison(groupedKeyIndex);
+            if (supportsPositionComparison) {
                 result.withPositionAccessor(new Output.PositionAccessor()
                 {
                     @Override
                     public boolean isNull(int position)
                     {
-                        return inlineGroupingState.groupedValuePositionIsNull(groupedKeyIndex, position);
+                        return groupByColumns == null
+                                ? groupedKeySource.groupedKeyPositionIsNull(groupedKeyIndex, position)
+                                : inlineGroupingState.groupedValuePositionIsNull(groupedKeyIndex, position);
                     }
 
                     @Override
                     public int compareNonNull(int position, Vector otherValues, int otherPosition)
                     {
-                        return inlineGroupingState.compareGroupedValuePosition(
-                                groupedKeyIndex, position, otherValues, otherPosition);
+                        return groupByColumns == null
+                                ? groupedKeySource.compareGroupedKeyPosition(groupedKeyIndex, position, otherValues, otherPosition)
+                                : inlineGroupingState.compareGroupedValuePosition(
+                                        groupedKeyIndex, position, otherValues, otherPosition);
                     }
 
                     @Override
@@ -1741,8 +1748,10 @@ public class GroupedAggregationOperator
                     @Override
                     public int compareNonNullPositions(int leftPosition, int rightPosition)
                     {
-                        return inlineGroupingState.compareGroupedValuePositions(
-                                groupedKeyIndex, leftPosition, rightPosition);
+                        return groupByColumns == null
+                                ? groupedKeySource.compareGroupedKeyPositions(groupedKeyIndex, leftPosition, rightPosition)
+                                : inlineGroupingState.compareGroupedValuePositions(
+                                        groupedKeyIndex, leftPosition, rightPosition);
                     }
                 });
             }
