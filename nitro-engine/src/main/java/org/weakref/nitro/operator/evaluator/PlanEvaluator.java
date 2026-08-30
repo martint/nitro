@@ -2609,6 +2609,16 @@ public final class PlanEvaluator
 
     private MaskOutcome classifyBooleanMask(Vector values, Vector nulls, Vector errors, Mask mask)
     {
+        if (policy.fastBooleanMaskClassifier()) {
+            Boolean constant = constantBooleanValue(values, nulls, errors);
+            if (constant != null) {
+                return new MaskOutcome(
+                        constant ? mask : emptyMask(mask.size()),
+                        emptyMask(mask.size()),
+                        emptyMask(mask.size()));
+            }
+        }
+
         int capacity = mask.count();
         Mask trueMask = allocator.allocateUninitializedSparseMask(allocationContext, capacity, mask.size());
         Mask nullMask = allocator.allocateUninitializedSparseMask(allocationContext, capacity, mask.size());
@@ -2640,8 +2650,14 @@ public final class PlanEvaluator
 
     private Mask classifyTrueBooleanMask(Vector values, Vector nulls, Vector errors, Mask mask)
     {
-        if (policy.fastBooleanMaskClassifier() && values instanceof BooleanVector booleanValues && VectorAccess.isAllFalseNulls(nulls) && VectorAccess.isAllFalseNulls(errors)) {
-            return allocator.intersectMask(allocationContext, mask, booleanValues);
+        if (policy.fastBooleanMaskClassifier()) {
+            Boolean constant = constantBooleanValue(values, nulls, errors);
+            if (constant != null) {
+                return constant ? mask : emptyMask(mask.size());
+            }
+            if (values instanceof BooleanVector booleanValues && VectorAccess.isAllFalseNulls(nulls) && VectorAccess.isAllFalseNulls(errors)) {
+                return allocator.intersectMask(allocationContext, mask, booleanValues);
+            }
         }
 
         int trueCount = countTrueRows(values, nulls, errors, mask);
@@ -2665,8 +2681,14 @@ public final class PlanEvaluator
 
     private Mask classifyFalseBooleanMask(Vector values, Vector nulls, Vector errors, Mask mask)
     {
-        if (policy.fastBooleanMaskClassifier() && values instanceof BooleanVector booleanValues && VectorAccess.isAllFalseNulls(nulls) && VectorAccess.isAllFalseNulls(errors)) {
-            return allocator.differenceMask(allocationContext, mask, booleanValues);
+        if (policy.fastBooleanMaskClassifier()) {
+            Boolean constant = constantBooleanValue(values, nulls, errors);
+            if (constant != null) {
+                return constant ? emptyMask(mask.size()) : mask;
+            }
+            if (values instanceof BooleanVector booleanValues && VectorAccess.isAllFalseNulls(nulls) && VectorAccess.isAllFalseNulls(errors)) {
+                return allocator.differenceMask(allocationContext, mask, booleanValues);
+            }
         }
 
         int falseCount = countFalseRows(values, nulls, errors, mask);
@@ -2720,6 +2742,15 @@ public final class PlanEvaluator
             }
         }
         return falseCount;
+    }
+
+    private static Boolean constantBooleanValue(Vector values, Vector nulls, Vector errors)
+    {
+        if (!(values instanceof RleVector rle) || rle.counts().length != 1 ||
+                !VectorAccess.isAllFalseNulls(nulls) || !VectorAccess.isAllFalseNulls(errors)) {
+            return null;
+        }
+        return readBoolean(rle.values(), 0);
     }
 
     private Mask tryEvaluatePrimitiveTrueMask(Reference reference, Mask mask)

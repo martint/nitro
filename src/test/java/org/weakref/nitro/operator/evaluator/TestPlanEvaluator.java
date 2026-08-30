@@ -2519,6 +2519,27 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testConstantRleBooleanMaskDoesNotScanOrAllocate()
+    {
+        Reference input = new Reference(new Input(0), Stream.VALUES);
+        EvaluationPlan plan = new EvaluationPlan(List.of(), List.of());
+        RleVector values = new RleVector(new int[] {10_000}, new BooleanVector(new boolean[] {true}));
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        PlanEvaluator evaluator = planEvaluator(
+                plan,
+                new PrimitiveRegistry(),
+                inputResolver(Map.of(input, values)),
+                allocator);
+        Mask mask = Mask.sparse(new int[] {1, 10, 100, 1_000, 9_999}, 10_000);
+
+        long allocatedBytes = allocator.allocatedBytes();
+        Mask result = evaluator.evaluate(new ReferenceMask(input), mask);
+
+        assertThat(result).isSameAs(mask);
+        assertThat(allocator.allocatedBytes()).isEqualTo(allocatedBytes);
+    }
+
+    @Test
     void testEvaluatesMergeConditionThroughBooleanReferenceMask()
     {
         PrimitiveRegistry primitiveRegistry = builtinPrimitiveRegistry();
