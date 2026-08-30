@@ -322,6 +322,17 @@ final class TopNState
         }
     }
 
+    public boolean hasPositionOrderingAccessor(Batch batch)
+    {
+        for (int orderingColumn : orderingColumns) {
+            Output.PositionAccessor positionAccessor = batch.output(orderingColumn).positionAccessor();
+            if (positionAccessor != null && positionAccessor.supportsPositionComparison()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     public int compareRetainedBatchPositions(int leftPosition, int rightPosition)
     {
         for (int orderingIndex = 0; orderingIndex < orderingColumns.length; orderingIndex++) {

@@ -188,7 +188,7 @@ public class TopNOperator
                 Mask mask = batch.borrowMask();
                 if (firstBatch &&
                         source.supportsConstrainedReborrow() &&
-                        retainedSingleBatchAdmission(mask) &&
+                        retainedSingleBatchAdmission(batch, mask) &&
                         !source.hasNext()) {
                     currentInputBatch = null;
                     return computeRetainedSingleBatchTopN(batch, mask);
@@ -278,9 +278,10 @@ public class TopNOperator
         return allocator.allocateRangeMask(allocationContext, 0, count);
     }
 
-    private boolean retainedSingleBatchAdmission(Mask mask)
+    private boolean retainedSingleBatchAdmission(Batch batch, Mask mask)
     {
-        return mask.count() >= (long) n * policy.retainedSingleBatchMinimumRowsPerLimit();
+        return state.hasPositionOrderingAccessor(batch) ||
+                mask.count() >= (long) n * policy.retainedSingleBatchMinimumRowsPerLimit();
     }
 
     private Mask computeRetainedSingleBatchTopN(Batch batch, Mask mask)

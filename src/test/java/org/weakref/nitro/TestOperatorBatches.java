@@ -4181,7 +4181,9 @@ public class TestOperatorBatches
         AtomicInteger maximumMaterializedPositions = new AtomicInteger();
         AtomicInteger directComparisons = new AtomicInteger();
         List<org.weakref.nitro.data.Row> rows = new ArrayList<>();
-        for (int value = 127; value >= 0; value--) {
+        // Keep the input below the ordinary 64 rows per TopN slot admission threshold.
+        // The position accessor itself must select the retained-position representation.
+        for (int value = 31; value >= 0; value--) {
             rows.add(row("key-%03d".formatted(value), 1L));
         }
         GroupOperator grouped = new GroupOperator(
