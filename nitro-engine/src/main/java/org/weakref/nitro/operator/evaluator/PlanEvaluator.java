@@ -1190,12 +1190,19 @@ public final class PlanEvaluator
         if (left == right) {
             return true;
         }
-        for (int index = 0; index < length; index++) {
+        // Most independently produced mappings are visibly different. Reject those from a bounded sample before
+        // paying for the exact proof below; calls such as element-with-ordinality otherwise scan the entire logical
+        // batch once for each dictionary-peeling convention only to discover that their physical domains differ.
+        // A matching sample is not treated as proof, so independently allocated but equivalent mappings retain the
+        // existing behavior.
+        int samples = Math.min(length, 16);
+        for (int sample = 0; sample < samples; sample++) {
+            int index = (int) ((long) sample * length / samples);
             if (left[index] != right[index]) {
                 return false;
             }
         }
-        return true;
+        return Arrays.mismatch(left, 0, length, right, 0, length) < 0;
     }
 
     private record DictionaryIdsMetadata(int length, int baseLength) {}

@@ -4423,6 +4423,60 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testDictionaryPeelingRetainsExactProofForIndependentMappings()
+    {
+        AtomicInteger evaluatedPositions = new AtomicInteger();
+        PrimitiveRegistry registry = new PrimitiveRegistry();
+        registry.register("first_dictionary", (inputs, mask, requestedStreams, output, context) -> {
+            evaluatedPositions.set(mask.count());
+            return inputs.getFirst();
+        });
+
+        Variable result = new Variable(0);
+        Reference left = new Reference(new Input(0), Stream.VALUES);
+        Reference right = new Reference(new Input(1), Stream.VALUES);
+        Reference output = new Reference(result, Stream.VALUES);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(result, new Call("first_dictionary", List.of(left, right)), AllMask.ALL)),
+                List.of(output));
+
+        int[] leftIds = new int[128];
+        int[] equivalentIds = new int[128];
+        int[] differentIds = new int[128];
+        for (int position = 0; position < leftIds.length; position++) {
+            leftIds[position] = position % 2;
+            equivalentIds[position] = position % 2;
+            differentIds[position] = (position + 1) % 3;
+        }
+
+        try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
+            PlanEvaluator equivalent = planEvaluator(
+                    plan,
+                    registry,
+                    inputResolver(Map.of(
+                            left, DictionaryVector.wrap(leftIds, new I64Vector(new long[] {11, 29})),
+                            right, DictionaryVector.wrap(equivalentIds, new I64Vector(new long[] {3, 5})))),
+                    allocator);
+
+            equivalent.evaluate(output, Mask.all(leftIds.length));
+            assertThat(evaluatedPositions).hasValue(2);
+            equivalent.close();
+
+            PlanEvaluator different = planEvaluator(
+                    plan,
+                    registry,
+                    inputResolver(Map.of(
+                            left, DictionaryVector.wrap(leftIds, new I64Vector(new long[] {11, 29})),
+                            right, DictionaryVector.wrap(differentIds, new I64Vector(new long[] {3, 5, 7})))),
+                    allocator);
+
+            different.evaluate(output, Mask.all(leftIds.length));
+            assertThat(evaluatedPositions).hasValue(leftIds.length);
+            different.close();
+        }
+    }
+
+    @Test
     void testDictionaryPeelingDoesNotAttachFrequenciesToChangedOutputDomain()
     {
         PrimitiveRegistry registry = new PrimitiveRegistry();
