@@ -127,6 +127,9 @@ public class GroupedAggregationOperator
     private int[] dictionaryDomainGroups = new int[0];
     private int[] dictionaryDomainRepresentatives = new int[0];
     private I64Vector reusableDictionaryDomainGroups;
+    private Mask reusableDictionaryDomainMask;
+    private Vector[] dictionaryDomainKeyValues = new Vector[0];
+    private Vector[] dictionaryDomainKeyNulls = new Vector[0];
     private VectorAccess.LongValues[] dictionaryDomainInputValues = new VectorAccess.LongValues[0];
     private VectorAccess.BooleanValues[] dictionaryDomainInputNulls = new VectorAccess.BooleanValues[0];
     private int[][] dictionaryDomainInputCounts = new int[0][];
@@ -974,9 +977,11 @@ public class GroupedAggregationOperator
         org.weakref.nitro.operator.aggregation.StreamAccessor streams = StreamAccessors.forBatch(batch);
         boolean groupedDomainInput = supportsGroupedDomainInput(streams);
         if (!dictionaryDomainAggregation || (!generatedUpdates && !groupedDomainInput && !encodedGroupedInput) ||
-                groupByColumns.length != 1 ||
                 filteredAggregationIndexes.length != 0 || distinctAggregationGroups.length != 0) {
             return false;
+        }
+        if (groupByColumns.length != 1) {
+            return trySharedDictionaryKeyDomainAggregation(batch, mask, streams, groupedDomainInput, encodedGroupedInput);
         }
         Output keyOutput = batch.output(groupByColumns[0]);
         Vector keyVector = keyOutput.borrow(Stream.VALUES);
@@ -1014,24 +1019,7 @@ public class GroupedAggregationOperator
         finally {
             phaseMetrics.recordGrouping(System.nanoTime() - start);
         }
-        maxObservedGroup = inlineGroupingState.groupCount() - 1;
-        int requiredCapacity = toIntExact(maxObservedGroup + 1);
-        int defaultCapacity = Allocator.computeCapacity(requiredCapacity);
-        int newCapacity = requiredCapacity;
-        for (PhysicalAggregationUnit aggregation : aggregations) {
-            int preferredCapacity = aggregation.stateCapacity(requiredCapacity, defaultCapacity);
-            if (preferredCapacity < requiredCapacity) {
-                throw new IllegalArgumentException("aggregation state capacity is less than required group count");
-            }
-            newCapacity = Math.max(newCapacity, preferredCapacity);
-        }
-        start = System.nanoTime();
-        try {
-            prepareAggregationStates(previousMaxGroup, maxObservedGroup, newCapacity);
-        }
-        finally {
-            phaseMetrics.recordStatePreparation(System.nanoTime() - start);
-        }
+        prepareAggregationStateForCurrentGroups(previousMaxGroup);
         start = System.nanoTime();
         try {
             if (generatedUpdates) {
@@ -1115,6 +1103,210 @@ public class GroupedAggregationOperator
             phaseMetrics.recordAccumulation(System.nanoTime() - start);
         }
         return true;
+    }
+
+    /**
+     * Aggregates an arbitrary-arity composite key over a physical domain shared by all key dictionaries. The
+     * dictionaries define one tuple per physical id, so grouping and aggregation need visit each used tuple once;
+     * the frequency vector preserves the exact number of contributing logical rows.
+     */
+    private boolean trySharedDictionaryKeyDomainAggregation(
+            Batch batch,
+            Mask mask,
+            org.weakref.nitro.operator.aggregation.StreamAccessor streams,
+            boolean groupedDomainInput,
+            boolean encodedGroupedInput)
+    {
+        if (groupByColumns.length < 2 || (!groupedDomainInput && !encodedGroupedInput)) {
+            return false;
+        }
+        if (dictionaryDomainKeyValues.length != groupByColumns.length) {
+            dictionaryDomainKeyValues = new Vector[groupByColumns.length];
+            dictionaryDomainKeyNulls = new Vector[groupByColumns.length];
+        }
+        try {
+            return trySharedDictionaryKeyDomainAggregationInternal(
+                    batch,
+                    mask,
+                    streams,
+                    groupedDomainInput);
+        }
+        finally {
+            Arrays.fill(dictionaryDomainKeyValues, null);
+            Arrays.fill(dictionaryDomainKeyNulls, null);
+        }
+    }
+
+    private boolean trySharedDictionaryKeyDomainAggregationInternal(
+            Batch batch,
+            Mask mask,
+            org.weakref.nitro.operator.aggregation.StreamAccessor streams,
+            boolean groupedDomainInput)
+    {
+        DictionaryVector first = null;
+        int[] ids = null;
+        int domainSize = -1;
+        for (int key = 0; key < groupByColumns.length; key++) {
+            Output output = batch.output(groupByColumns[key]);
+            if (!(output.borrow(Stream.VALUES) instanceof DictionaryVector dictionary)) {
+                return false;
+            }
+            if (first == null) {
+                first = dictionary;
+                ids = dictionary.ids();
+                domainSize = dictionary.values().length();
+            }
+            else if (dictionary.length() != first.length() ||
+                    dictionary.values().length() != domainSize ||
+                    !first.hasSameRowMapping(dictionary)) {
+                return false;
+            }
+            dictionaryDomainKeyValues[key] = dictionary.values();
+
+            Vector nulls = output.borrowOrNull(Stream.NULLS);
+            if (VectorAccess.isAllFalseNulls(nulls)) {
+                dictionaryDomainKeyNulls[key] = null;
+            }
+            else if (nulls instanceof DictionaryVector dictionaryNulls &&
+                    dictionaryNulls.length() == first.length() &&
+                    dictionaryNulls.values().length() == domainSize &&
+                    first.hasSameRowMapping(dictionaryNulls)) {
+                dictionaryDomainKeyNulls[key] = dictionaryNulls.values();
+            }
+            else {
+                return false;
+            }
+        }
+        if ((long) domainSize * dictionaryDomainAggregationMinReduction > mask.count()) {
+            return false;
+        }
+        if (!groupedDomainInput && !(mask.all() && first.hasDomainFrequencies()) && domainSize > Long.SIZE) {
+            return false;
+        }
+
+        ensureDictionaryDomainScratchCapacity(domainSize);
+        Arrays.fill(dictionaryDomainCounts, 0, domainSize, 0);
+        int usedDomains = 0;
+        Mask.DictionaryDomainSelection selection = mask.dictionaryDomainSelection(first);
+        if ((mask.all() || selection != null) && first.hasDomainFrequencies()) {
+            for (int domain = 0; domain < domainSize; domain++) {
+                int frequency = selection == null || selection.selects(domain) ? first.domainFrequency(domain) : 0;
+                dictionaryDomainCounts[domain] = frequency;
+                if (frequency != 0) {
+                    dictionaryDomainRepresentatives[usedDomains++] = domain;
+                }
+            }
+        }
+        else {
+            for (int position : mask) {
+                int domain = ids[position];
+                if (dictionaryDomainCounts[domain]++ == 0) {
+                    dictionaryDomainRepresentatives[usedDomains++] = domain;
+                }
+            }
+        }
+        if (usedDomains == 0) {
+            return true;
+        }
+
+        if (reusableDictionaryDomainMask == null) {
+            reusableDictionaryDomainMask = allocator.allocateSparseMask(
+                    allocationContext,
+                    dictionaryDomainRepresentatives,
+                    usedDomains,
+                    domainSize);
+        }
+        else {
+            allocator.overwriteSparseMask(
+                    allocationContext,
+                    reusableDictionaryDomainMask,
+                    dictionaryDomainRepresentatives,
+                    usedDomains,
+                    domainSize);
+        }
+        reusableDictionaryDomainGroups = allocator.reallocateIfNecessary(
+                allocationContext,
+                reusableDictionaryDomainGroups,
+                I64Vector.class,
+                domainSize,
+                I64Vector::new);
+
+        long previousMaxGroup = maxObservedGroup;
+        long start = System.nanoTime();
+        try {
+            inlineGroupingState.assignGroups(
+                    dictionaryDomainKeyValues,
+                    dictionaryDomainKeyNulls,
+                    reusableDictionaryDomainMask,
+                    reusableDictionaryDomainGroups);
+        }
+        finally {
+            phaseMetrics.recordGrouping(System.nanoTime() - start);
+        }
+        prepareAggregationStateForCurrentGroups(previousMaxGroup);
+
+        start = System.nanoTime();
+        try {
+            if (groupedDomainInput) {
+                GroupedAggregationDomain domain = new GroupedAggregationDomain(
+                        reusableDictionaryDomainGroups,
+                        dictionaryDomainCounts,
+                        domainSize);
+                for (int aggregationIndex : plainAggregationIndexes) {
+                    aggregations[aggregationIndex].accumulateGroupedDomain(states[aggregationIndex], domain, streams);
+                }
+            }
+            else {
+                DictionaryVector encodedGroups = mask.all() && first.hasDomainFrequencies()
+                        ? first.sharedMappingWithValues(reusableDictionaryDomainGroups)
+                        : first.sharedMappingWithValuesAndDomainPresence(
+                                reusableDictionaryDomainGroups,
+                                domainPresence(dictionaryDomainCounts, domainSize));
+                for (int aggregationIndex : plainAggregationIndexes) {
+                    aggregations[aggregationIndex].accumulate(states[aggregationIndex], encodedGroups, mask, streams);
+                }
+            }
+        }
+        finally {
+            phaseMetrics.recordAccumulation(System.nanoTime() - start);
+        }
+        return true;
+    }
+
+    private void prepareAggregationStateForCurrentGroups(long previousMaxGroup)
+    {
+        maxObservedGroup = inlineGroupingState.groupCount() - 1;
+        int requiredCapacity = toIntExact(maxObservedGroup + 1);
+        int defaultCapacity = Allocator.computeCapacity(requiredCapacity);
+        int newCapacity = requiredCapacity;
+        for (PhysicalAggregationUnit aggregation : aggregations) {
+            int preferredCapacity = aggregation.stateCapacity(requiredCapacity, defaultCapacity);
+            if (preferredCapacity < requiredCapacity) {
+                throw new IllegalArgumentException("aggregation state capacity is less than required group count");
+            }
+            newCapacity = Math.max(newCapacity, preferredCapacity);
+        }
+        long start = System.nanoTime();
+        try {
+            prepareAggregationStates(previousMaxGroup, maxObservedGroup, newCapacity);
+        }
+        finally {
+            phaseMetrics.recordStatePreparation(System.nanoTime() - start);
+        }
+    }
+
+    private static long domainPresence(int[] counts, int domainSize)
+    {
+        if (domainSize > Long.SIZE) {
+            throw new IllegalArgumentException("dictionary domain presence requires at most 64 entries");
+        }
+        long presence = 0;
+        for (int domain = 0; domain < domainSize; domain++) {
+            if (counts[domain] != 0) {
+                presence |= 1L << domain;
+            }
+        }
+        return presence;
     }
 
     private boolean supportsEncodedGroupedInput()

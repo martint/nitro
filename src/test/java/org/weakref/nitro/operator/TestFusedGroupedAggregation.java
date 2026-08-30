@@ -540,6 +540,66 @@ class TestFusedGroupedAggregation
     }
 
     @Test
+    void registeredAggregationConsumesSharedCompositeDictionaryDomain()
+    {
+        int size = 16_384;
+        int[] ids = new int[size];
+        int[] frequencies = new int[4];
+        long[] firstKeys = {1, 1, 2, 2};
+        long[] secondKeys = {10, 20, 10, 20};
+        long[] thirdKeys = {100, 200, 300, 400};
+        Map<String, Long> expected = new HashMap<>();
+        for (int position = 0; position < size; position++) {
+            int id = (position * 3 + 1) & 3;
+            ids[position] = id;
+            frequencies[id]++;
+            expected.merge(firstKeys[id] + ":" + secondKeys[id] + ":" + thirdKeys[id], 1L, Long::sum);
+        }
+
+        WeightedDomainCount implementation = new WeightedDomainCount();
+        PhysicalAggregationProgram program = PhysicalAggregationProgram.singleUnit(
+                new RegisteredAggregationUnit(implementation, RAW, FINAL, new int[0]));
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        DictionaryVector firstDictionary = DictionaryVector.ofTrustedIdsWithDomainFrequencies(
+                ids,
+                size,
+                new I64Vector(firstKeys),
+                frequencies);
+        Operator operator = new GroupedAggregationOperator(
+                allocator,
+                List.of(0, 1, 2),
+                program,
+                new TableOperator(3, List.of(TableOperator.Page.values(
+                        size,
+                        new Vector[] {
+                                firstDictionary,
+                                firstDictionary.sharedMappingWithValues(new I64Vector(secondKeys)),
+                                firstDictionary.sharedMappingWithValues(new I64Vector(thirdKeys))},
+                        Mask.all(size)))));
+
+        Map<String, Long> actual = new HashMap<>();
+        try (operator) {
+            while (operator.hasNext()) {
+                try (Batch result = operator.next()) {
+                    VectorAccess.LongValues first = VectorAccess.longValues(result.output(0).borrow(Stream.VALUES));
+                    VectorAccess.LongValues second = VectorAccess.longValues(result.output(1).borrow(Stream.VALUES));
+                    VectorAccess.LongValues third = VectorAccess.longValues(result.output(2).borrow(Stream.VALUES));
+                    VectorAccess.LongValues counts = VectorAccess.longValues(result.output(3).borrow(Stream.VALUES));
+                    for (int position : result.borrowMask()) {
+                        actual.put(
+                                first.value(position) + ":" + second.value(position) + ":" + third.value(position),
+                                counts.value(position));
+                    }
+                }
+            }
+        }
+
+        assertThat(actual).isEqualTo(expected);
+        assertThat(implementation.groupedDomainObserved).isTrue();
+        assertThat(implementation.logicalRowsObserved).isFalse();
+    }
+
+    @Test
     void registeredAggregationConsumesCompactDictionarySelectionFrequencies()
     {
         int size = 16_384;
