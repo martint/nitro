@@ -85,6 +85,21 @@ public final class DoubleStateVector
         return new DoubleStateVector(length, chunks, retainedBytes);
     }
 
+    public static DoubleStateVector growOwned(
+            Allocator allocator,
+            Allocator.Context allocationContext,
+            DoubleStateVector previous,
+            int length)
+    {
+        DoubleStateVector grown = grow(previous, length);
+        if (previous.length >= CHUNK_SIZE) {
+            return allocator.replaceSharedGrowth(allocationContext, previous, grown);
+        }
+        grown = allocator.adopt(allocationContext, grown);
+        allocator.discard(allocationContext, previous);
+        return grown;
+    }
+
     @Override
     public int length()
     {
