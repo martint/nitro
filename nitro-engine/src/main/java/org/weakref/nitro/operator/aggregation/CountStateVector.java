@@ -82,6 +82,15 @@ public final class CountStateVector
         return new CountStateVector(length, compactChunks, wideChunks, retainedBytes);
     }
 
+    public static CountStateVector growOwned(
+            Allocator allocator,
+            Allocator.Context allocationContext,
+            CountStateVector previous,
+            int length)
+    {
+        return allocator.replaceSharedGrowth(allocationContext, previous, grow(previous, length));
+    }
+
     @Override
     public int length()
     {

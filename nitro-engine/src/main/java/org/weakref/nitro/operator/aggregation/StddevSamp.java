@@ -57,8 +57,10 @@ public class StddevSamp
         if (values.length() >= size) {
             return state;
         }
-        StddevSampStateVector grown = allocator.adopt(allocationContext, StddevSampStateVector.grow(values, size));
-        allocator.discard(allocationContext, values);
+        StddevSampStateVector grown = allocator.replaceSharedGrowth(
+                allocationContext,
+                values,
+                StddevSampStateVector.grow(values, size));
         return Streams.ofValues(grown);
     }
 

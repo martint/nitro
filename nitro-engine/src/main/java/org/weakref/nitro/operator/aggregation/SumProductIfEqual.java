@@ -60,8 +60,7 @@ public final class SumProductIfEqual
         if (values.length() >= size) {
             return state;
         }
-        SumStateVector grown = allocator.adopt(allocationContext, SumStateVector.grow(values, size));
-        allocator.discard(allocationContext, values);
+        SumStateVector grown = SumStateVector.growOwned(allocator, allocationContext, values, size);
         return Streams.ofValues(grown);
     }
 

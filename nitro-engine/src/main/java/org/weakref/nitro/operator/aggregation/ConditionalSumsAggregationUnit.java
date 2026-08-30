@@ -107,8 +107,7 @@ public final class ConditionalSumsAggregationUnit
         SumStateVector[] sums = state.sums();
         for (int index = 0; index < sums.length; index++) {
             SumStateVector current = sums[index];
-            sums[index] = allocator.adopt(allocationContext, SumStateVector.grow(current, size));
-            allocator.discard(allocationContext, current);
+            sums[index] = SumStateVector.growOwned(allocator, allocationContext, current, size);
         }
         return new State(state.arrayPool(), sums, Arrays.copyOf(state.fullyInitialized(), size));
     }

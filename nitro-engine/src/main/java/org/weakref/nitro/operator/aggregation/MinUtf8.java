@@ -54,8 +54,7 @@ public class MinUtf8
         if (values.length() >= size) {
             return state;
         }
-        MinUtf8StateVector grown = allocator.adopt(allocationContext, MinUtf8StateVector.grow(values, size));
-        allocator.discard(allocationContext, values);
+        MinUtf8StateVector grown = MinUtf8StateVector.growOwned(allocator, allocationContext, values, size);
         return Streams.ofValues(grown);
     }
 

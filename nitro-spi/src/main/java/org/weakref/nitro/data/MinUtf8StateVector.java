@@ -55,6 +55,15 @@ public final class MinUtf8StateVector
         return new MinUtf8StateVector(length, chunks, source.retainedBytes - source.length + length);
     }
 
+    public static MinUtf8StateVector growOwned(
+            Allocator allocator,
+            Allocator.Context allocationContext,
+            MinUtf8StateVector source,
+            int length)
+    {
+        return allocator.replaceSharedGrowth(allocationContext, source, grow(source, length));
+    }
+
     @Override
     public int length()
     {

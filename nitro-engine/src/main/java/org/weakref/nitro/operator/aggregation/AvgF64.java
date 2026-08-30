@@ -54,8 +54,10 @@ public class AvgF64
         if (values.length() >= size) {
             return state;
         }
-        AvgStateVector grown = allocator.adopt(allocationContext, AvgStateVector.grow(values, size));
-        allocator.discard(allocationContext, values);
+        AvgStateVector grown = allocator.replaceSharedGrowth(
+                allocationContext,
+                values,
+                AvgStateVector.grow(values, size));
         return Streams.ofValues(grown);
     }
 

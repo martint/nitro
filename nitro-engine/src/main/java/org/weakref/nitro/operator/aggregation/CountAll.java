@@ -52,8 +52,7 @@ public class CountAll
         if (values.length() >= size) {
             return state;
         }
-        CountStateVector grown = allocator.adopt(allocationContext, CountStateVector.grow(values, size));
-        allocator.discard(allocationContext, values);
+        CountStateVector grown = CountStateVector.growOwned(allocator, allocationContext, values, size);
         return Streams.ofValues(grown);
     }
 

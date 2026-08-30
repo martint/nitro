@@ -113,6 +113,23 @@ public final class SumStateVector
         return grown;
     }
 
+    public static SumStateVector growOwned(
+            Allocator allocator,
+            Allocator.Context allocationContext,
+            SumStateVector previous,
+            int length)
+    {
+        SumStateVector grown = grow(previous, length);
+        // The compact first chunk is exactly sized and must be copied while it is still below CHUNK_SIZE.
+        // Once the first full chunk exists, growth retains every existing chunk and only appends new ones.
+        if (previous.length >= CHUNK_SIZE) {
+            return allocator.replaceSharedGrowth(allocationContext, previous, grown);
+        }
+        grown = allocator.adopt(allocationContext, grown);
+        allocator.discard(allocationContext, previous);
+        return grown;
+    }
+
     @Override
     public int length()
     {

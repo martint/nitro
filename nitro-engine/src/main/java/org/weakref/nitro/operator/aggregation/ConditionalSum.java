@@ -103,8 +103,7 @@ public final class ConditionalSum
         if (current.length() >= size) {
             return state;
         }
-        SumStateVector grown = allocator.adopt(allocationContext, SumStateVector.grow(current, size));
-        allocator.discard(allocationContext, current);
+        SumStateVector grown = SumStateVector.growOwned(allocator, allocationContext, current, size);
         return Streams.ofValues(grown);
     }
 
