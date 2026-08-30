@@ -2612,6 +2612,12 @@ public class HashJoinOperator
                     !probeOuterJoin &&
                     (currentOuterBatchFullyConsumed() || !hasDenseOuterRange());
         }
+        if (encodingLeaf(values).isVariableWidth()) {
+            // Keep variable-width domains encoded across the join. Flattening duplicates their byte storage and
+            // discards physical identity that downstream TopN/grouping can consume directly. Fixed-width values do
+            // not have that ownership/copy penalty and retain the sampled locality admission below.
+            return false;
+        }
 
         int sampleSize = Math.min(currentOutputCount, outputPolicy.outerMaterializationSampleSize());
         int[] physicalPositions = outerMaterializationPositions(sampleSize);

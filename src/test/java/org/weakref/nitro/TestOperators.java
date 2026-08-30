@@ -7714,7 +7714,7 @@ public class TestOperators
     }
 
     @Test
-    void testHashJoinFlattensLowReuseEncodedBinaryPayloadWithoutRebuildingDictionary()
+    void testHashJoinPreservesLowReuseEncodedBinaryPayload()
     {
         I64Vector keys = new I64Vector(new long[] {1L, 2L, 3L});
         BinaryVector binary = new BinaryVector(3, 14);
@@ -7771,11 +7771,10 @@ public class TestOperators
                 0);
                 Batch batch = join.next()) {
             Vector result = batch.output(1).borrow(Stream.VALUES);
-            assertThat(result).isInstanceOf(BinaryVector.class);
-            BinaryVector output = (BinaryVector) result;
-            assertThat(new String(output.data(), output.offsets()[0], output.offsets()[1] - output.offsets()[0], UTF_8)).isEqualTo("alpha");
-            assertThat(new String(output.data(), output.offsets()[1], output.offsets()[2] - output.offsets()[1], UTF_8)).isEqualTo("beta");
-            assertThat(new String(output.data(), output.offsets()[2], output.offsets()[3] - output.offsets()[2], UTF_8)).isEqualTo("gamma");
+            assertThat(result).isInstanceOf(DictionaryVector.class);
+            DictionaryVector output = (DictionaryVector) result;
+            assertThat(output.values()).isSameAs(payload);
+            assertThat(output.ids()).containsExactly(0, 1, 2);
         }
     }
 
