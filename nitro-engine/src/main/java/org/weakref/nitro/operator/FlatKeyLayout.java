@@ -38,6 +38,109 @@ import static java.nio.ByteOrder.LITTLE_ENDIAN;
 class FlatKeyLayout
 {
     private static final int COMPACT_BINARY_SAMPLE_SIZE = 64;
+
+    /**
+     * One stable receiver class for every integer field. VectorAccess normally returns a shape-specific lambda;
+     * a composite key containing (for example) I32 and I64 fields therefore makes the hot value call polymorphic.
+     * Rebinding this owner-held accessor once per batch keeps the call monomorphic while retaining the same exact
+     * flat, dictionary, RLE, and fallback semantics.
+     */
+    private static final class PhysicalLongValues
+            implements VectorAccess.LongValues
+    {
+        private static final byte I64 = 0;
+        private static final byte I32 = 1;
+        private static final byte DICTIONARY_I64 = 2;
+        private static final byte DICTIONARY_I32 = 3;
+        private static final byte CONSTANT = 4;
+        private static final byte GENERIC = 5;
+
+        private byte kind;
+        private long[] longs;
+        private int[] ints;
+        private int[] ids;
+        private long constant;
+        private VectorAccess.LongValues generic;
+
+        PhysicalLongValues bind(Vector vector)
+        {
+            clear();
+            switch (vector) {
+                case I64Vector values -> {
+                    kind = I64;
+                    longs = values.values();
+                }
+                case I32Vector values -> {
+                    kind = I32;
+                    ints = values.values();
+                }
+                case DictionaryVector dictionary when dictionary.values() instanceof I64Vector values -> {
+                    kind = DICTIONARY_I64;
+                    longs = values.values();
+                    ids = dictionary.ids();
+                }
+                case DictionaryVector dictionary when dictionary.values() instanceof I32Vector values -> {
+                    kind = DICTIONARY_I32;
+                    ints = values.values();
+                    ids = dictionary.ids();
+                }
+                case RleVector rle when rle.counts().length == 1 -> {
+                    kind = CONSTANT;
+                    constant = VectorAccess.longValues(rle.values()).value(0);
+                }
+                default -> {
+                    kind = GENERIC;
+                    generic = VectorAccess.longValues(vector);
+                }
+            }
+            return this;
+        }
+
+        PhysicalLongValues bind(Vector vector, int[] positionIds)
+        {
+            clear();
+            ids = positionIds;
+            switch (vector) {
+                case I64Vector values -> {
+                    kind = DICTIONARY_I64;
+                    longs = values.values();
+                }
+                case I32Vector values -> {
+                    kind = DICTIONARY_I32;
+                    ints = values.values();
+                }
+                default -> {
+                    kind = GENERIC;
+                    VectorAccess.LongValues values = VectorAccess.longValues(vector);
+                    generic = position -> values.value(positionIds[position]);
+                }
+            }
+            return this;
+        }
+
+        private void clear()
+        {
+            longs = null;
+            ints = null;
+            ids = null;
+            generic = null;
+        }
+
+        @Override
+        public long value(int position)
+        {
+            return switch (kind) {
+                case I64 -> longs[position];
+                case I32 -> ints[position];
+                case DICTIONARY_I64 -> longs[ids[position]];
+                case DICTIONARY_I32 -> ints[ids[position]];
+                case CONSTANT -> constant;
+                case GENERIC -> generic.value(position);
+                default -> throw new IllegalStateException("Unknown physical long access kind: " + kind);
+            };
+        }
+    }
+
     private final PrimitiveArrayPool arrayPool;
     private final OperatorCodeGenerationResources codeGeneration;
     private final FlatKeyTablePolicy keyTablePolicy;
@@ -209,6 +312,7 @@ class FlatKeyLayout
     private boolean debugGeneratedDictionaryHashBatchRejectedPrinted;
     private DictionaryRecordEqualityKernel generatedRecordEqualityKernel;
     private VectorAccess.LongValues[] fieldLong;
+    private PhysicalLongValues[] physicalFieldLong;
     private VectorAccess.BooleanValues[] fieldBoolean;
     private DictionaryHashBatchKernel.BinaryHashes[] fieldBinaryHashes;
     private BinaryVector[] fieldBinaryBase;
@@ -811,6 +915,8 @@ class FlatKeyLayout
             batchPositionDictionaryMapping = new DictionaryVector[handlers.length];
             fieldLazyIntern = new boolean[handlers.length];
             fieldLong = new VectorAccess.LongValues[handlers.length];
+            physicalFieldLong = new PhysicalLongValues[handlers.length];
+            Arrays.setAll(physicalFieldLong, _ -> new PhysicalLongValues());
             fieldBoolean = new VectorAccess.BooleanValues[handlers.length];
             fieldBinaryHashes = new DictionaryHashBatchKernel.BinaryHashes[handlers.length];
             fieldBinaryBase = new BinaryVector[handlers.length];
@@ -870,7 +976,9 @@ class FlatKeyLayout
             batchFieldAllNull[index] = policy.allNullBatchMetadata() && VectorAccess.isAllTrueNulls(fieldNulls);
             // Resolve this field's typed value/null accessors once for the batch (layer-2 monomorphization).
             Vector fieldValue = channel < values.length ? values[channel] : null;
-            fieldLong[index] = fieldKinds[index] == FlatTypeHandler.Kind.LONG && fieldValue != null ? VectorAccess.longValues(fieldValue) : null;
+            fieldLong[index] = fieldKinds[index] == FlatTypeHandler.Kind.LONG && fieldValue != null
+                    ? physicalFieldLong[index].bind(fieldValue)
+                    : null;
             fieldBoolean[index] = fieldKinds[index] == FlatTypeHandler.Kind.BOOLEAN && fieldValue != null ? VectorAccess.booleanValues(fieldValue) : null;
             fieldBinaryBase[index] = null;
             fieldBinaryIds[index] = null;
@@ -944,18 +1052,7 @@ class FlatKeyLayout
                     fieldBinaryIds[index] = composed;
                 }
                 else if (fieldKinds[index] == FlatTypeHandler.Kind.LONG) {
-                    int[] positions = composed;
-                    fieldLong[index] = switch (dictionaryValues) {
-                        case I64Vector base -> {
-                            long[] leaf = base.values();
-                            yield position -> leaf[positions[position]];
-                        }
-                        case I32Vector base -> {
-                            int[] leaf = base.values();
-                            yield position -> leaf[positions[position]];
-                        }
-                        default -> fieldLong[index];
-                    };
+                    fieldLong[index] = physicalFieldLong[index].bind(dictionaryValues, composed);
                 }
             }
             int distinctCount = dictionaryValues.length();

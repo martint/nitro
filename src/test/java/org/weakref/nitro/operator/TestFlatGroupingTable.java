@@ -1701,6 +1701,61 @@ class TestFlatGroupingTable
     }
 
     @Test
+    void testCompositeGroupingSupportsChangingIntegerEncodings()
+    {
+        Vector[] initial = {
+                new I64Vector(new long[] {10, 20, 10, 30}),
+                new I32Vector(new int[] {1, 2, 1, 3}),
+                new I64Vector(new long[] {7, 7, 7, 7})};
+        Vector[] nulls = {null, null, null};
+        FlatGroupingTable table = new FlatGroupingTable(
+                FlatKeyLayout.tryCreate(initial, true, arrayPool, codeGeneration, flatKeyTablePolicy),
+                initial[0].length(),
+                true);
+        try {
+            I64Vector groups = new I64Vector(initial[0].length());
+            Mask mask = Mask.all(initial[0].length());
+            table.beginBatch(initial, nulls);
+            table.prepareBatchHashes(initial, nulls, mask);
+            long nextGroupId = 0;
+            for (int position = 0; position < initial[0].length(); position++) {
+                groups.values()[position] = table.assignGroup(initial, nulls, position, nextGroupId);
+                if (groups.values()[position] == nextGroupId) {
+                    nextGroupId++;
+                }
+            }
+            table.endBatch();
+
+            assertThat(nextGroupId).isEqualTo(3);
+            assertThat(groups.values()).containsExactly(0, 1, 0, 2);
+
+            DictionaryVector innerLongs = DictionaryVector.wrapNested(
+                    new int[] {2, 0, 1},
+                    3,
+                    new I64Vector(new long[] {10, 20, 30}));
+            Vector[] encoded = {
+                    DictionaryVector.wrapNested(new int[] {1, 0, 2, 1}, 4, innerLongs),
+                    DictionaryVector.wrap(new int[] {0, 2, 1, 0}, 4, new I32Vector(new int[] {1, 2, 3})),
+                    new RleVector(new int[] {4}, new I64Vector(new long[] {7}))};
+            table.beginBatch(encoded, nulls);
+            table.prepareBatchHashes(encoded, nulls, mask);
+            for (int position = 0; position < encoded[0].length(); position++) {
+                groups.values()[position] = table.assignGroup(encoded, nulls, position, nextGroupId);
+                if (groups.values()[position] == nextGroupId) {
+                    nextGroupId++;
+                }
+            }
+            table.endBatch();
+
+            assertThat(nextGroupId).isEqualTo(3);
+            assertThat(groups.values()).containsExactly(0, 2, 1, 0);
+        }
+        finally {
+            table.releaseBuffers();
+        }
+    }
+
+    @Test
     void testPackedIdentityAdmissionRequiresAnotherInputBatch()
     {
         int size = 4096;
