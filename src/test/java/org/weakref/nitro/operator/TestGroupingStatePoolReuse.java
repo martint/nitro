@@ -144,6 +144,112 @@ public class TestGroupingStatePoolReuse
         }
     }
 
+    @Test
+    public void testIndependentStructuralDictionaryKeysHashPhysicalCombinationsOnly()
+            throws ReflectiveOperationException
+    {
+        CountingLongSemantics firstSemantics = new CountingLongSemantics();
+        CountingLongSemantics secondSemantics = new CountingLongSemantics();
+        CountingLongSemantics thirdSemantics = new CountingLongSemantics();
+        TypeBinding firstType = countingLongType("first", firstSemantics);
+        TypeBinding secondType = countingLongType("second", secondSemantics);
+        TypeBinding thirdType = countingLongType("third", thirdSemantics);
+        int rows = 10_000;
+        int[] firstIds = new int[rows];
+        int[] secondIds = new int[rows];
+        int[] thirdIds = new int[rows];
+        for (int position = 0; position < rows; position++) {
+            firstIds[position] = position & 1;
+            secondIds[position] = position % 4 < 2 ? 0 : 1;
+            thirdIds[position] = position % 8 < 4 ? 0 : 1;
+        }
+
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            allocator.beginExecution();
+            Allocator.Context context = new Allocator.Context("shared-structural-dictionary-test");
+            GroupingState state = new GroupingState(
+                    resources.primitiveArrays(),
+                    resources.operatorCodeGeneration(),
+                    resources.groupingState(),
+                    resources.operatorResources().adaptiveLongGroupingPolicy(),
+                    resources.operatorResources().flatKeyTablePolicy(),
+                    List.of(firstType, secondType, thirdType),
+                    allocator,
+                    context);
+            I64Vector groups = new I64Vector(rows);
+            state.assignGroups(
+                    new Vector[] {
+                            DictionaryVector.wrap(firstIds, new I64Vector(new long[] {1, 2})),
+                            DictionaryVector.wrap(secondIds, new I64Vector(new long[] {10, 20})),
+                            DictionaryVector.wrap(thirdIds, new I64Vector(new long[] {100, 200}))},
+                    new Vector[] {null, null, null},
+                    Mask.all(rows),
+                    groups);
+
+            for (int position = 0; position < rows; position++) {
+                assertThat(groups.values()[position]).isEqualTo(position % 8);
+            }
+            assertThat(state.groupCount()).isEqualTo(8);
+            assertThat(firstSemantics.hashCalls + secondSemantics.hashCalls + thirdSemantics.hashCalls).isLessThan(200);
+
+            state.releaseBuffers();
+            allocator.release(context);
+        }
+    }
+
+    @Test
+    public void testIndependentStructuralDictionaryKeysRejectUnprofitableDomain()
+            throws ReflectiveOperationException
+    {
+        CountingLongSemantics firstSemantics = new CountingLongSemantics();
+        CountingLongSemantics secondSemantics = new CountingLongSemantics();
+        CountingLongSemantics thirdSemantics = new CountingLongSemantics();
+        int rows = 16;
+        int[] firstIds = new int[rows];
+        int[] secondIds = new int[rows];
+        int[] thirdIds = new int[rows];
+        for (int position = 0; position < rows; position++) {
+            firstIds[position] = position & 1;
+            secondIds[position] = position % 4 < 2 ? 0 : 1;
+            thirdIds[position] = position % 8 < 4 ? 0 : 1;
+        }
+
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            allocator.beginExecution();
+            Allocator.Context context = new Allocator.Context("unprofitable-structural-dictionary-test");
+            GroupingState state = new GroupingState(
+                    resources.primitiveArrays(),
+                    resources.operatorCodeGeneration(),
+                    resources.groupingState(),
+                    resources.operatorResources().adaptiveLongGroupingPolicy(),
+                    resources.operatorResources().flatKeyTablePolicy(),
+                    List.of(
+                            countingLongType("first-small", firstSemantics),
+                            countingLongType("second-small", secondSemantics),
+                            countingLongType("third-small", thirdSemantics)),
+                    allocator,
+                    context);
+            I64Vector groups = new I64Vector(rows);
+            state.assignGroups(
+                    new Vector[] {
+                            DictionaryVector.wrap(firstIds, new I64Vector(new long[] {1, 2})),
+                            DictionaryVector.wrap(secondIds, new I64Vector(new long[] {10, 20})),
+                            DictionaryVector.wrap(thirdIds, new I64Vector(new long[] {100, 200}))},
+                    new Vector[] {null, null, null},
+                    Mask.all(rows),
+                    groups);
+
+            assertThat(state.groupCount()).isEqualTo(8);
+            assertThat(firstSemantics.hashCalls + secondSemantics.hashCalls + thirdSemantics.hashCalls)
+                    .isGreaterThanOrEqualTo(rows * 3);
+
+            state.releaseBuffers();
+            allocator.release(context);
+        }
+    }
+
     public static boolean vectorAbsoluteIdentical(
             Vector left,
             int leftPosition,
@@ -157,6 +263,86 @@ public class TestGroupingStatePoolReuse
     public static long vectorAbsoluteHash(Vector vector, int position)
     {
         return Long.hashCode(Math.abs(((I64Vector) vector).values()[position]));
+    }
+
+    private static TypeBinding countingLongType(String name, CountingLongSemantics semantics)
+            throws ReflectiveOperationException
+    {
+        TypeOperators operators = new TypeOperators(
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.of(MethodHandles.lookup().findVirtual(
+                                CountingLongSemantics.class,
+                                "identical",
+                                MethodType.methodType(boolean.class, Vector.class, int.class, Vector.class, int.class))
+                        .bindTo(semantics)),
+                Optional.of(MethodHandles.lookup().findVirtual(
+                                CountingLongSemantics.class,
+                                "hash",
+                                MethodType.methodType(long.class, Vector.class, int.class))
+                        .bindTo(semantics)),
+                Optional.empty());
+        return new TypeBinding()
+        {
+            @Override
+            public TypeIdentity identity()
+            {
+                return new TypeIdentity("testing:counting-structural-" + name);
+            }
+
+            @Override
+            public Class<?> carrierType()
+            {
+                return long.class;
+            }
+
+            @Override
+            public TypeOperators operators()
+            {
+                return operators;
+            }
+
+            @Override
+            public Set<Class<? extends Vector>> supportedVectorTypes()
+            {
+                return Set.of(I64Vector.class);
+            }
+
+            @Override
+            public boolean supportsVector(Vector vector)
+            {
+                return vector instanceof I64Vector ||
+                        (vector instanceof DictionaryVector dictionary && dictionary.values() instanceof I64Vector);
+            }
+        };
+    }
+
+    private static final class CountingLongSemantics
+    {
+        private int hashCalls;
+
+        private boolean identical(Vector left, int leftPosition, Vector right, int rightPosition)
+        {
+            return valueAt(left, leftPosition) == valueAt(right, rightPosition);
+        }
+
+        private long hash(Vector vector, int position)
+        {
+            hashCalls++;
+            return Long.hashCode(valueAt(vector, position));
+        }
+
+        private static long valueAt(Vector vector, int position)
+        {
+            if (vector instanceof DictionaryVector dictionary) {
+                return ((I64Vector) dictionary.values()).values()[dictionary.ids()[position]];
+            }
+            return ((I64Vector) vector).values()[position];
+        }
     }
 
     @Test

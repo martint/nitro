@@ -93,6 +93,13 @@ final class GroupingState
     // Packed (generation, group id) entries avoid two independent random cache-array probes by dictionary id.
     private long[] sharedDictionaryEntriesById = new long[0];
     private int sharedDictionaryGeneration;
+    private long[] independentDictionaryGroups = new long[0];
+    private int[] independentDictionaryGenerations = new int[0];
+    private int independentDictionaryGeneration;
+    private DictionaryVector[] independentDictionaries = new DictionaryVector[0];
+    private Vector[] independentDictionaryValues = new Vector[0];
+    private Vector[] independentDictionaryNulls = new Vector[0];
+    private int[] independentDictionaryPositions = new int[0];
     long nextGroupId;
     private long nullGroup = -1;
     private boolean useLongGrouping;
@@ -720,6 +727,12 @@ final class GroupingState
         }
         initializeIfNecessary(values, nulls, mask);
         decideDictionaryFlatSingleIdentity(values, nulls, mask);
+        if (useSharedDictionaryGrouping && assignSharedDictionaryGroups(values, nulls, mask, result)) {
+            return;
+        }
+        if (structuralGrouping != null && assignIndependentDictionaryGroups(values, nulls, mask, result)) {
+            return;
+        }
         if (structuralGrouping != null) {
             nextGroupId = structuralGrouping.assignGroups(values, nulls, mask, result, nextGroupId);
             return;
@@ -786,9 +799,6 @@ final class GroupingState
             reserveFlatGroupingLookahead(mask.count(), nextGroupId - previousGroupCount);
             return;
         }
-        if (useSharedDictionaryGrouping && assignSharedDictionaryGroups(values, nulls, mask, result)) {
-            return;
-        }
         if (values.length == 1 && values[0] instanceof DictionaryVector dictionary) {
             assignDictionaryGroups(dictionary, nulls[0], mask, result);
             return;
@@ -824,6 +834,12 @@ final class GroupingState
         bytes += referenceArrayBytes(cachedSharedDictionaryValues);
         bytes += longArrayBytes(cachedSharedDictionaryGenerations);
         bytes += longArrayBytes(sharedDictionaryEntriesById);
+        bytes += longArrayBytes(independentDictionaryGroups);
+        bytes += intArrayBytes(independentDictionaryGenerations);
+        bytes += referenceArrayBytes(independentDictionaries);
+        bytes += referenceArrayBytes(independentDictionaryValues);
+        bytes += referenceArrayBytes(independentDictionaryNulls);
+        bytes += intArrayBytes(independentDictionaryPositions);
         bytes += packedIntPairControl == null ? 0 : packedIntPairControl.length;
         bytes += intArrayBytes(packedIntTripleThirdByGroup);
         bytes += packedIntTripleNullMasksByGroup.length;
@@ -905,14 +921,20 @@ final class GroupingState
             return false;
         }
         Vector[] dictionaryValues = new Vector[values.length];
+        Vector[] dictionaryNulls = structuralGrouping == null ? null : new Vector[nulls.length];
         int dictionarySize = 0;
         for (int index = 0; index < values.length; index++) {
             dictionaryValues[index] = ((DictionaryVector) values[index]).values();
+            if (dictionaryNulls != null && !VectorAccess.isAllFalseNulls(nulls[index])) {
+                dictionaryNulls[index] = ((DictionaryVector) nulls[index]).values();
+            }
             dictionarySize = Math.max(dictionarySize, dictionaryValues[index].length());
         }
         ensureSharedDictionaryCacheCapacity(dictionarySize);
         int generation = currentSharedDictionaryGeneration(dictionaryValues);
-        OperatorKeySemantics.Key[] probeKeys = sharedDictionaryFlatBacking ? null : new OperatorKeySemantics.Key[values.length];
+        OperatorKeySemantics.Key[] probeKeys = sharedDictionaryFlatBacking || structuralGrouping != null
+                ? null
+                : new OperatorKeySemantics.Key[values.length];
         long[] output = result.values();
         if (sharedDictionaryFlatBacking) {
             flatGroupingTable.beginBatch(values, nulls, mask);
@@ -926,6 +948,17 @@ final class GroupingState
                     if (sharedDictionaryFlatBacking) {
                         long newGroupId = nextGroupId;
                         groupId = flatGroupingTable.assignGroup(values, nulls, position, newGroupId);
+                        if (groupId == newGroupId) {
+                            nextGroupId++;
+                        }
+                    }
+                    else if (structuralGrouping != null) {
+                        long newGroupId = nextGroupId;
+                        groupId = structuralGrouping.assignGroup(
+                                dictionaryValues,
+                                dictionaryNulls,
+                                dictionaryId,
+                                newGroupId);
                         if (groupId == newGroupId) {
                             nextGroupId++;
                         }
@@ -952,6 +985,117 @@ final class GroupingState
                 flatGroupingTable.releasePositionIndexedScratchIfOversized(mask);
             }
         }
+    }
+
+    /**
+     * Resolves independently encoded composite keys by their bounded physical-domain cross product. Each distinct
+     * dictionary-id tuple reaches the authoritative structural index once per batch; logical rows only compute the
+     * mixed-radix tuple and reuse its group id. This preserves registered type semantics while avoiding structural
+     * hashing for every repeated logical row.
+     */
+    private boolean assignIndependentDictionaryGroups(Vector[] values, Vector[] nulls, Mask mask, I64Vector result)
+    {
+        if (!compositePolicy.independentDictionaryTupleDomain() ||
+                values.length < 2 ||
+                values.length > compositePolicy.sharedDictionaryMaxFields()) {
+            return false;
+        }
+
+        ensureIndependentDictionaryScratchCapacity(values.length);
+        int combinations = 1;
+        for (int key = 0; key < values.length; key++) {
+            if (!(values[key] instanceof DictionaryVector dictionary) ||
+                    !VectorAccess.isAllFalseNulls(nulls[key])) {
+                clearIndependentDictionaryScratch(values.length);
+                return false;
+            }
+            independentDictionaries[key] = dictionary;
+            independentDictionaryValues[key] = dictionary.values();
+            int domainSize = dictionary.values().length();
+            if (domainSize == 0 ||
+                    combinations > compositePolicy.independentDictionaryTupleDomainMaxEntries() / domainSize) {
+                clearIndependentDictionaryScratch(values.length);
+                return false;
+            }
+            combinations *= domainSize;
+        }
+        if ((long) combinations * compositePolicy.independentDictionaryTupleDomainMinimumReduction() > mask.selectedCount()) {
+            clearIndependentDictionaryScratch(values.length);
+            return false;
+        }
+
+        try {
+            ensureIndependentDictionaryCapacity(combinations);
+            int generation = nextIndependentDictionaryGeneration();
+            long[] output = result.values();
+            for (int position : mask) {
+                int combination = 0;
+                for (int key = 0; key < values.length; key++) {
+                    int dictionaryId = independentDictionaries[key].ids()[position];
+                    independentDictionaryPositions[key] = dictionaryId;
+                    combination = combination * independentDictionaryValues[key].length() + dictionaryId;
+                }
+                if (independentDictionaryGenerations[combination] != generation) {
+                    long newGroupId = nextGroupId;
+                    long groupId = structuralGrouping.assignGroup(
+                            independentDictionaryValues,
+                            independentDictionaryNulls,
+                            independentDictionaryPositions,
+                            newGroupId);
+                    if (groupId == newGroupId) {
+                        nextGroupId++;
+                    }
+                    independentDictionaryGroups[combination] = groupId;
+                    independentDictionaryGenerations[combination] = generation;
+                }
+                output[position] = independentDictionaryGroups[combination];
+            }
+            return true;
+        }
+        finally {
+            clearIndependentDictionaryScratch(values.length);
+        }
+    }
+
+    private void ensureIndependentDictionaryScratchCapacity(int keyCount)
+    {
+        if (independentDictionaries.length >= keyCount) {
+            return;
+        }
+        independentDictionaries = new DictionaryVector[keyCount];
+        independentDictionaryValues = new Vector[keyCount];
+        independentDictionaryNulls = new Vector[keyCount];
+        arrayPool.release(independentDictionaryPositions);
+        independentDictionaryPositions = arrayPool.borrowInts(keyCount);
+    }
+
+    private void clearIndependentDictionaryScratch(int keyCount)
+    {
+        Arrays.fill(independentDictionaries, 0, keyCount, null);
+        Arrays.fill(independentDictionaryValues, 0, keyCount, null);
+        Arrays.fill(independentDictionaryNulls, 0, keyCount, null);
+    }
+
+    private void ensureIndependentDictionaryCapacity(int combinations)
+    {
+        if (independentDictionaryGroups.length >= combinations) {
+            return;
+        }
+        int capacity = Math.max(combinations, Math.max(16, independentDictionaryGroups.length * 2));
+        arrayPool.release(independentDictionaryGroups);
+        arrayPool.release(independentDictionaryGenerations);
+        independentDictionaryGroups = arrayPool.borrowLongs(capacity);
+        independentDictionaryGenerations = arrayPool.borrowInts(capacity);
+        Arrays.fill(independentDictionaryGenerations, 0);
+    }
+
+    private int nextIndependentDictionaryGeneration()
+    {
+        if (independentDictionaryGeneration == Integer.MAX_VALUE) {
+            Arrays.fill(independentDictionaryGenerations, 0);
+            independentDictionaryGeneration = 0;
+        }
+        return ++independentDictionaryGeneration;
     }
 
     private static int[] sharedDictionaryIds(Vector[] values, Mask mask)
@@ -1085,14 +1229,6 @@ final class GroupingState
         }
         initialized = true;
 
-        if (!allowsLegacyKeyShortcuts) {
-            structuralGrouping = new StructuralGroupingIndex(
-                    requireNonNull(allocator, "allocator is null"),
-                    requireNonNull(allocationContext, "allocationContext is null"),
-                    structuralKeyKernels);
-            return;
-        }
-
         if (compositePolicy.debugGroupingShapes()) {
             StringBuilder shape = new StringBuilder("[grouping-shape]");
             for (Vector value : values) {
@@ -1104,6 +1240,23 @@ final class GroupingState
                 shape.append(')');
             }
             System.err.println(shape);
+        }
+
+        if (!allowsLegacyKeyShortcuts) {
+            structuralGrouping = new StructuralGroupingIndex(
+                    requireNonNull(allocator, "allocator is null"),
+                    requireNonNull(allocationContext, "allocationContext is null"),
+                    structuralKeyKernels);
+            int[] sharedIds = mask != null &&
+                    compositePolicy.sharedDictionaryComposite() &&
+                    values.length > 1 &&
+                    values.length <= compositePolicy.sharedDictionaryMaxFields()
+                    ? sharedDictionaryIds(values, mask)
+                    : null;
+            if (sharedIds != null && sharedDictionaryNullsCompatible(nulls, sharedIds, mask)) {
+                useSharedDictionaryGrouping = true;
+            }
+            return;
         }
 
         keyHandlers = new FlatTypeHandler[values.length];
@@ -3605,6 +3758,15 @@ final class GroupingState
         dictionaryGenerations = new int[0];
         arrayPool.release(sharedDictionaryEntriesById);
         sharedDictionaryEntriesById = new long[0];
+        arrayPool.release(independentDictionaryGroups);
+        independentDictionaryGroups = new long[0];
+        arrayPool.release(independentDictionaryGenerations);
+        independentDictionaryGenerations = new int[0];
+        independentDictionaries = new DictionaryVector[0];
+        independentDictionaryValues = new Vector[0];
+        independentDictionaryNulls = new Vector[0];
+        arrayPool.release(independentDictionaryPositions);
+        independentDictionaryPositions = new int[0];
         arrayPool.release(densePositionsCache);
         densePositionsCache = new int[0];
         if (multiLongTable != null) {
@@ -3652,6 +3814,7 @@ final class GroupingState
         private final Object2LongOpenHashMap<StructuralGroupingKey> groups = new Object2LongOpenHashMap<>();
         private final ArrayList<StructuralGroupingKey> representatives = new ArrayList<>();
         private final StructuralGroupingKey reusableProbe;
+        private final int[] singlePosition = new int[1];
 
         private StructuralGroupingIndex(
                 Allocator allocator,
@@ -3769,6 +3932,22 @@ final class GroupingState
             return nextGroupId;
         }
 
+        private long assignGroup(Vector[] values, Vector[] nulls, int[] positions, long nextGroupId)
+        {
+            reusableProbe.set(values, nulls, positions);
+            long groupId = groups.getLong(reusableProbe);
+            if (groupId != -1) {
+                return groupId;
+            }
+
+            Vector[] ownedValues = copyVectorPositions(values, positions);
+            Vector[] ownedNulls = copyNullableVectorPositions(nulls, positions);
+            StructuralGroupingKey key = new StructuralGroupingKey(kernels, ownedValues, ownedNulls, 0);
+            groups.put(key, nextGroupId);
+            setRepresentative(nextGroupId, key);
+            return nextGroupId;
+        }
+
         private void setRepresentative(long groupId, StructuralGroupingKey key)
         {
             int index = toIntExact(groupId);
@@ -3863,6 +4042,28 @@ final class GroupingState
             return copies;
         }
 
+        private Vector[] copyVectorPositions(Vector[] vectors, int[] positions)
+        {
+            Vector[] copies = new Vector[vectors.length];
+            for (int index = 0; index < vectors.length; index++) {
+                singlePosition[0] = positions[index];
+                copies[index] = allocator.copyVector(allocationContext, vectors[index], singlePosition);
+            }
+            return copies;
+        }
+
+        private Vector[] copyNullableVectorPositions(Vector[] vectors, int[] positions)
+        {
+            Vector[] copies = new Vector[vectors.length];
+            for (int index = 0; index < vectors.length; index++) {
+                if (vectors[index] != null) {
+                    singlePosition[0] = positions[index];
+                    copies[index] = allocator.copyVector(allocationContext, vectors[index], singlePosition);
+                }
+            }
+            return copies;
+        }
+
         private void releaseBuffers()
         {
             groups.clear();
@@ -3878,6 +4079,7 @@ final class GroupingState
         private Vector[] values;
         private Vector[] nulls;
         private int position;
+        private int[] positions;
 
         private StructuralGroupingKey(StructuralKeyKernel[] kernels)
         {
@@ -3894,6 +4096,7 @@ final class GroupingState
             this.values = values;
             this.nulls = nulls;
             this.position = position;
+            this.positions = null;
         }
 
         private void set(Vector[] values, Vector[] nulls, int position)
@@ -3901,6 +4104,14 @@ final class GroupingState
             this.values = values;
             this.nulls = nulls;
             this.position = position;
+            this.positions = null;
+        }
+
+        private void set(Vector[] values, Vector[] nulls, int[] positions)
+        {
+            this.values = values;
+            this.nulls = nulls;
+            this.positions = positions;
         }
 
         @Override
@@ -3908,9 +4119,10 @@ final class GroupingState
         {
             int hash = 1;
             for (int keyIndex = 0; keyIndex < kernels.length; keyIndex++) {
-                int keyHash = OperatorVectorSupport.isNull(nulls[keyIndex], position)
+                int keyPosition = position(keyIndex);
+                int keyHash = OperatorVectorSupport.isNull(nulls[keyIndex], keyPosition)
                         ? NULL_HASH
-                        : Long.hashCode(kernels[keyIndex].hash(values[keyIndex], nulls[keyIndex], position));
+                        : Long.hashCode(kernels[keyIndex].hash(values[keyIndex], nulls[keyIndex], keyPosition));
                 hash = 31 * hash + keyHash;
             }
             return hash;
@@ -3923,8 +4135,10 @@ final class GroupingState
                 return false;
             }
             for (int keyIndex = 0; keyIndex < kernels.length; keyIndex++) {
-                boolean leftNull = OperatorVectorSupport.isNull(nulls[keyIndex], position);
-                boolean rightNull = OperatorVectorSupport.isNull(other.nulls[keyIndex], other.position);
+                int leftPosition = position(keyIndex);
+                int rightPosition = other.position(keyIndex);
+                boolean leftNull = OperatorVectorSupport.isNull(nulls[keyIndex], leftPosition);
+                boolean rightNull = OperatorVectorSupport.isNull(other.nulls[keyIndex], rightPosition);
                 if (leftNull || rightNull) {
                     if (leftNull != rightNull) {
                         return false;
@@ -3934,14 +4148,19 @@ final class GroupingState
                 if (!kernels[keyIndex].identical(
                         values[keyIndex],
                         nulls[keyIndex],
-                        position,
+                        leftPosition,
                         other.values[keyIndex],
                         other.nulls[keyIndex],
-                        other.position)) {
+                        rightPosition)) {
                     return false;
                 }
             }
             return true;
+        }
+
+        private int position(int keyIndex)
+        {
+            return positions == null ? position : positions[keyIndex];
         }
     }
 

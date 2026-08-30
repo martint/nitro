@@ -24,6 +24,9 @@ public record CompositeGroupingPolicy(
         int sharedDictionaryMaxFields,
         int sharedDictionarySampleSize,
         int sharedDictionaryMaxDistinctPercent,
+        boolean independentDictionaryTupleDomain,
+        int independentDictionaryTupleDomainMinimumReduction,
+        int independentDictionaryTupleDomainMaxEntries,
         boolean sharedDictionaryFlatBacking,
         int sharedDictionaryFlatBackingMinFields,
         int sharedDictionaryFlatBackingMinRows,
@@ -57,6 +60,8 @@ public record CompositeGroupingPolicy(
         if (sharedDictionaryMaxFields <= 0 ||
                 sharedDictionarySampleSize < 0 ||
                 sharedDictionaryMaxDistinctPercent < 0 ||
+                independentDictionaryTupleDomainMinimumReduction <= 0 ||
+                independentDictionaryTupleDomainMaxEntries <= 0 ||
                 sharedDictionaryFlatBackingMinFields <= 0 ||
                 sharedDictionaryFlatBackingMinRows < 0 ||
                 generatedCompactLongMinArity <= 0 ||
@@ -85,6 +90,9 @@ public record CompositeGroupingPolicy(
                 3,
                 128,
                 75,
+                true,
+                4,
+                1 << 16,
                 true,
                 3,
                 1 << 12,
@@ -123,6 +131,9 @@ public record CompositeGroupingPolicy(
                 sharedDictionaryMaxFields,
                 sharedDictionarySampleSize,
                 sharedDictionaryMaxDistinctPercent,
+                independentDictionaryTupleDomain,
+                independentDictionaryTupleDomainMinimumReduction,
+                independentDictionaryTupleDomainMaxEntries,
                 sharedDictionaryFlatBacking,
                 sharedDictionaryFlatBackingMinFields,
                 sharedDictionaryFlatBackingMinRows,
@@ -169,6 +180,9 @@ public record CompositeGroupingPolicy(
                 sharedDictionaryMaxFields,
                 sharedDictionarySampleSize,
                 sharedDictionaryMaxDistinctPercent,
+                independentDictionaryTupleDomain,
+                independentDictionaryTupleDomainMinimumReduction,
+                independentDictionaryTupleDomainMaxEntries,
                 sharedDictionaryFlatBacking,
                 sharedDictionaryFlatBackingMinFields,
                 sharedDictionaryFlatBackingMinRows,
@@ -210,6 +224,15 @@ public record CompositeGroupingPolicy(
                 Integer.getInteger(
                         "nitro.group.sharedDictionaryMaxDistinctPercent",
                         defaults.sharedDictionaryMaxDistinctPercent()),
+                booleanProperty(
+                        "nitro.group.independentDictionaryTupleDomain",
+                        defaults.independentDictionaryTupleDomain()),
+                Integer.getInteger(
+                        "nitro.group.independentDictionaryTupleDomainMinimumReduction",
+                        defaults.independentDictionaryTupleDomainMinimumReduction()),
+                Integer.getInteger(
+                        "nitro.group.independentDictionaryTupleDomainMaxEntries",
+                        defaults.independentDictionaryTupleDomainMaxEntries()),
                 booleanProperty("nitro.group.sharedDictionaryFlatBacking", defaults.sharedDictionaryFlatBacking()),
                 Integer.getInteger(
                         "nitro.group.sharedDictionaryFlatBackingMinFields",
