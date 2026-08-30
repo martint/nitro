@@ -13,7 +13,9 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.core.type.BoundTypeKey;
 import org.weakref.nitro.core.type.TypeBinding;
+import org.weakref.nitro.core.type.TypeKeyBinder;
 import org.weakref.nitro.core.type.TypeOperators;
 import org.weakref.nitro.data.ArrayVector;
 import org.weakref.nitro.data.DictionaryVector;
@@ -84,7 +86,8 @@ public final class StructuralTypeKernelFactory
             return new DirectStructuralKeyKernel(
                     type,
                     operators.vectorHash().orElseThrow(),
-                    operators.vectorIdentical().orElseThrow());
+                    operators.vectorIdentical().orElseThrow(),
+                    type.keyBinder().orElse(null));
         }
         boolean hasValueRead = operators.valueRead().isPresent();
         boolean hasHash = operators.hash().isPresent();
@@ -832,11 +835,26 @@ public final class StructuralTypeKernelFactory
 
         private final MethodHandle hash;
         private final MethodHandle identical;
+        private final TypeKeyBinder keyBinder;
 
-        private DirectStructuralKeyKernel(TypeBinding type, MethodHandle hash, MethodHandle identical)
+        private DirectStructuralKeyKernel(
+                TypeBinding type,
+                MethodHandle hash,
+                MethodHandle identical,
+                TypeKeyBinder keyBinder)
         {
             this.hash = requireDirectType(type, "vectorHash", hash, HASH_TYPE);
             this.identical = requireDirectType(type, "vectorIdentical", identical, IDENTICAL_TYPE);
+            this.keyBinder = keyBinder;
+        }
+
+        @Override
+        public Bound bind(Vector values)
+        {
+            if (keyBinder == null) {
+                return StructuralKeyKernel.super.bind(values);
+            }
+            return new ProviderBoundKey(this, requireNonNull(keyBinder.bind(values), "key binder returned null"));
         }
 
         @Override
@@ -872,6 +890,34 @@ public final class StructuralTypeKernelFactory
             catch (Throwable throwable) {
                 throw new IllegalStateException("Direct structural identity comparison failed", throwable);
             }
+        }
+    }
+
+    private static final class ProviderBoundKey
+            implements StructuralKeyKernel.Bound
+    {
+        private final StructuralKeyKernel owner;
+        private final BoundTypeKey key;
+
+        private ProviderBoundKey(StructuralKeyKernel owner, BoundTypeKey key)
+        {
+            this.owner = owner;
+            this.key = key;
+        }
+
+        @Override
+        public long hash(int position)
+        {
+            return key.hash(position);
+        }
+
+        @Override
+        public boolean identical(int position, StructuralKeyKernel.Bound other, int otherPosition)
+        {
+            if (!(other instanceof ProviderBoundKey right) || owner != right.owner) {
+                throw new IllegalArgumentException("bound key was created by a different kernel");
+            }
+            return key.identical(position, right.key, otherPosition);
         }
     }
 

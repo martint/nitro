@@ -3835,6 +3835,7 @@ final class GroupingState
                 I64Vector result,
                 long nextGroupId)
         {
+            StructuralKeyKernel.Bound[] boundKeys = bind(values);
             groups.ensureCapacity(groups.size() + mask.count());
             Object2LongOpenHashMap<StructuralGroupingKey> newGroups = new Object2LongOpenHashMap<>();
             newGroups.defaultReturnValue(-1);
@@ -3842,13 +3843,13 @@ final class GroupingState
             int newGroupCount = 0;
             long[] output = result.values();
             for (int position : mask) {
-                reusableProbe.set(values, nulls, position);
+                reusableProbe.set(values, nulls, boundKeys, position);
                 long groupId = groups.getLong(reusableProbe);
                 if (groupId == -1) {
                     groupId = newGroups.getLong(reusableProbe);
                     if (groupId == -1) {
                         groupId = nextGroupId + newGroupCount;
-                        newGroups.put(new StructuralGroupingKey(kernels, values, nulls, position), groupId);
+                        newGroups.put(new StructuralGroupingKey(kernels, values, nulls, boundKeys, position), groupId);
                         newGroupPositions[newGroupCount++] = position;
                     }
                 }
@@ -3861,8 +3862,10 @@ final class GroupingState
             int[] positions = Arrays.copyOf(newGroupPositions, newGroupCount);
             Vector[] ownedValues = copyVectors(values, positions);
             Vector[] ownedNulls = copyNullableVectors(nulls, positions);
+            StructuralKeyKernel.Bound[] ownedBoundKeys = bind(ownedValues);
             for (int position = 0; position < newGroupCount; position++) {
-                StructuralGroupingKey key = new StructuralGroupingKey(kernels, ownedValues, ownedNulls, position);
+                StructuralGroupingKey key = new StructuralGroupingKey(
+                        kernels, ownedValues, ownedNulls, ownedBoundKeys, position);
                 long groupId = nextGroupId + position;
                 groups.put(key, groupId);
                 setRepresentative(groupId, key);
@@ -3884,17 +3887,18 @@ final class GroupingState
             int newGroupCount = 0;
             Vector[] values = {dictionaryValues};
             Vector[] nulls = {null};
+            StructuralKeyKernel.Bound[] boundKeys = bind(values);
             for (int domain = 0; domain < domainSize; domain++) {
                 if (counts[domain] == 0) {
                     continue;
                 }
-                reusableProbe.set(values, nulls, domain);
+                reusableProbe.set(values, nulls, boundKeys, domain);
                 long groupId = groups.getLong(reusableProbe);
                 if (groupId == -1) {
                     groupId = newGroups.getLong(reusableProbe);
                     if (groupId == -1) {
                         groupId = nextGroupId + newGroupCount;
-                        newGroups.put(new StructuralGroupingKey(kernels, values, nulls, domain), groupId);
+                        newGroups.put(new StructuralGroupingKey(kernels, values, nulls, boundKeys, domain), groupId);
                         newGroupPositions[newGroupCount++] = domain;
                     }
                 }
@@ -3906,8 +3910,10 @@ final class GroupingState
 
             int[] positions = Arrays.copyOf(newGroupPositions, newGroupCount);
             Vector[] ownedValues = copyVectors(values, positions);
+            StructuralKeyKernel.Bound[] ownedBoundKeys = bind(ownedValues);
             for (int position = 0; position < newGroupCount; position++) {
-                StructuralGroupingKey key = new StructuralGroupingKey(kernels, ownedValues, nulls, position);
+                StructuralGroupingKey key = new StructuralGroupingKey(
+                        kernels, ownedValues, nulls, ownedBoundKeys, position);
                 long groupId = nextGroupId + position;
                 groups.put(key, groupId);
                 setRepresentative(groupId, key);
@@ -3917,7 +3923,8 @@ final class GroupingState
 
         private long assignGroup(Vector[] values, Vector[] nulls, int position, long nextGroupId)
         {
-            reusableProbe.set(values, nulls, position);
+            StructuralKeyKernel.Bound[] boundKeys = bind(values);
+            reusableProbe.set(values, nulls, boundKeys, position);
             long groupId = groups.getLong(reusableProbe);
             if (groupId != -1) {
                 return groupId;
@@ -3926,7 +3933,8 @@ final class GroupingState
             int[] positions = {position};
             Vector[] ownedValues = copyVectors(values, positions);
             Vector[] ownedNulls = copyNullableVectors(nulls, positions);
-            StructuralGroupingKey key = new StructuralGroupingKey(kernels, ownedValues, ownedNulls, 0);
+            StructuralGroupingKey key = new StructuralGroupingKey(
+                    kernels, ownedValues, ownedNulls, bind(ownedValues), 0);
             groups.put(key, nextGroupId);
             setRepresentative(nextGroupId, key);
             return nextGroupId;
@@ -3934,7 +3942,8 @@ final class GroupingState
 
         private long assignGroup(Vector[] values, Vector[] nulls, int[] positions, long nextGroupId)
         {
-            reusableProbe.set(values, nulls, positions);
+            StructuralKeyKernel.Bound[] boundKeys = bind(values);
+            reusableProbe.set(values, nulls, boundKeys, positions);
             long groupId = groups.getLong(reusableProbe);
             if (groupId != -1) {
                 return groupId;
@@ -3942,7 +3951,8 @@ final class GroupingState
 
             Vector[] ownedValues = copyVectorPositions(values, positions);
             Vector[] ownedNulls = copyNullableVectorPositions(nulls, positions);
-            StructuralGroupingKey key = new StructuralGroupingKey(kernels, ownedValues, ownedNulls, 0);
+            StructuralGroupingKey key = new StructuralGroupingKey(
+                    kernels, ownedValues, ownedNulls, bind(ownedValues), 0);
             groups.put(key, nextGroupId);
             setRepresentative(nextGroupId, key);
             return nextGroupId;
@@ -3961,8 +3971,17 @@ final class GroupingState
 
         private boolean contains(Vector[] values, Vector[] nulls, int position)
         {
-            reusableProbe.set(values, nulls, position);
+            reusableProbe.set(values, nulls, bind(values), position);
             return groups.getLong(reusableProbe) != -1;
+        }
+
+        private StructuralKeyKernel.Bound[] bind(Vector[] values)
+        {
+            StructuralKeyKernel.Bound[] result = new StructuralKeyKernel.Bound[kernels.length];
+            for (int index = 0; index < kernels.length; index++) {
+                result[index] = kernels[index].bind(values[index]);
+            }
+            return result;
         }
 
         private Streams groupedValues(
@@ -4078,6 +4097,7 @@ final class GroupingState
         private final StructuralKeyKernel[] kernels;
         private Vector[] values;
         private Vector[] nulls;
+        private StructuralKeyKernel.Bound[] boundKeys;
         private int position;
         private int[] positions;
 
@@ -4090,27 +4110,39 @@ final class GroupingState
                 StructuralKeyKernel[] kernels,
                 Vector[] values,
                 Vector[] nulls,
+                StructuralKeyKernel.Bound[] boundKeys,
                 int position)
         {
             this.kernels = kernels;
             this.values = values;
             this.nulls = nulls;
+            this.boundKeys = boundKeys;
             this.position = position;
             this.positions = null;
         }
 
-        private void set(Vector[] values, Vector[] nulls, int position)
+        private void set(
+                Vector[] values,
+                Vector[] nulls,
+                StructuralKeyKernel.Bound[] boundKeys,
+                int position)
         {
             this.values = values;
             this.nulls = nulls;
+            this.boundKeys = boundKeys;
             this.position = position;
             this.positions = null;
         }
 
-        private void set(Vector[] values, Vector[] nulls, int[] positions)
+        private void set(
+                Vector[] values,
+                Vector[] nulls,
+                StructuralKeyKernel.Bound[] boundKeys,
+                int[] positions)
         {
             this.values = values;
             this.nulls = nulls;
+            this.boundKeys = boundKeys;
             this.positions = positions;
         }
 
@@ -4122,7 +4154,7 @@ final class GroupingState
                 int keyPosition = position(keyIndex);
                 int keyHash = OperatorVectorSupport.isNull(nulls[keyIndex], keyPosition)
                         ? NULL_HASH
-                        : Long.hashCode(kernels[keyIndex].hash(values[keyIndex], nulls[keyIndex], keyPosition));
+                        : Long.hashCode(boundKeys[keyIndex].hash(keyPosition));
                 hash = 31 * hash + keyHash;
             }
             return hash;
@@ -4145,13 +4177,7 @@ final class GroupingState
                     }
                     continue;
                 }
-                if (!kernels[keyIndex].identical(
-                        values[keyIndex],
-                        nulls[keyIndex],
-                        leftPosition,
-                        other.values[keyIndex],
-                        other.nulls[keyIndex],
-                        rightPosition)) {
+                if (!boundKeys[keyIndex].identical(leftPosition, other.boundKeys[keyIndex], rightPosition)) {
                     return false;
                 }
             }

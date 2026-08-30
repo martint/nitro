@@ -14,8 +14,10 @@
 package org.weakref.nitro.operator;
 
 import org.junit.jupiter.api.Test;
+import org.weakref.nitro.core.type.BoundTypeKey;
 import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.core.type.TypeIdentity;
+import org.weakref.nitro.core.type.TypeKeyBinder;
 import org.weakref.nitro.core.type.TypeOperators;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
@@ -46,6 +48,89 @@ public class TestGroupingStatePoolReuse
     private final GroupingStateResources groupingResources = engineResources.groupingState();
     private final AdaptiveLongGroupingPolicy adaptiveLongGroupingPolicy = engineResources.operatorResources().adaptiveLongGroupingPolicy();
     private final FlatKeyTablePolicy flatKeyTablePolicy = engineResources.operatorResources().flatKeyTablePolicy();
+
+    @Test
+    public void testStructuralGroupingBindsProviderKeyAccessOncePerVector()
+            throws ReflectiveOperationException
+    {
+        BindingSemantics semantics = new BindingSemantics();
+        TypeOperators operators = new TypeOperators(
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.of(MethodHandles.lookup().findStatic(
+                        TestGroupingStatePoolReuse.class,
+                        "unexpectedVectorIdentical",
+                        MethodType.methodType(boolean.class, Vector.class, int.class, Vector.class, int.class))),
+                Optional.of(MethodHandles.lookup().findStatic(
+                        TestGroupingStatePoolReuse.class,
+                        "unexpectedVectorHash",
+                        MethodType.methodType(long.class, Vector.class, int.class))),
+                Optional.empty());
+        TypeBinding type = new TypeBinding()
+        {
+            @Override
+            public TypeIdentity identity()
+            {
+                return new TypeIdentity("testing:bound-key");
+            }
+
+            @Override
+            public Class<?> carrierType()
+            {
+                return long.class;
+            }
+
+            @Override
+            public TypeOperators operators()
+            {
+                return operators;
+            }
+
+            @Override
+            public Optional<TypeKeyBinder> keyBinder()
+            {
+                return Optional.of(semantics::bind);
+            }
+
+            @Override
+            public Set<Class<? extends Vector>> supportedVectorTypes()
+            {
+                return Set.of(I64Vector.class);
+            }
+        };
+
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            allocator.beginExecution();
+            Allocator.Context context = new Allocator.Context("boundKeyTest");
+            GroupingState state = new GroupingState(
+                    resources.primitiveArrays(),
+                    resources.operatorCodeGeneration(),
+                    resources.groupingState(),
+                    resources.operatorResources().adaptiveLongGroupingPolicy(),
+                    resources.operatorResources().flatKeyTablePolicy(),
+                    List.of(type),
+                    allocator,
+                    context);
+            I64Vector result = new I64Vector(4);
+            state.assignGroups(
+                    new Vector[] {new I64Vector(new long[] {-2, 1, 2, -1})},
+                    new Vector[] {null},
+                    Mask.all(4),
+                    result);
+
+            assertThat(result.values()).containsExactly(0, 1, 0, 1);
+            assertThat(state.groupCount()).isEqualTo(2);
+            assertThat(semantics.bindCalls).isEqualTo(2);
+
+            state.releaseBuffers();
+            allocator.release(context);
+        }
+    }
 
     @Test
     public void testStructuralDictionaryDomainUsesRegisteredSemantics()
@@ -263,6 +348,51 @@ public class TestGroupingStatePoolReuse
     public static long vectorAbsoluteHash(Vector vector, int position)
     {
         return Long.hashCode(Math.abs(((I64Vector) vector).values()[position]));
+    }
+
+    public static boolean unexpectedVectorIdentical(Vector left, int leftPosition, Vector right, int rightPosition)
+    {
+        throw new AssertionError("row-wise vector identity must not be used after binding");
+    }
+
+    public static long unexpectedVectorHash(Vector vector, int position)
+    {
+        throw new AssertionError("row-wise vector hash must not be used after binding");
+    }
+
+    private static final class BindingSemantics
+    {
+        private int bindCalls;
+
+        private BoundTypeKey bind(Vector vector)
+        {
+            bindCalls++;
+            return new AbsoluteBoundKey(((I64Vector) vector).values());
+        }
+    }
+
+    private static final class AbsoluteBoundKey
+            implements BoundTypeKey
+    {
+        private final long[] values;
+
+        private AbsoluteBoundKey(long[] values)
+        {
+            this.values = values;
+        }
+
+        @Override
+        public long hash(int position)
+        {
+            return Long.hashCode(Math.abs(values[position]));
+        }
+
+        @Override
+        public boolean identical(int position, BoundTypeKey other, int otherPosition)
+        {
+            AbsoluteBoundKey right = (AbsoluteBoundKey) other;
+            return Math.abs(values[position]) == Math.abs(right.values[otherPosition]);
+        }
     }
 
     private static TypeBinding countingLongType(String name, CountingLongSemantics semantics)

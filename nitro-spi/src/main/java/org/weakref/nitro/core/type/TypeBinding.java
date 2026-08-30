@@ -42,6 +42,16 @@ public interface TypeBinding
 
     TypeOperators operators();
 
+    /// Optional batch-bound key operations for physical representations whose access path is
+    /// expensive to rediscover for every logical row.
+    ///
+    /// The returned binder remains provider-owned. Operators must treat it as opaque and must
+    /// preserve [#operators()] as the semantic fallback when it is absent.
+    default Optional<TypeKeyBinder> keyBinder()
+    {
+        return Optional.empty();
+    }
+
     /// Provider-owned construction for typed constants and null placeholders.
     ///
     /// Empty is retained for compatibility bindings and types that cannot be materialized as
