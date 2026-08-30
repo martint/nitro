@@ -987,12 +987,7 @@ public class GroupedAggregationOperator
         if ((long) slots * dictionaryDomainAggregationMinReduction > mask.count()) {
             return false;
         }
-        if (dictionaryDomainCounts.length < slots) {
-            int capacity = Allocator.computeCapacity(slots);
-            dictionaryDomainCounts = new int[capacity];
-            dictionaryDomainGroups = new int[capacity];
-            dictionaryDomainRepresentatives = new int[capacity];
-        }
+        ensureDictionaryDomainScratchCapacity(slots);
         Vector keyNulls = keyOutput.borrowOrNull(Stream.NULLS);
         if (generatedUpdates && !bindDictionaryDomainInputs(batch, dictionary, keyNulls, mask, slots)) {
             generatedUpdates = false;
@@ -1453,10 +1448,7 @@ public class GroupedAggregationOperator
     private boolean resolveFusedKeyDomainGroups(Mask mask)
     {
         int domainSize = fusedBindings.keyDomainSize();
-        if (dictionaryDomainCounts.length < domainSize) {
-            dictionaryDomainCounts = new int[Allocator.computeCapacity(domainSize)];
-            dictionaryDomainGroups = new int[dictionaryDomainCounts.length];
-        }
+        ensureDictionaryDomainScratchCapacity(domainSize);
         if (fusedBindings.countKeyDomain(mask, dictionaryDomainCounts) == 0) {
             return false;
         }
@@ -1476,10 +1468,7 @@ public class GroupedAggregationOperator
     private boolean tryDictionaryDomainAggregation(Mask mask)
     {
         int domainSize = fusedBindings.keyDomainSize();
-        if (dictionaryDomainCounts.length < domainSize) {
-            dictionaryDomainCounts = new int[Allocator.computeCapacity(domainSize)];
-            dictionaryDomainGroups = new int[dictionaryDomainCounts.length];
-        }
+        ensureDictionaryDomainScratchCapacity(domainSize);
         domainSize = fusedBindings.countKeyDomain(mask, dictionaryDomainCounts);
         if (domainSize == 0) {
             return false;
@@ -1504,6 +1493,19 @@ public class GroupedAggregationOperator
             }
         }
         return true;
+    }
+
+    private void ensureDictionaryDomainScratchCapacity(int requiredSize)
+    {
+        if (dictionaryDomainCounts.length >= requiredSize &&
+                dictionaryDomainGroups.length >= requiredSize &&
+                dictionaryDomainRepresentatives.length >= requiredSize) {
+            return;
+        }
+        int capacity = Allocator.computeCapacity(requiredSize);
+        dictionaryDomainCounts = new int[capacity];
+        dictionaryDomainGroups = new int[capacity];
+        dictionaryDomainRepresentatives = new int[capacity];
     }
 
     private boolean canBatchInputIndependentFusedAccumulator()

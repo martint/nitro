@@ -466,6 +466,31 @@ class TestFusedGroupedAggregation
     }
 
     @Test
+    void dictionaryDomainScratchGrowsAcrossAdmissionBoundary()
+    {
+        long[] domain = {11, 22, 33, 44};
+        Map<Long, long[]> reference = new HashMap<>();
+        List<TableOperator.Page> pages = new ArrayList<>();
+        // Four rows per physical key admit the generated key-domain path, but not the general path whose extra
+        // slot represents SQL NULL. The following batch crosses that boundary. All reusable domain arrays must
+        // therefore grow as one invariant even though the first path does not use representative positions.
+        for (int size : new int[] {16, 20}) {
+            int[] ids = new int[size];
+            for (int position = 0; position < size; position++) {
+                int id = position & 3;
+                ids[position] = id;
+                reference.computeIfAbsent(domain[id], ignored -> new long[2])[0]++;
+            }
+            pages.add(TableOperator.Page.values(
+                    size,
+                    new Vector[] {DictionaryVector.ofTrustedIds(ids, new I64Vector(domain))},
+                    Mask.all(size)));
+        }
+
+        assertGroupedSumAndCount(pages, List.of(new CountAll()), reference, false);
+    }
+
+    @Test
     void registeredAggregationConsumesSparseDictionaryDomainFrequencies()
     {
         int size = 16_384;
