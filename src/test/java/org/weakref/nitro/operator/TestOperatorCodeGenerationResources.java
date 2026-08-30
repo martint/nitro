@@ -166,6 +166,12 @@ class TestOperatorCodeGenerationResources
         assertThat(first.mixedComposite3Grouping().create(mixedShape)).isSameAs(firstMixed);
         assertThat(second.mixedComposite3Grouping().create(mixedShape)).isNotSameAs(firstMixed);
 
+        long directShape = DirectCompositeGroupingKernelGenerator.fieldShape(0, 0, false, true);
+        directShape = DirectCompositeGroupingKernelGenerator.fieldShape(directShape, 1, true, false);
+        DirectCompositeGroupingKernel firstDirect = first.directCompositeGrouping().create(directShape, 2);
+        assertThat(first.directCompositeGrouping().create(directShape, 2)).isSameAs(firstDirect);
+        assertThat(second.directCompositeGrouping().create(directShape, 2)).isNotSameAs(firstDirect);
+
         DictionaryRecordEqualityKernelGenerator.Shape equalityShape =
                 new DictionaryRecordEqualityKernelGenerator.Shape(
                         false,
@@ -191,6 +197,9 @@ class TestOperatorCodeGenerationResources
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("Multi-long grouping table generator is closed");
         assertThatThrownBy(first::dictionaryHash)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("Operator code-generation resources are closed");
+        assertThatThrownBy(first::directCompositeGrouping)
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("Operator code-generation resources are closed");
 

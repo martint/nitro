@@ -159,6 +159,11 @@ class FlatKeyLayout
     private boolean[] compactLongDomainRejected;
     private boolean batchCompositeEncodable;
     private boolean batchCompositeEligible;
+    private VectorAccess.LongValues[] directCompositeLongValues;
+    private int[][] directCompositeDictionaryIds;
+    private int[][] directCompositeGlobalIds;
+    private int[] directCompositeRadices;
+    private long[] directCompositeLongBases;
     private boolean debugMixedCompositePrinted;
     // Concrete three-field mixed-composite state, resolved once per batch. A GroupId-style producer commonly makes
     // every key channel either all-null or null-free for the whole batch. Keep that invariant, field order, and
@@ -819,6 +824,11 @@ class FlatKeyLayout
             compactLongBase = new long[handlers.length];
             compactLongBaseSet = new boolean[handlers.length];
             compactLongDomainRejected = new boolean[handlers.length];
+            directCompositeLongValues = new VectorAccess.LongValues[handlers.length];
+            directCompositeDictionaryIds = new int[handlers.length][];
+            directCompositeGlobalIds = new int[handlers.length][];
+            directCompositeRadices = new int[handlers.length];
+            directCompositeLongBases = new long[handlers.length];
         }
         // A narrow mixed key can use compact radices whether its dictionaries are tiny or large. Tiny bases are
         // already eagerly interned by the normal policy; only a large base needs the extra eager scan so its final
@@ -1848,6 +1858,72 @@ class FlatKeyLayout
                 nextGroupId,
                 result.values(),
                 compositeCache);
+    }
+
+    /**
+     * Emit an arbitrary-arity direct-cache loop only after every field has a null-free, fully resolved physical
+     * accessor. Lazy binary interning remains on the authoritative interpreted path because a generated loop must
+     * never make value-id allocation implicit. Field order, carrier kind, radix, and compact long base are resolved
+     * once here and encoded into the generated kernel shape.
+     */
+    long assignDirectCompositeBatch(
+            FlatGroupingTable table,
+            Vector[] values,
+            Vector[] nulls,
+            Mask mask,
+            I64Vector result,
+            long nextGroupId)
+    {
+        if (!batchCompositeEligible) {
+            return -1;
+        }
+        long shape = 0;
+        int compositeSize = 1;
+        for (int order = 0; order < compositeOrder.length; order++) {
+            int field = compositeOrder[order];
+            if (!batchFieldNullFree[field]) {
+                return -1;
+            }
+            boolean binary = fieldKinds[field] == FlatTypeHandler.Kind.BINARY;
+            boolean subtractBase = !binary && handlers.length > 3 && batchMixedComposite && compactLongBaseSet[field];
+            if (binary) {
+                if (fieldLazyIntern[field] || batchDictionaryIds[field] == null || batchEntryGlobalId[field] == null) {
+                    return -1;
+                }
+                directCompositeDictionaryIds[order] = batchDictionaryIds[field];
+                directCompositeGlobalIds[order] = batchEntryGlobalId[field];
+                directCompositeLongValues[order] = null;
+                directCompositeRadices[order] = compositeRadix(field);
+                directCompositeLongBases[order] = 0;
+            }
+            else {
+                if (fieldKinds[field] != FlatTypeHandler.Kind.LONG || fieldLong[field] == null) {
+                    return -1;
+                }
+                directCompositeDictionaryIds[order] = null;
+                directCompositeGlobalIds[order] = null;
+                directCompositeLongValues[order] = fieldLong[field];
+                directCompositeRadices[order] = LONG_COMPOSITE_RADIX;
+                directCompositeLongBases[order] = subtractBase ? compactLongBase[field] : 0;
+            }
+            shape = DirectCompositeGroupingKernelGenerator.fieldShape(shape, order, binary, subtractBase);
+            compositeSize = Math.multiplyExact(compositeSize, directCompositeRadices[order]);
+        }
+        DirectCompositeGroupingKernel kernel = codeGeneration.directCompositeGrouping().create(shape, compositeOrder.length);
+        return kernel.assign(
+                mask.selectedPositions(),
+                mask.selectedCount(),
+                directCompositeLongValues,
+                directCompositeDictionaryIds,
+                directCompositeGlobalIds,
+                directCompositeRadices,
+                directCompositeLongBases,
+                table,
+                values,
+                nulls,
+                nextGroupId,
+                result.values(),
+                table.prepareCompositeCache(compositeSize));
     }
 
     private int batchNullShape(int fieldIndex)

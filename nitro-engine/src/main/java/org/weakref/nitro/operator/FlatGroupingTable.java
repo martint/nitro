@@ -1219,6 +1219,19 @@ final class FlatGroupingTable
         return layout.assignMixedComposite3Batch(this, values, nulls, mask, result, nextGroupId);
     }
 
+    long assignDirectCompositeBatch(
+            Vector[] values,
+            Vector[] nulls,
+            Mask mask,
+            I64Vector result,
+            long nextGroupId)
+    {
+        if (sparseCompositeAdmitted) {
+            return -1;
+        }
+        return layout.assignDirectCompositeBatch(this, values, nulls, mask, result, nextGroupId);
+    }
+
     public long assignGroup(Vector[] values, int position, long newGroupId)
     {
         return assignGroup(values, null, position, newGroupId);

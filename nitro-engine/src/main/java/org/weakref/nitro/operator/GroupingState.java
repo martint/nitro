@@ -1649,6 +1649,12 @@ final class GroupingState
                 nextGroupId = batchNextGroupId;
                 return;
             }
+            long directCompositeNextGroupId = flatGroupingTable.assignDirectCompositeBatch(
+                    values, nulls, mask, result, nextGroupId);
+            if (directCompositeNextGroupId >= 0) {
+                nextGroupId = directCompositeNextGroupId;
+                return;
+            }
             long prefetchedNextGroupId = flatGroupingTable.assignPrefetchedBatch(
                     values, nulls, mask, result, nextGroupId);
             if (prefetchedNextGroupId >= 0) {

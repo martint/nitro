@@ -1672,6 +1672,35 @@ class TestFlatGroupingTable
     }
 
     @Test
+    void testGeneratedDirectCompositeBatchSupportsArbitraryFieldCount()
+    {
+        Vector[] values = {
+                DictionaryVector.wrap(new int[] {0, 1, 0, 2, 1}, 5, utf8("alpha", "beta", "gamma")),
+                new I64Vector(new long[] {1, 2, 1, 3, 2}),
+                DictionaryVector.wrap(new int[] {1, 0, 1, 2, 0}, 5, utf8("left", "right", "center")),
+                new I64Vector(new long[] {10, 11, 10, 12, 11})};
+        Vector[] nulls = {null, null, null, null};
+        FlatGroupingTable table = new FlatGroupingTable(
+                FlatKeyLayout.tryCreate(values, true, arrayPool, codeGeneration, flatKeyTablePolicy),
+                values[0].length(),
+                true);
+        try {
+            I64Vector groups = new I64Vector(values[0].length());
+            Mask mask = Mask.all(values[0].length());
+            table.beginBatch(values, nulls);
+            table.prepareBatchHashes(values, nulls, mask);
+            long nextGroupId = table.assignDirectCompositeBatch(values, nulls, mask, groups, 0);
+            table.endBatch();
+
+            assertThat(nextGroupId).isEqualTo(3);
+            assertThat(groups.values()).containsExactly(0, 1, 0, 2, 1);
+        }
+        finally {
+            table.releaseBuffers();
+        }
+    }
+
+    @Test
     void testPackedIdentityAdmissionRequiresAnotherInputBatch()
     {
         int size = 4096;

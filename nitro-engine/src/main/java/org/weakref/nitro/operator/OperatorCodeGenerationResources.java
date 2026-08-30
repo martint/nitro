@@ -33,6 +33,7 @@ public final class OperatorCodeGenerationResources
     private final AdaptiveLongGroupingTableGenerator adaptiveLongGrouping = new AdaptiveLongGroupingTableGenerator();
     private final DictionaryHashBatchKernelGenerator dictionaryHash = new DictionaryHashBatchKernelGenerator();
     private final MixedComposite3GroupingKernelGenerator mixedComposite3Grouping = new MixedComposite3GroupingKernelGenerator();
+    private final DirectCompositeGroupingKernelGenerator directCompositeGrouping = new DirectCompositeGroupingKernelGenerator();
     private final NormalizedIntGroupingKernelGenerator normalizedIntGrouping = new NormalizedIntGroupingKernelGenerator();
     private final DictionaryRecordEqualityKernelGenerator dictionaryRecordEquality = new DictionaryRecordEqualityKernelGenerator();
     private final StructuralTypeKernelFactory structuralTypes = new StructuralTypeKernelFactory();
@@ -91,6 +92,12 @@ public final class OperatorCodeGenerationResources
         return mixedComposite3Grouping;
     }
 
+    DirectCompositeGroupingKernelGenerator directCompositeGrouping()
+    {
+        checkOpen();
+        return directCompositeGrouping;
+    }
+
     NormalizedIntGroupingKernelGenerator normalizedIntGrouping()
     {
         checkOpen();
@@ -122,6 +129,7 @@ public final class OperatorCodeGenerationResources
         adaptiveLongGrouping.close();
         dictionaryHash.close();
         mixedComposite3Grouping.close();
+        directCompositeGrouping.close();
         normalizedIntGrouping.close();
         dictionaryRecordEquality.close();
     }
