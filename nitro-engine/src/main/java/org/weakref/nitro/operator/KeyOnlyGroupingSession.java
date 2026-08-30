@@ -47,6 +47,7 @@ public final class KeyOnlyGroupingSession
     private final int[] groupByColumns;
     private final List<Integer> groupByColumnList;
     private final List<TypeBinding> keyTypes;
+    private final List<StructuralKeyKernel> cardinalityKeyKernels;
     private final Vector[] values;
     private final Vector[] nulls;
     private final InitialAggregationBatchBuilder outputBuilder;
@@ -100,6 +101,12 @@ public final class KeyOnlyGroupingSession
         this.nulls = new Vector[this.groupByColumns.length];
         this.distinctKeySetPolicy = operatorResources.distinctKeySetPolicy();
         this.partialAggregationControl = partialAggregationControl;
+        StructuralTypeKernelFactory structuralTypes = operatorResources.codeGeneration().structuralTypes();
+        this.cardinalityKeyKernels = partialAggregationControl == null
+                ? List.of()
+                : keyTypes.stream()
+                        .map(structuralTypes::key)
+                        .toList();
         this.allocationContext = new Allocator.Context(
                 "KeyOnlyGroupingSession",
                 operatorResources.grouping().markDistinctMaskPool());
@@ -153,6 +160,7 @@ public final class KeyOnlyGroupingSession
                 PartialAggregationInputStatistics inputStatistics = GroupingCardinalitySampler.sample(
                         batch,
                         groupByColumnList,
+                        cardinalityKeyKernels,
                         sampleSize,
                         allocator.primitiveArrays(),
                         false);

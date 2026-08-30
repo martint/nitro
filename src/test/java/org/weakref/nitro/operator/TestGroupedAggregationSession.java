@@ -30,6 +30,7 @@ import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
+import org.weakref.nitro.data.StructVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAllocator;
 import org.weakref.nitro.execution.EngineResources;
@@ -861,6 +862,45 @@ class TestGroupedAggregationSession
     }
 
     @Test
+    void testCardinalityObservationUsesTypeAuthoredStructuralKeys()
+    {
+        TypeBinding scalar = Schema.unspecified(1).field(0).type();
+        TypeBinding structType = new TestingStructType(List.of(scalar, scalar));
+        TestingPartialAggregationControl control = new TestingPartialAggregationControl();
+        control.enabled = false;
+        control.sampleSize = 4;
+        control.enableAfterCardinalityObservations = 1;
+
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                GroupedAggregationSession session = new GroupedAggregationSession(
+                        allocator,
+                        new Schema(List.of(new Field(structType, false))),
+                        List.of(0),
+                        List.of(0),
+                        PhysicalAggregationProgram.independent(List.of(new CountAll())),
+                        resources.operatorResources(),
+                        control)) {
+            allocator.beginExecution();
+            StructVector keys = new StructVector(4);
+            keys.setField("high", Streams.ofValues(new I64Vector(new long[] {1, 2, 1, 2})));
+            keys.setField("low", Streams.ofValues(new I64Vector(new long[] {10, 20, 10, 20})));
+            try (Batch input = new Batch(Mask.all(4), Output.of(Streams.ofValues(keys)))) {
+                session.addInput(input, 80);
+            }
+
+            assertThat(control.cardinalityObservations).isEqualTo(1);
+            assertThat(control.observedInput.sampledRows()).isEqualTo(4);
+            assertThat(control.observedInput.distinctKeyHashes()).isEqualTo(2);
+            assertThat(control.passthroughFlushes).isZero();
+            try (Batch result = session.finish()) {
+                assertThat(result.borrowMask().count()).isEqualTo(2);
+                assertThat(selectedLongValues(result, 1)).containsExactly(2, 2);
+            }
+        }
+    }
+
+    @Test
     void testStreamsAdaptiveFlushInBoundedBatches()
     {
         TestingPartialAggregationControl control = new TestingPartialAggregationControl();
@@ -1318,5 +1358,38 @@ class TestGroupedAggregationSession
                         (vector instanceof DictionaryVector dictionary && dictionary.values() instanceof BinaryVector);
             }
         };
+    }
+
+    private record TestingStructType(List<TypeBinding> nestedValueTypes)
+            implements TypeBinding
+    {
+        private TestingStructType
+        {
+            nestedValueTypes = List.copyOf(nestedValueTypes);
+        }
+
+        @Override
+        public TypeIdentity identity()
+        {
+            return new TypeIdentity("testing:struct-cardinality");
+        }
+
+        @Override
+        public Class<?> carrierType()
+        {
+            return Object.class;
+        }
+
+        @Override
+        public TypeOperators operators()
+        {
+            return TypeOperators.UNSPECIFIED;
+        }
+
+        @Override
+        public Set<Class<? extends Vector>> supportedVectorTypes()
+        {
+            return Set.of(StructVector.class, DictionaryVector.class);
+        }
     }
 }

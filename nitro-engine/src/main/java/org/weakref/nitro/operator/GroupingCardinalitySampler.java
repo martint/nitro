@@ -44,9 +44,23 @@ final class GroupingCardinalitySampler
             PrimitiveArrayPool arrays,
             boolean aggregationReadsInput)
     {
+        return sample(batch, groupByColumns, null, maximumSampleSize, arrays, aggregationReadsInput);
+    }
+
+    public static PartialAggregationInputStatistics sample(
+            Batch batch,
+            List<Integer> groupByColumns,
+            List<StructuralKeyKernel> keyKernels,
+            int maximumSampleSize,
+            PrimitiveArrayPool arrays,
+            boolean aggregationReadsInput)
+    {
         requireNonNull(batch, "batch is null");
         requireNonNull(groupByColumns, "groupByColumns is null");
         requireNonNull(arrays, "arrays is null");
+        if (keyKernels != null && keyKernels.size() != groupByColumns.size()) {
+            throw new IllegalArgumentException("keyKernels size does not match groupByColumns");
+        }
         if (maximumSampleSize <= 0) {
             throw new IllegalArgumentException("maximumSampleSize must be positive");
         }
@@ -83,7 +97,9 @@ final class GroupingCardinalitySampler
                 long hash = 0x9E3779B97F4A7C15L;
                 for (int key = 0; key < values.length; key++) {
                     hash = Long.rotateLeft(hash, 27) * 0xC2B2AE3D27D4EB4FL +
-                            OperatorKeySemantics.hash(values[key], nulls[key], position);
+                            (keyKernels == null
+                                    ? OperatorKeySemantics.hash(values[key], nulls[key], position)
+                                    : keyKernels.get(key).hash(values[key], nulls[key], position));
                 }
                 hashes[sample] = hash;
             }

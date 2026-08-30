@@ -34,6 +34,7 @@ public final class GroupedAggregationSession
     private final Allocator allocator;
     private final Schema inputSchema;
     private final List<Integer> groupByColumns;
+    private final List<StructuralKeyKernel> cardinalityKeyKernels;
     private final List<Integer> groupedColumns;
     private final PhysicalAggregationProgram program;
     private final OperatorResources operatorResources;
@@ -128,12 +129,18 @@ public final class GroupedAggregationSession
     {
         this.allocator = requireNonNull(allocator, "allocator is null");
         this.inputSchema = requireNonNull(inputSchema, "inputSchema is null");
+        this.operatorResources = requireNonNull(operatorResources, "operatorResources is null");
         this.groupByColumns = List.copyOf(requireNonNull(groupByColumns, "groupByColumns is null"));
         this.groupedColumns = List.copyOf(requireNonNull(groupedColumns, "groupedColumns is null"));
         this.program = requireNonNull(program, "program is null");
-        this.operatorResources = requireNonNull(operatorResources, "operatorResources is null");
         this.groupingResources = requireNonNull(groupingResources, "groupingResources is null");
         this.partialAggregationControl = partialAggregationControl;
+        StructuralTypeKernelFactory structuralTypes = this.operatorResources.codeGeneration().structuralTypes();
+        this.cardinalityKeyKernels = partialAggregationControl == null
+                ? List.of()
+                : this.groupByColumns.stream()
+                        .map(column -> structuralTypes.key(inputSchema.field(column).type()))
+                        .toList();
         if (maxFinalOutputBatchRows <= 0) {
             throw new IllegalArgumentException("maxFinalOutputBatchRows must be positive");
         }
@@ -203,6 +210,7 @@ public final class GroupedAggregationSession
                 PartialAggregationInputStatistics inputStatistics = GroupingCardinalitySampler.sample(
                         batch,
                         groupByColumns,
+                        cardinalityKeyKernels,
                         sampleSize,
                         allocator.primitiveArrays(),
                         program.readsInputValues());
