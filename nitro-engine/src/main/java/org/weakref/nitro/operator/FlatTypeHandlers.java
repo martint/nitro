@@ -523,7 +523,7 @@ final class FlatTypeHandlers
                     continue;
                 }
                 int recordIndex = table.recordIndex(index);
-                if (recordIndex >= 0) {
+                if (recordIndex >= 0 && !table.fieldNull(recordIndex, fieldIndex)) {
                     totalBytes += binaryLength(table.fixedChunk(recordIndex), table.keyOffset(table.fixedOffset(recordIndex)) + field.fixedOffset());
                 }
             }

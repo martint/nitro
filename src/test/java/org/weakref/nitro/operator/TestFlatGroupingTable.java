@@ -84,6 +84,41 @@ class TestFlatGroupingTable
     private final FlatKeyTablePolicy flatKeyTablePolicy = engineResources.operatorResources().flatKeyTablePolicy();
 
     @Test
+    void testNullableBinaryGroupedOutputIgnoresNullPayloadMetadataWhenSizing()
+    {
+        Allocator allocator = new Allocator(engineResources);
+        Allocator.Context context = new Allocator.Context("nullable-binary-grouped-output");
+        Vector[] values = {utf8("ignored", "ok")};
+        Vector[] nulls = {new BooleanVector(new boolean[] {true, false})};
+        FlatKeyLayout layout = FlatKeyLayout.tryCreate(values, true, arrayPool, codeGeneration, flatKeyTablePolicy);
+        FlatGroupingTable table = new FlatGroupingTable(layout, 2, true);
+        try {
+            table.beginBatch(values, nulls);
+            assertThat(table.assignGroup(values, nulls, 0, 0)).isZero();
+            assertThat(table.assignGroup(values, nulls, 1, 1)).isEqualTo(1);
+            table.endBatch();
+
+            // Null flat fields do not initialize their payload slot. Poison the binary length to prove that exact
+            // output sizing consults the null bit before interpreting unspecified payload metadata.
+            int nullRecord = table.recordIndex(0);
+            int lengthOffset = table.keyOffset(table.fixedOffset(nullRecord)) + layout.field(0).fixedOffset() + Integer.BYTES * 2;
+            Arrays.fill(table.fixedChunk(nullRecord), lengthOffset, lengthOffset + Integer.BYTES, (byte) 0xFF);
+
+            Streams grouped = table.groupedValues(0, Mask.all(2), null, allocator, context);
+            BinaryVector groupedValues = (BinaryVector) grouped.values();
+            BooleanVector groupedNulls = (BooleanVector) grouped.getOrNull(org.weakref.nitro.data.Stream.NULLS);
+            assertThat(groupedValues.byteCapacity()).isEqualTo(2);
+            assertThat(groupedValues.length(1)).isEqualTo(2);
+            assertThat(new String(groupedValues.copyBytes(1), StandardCharsets.UTF_8)).isEqualTo("ok");
+            assertThat(groupedNulls.values()).containsExactly(true, false);
+        }
+        finally {
+            table.releaseBuffers();
+            allocator.release(context);
+        }
+    }
+
+    @Test
     void testBatchedGroupedValueCopyPreservesPhysicalKindsAndNulls()
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());
