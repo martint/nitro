@@ -687,6 +687,9 @@ public final class PlanEvaluator
             if (peeledResult == null && mask.all()) {
                 peeledResult = tryEvaluatePropagatingNullsPeeledCall(function, inputs, requestedStreams);
             }
+            if (peeledResult == null && mask.all()) {
+                peeledResult = tryEvaluateIndependentDictionaryDomain(function, inputs, requestedStreams, mask);
+            }
             if (peeledResult != null) {
                 return completeRequestedStreams(requestedStreams, propagateInputErrors(requestedStreams, inputs, peeledResult, mask), mask);
             }
@@ -744,6 +747,128 @@ public final class PlanEvaluator
             }
         }
         return false;
+    }
+
+    /**
+     * Evaluates a deterministic function once per observed tuple in the bounded Cartesian domain of independently
+     * encoded arguments. Equal row mappings are handled by ordinary dictionary peeling above; this path is for calls
+     * such as an UNNEST element combined with ordinality, where the logical mappings differ but each physical domain
+     * is tiny. The registry function remains authoritative: the evaluator only constructs a smaller encoded batch.
+     */
+    private Streams tryEvaluateIndependentDictionaryDomain(
+            PrimitiveFunction function,
+            List<Streams> inputs,
+            Set<Stream> requestedStreams,
+            Mask mask)
+    {
+        if (!function.deterministic() || inputs.size() < 2 || policy.independentDictionaryDomainMaxEntries() == 0) {
+            return null;
+        }
+
+        DictionaryVector[] dictionaries = new DictionaryVector[inputs.size()];
+        int productSize = 1;
+        for (int input = 0; input < inputs.size(); input++) {
+            Streams streams = inputs.get(input);
+            if (!(streams.getOrNull(Stream.VALUES) instanceof DictionaryVector dictionary) ||
+                    !VectorAccess.isAllFalseNulls(streams.getOrNull(Stream.NULLS)) ||
+                    !VectorAccess.isAllFalseNulls(streams.getOrNull(Stream.ERRORS))) {
+                return null;
+            }
+            int cardinality = dictionary.values().length();
+            if (cardinality == 0 || productSize > policy.independentDictionaryDomainMaxEntries() / cardinality) {
+                return null;
+            }
+            productSize *= cardinality;
+            dictionaries[input] = dictionary;
+        }
+        if ((long) productSize * policy.independentDictionaryDomainMinimumReduction() > mask.count()) {
+            return null;
+        }
+
+        int[] tupleGroups = allocator.primitiveArrays().borrowInts(productSize);
+        I32Vector logicalIds = allocator.allocate(allocationContext, I32Vector.class, mask.size(), I32Vector::new);
+        int[] frequencies = allocator.primitiveArrays().borrowInts(productSize);
+        int[][] domainIds = new int[inputs.size()][];
+        for (int input = 0; input < domainIds.length; input++) {
+            domainIds[input] = allocator.primitiveArrays().borrowInts(productSize);
+        }
+        Arrays.fill(tupleGroups, 0, productSize, -1);
+        Arrays.fill(frequencies, 0, productSize, 0);
+
+        I32Vector ownedFrequencies = null;
+        boolean mappingPublished = false;
+        try {
+            int domainCount = 0;
+            for (int position = 0; position < mask.size(); position++) {
+                int tuple = 0;
+                for (DictionaryVector dictionary : dictionaries) {
+                    tuple = tuple * dictionary.values().length() + dictionary.ids()[position];
+                }
+                int domain = tupleGroups[tuple];
+                if (domain < 0) {
+                    domain = domainCount++;
+                    tupleGroups[tuple] = domain;
+                    for (int input = 0; input < dictionaries.length; input++) {
+                        domainIds[input][domain] = dictionaries[input].ids()[position];
+                    }
+                }
+                logicalIds.values()[position] = domain;
+                frequencies[domain]++;
+            }
+
+            List<Streams> domainInputs = new ArrayList<>(inputs.size());
+            for (int input = 0; input < inputs.size(); input++) {
+                domainInputs.add(Streams.ofValues(DictionaryVector.wrapNested(
+                        domainIds[input],
+                        domainCount,
+                        dictionaries[input].values())));
+            }
+            Mask domainMask = allocator.allocateAllMask(allocationContext, domainCount);
+            Streams domainResult;
+            try {
+                domainResult = function.apply(domainInputs, domainMask, requestedStreams, null, executionContext);
+            }
+            finally {
+                allocator.release(allocationContext, domainMask);
+            }
+
+            Streams.Builder result = Streams.builder();
+            DictionaryVector mapping = null;
+            for (Stream stream : domainResult.streams()) {
+                Vector values = domainResult.get(stream);
+                checkArgument(values.length() == domainCount, "Independent dictionary result length differs from domain");
+                if (mapping == null) {
+                    ownedFrequencies = allocator.allocate(allocationContext, I32Vector.class, domainCount, I32Vector::new);
+                    System.arraycopy(frequencies, 0, ownedFrequencies.values(), 0, domainCount);
+                    mapping = allocator.adopt(
+                            allocationContext,
+                            DictionaryVector.wrapOwnedIdsWithDomainFrequencies(
+                                    logicalIds,
+                                    mask.size(),
+                                    values,
+                                    ownedFrequencies));
+                    mappingPublished = true;
+                    result.put(stream, mapping);
+                }
+                else {
+                    result.put(stream, allocator.adopt(allocationContext, mapping.sharedMappingWithValues(values)));
+                }
+            }
+            return result.build();
+        }
+        finally {
+            allocator.primitiveArrays().release(tupleGroups);
+            allocator.primitiveArrays().release(frequencies);
+            for (int[] ids : domainIds) {
+                allocator.primitiveArrays().release(ids);
+            }
+            if (!mappingPublished) {
+                allocator.release(allocationContext, logicalIds);
+                if (ownedFrequencies != null) {
+                    allocator.release(allocationContext, ownedFrequencies);
+                }
+            }
+        }
     }
 
     private Streams tryEvaluateDictionaryPeeledCall(

@@ -20,6 +20,8 @@ public record EvaluationOperatorPolicy(
         int dictionaryPeelSparseRatio,
         int dictionaryDomainCacheMaxEntries,
         int dictionaryDomainCacheSlots,
+        int independentDictionaryDomainMaxEntries,
+        int independentDictionaryDomainMinimumReduction,
         boolean adaptiveMaskReordering,
         boolean orShortCircuitRemaining,
         boolean orEvaluateFinalTermOnFullMask,
@@ -42,6 +44,12 @@ public record EvaluationOperatorPolicy(
         if (dictionaryDomainCacheSlots < 0) {
             throw new IllegalArgumentException("dictionaryDomainCacheSlots is negative");
         }
+        if (independentDictionaryDomainMaxEntries < 0) {
+            throw new IllegalArgumentException("independentDictionaryDomainMaxEntries is negative");
+        }
+        if (independentDictionaryDomainMinimumReduction <= 0) {
+            throw new IllegalArgumentException("independentDictionaryDomainMinimumReduction must be positive");
+        }
         if (orFinalTermMinRemainingRows < 0) {
             throw new IllegalArgumentException("orFinalTermMinRemainingRows is negative");
         }
@@ -56,6 +64,8 @@ public record EvaluationOperatorPolicy(
                 8,
                 4_096,
                 64,
+                4_096,
+                8,
                 true,
                 true,
                 false,
@@ -75,6 +85,8 @@ public record EvaluationOperatorPolicy(
                 Integer.getInteger("nitro.expression.dictionaryPeelSparseRatio", defaults.dictionaryPeelSparseRatio()),
                 Integer.getInteger("nitro.expression.dictionaryDomainCacheMaxEntries", defaults.dictionaryDomainCacheMaxEntries()),
                 Integer.getInteger("nitro.expression.dictionaryDomainCacheSlots", defaults.dictionaryDomainCacheSlots()),
+                Integer.getInteger("nitro.expression.independentDictionaryDomainMaxEntries", defaults.independentDictionaryDomainMaxEntries()),
+                Integer.getInteger("nitro.expression.independentDictionaryDomainMinimumReduction", defaults.independentDictionaryDomainMinimumReduction()),
                 booleanProperty("nitro.expression.adaptiveMaskReordering", defaults.adaptiveMaskReordering()),
                 booleanProperty("nitro.expression.orShortCircuitRemaining", defaults.orShortCircuitRemaining()),
                 booleanProperty("nitro.expression.orEvaluateFinalTermOnFullMask", defaults.orEvaluateFinalTermOnFullMask()),

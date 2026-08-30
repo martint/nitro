@@ -86,6 +86,7 @@ import org.weakref.nitro.operator.evaluator.ir.StructField;
 import org.weakref.nitro.operator.evaluator.ir.Variable;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -4423,7 +4424,7 @@ public class TestPlanEvaluator
     }
 
     @Test
-    void testDictionaryPeelingRetainsExactProofForIndependentMappings()
+    void testDictionaryPeelingAndIndependentDomainsRetainExactSemantics()
     {
         AtomicInteger evaluatedPositions = new AtomicInteger();
         PrimitiveRegistry registry = new PrimitiveRegistry();
@@ -4470,9 +4471,83 @@ public class TestPlanEvaluator
                             right, DictionaryVector.wrap(differentIds, new I64Vector(new long[] {3, 5, 7})))),
                     allocator);
 
-            different.evaluate(output, Mask.all(leftIds.length));
-            assertThat(evaluatedPositions).hasValue(leftIds.length);
+            Streams differentResult = different.evaluate(output, Mask.all(leftIds.length));
+            assertThat(evaluatedPositions).hasValue(6);
+            assertThat(differentResult.values()).isInstanceOf(DictionaryVector.class);
+            assertThat(readLongs(differentResult.values())).containsExactly(
+                    java.util.stream.IntStream.range(0, leftIds.length)
+                            .mapToLong(position -> position % 2 == 0 ? 11 : 29)
+                            .toArray());
+            DictionaryVector encoded = (DictionaryVector) differentResult.values();
+            assertThat(encoded.hasDomainFrequencies()).isTrue();
+            int frequency = 0;
+            for (int domain = 0; domain < encoded.values().length(); domain++) {
+                frequency += encoded.domainFrequency(domain);
+            }
+            assertThat(frequency).isEqualTo(leftIds.length);
             different.close();
+        }
+    }
+
+    @Test
+    void testIndependentDictionaryDomainsShareAllocatorOwnedOutputMapping()
+    {
+        AtomicInteger evaluatedPositions = new AtomicInteger();
+        PrimitiveRegistry registry = new PrimitiveRegistry();
+        registry.register("three_input_dictionary", new PrimitiveFunction()
+        {
+            @Override
+            public Streams apply(List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
+            {
+                evaluatedPositions.set(mask.count());
+                return Streams.ofValuesAndNulls(new I64Vector(mask.size()), new BooleanVector(mask.size()));
+            }
+
+            @Override
+            public Set<Stream> requiredInputStreams(int inputIndex, Set<Stream> requestedOutputStreams)
+            {
+                return ALL_INPUT_STREAMS;
+            }
+        });
+
+        Variable result = new Variable(0);
+        List<Reference> arguments = java.util.stream.IntStream.range(0, 3)
+                .mapToObj(input -> new Reference(new Input(input), Stream.VALUES))
+                .toList();
+        Reference outputValues = new Reference(result, Stream.VALUES);
+        Reference outputNulls = new Reference(result, Stream.NULLS);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(result, new Call("three_input_dictionary", arguments), AllMask.ALL)),
+                List.of(outputValues, outputNulls),
+                Map.of(outputValues, StreamPlan.MATERIALIZED, outputNulls, StreamPlan.MATERIALIZED));
+
+        int positions = 256;
+        Map<Reference, org.weakref.nitro.data.Vector> inputVectors = new HashMap<>();
+        for (int input = 0; input < arguments.size(); input++) {
+            int[] ids = new int[positions];
+            for (int position = 0; position < positions; position++) {
+                ids[position] = (position >>> input) & 1;
+            }
+            Input producer = (Input) arguments.get(input).producer();
+            inputVectors.put(arguments.get(input), DictionaryVector.wrap(ids, new I64Vector(new long[] {input, input + 10L})));
+            inputVectors.put(new Reference(producer, Stream.NULLS), new BooleanVector(positions));
+            inputVectors.put(new Reference(producer, Stream.ERRORS), new BooleanVector(positions));
+        }
+
+        try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
+            PlanEvaluator evaluator = planEvaluator(plan, registry, inputResolver(inputVectors), allocator);
+            Streams evaluated = evaluator.evaluate(outputValues, Mask.all(positions));
+
+            assertThat(evaluatedPositions).hasValue(8);
+            assertThat(evaluated.values()).isInstanceOf(DictionaryVector.class);
+            assertThat(evaluated.get(Stream.NULLS)).isInstanceOf(DictionaryVector.class);
+            DictionaryVector values = (DictionaryVector) evaluated.values();
+            DictionaryVector nulls = (DictionaryVector) evaluated.get(Stream.NULLS);
+            assertThat(values.hasSameRowMapping(nulls)).isTrue();
+            assertThat(values.hasOwnedMapping()).isTrue();
+            assertThat(nulls.hasOwnedMapping()).isFalse();
+            assertThat(evaluator.prepareResultForTransfer(values)).isSameAs(values);
+            evaluator.close();
         }
     }
 

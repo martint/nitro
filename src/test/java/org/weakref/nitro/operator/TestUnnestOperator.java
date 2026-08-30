@@ -423,7 +423,42 @@ public class TestUnnestOperator
 
         try (Batch batch = unnest.next()) {
             assertThat(batch.output(0).borrow(Stream.VALUES)).isSameAs(elements);
-            assertThat(((I64Vector) batch.output(1).borrow(Stream.VALUES)).values()).startsWith(1, 2, 1);
+            Vector ordinality = batch.output(1).borrow(Stream.VALUES);
+            VectorAccess.LongValues values = VectorAccess.longValues(ordinality);
+            assertThat(new long[] {values.value(0), values.value(1), values.value(2)}).containsExactly(1, 2, 1);
+        }
+        unnest.close();
+    }
+
+    @Test
+    void testPreservesLowCardinalityOrdinalityDomain()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        int rows = 32;
+        ArrayVector arrays = new ArrayVector(rows);
+        for (int row = 0; row <= rows; row++) {
+            arrays.offsets()[row] = row * 2;
+        }
+        arrays.setElements(Streams.ofValues(new I64Vector(rows * 2)));
+        Operator source = new TableOperator(
+                Schema.unspecified(1),
+                List.of(TableOperator.Page.values(rows, new Vector[] {arrays}, Mask.all(rows))));
+        Field output = Schema.unspecified(1).field(0);
+        Operator unnest = new UnnestOperator(
+                allocator,
+                source,
+                new int[0],
+                List.of(UnnestOperator.Mapping.direct(0, List.of(output))),
+                Optional.of(output),
+                false,
+                new UnnestOperatorPolicy(128));
+
+        try (Batch batch = unnest.next()) {
+            Vector ordinality = batch.output(1).borrow(Stream.VALUES);
+            assertThat(ordinality).isInstanceOf(DictionaryVector.class);
+            DictionaryVector dictionary = (DictionaryVector) ordinality;
+            assertThat(((I64Vector) dictionary.values()).values()).containsExactly(1, 2);
+            assertThat(dictionary.ids()).startsWith(0, 1, 0, 1, 0, 1);
         }
         unnest.close();
     }

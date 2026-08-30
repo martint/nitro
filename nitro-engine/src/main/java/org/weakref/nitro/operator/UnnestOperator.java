@@ -124,7 +124,7 @@ public final class UnnestOperator
     private final boolean[] mappingHasPadding;
     private final int[] repeatedStarts;
     private final int[] repeatedLengths;
-    private final long[] ordinality;
+    private final int[] ordinalityIds;
     private final boolean[] ordinalityNulls;
 
     private InputState input;
@@ -191,7 +191,7 @@ public final class UnnestOperator
         mappingHasPadding = allocator.primitiveArrays().borrowBooleans(this.mappings.size());
         repeatedStarts = allocator.primitiveArrays().borrowInts(this.mappings.size());
         repeatedLengths = allocator.primitiveArrays().borrowInts(this.mappings.size());
-        ordinality = allocator.primitiveArrays().borrowLongs(this.maxRowsPerBatch);
+        ordinalityIds = allocator.primitiveArrays().borrowInts(this.maxRowsPerBatch);
         ordinalityNulls = outer && ordinalityField.isPresent()
                 ? allocator.primitiveArrays().borrowBooleans(this.maxRowsPerBatch)
                 : null;
@@ -283,9 +283,24 @@ public final class UnnestOperator
         }
 
         if (ordinalityField.isPresent()) {
-            I64Vector ordinality = allocator.allocate(allocationContext, I64Vector.class, count, I64Vector::new);
-            System.arraycopy(this.ordinality, 0, ordinality.values(), 0, count);
-            owned.add(ordinality);
+            Vector ordinality;
+            int ordinalityDomainSize = input.maximumOrdinality();
+            if (policy.admitsOrdinalityDomain(count, ordinalityDomainSize)) {
+                I64Vector domain = allocator.allocate(allocationContext, I64Vector.class, ordinalityDomainSize, I64Vector::new);
+                for (int position = 0; position < ordinalityDomainSize; position++) {
+                    domain.values()[position] = position + 1L;
+                }
+                owned.add(domain);
+                ordinality = DictionaryVector.wrapNested(ordinalityIds, count, domain);
+            }
+            else {
+                I64Vector flat = allocator.allocate(allocationContext, I64Vector.class, count, I64Vector::new);
+                for (int position = 0; position < count; position++) {
+                    flat.values()[position] = ordinalityIds[position] + 1L;
+                }
+                owned.add(flat);
+                ordinality = flat;
+            }
             if (input.hasOrdinalityNulls()) {
                 BooleanVector nulls = allocator.allocate(allocationContext, BooleanVector.class, count, BooleanVector::new);
                 System.arraycopy(ordinalityNulls, 0, nulls.values(), 0, count);
@@ -384,7 +399,7 @@ public final class UnnestOperator
             allocator.primitiveArrays().release(mappingHasPadding);
             allocator.primitiveArrays().release(repeatedStarts);
             allocator.primitiveArrays().release(repeatedLengths);
-            allocator.primitiveArrays().release(ordinality);
+            allocator.primitiveArrays().release(ordinalityIds);
             if (ordinalityNulls != null) {
                 allocator.primitiveArrays().release(ordinalityNulls);
             }
@@ -559,6 +574,7 @@ public final class UnnestOperator
         private boolean cachedOuterPadding;
         private boolean outerPadding;
         private boolean hasOrdinalityNulls;
+        private int maximumOrdinality;
         private boolean closed;
 
         private InputState(Batch batch)
@@ -641,6 +657,7 @@ public final class UnnestOperator
             }
             Arrays.fill(mappingHasPadding, false);
             hasOrdinalityNulls = false;
+            maximumOrdinality = 0;
 
             int output = 0;
             while (output < limit && hasOutput()) {
@@ -648,9 +665,14 @@ public final class UnnestOperator
                 if (rowLength < 0) {
                     rowLength = prepareRow(inputPosition);
                 }
+                if (ordinalityField.isPresent()) {
+                    maximumOrdinality = Math.max(maximumOrdinality, Math.min(rowLength, elementIndex + limit - output));
+                }
                 while (output < limit && elementIndex < rowLength) {
                     replicatePositions[output] = inputPosition;
-                    ordinality[output] = elementIndex + 1L;
+                    if (ordinalityField.isPresent()) {
+                        ordinalityIds[output] = elementIndex;
+                    }
                     if (ordinalityNulls != null) {
                         ordinalityNulls[output] = outerPadding;
                         hasOrdinalityNulls |= outerPadding;
@@ -682,6 +704,11 @@ public final class UnnestOperator
         private boolean hasOrdinalityNulls()
         {
             return hasOrdinalityNulls;
+        }
+
+        private int maximumOrdinality()
+        {
+            return maximumOrdinality;
         }
 
         private int prepareRow(int inputPosition)

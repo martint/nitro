@@ -18,18 +18,30 @@ import org.weakref.nitro.data.VectorAccess;
 import static com.google.common.base.Preconditions.checkArgument;
 
 /** Immutable, composition-owned physical policy for repeated-value expansion. */
-public record UnnestOperatorPolicy(int maxRowsPerBatch, int valueRunSampleSize, int minimumAverageValueRunLength)
+public record UnnestOperatorPolicy(
+        int maxRowsPerBatch,
+        int valueRunSampleSize,
+        int minimumAverageValueRunLength,
+        int ordinalityDomainMaxEntries,
+        int ordinalityDomainMinimumReduction)
 {
     public UnnestOperatorPolicy
     {
         checkArgument(maxRowsPerBatch > 0, "maxRowsPerBatch must be positive");
         checkArgument(valueRunSampleSize > 0, "valueRunSampleSize must be positive");
         checkArgument(minimumAverageValueRunLength > 1, "minimumAverageValueRunLength must be greater than one");
+        checkArgument(ordinalityDomainMaxEntries >= 0, "ordinalityDomainMaxEntries is negative");
+        checkArgument(ordinalityDomainMinimumReduction > 0, "ordinalityDomainMinimumReduction must be positive");
     }
 
     public UnnestOperatorPolicy(int maxRowsPerBatch)
     {
-        this(maxRowsPerBatch, 1_024, 4);
+        this(maxRowsPerBatch, 1_024, 4, 4_096, 8);
+    }
+
+    public UnnestOperatorPolicy(int maxRowsPerBatch, int valueRunSampleSize, int minimumAverageValueRunLength)
+    {
+        this(maxRowsPerBatch, valueRunSampleSize, minimumAverageValueRunLength, 4_096, 8);
     }
 
     public static UnnestOperatorPolicy defaults()
@@ -53,6 +65,15 @@ public record UnnestOperatorPolicy(int maxRowsPerBatch, int valueRunSampleSize, 
         return new UnnestOperatorPolicy(
                 Integer.getInteger("nitro.unnest.maxRowsPerBatch", 65_536),
                 Integer.getInteger("nitro.unnest.valueRunSampleSize", 1_024),
-                Integer.getInteger("nitro.unnest.minimumAverageValueRunLength", 4));
+                Integer.getInteger("nitro.unnest.minimumAverageValueRunLength", 4),
+                Integer.getInteger("nitro.unnest.ordinalityDomainMaxEntries", 4_096),
+                Integer.getInteger("nitro.unnest.ordinalityDomainMinimumReduction", 8));
+    }
+
+    boolean admitsOrdinalityDomain(int outputCount, int domainSize)
+    {
+        return domainSize > 0 &&
+                domainSize <= ordinalityDomainMaxEntries &&
+                (long) domainSize * ordinalityDomainMinimumReduction <= outputCount;
     }
 }
