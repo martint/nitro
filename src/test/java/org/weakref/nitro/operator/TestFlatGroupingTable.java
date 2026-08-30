@@ -325,6 +325,52 @@ class TestFlatGroupingTable
     }
 
     @Test
+    void testBigintPairSkipsProvenAbsentBatchNullsAndReadmitsLaterNulls()
+    {
+        Vector[] initial = {
+                new I64Vector(new long[] {1, 2}),
+                new I64Vector(new long[] {10, 20})};
+        FlatKeyLayout layout = BigintPairFlatKeyLayout.create(
+                initial,
+                true,
+                arrayPool,
+                codeGeneration,
+                flatKeyTablePolicy,
+                List.of());
+        FlatGroupingTable table = new FlatGroupingTable(layout, 2, true);
+        try {
+            Vector allFalse = new RleVector(new int[] {2}, new BooleanVector(new boolean[] {false}));
+            Vector[] initialNulls = {allFalse, allFalse};
+            table.beginBatch(initial, initialNulls);
+            assertThat(table.assignGroup(initial, initialNulls, 0, 0)).isZero();
+            assertThat(table.assignGroup(initial, initialNulls, 1, 1)).isEqualTo(1);
+            table.endBatch();
+
+            Vector[] nullable = {
+                    new I64Vector(new long[] {1, 2, 1}),
+                    new I64Vector(new long[] {10, 20, 10})};
+            Vector[] nullableNulls = {
+                    new BooleanVector(new boolean[] {false, false, true}),
+                    new RleVector(new int[] {3}, new BooleanVector(new boolean[] {false}))};
+            table.beginBatch(nullable, nullableNulls);
+            assertThat(table.assignGroup(nullable, nullableNulls, 0, 2)).isZero();
+            assertThat(table.assignGroup(nullable, nullableNulls, 1, 2)).isEqualTo(1);
+            assertThat(table.assignGroup(nullable, nullableNulls, 2, 2)).isEqualTo(2);
+            table.endBatch();
+
+            Vector[] finalValues = {new I64Vector(new long[] {1}), new I64Vector(new long[] {10})};
+            Vector finalAllFalse = new RleVector(new int[] {1}, new BooleanVector(new boolean[] {false}));
+            Vector[] finalNulls = {finalAllFalse, finalAllFalse};
+            table.beginBatch(finalValues, finalNulls);
+            assertThat(table.assignGroup(finalValues, finalNulls, 0, 3)).isZero();
+            table.endBatch();
+        }
+        finally {
+            table.releaseBuffers();
+        }
+    }
+
+    @Test
     void testProviderOwnedIntegerStorageRejectsOutOfDomainValue()
     {
         TypeBinding bigint = longBinding("testing:bigint", Optional.empty());

@@ -48,6 +48,7 @@ final class BigintPairFlatKeyLayout
     private VectorAccess.LongValues secondKeyAccessor;
     private VectorAccess.BooleanValues firstNullAccessor;
     private VectorAccess.BooleanValues secondNullAccessor;
+    private int batchNullability;
 
     private BigintPairFlatKeyLayout(
             PrimitiveArrayPool arrayPool,
@@ -122,8 +123,12 @@ final class BigintPairFlatKeyLayout
         // is a monomorphic lambda invocation.
         firstKeyAccessor = VectorAccess.longValues(values[0]);
         secondKeyAccessor = VectorAccess.longValues(values[1]);
-        firstNullAccessor = (nulls != null && nulls.length > 0) ? VectorAccess.booleanValues(nulls[0]) : null;
-        secondNullAccessor = (nulls != null && nulls.length > 1) ? VectorAccess.booleanValues(nulls[1]) : null;
+        Vector firstNulls = nulls != null && nulls.length > 0 ? nulls[0] : null;
+        Vector secondNulls = nulls != null && nulls.length > 1 ? nulls[1] : null;
+        batchNullability = (nullable && !VectorAccess.isAllFalseNulls(firstNulls) ? 1 : 0) |
+                (nullable && !VectorAccess.isAllFalseNulls(secondNulls) ? 2 : 0);
+        firstNullAccessor = (batchNullability & 1) != 0 ? VectorAccess.booleanValues(firstNulls) : null;
+        secondNullAccessor = (batchNullability & 2) != 0 ? VectorAccess.booleanValues(secondNulls) : null;
     }
 
     @Override
@@ -133,6 +138,7 @@ final class BigintPairFlatKeyLayout
         secondKeyAccessor = null;
         firstNullAccessor = null;
         secondNullAccessor = null;
+        batchNullability = 0;
     }
 
     @Override
@@ -143,9 +149,9 @@ final class BigintPairFlatKeyLayout
         long first = firstKeyAccessor.value(position);
         long second = secondKeyAccessor.value(position);
         long nullTag = 0;
-        if (nullable) {
-            boolean firstIsNull = firstNullAccessor != null && firstNullAccessor.value(position);
-            boolean secondIsNull = secondNullAccessor != null && secondNullAccessor.value(position);
+        if (batchNullability != 0) {
+            boolean firstIsNull = (batchNullability & 1) != 0 && firstNullAccessor.value(position);
+            boolean secondIsNull = (batchNullability & 2) != 0 && secondNullAccessor.value(position);
             if (firstIsNull) {
                 first = 0;
                 nullTag |= 1;
@@ -172,8 +178,8 @@ final class BigintPairFlatKeyLayout
         long first = firstKeyAccessor.value(position);
         long second = secondKeyAccessor.value(position);
         if (nullable) {
-            boolean firstIsNull = firstNullAccessor != null && firstNullAccessor.value(position);
-            boolean secondIsNull = secondNullAccessor != null && secondNullAccessor.value(position);
+            boolean firstIsNull = (batchNullability & 1) != 0 && firstNullAccessor.value(position);
+            boolean secondIsNull = (batchNullability & 2) != 0 && secondNullAccessor.value(position);
             byte nullByte = (byte) ((firstIsNull ? 1 : 0) | (secondIsNull ? 2 : 0));
             fixedChunk[fixedOffset] = nullByte;
             if (firstIsNull) {
@@ -196,8 +202,8 @@ final class BigintPairFlatKeyLayout
             byte storedNullByte = fixedChunk[fixedOffset];
             boolean storedFirstNull = (storedNullByte & 1) != 0;
             boolean storedSecondNull = (storedNullByte & 2) != 0;
-            boolean inputFirstNull = firstNullAccessor != null && firstNullAccessor.value(position);
-            boolean inputSecondNull = secondNullAccessor != null && secondNullAccessor.value(position);
+            boolean inputFirstNull = (batchNullability & 1) != 0 && firstNullAccessor.value(position);
+            boolean inputSecondNull = (batchNullability & 2) != 0 && secondNullAccessor.value(position);
             if (storedFirstNull != inputFirstNull || storedSecondNull != inputSecondNull) {
                 return false;
             }
