@@ -847,15 +847,25 @@ class TestAllocator
         int[] ids = {0, 1, 0};
         I64Vector values = new I64Vector(new long[] {11, 29});
 
-        assertThat(new DictionaryVector(ids, values).retainedBytes()).isEqualTo(3L * Integer.BYTES);
-        assertThat(DictionaryVector.ofTrustedIds(ids, values).retainedBytes()).isEqualTo(3L * Integer.BYTES);
-        assertThat(DictionaryVector.wrap(ids, values).retainedBytes()).isZero();
+        DictionaryVector copied = new DictionaryVector(ids, values);
+        assertThat(copied.retainedBytes()).isEqualTo(3L * Integer.BYTES);
+        assertThat(copied.idStorageOwnerOrNull()).isSameAs(copied);
+
+        DictionaryVector trusted = DictionaryVector.ofTrustedIds(ids, values);
+        assertThat(trusted.retainedBytes()).isEqualTo(3L * Integer.BYTES);
+        assertThat(trusted.idStorageOwnerOrNull()).isSameAs(trusted);
+
+        DictionaryVector borrowed = DictionaryVector.wrap(ids, values);
+        assertThat(borrowed.retainedBytes()).isZero();
+        assertThat(borrowed.idStorageOwnerOrNull()).isNull();
 
         DictionaryVector nested = DictionaryVector.ofTrustedIds(new int[] {1, 0}, values);
         assertThat(DictionaryVector.wrap(ids, nested).retainedBytes()).isEqualTo(3L * Integer.BYTES);
 
         I32Vector ownedIds = new I32Vector(ids.clone());
-        assertThat(DictionaryVector.wrapOwnedIds(ownedIds, ids.length, values).retainedBytes()).isZero();
+        DictionaryVector explicitlyOwned = DictionaryVector.wrapOwnedIds(ownedIds, ids.length, values);
+        assertThat(explicitlyOwned.retainedBytes()).isZero();
+        assertThat(explicitlyOwned.idStorageOwnerOrNull()).isSameAs(ownedIds);
     }
 
     @Test

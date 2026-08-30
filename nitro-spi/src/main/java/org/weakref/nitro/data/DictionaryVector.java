@@ -441,6 +441,21 @@ public final class DictionaryVector
     }
 
     /**
+     * Returns the vector identity that owns this mapping's backing array, or {@code null} for a borrowed mapping.
+     *
+     * <p>Allocator-produced dictionaries may own their ID array either directly in this wrapper or through an
+     * {@link I32Vector} ownership child. Retained consumers use this identity to prove that the exact storage they
+     * expose participates in an asynchronous lease.
+     */
+    public Vector idStorageOwnerOrNull()
+    {
+        if (ownedIds != null) {
+            return ownedIds;
+        }
+        return ownsRawIds ? this : null;
+    }
+
+    /**
      * Replaces the value domain while retaining this dictionary's allocator-owned mapping and frequency metadata.
      * The result is an ownership replacement, not an independent sibling: callers must publish only the returned
      * vector outside the current allocation context. Allocator tree traversal is identity-aware, so the shared owned
