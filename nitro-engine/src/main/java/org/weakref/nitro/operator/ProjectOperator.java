@@ -331,6 +331,23 @@ public class ProjectOperator
     }
 
     @Override
+    public StaticFilterEnforcement pushStaticFilter(org.weakref.nitro.operator.DynamicFilter filter)
+    {
+        // A direct projected input preserves the source column's value and null semantics exactly, so it can also
+        // preserve the source's semantic-enforcement acknowledgement. Returning only the ordinary dynamic-filter
+        // forwarding result would make a FilterOperator evaluate an already-enforced predicate a second time.
+        int outputIndex = filter.column();
+        if (outputIndex < 0 || outputIndex >= outputReferences.size()) {
+            return StaticFilterEnforcement.residual();
+        }
+        Reference reference = outputReferences.get(outputIndex);
+        if (reference.stream() != Stream.VALUES || !(reference.producer() instanceof Input input)) {
+            return StaticFilterEnforcement.residual();
+        }
+        return source.pushStaticFilter(filter.withColumn(input.index()));
+    }
+
+    @Override
     public boolean supportsDynamicFilterPushdown(int column)
     {
         if (column < 0 || column >= outputReferences.size()) {

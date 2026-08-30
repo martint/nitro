@@ -17,6 +17,7 @@ import org.junit.jupiter.api.Test;
 import org.weakref.nitro.core.function.aggregation.AggregationExecution;
 import org.weakref.nitro.core.function.aggregation.AggregationImplementation;
 import org.weakref.nitro.core.function.aggregation.AggregationInput;
+import org.weakref.nitro.core.function.aggregation.GroupedAggregationDomain;
 import org.weakref.nitro.core.function.aggregation.GroupedAggregationUpdate;
 import org.weakref.nitro.core.function.aggregation.LongStateUpdate;
 import org.weakref.nitro.data.Allocator;
@@ -39,6 +40,7 @@ import org.weakref.nitro.operator.aggregation.FilteredAccumulator;
 import org.weakref.nitro.operator.aggregation.GeneratedRegisteredAggregationUnit;
 import org.weakref.nitro.operator.aggregation.MinUtf8;
 import org.weakref.nitro.operator.aggregation.PhysicalAggregationProgram;
+import org.weakref.nitro.operator.aggregation.RegisteredAggregationUnit;
 import org.weakref.nitro.operator.aggregation.StreamAccessor;
 import org.weakref.nitro.operator.aggregation.Sum;
 
@@ -460,6 +462,103 @@ class TestFusedGroupedAggregation
         }
 
         assertGroupedSumAndCount(pages, List.of(new CountAll()), reference, false);
+    }
+
+    @Test
+    void registeredAggregationConsumesSparseDictionaryDomainFrequencies()
+    {
+        int size = 16_384;
+        int[] ids = new int[size];
+        int[] selected = new int[size - (size + 4) / 5];
+        int selectedCount = 0;
+        long[] keys = {11, 22, 33, 44};
+        Map<Long, Long> expected = new HashMap<>();
+        for (int position = 0; position < size; position++) {
+            int id = (position * 3 + 1) & 3;
+            ids[position] = id;
+            if (position % 5 != 0) {
+                selected[selectedCount++] = position;
+                expected.merge(keys[id], 1L, Long::sum);
+            }
+        }
+
+        WeightedDomainCount implementation = new WeightedDomainCount();
+        PhysicalAggregationProgram program = PhysicalAggregationProgram.singleUnit(
+                new RegisteredAggregationUnit(implementation, RAW, FINAL, new int[0]));
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        Operator operator = new GroupedAggregationOperator(
+                allocator,
+                List.of(0),
+                program,
+                new TableOperator(1, List.of(TableOperator.Page.values(
+                        size,
+                        new Vector[] {DictionaryVector.ofTrustedIds(ids, new I64Vector(keys))},
+                        Mask.sparse(selected, size)))));
+
+        Map<Long, Long> actual = new HashMap<>();
+        try (operator) {
+            while (operator.hasNext()) {
+                try (Batch result = operator.next()) {
+                    VectorAccess.LongValues resultKeys = VectorAccess.longValues(result.output(0).borrow(Stream.VALUES));
+                    VectorAccess.LongValues resultCounts = VectorAccess.longValues(result.output(1).borrow(Stream.VALUES));
+                    for (int position : result.borrowMask()) {
+                        actual.put(resultKeys.value(position), resultCounts.value(position));
+                    }
+                }
+            }
+        }
+
+        assertThat(actual).isEqualTo(expected);
+        assertThat(implementation.groupedDomainObserved).isTrue();
+        assertThat(implementation.logicalRowsObserved).isFalse();
+    }
+
+    @Test
+    void registeredAggregationConsumesCompactDictionarySelectionFrequencies()
+    {
+        int size = 16_384;
+        int[] ids = new int[size];
+        int[] frequencies = new int[4];
+        long[] keys = {11, 22, 33, 44};
+        for (int position = 0; position < size; position++) {
+            int id = (position * 3 + 1) & 3;
+            ids[position] = id;
+            frequencies[id]++;
+        }
+        DictionaryVector dictionary = DictionaryVector.ofTrustedIdsWithDomainFrequencies(
+                ids,
+                size,
+                new I64Vector(keys),
+                frequencies);
+        Mask selected = Mask.all(size);
+        selected.retainDictionaryComparison(dictionary, new boolean[] {false, true, false, true});
+
+        WeightedDomainCount implementation = new WeightedDomainCount();
+        PhysicalAggregationProgram program = PhysicalAggregationProgram.singleUnit(
+                new RegisteredAggregationUnit(implementation, RAW, FINAL, new int[0]));
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        Operator operator = new GroupedAggregationOperator(
+                allocator,
+                List.of(0),
+                program,
+                new TableOperator(1, List.of(TableOperator.Page.values(size, new Vector[] {dictionary}, selected))));
+
+        Map<Long, Long> actual = new HashMap<>();
+        try (operator) {
+            while (operator.hasNext()) {
+                try (Batch result = operator.next()) {
+                    VectorAccess.LongValues resultKeys = VectorAccess.longValues(result.output(0).borrow(Stream.VALUES));
+                    VectorAccess.LongValues resultCounts = VectorAccess.longValues(result.output(1).borrow(Stream.VALUES));
+                    for (int position : result.borrowMask()) {
+                        actual.put(resultKeys.value(position), resultCounts.value(position));
+                    }
+                }
+            }
+        }
+
+        assertThat(actual).containsExactlyInAnyOrderEntriesOf(Map.of(22L, (long) frequencies[1], 44L, (long) frequencies[3]));
+        assertThat(implementation.groupedDomainObserved).isTrue();
+        assertThat(implementation.logicalRowsObserved).isFalse();
     }
 
     @Test
@@ -929,6 +1028,100 @@ class TestFusedGroupedAggregation
                 flatGroups.values()[position] = groupValues.value(position);
             }
             super.accumulate(state, flatGroups, mask, streams);
+        }
+    }
+
+    private static final class WeightedDomainCount
+            implements AggregationImplementation
+    {
+        private boolean groupedDomainObserved;
+        private boolean logicalRowsObserved;
+
+        @Override
+        public Object allocate(AggregationExecution execution, int groups)
+        {
+            return new long[groups];
+        }
+
+        @Override
+        public Object grow(Allocator allocator, Allocator.Context allocationContext, Object state, int groups)
+        {
+            return Arrays.copyOf((long[]) state, groups);
+        }
+
+        @Override
+        public void initialize(Object state, int offset, int length)
+        {
+            Arrays.fill((long[]) state, offset, offset + length, 0);
+        }
+
+        @Override
+        public void addRawInput(Object state, int group, Mask mask, AggregationInput input)
+        {
+            logicalRowsObserved = true;
+            ((long[]) state)[group] += mask.count();
+        }
+
+        @Override
+        public void addRawInput(Object state, Vector groups, Mask mask, AggregationInput input)
+        {
+            logicalRowsObserved = true;
+            VectorAccess.LongValues groupIds = VectorAccess.longValues(groups);
+            for (int position : mask) {
+                ((long[]) state)[(int) groupIds.value(position)]++;
+            }
+        }
+
+        @Override
+        public boolean supportsRawGroupedDomainInput(AggregationInput input)
+        {
+            return true;
+        }
+
+        @Override
+        public void addRawGroupedDomainInput(Object state, GroupedAggregationDomain domain, AggregationInput input)
+        {
+            groupedDomainObserved = true;
+            VectorAccess.LongValues groupIds = VectorAccess.longValues(domain.groups());
+            for (int physical = 0; physical < domain.size(); physical++) {
+                ((long[]) state)[(int) groupIds.value(physical)] += domain.frequency(physical);
+            }
+        }
+
+        @Override
+        public void addIntermediate(Object state, int group, Mask mask, AggregationInput input)
+        {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public void addIntermediate(Object state, Vector groups, Mask mask, AggregationInput input)
+        {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public Streams intermediate(
+                int maxGroup,
+                Object state,
+                Streams existing,
+                Allocator allocator,
+                Allocator.Context allocationContext)
+        {
+            return result(maxGroup, state, existing, allocator, allocationContext);
+        }
+
+        @Override
+        public Streams result(
+                int maxGroup,
+                Object state,
+                Streams existing,
+                Allocator allocator,
+                Allocator.Context allocationContext)
+        {
+            I64Vector output = allocator.allocate(allocationContext, I64Vector.class, maxGroup + 1, I64Vector::new);
+            System.arraycopy(state, 0, output.values(), 0, maxGroup + 1);
+            return Streams.ofValues(output);
         }
     }
 

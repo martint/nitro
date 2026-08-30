@@ -2907,12 +2907,15 @@ final class GroupingState
         int used = 0;
         // Exact reader-produced frequencies make an all-row, non-null encoded domain self-describing. Every
         // grouping representation can consume the physical domain directly without revisiting logical ids.
-        boolean exactDomainFrequencies = mask.all() &&
+        Mask.DictionaryDomainSelection domainSelection = mask.dictionaryDomainSelection(dictionary);
+        boolean exactDomainFrequencies = (mask.all() || domainSelection != null) &&
                 VectorAccess.isAllFalseNulls(nullVector) &&
                 dictionary.hasDomainFrequencies();
         if (exactDomainFrequencies) {
             for (int domain = 0; domain < domainSize; domain++) {
-                int frequency = dictionary.domainFrequency(domain);
+                int frequency = domainSelection == null || domainSelection.selects(domain)
+                        ? dictionary.domainFrequency(domain)
+                        : 0;
                 counts[domain] = frequency;
                 used += frequency == 0 ? 0 : 1;
             }

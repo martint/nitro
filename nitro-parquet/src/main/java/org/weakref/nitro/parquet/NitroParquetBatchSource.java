@@ -46,6 +46,7 @@ import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.StructVector;
 import org.weakref.nitro.data.ValueDemand;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.data.VectorBatchScope;
 import org.weakref.nitro.data.VectorColumnGeneration;
 import org.weakref.nitro.data.VectorSourceBatch;
@@ -237,6 +238,8 @@ public final class NitroParquetBatchSource
     private final Schema outputSchema;
     private final SourceColumnHandle[] sourceColumns;
     private final boolean[] outputRequired;
+    private final ValueDemand[] outputDemands;
+    private boolean[] filterDomainKeep = new boolean[0];
     private final ParquetFile[] files;
     private final ParquetMappedFileCache.Lease[] mappedFileLeases;
     private final ColumnReader[] readers;
@@ -820,6 +823,8 @@ public final class NitroParquetBatchSource
         this.nullReaders = new ColumnReader[columnCount];
         this.outputRequired = new boolean[columnCount];
         java.util.Arrays.fill(outputRequired, true);
+        this.outputDemands = new ValueDemand[columnCount];
+        java.util.Arrays.fill(outputDemands, ValueDemand.FULL);
         this.nullable = new boolean[columnCount];
         this.intOutputAsLong = new boolean[columnCount];
         this.currentValues = new Vector[columnCount];
@@ -1111,13 +1116,16 @@ public final class NitroParquetBatchSource
         }
         requireNonNull(outputs, "outputs is null");
         java.util.Arrays.fill(outputRequired, false);
+        java.util.Arrays.fill(outputDemands, ValueDemand.FULL);
         for (java.util.Map.Entry<SourceColumnHandle, ValueDemand> output : outputs.entrySet()) {
             int column = columnIndex(requireNonNull(output.getKey(), "output is null"));
             if (column < 0) {
                 throw new IllegalArgumentException("output belongs to another source");
             }
             outputRequired[column] = true;
-            readers[column].setDictionaryDomainMetadataDemand(requireNonNull(output.getValue(), "output demand is null"));
+            ValueDemand demand = requireNonNull(output.getValue(), "output demand is null");
+            outputDemands[column] = demand;
+            readers[column].setDictionaryDomainMetadataDemand(demand);
         }
         for (int column = 0; column < readers.length; column++) {
             if (!outputRequired[column]) {
@@ -1146,13 +1154,14 @@ public final class NitroParquetBatchSource
         checkOpen();
         advancePastRejectedRowGroups();
         alignReadersForLateRowLevelFiltering();
-        if (!(filtersActive() ? ensureWindow() : nextRow < totalRows)) {
+        boolean preserveFilteredDomains = preservesFilteredDomains();
+        if (!((filtersActive() && !preserveFilteredDomains) ? ensureWindow() : nextRow < totalRows)) {
             return SourcePoll.Finished.FINISHED;
         }
         closeCurrentBatch();
         enableDirectNumericBatchDecodeIfAdmitted();
 
-        if (filtersActive()) {
+        if (filtersActive() && !preserveFilteredDomains) {
             return new SourcePoll.Ready(emitSlice());
         }
         int count = toIntExact(Math.min(currentBatchRows, totalRows - nextRow));
@@ -1161,7 +1170,23 @@ public final class NitroParquetBatchSource
             consumeRowGroupRows(count);
         }
         nextRow += count;
+        if (preserveFilteredDomains) {
+            return new SourcePoll.Ready(fullBatch(count, true));
+        }
         return new SourcePoll.Ready(lateMaterializationPolicy.enabled() ? lazyBatch(count) : fullBatch(count));
+    }
+
+    private boolean preservesFilteredDomains()
+    {
+        if (!filtersActive()) {
+            return false;
+        }
+        for (int column = 0; column < readers.length; column++) {
+            if (filtersByColumn[column] != null && outputDemands[column] == ValueDemand.FULL_WITH_DOMAIN_COUNTS) {
+                return true;
+            }
+        }
+        return false;
     }
 
     @Override
@@ -1497,6 +1522,11 @@ public final class NitroParquetBatchSource
 
     private SourceBatch fullBatch(int count)
     {
+        return fullBatch(count, false);
+    }
+
+    private SourceBatch fullBatch(int count, boolean applyFiltersAsMask)
+    {
         int columnCount = readers.length;
         lazyOutputResolution = false;
         VectorColumnGeneration[] outputs = new VectorColumnGeneration[columnCount];
@@ -1552,10 +1582,45 @@ public final class NitroParquetBatchSource
         }
 
         Mask mask = allocator.allocateAllMask(allocationContext, count);
+        if (applyFiltersAsMask) {
+            applyFiltersAsMask(mask);
+        }
         beginAdaptiveBatch(count);
         SourceBatch batch = new VectorSourceBatch(outputSchema, mask, outputs, batchBuffers, adaptiveConstrainer, adaptiveClose);
         currentBatch = batch;
         return batch;
+    }
+
+    private void applyFiltersAsMask(Mask mask)
+    {
+        for (int column = 0; column < readers.length && !mask.none(); column++) {
+            LongDomain filter = filtersByColumn[column];
+            if (filter == null) {
+                continue;
+            }
+            adaptCurrentValue(column);
+            Vector values = currentValues[column];
+            Vector nulls = currentNulls[column];
+            if (values instanceof DictionaryVector dictionary && dictionary.values().length() <= Long.SIZE) {
+                VectorAccess.LongValues domain = VectorAccess.longValues(dictionary.values());
+                int domainSize = dictionary.values().length();
+                if (filterDomainKeep.length != domainSize) {
+                    filterDomainKeep = new boolean[domainSize];
+                }
+                for (int dictionaryId = 0; dictionaryId < domainSize; dictionaryId++) {
+                    filterDomainKeep[dictionaryId] = filter.test(domain.value(dictionaryId));
+                }
+                mask.retainDictionaryComparison(dictionary, filterDomainKeep);
+                if (!VectorAccess.isAllFalseNulls(nulls)) {
+                    VectorAccess.BooleanValues nullValues = VectorAccess.booleanValues(nulls);
+                    mask.retainIf(position -> !nullValues.value(position));
+                }
+                continue;
+            }
+            VectorAccess.LongValues flat = VectorAccess.longValues(values);
+            VectorAccess.BooleanValues nullValues = VectorAccess.isAllFalseNulls(nulls) ? null : VectorAccess.booleanValues(nulls);
+            mask.retainIf(position -> (nullValues == null || !nullValues.value(position)) && filter.test(flat.value(position)));
+        }
     }
 
     /**

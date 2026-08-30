@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.core.function.aggregation.GroupedAggregationDomain;
 import org.weakref.nitro.core.function.aggregation.GroupedAggregationUpdate;
 import org.weakref.nitro.core.function.aggregation.GroupedStateUpdate;
 import org.weakref.nitro.core.function.aggregation.LongStateUpdate;
@@ -970,7 +971,9 @@ public class GroupedAggregationOperator
     {
         boolean generatedUpdates = fusedSpecs != null;
         boolean encodedGroupedInput = supportsEncodedGroupedInput();
-        if (!dictionaryDomainAggregation || (!generatedUpdates && !encodedGroupedInput) ||
+        org.weakref.nitro.operator.aggregation.StreamAccessor streams = StreamAccessors.forBatch(batch);
+        boolean groupedDomainInput = supportsGroupedDomainInput(streams);
+        if (!dictionaryDomainAggregation || (!generatedUpdates && !groupedDomainInput && !encodedGroupedInput) ||
                 groupByColumns.length != 1 ||
                 filteredAggregationIndexes.length != 0 || distinctAggregationGroups.length != 0) {
             return false;
@@ -994,9 +997,10 @@ public class GroupedAggregationOperator
         if (generatedUpdates && !bindDictionaryDomainInputs(batch, dictionary, keyNulls, mask, slots)) {
             generatedUpdates = false;
         }
-        if (!generatedUpdates && (!encodedGroupedInput ||
-                !VectorAccess.isAllFalseNulls(keyNulls) ||
-                dictionary.values().length() > Long.SIZE)) {
+        if ((groupedDomainInput || encodedGroupedInput) && !VectorAccess.isAllFalseNulls(keyNulls)) {
+            return false;
+        }
+        if (!generatedUpdates && !groupedDomainInput && (!encodedGroupedInput || dictionary.values().length() > Long.SIZE)) {
             return false;
         }
 
@@ -1063,6 +1067,26 @@ public class GroupedAggregationOperator
                     }
                 }
             }
+            else if (groupedDomainInput) {
+                int domainSize = dictionary.values().length();
+                reusableDictionaryDomainGroups = allocator.reallocateIfNecessary(
+                        allocationContext,
+                        reusableDictionaryDomainGroups,
+                        I64Vector.class,
+                        domainSize,
+                        I64Vector::new);
+                long[] groupValues = reusableDictionaryDomainGroups.values();
+                for (int domain = 0; domain < domainSize; domain++) {
+                    groupValues[domain] = dictionaryDomainGroups[domain];
+                }
+                GroupedAggregationDomain domain = new GroupedAggregationDomain(
+                        reusableDictionaryDomainGroups,
+                        dictionaryDomainCounts,
+                        domainSize);
+                for (int aggregationIndex : plainAggregationIndexes) {
+                    aggregations[aggregationIndex].accumulateGroupedDomain(states[aggregationIndex], domain, streams);
+                }
+            }
             else {
                 int domainSize = dictionary.values().length();
                 reusableDictionaryDomainGroups = allocator.reallocateIfNecessary(
@@ -1087,7 +1111,6 @@ public class GroupedAggregationOperator
                 DictionaryVector encodedGroups = mask.all() && dictionary.hasDomainFrequencies()
                         ? dictionary.sharedMappingWithValues(reusableDictionaryDomainGroups)
                         : dictionary.sharedMappingWithValuesAndDomainPresence(reusableDictionaryDomainGroups, domainPresence);
-                org.weakref.nitro.operator.aggregation.StreamAccessor streams = StreamAccessors.forBatch(batch);
                 for (int aggregationIndex : plainAggregationIndexes) {
                     aggregations[aggregationIndex].accumulate(states[aggregationIndex], encodedGroups, mask, streams);
                 }
@@ -1106,6 +1129,19 @@ public class GroupedAggregationOperator
         }
         for (int aggregationIndex : plainAggregationIndexes) {
             if (!aggregations[aggregationIndex].supportsEncodedGroupedInput()) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean supportsGroupedDomainInput(org.weakref.nitro.operator.aggregation.StreamAccessor streams)
+    {
+        if (plainAggregationIndexes.length == 0) {
+            return false;
+        }
+        for (int aggregationIndex : plainAggregationIndexes) {
+            if (!aggregations[aggregationIndex].supportsGroupedDomainInput(streams)) {
                 return false;
             }
         }

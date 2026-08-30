@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.operator.aggregation;
 
+import org.weakref.nitro.core.function.aggregation.GroupedAggregationDomain;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Streams;
@@ -79,6 +80,16 @@ public interface PhysicalAggregationUnit
     default boolean supportsEncodedGroupedInput()
     {
         return false;
+    }
+
+    default boolean supportsGroupedDomainInput(StreamAccessor streams)
+    {
+        return false;
+    }
+
+    default void accumulateGroupedDomain(Object state, GroupedAggregationDomain domain, StreamAccessor streams)
+    {
+        throw new UnsupportedOperationException("grouped domain input is not supported");
     }
 
     default void accumulateDistinctSelected(Object state, Vector groups, Mask mask, StreamAccessor streams)

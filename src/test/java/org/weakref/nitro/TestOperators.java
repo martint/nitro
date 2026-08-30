@@ -4849,6 +4849,47 @@ public class TestOperators
     }
 
     @Test
+    void testFilterOperatorRemovesPredicateEnforcedThroughProjection()
+    {
+        PrimitiveRegistry primitiveRegistry = primitiveRegistry();
+        Variable literal = new Variable(0);
+        Variable predicate = new Variable(1);
+        EvaluationPlan filterPlan = new EvaluationPlan(List.of(
+                new Assignment(literal, new Literal(2L), AllMask.ALL),
+                new Assignment(predicate, new Call("eq", List.of(
+                        new Reference(new Input(0), Stream.VALUES),
+                        new Reference(literal, Stream.VALUES))), AllMask.ALL)), List.of());
+        ConstantTableOperator source = new ConstantTableOperator(
+                allocator,
+                2,
+                List.of(row(1L, 10L), row(2L, 20L), row(3L, 30L)))
+        {
+            @Override
+            public StaticFilterEnforcement pushStaticFilter(org.weakref.nitro.operator.DynamicFilter filter)
+            {
+                assertThat(filter.column()).isEqualTo(1);
+                StaticFilterEnforcement enforcement = StaticFilterEnforcement.pending();
+                enforcement.complete(RuntimeFilterAcceptance.ENFORCED);
+                return enforcement;
+            }
+        };
+        EvaluationPlan projectionPlan = new EvaluationPlan(
+                List.of(),
+                List.of(new Reference(new Input(1), Stream.VALUES)));
+
+        // The source intentionally does not apply the predicate. Seeing every projected row proves that the source's
+        // enforcement acknowledgement crossed the projection and removed the residual from the filter.
+        assertThat(operator(new FilterOperator(
+                new ProjectOperator(allocator, projectionPlan, primitiveRegistry, source),
+                filterPlan,
+                primitiveRegistry,
+                new Reference(predicate, Stream.VALUES),
+                allocator,
+                EngineResources.from(allocator).operatorResources().filter())))
+                .matchesExactly(List.of(row(10L), row(20L), row(30L)));
+    }
+
+    @Test
     void testProjectionAndFilterDeriveSourceOutputDemandAfterEnforcement()
     {
         assertThat(filterProjectSourceDemand(true)).containsExactly(1);

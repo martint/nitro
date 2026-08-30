@@ -88,6 +88,28 @@ public interface AggregationImplementation
     }
 
     /**
+     * Whether raw grouped input can consume an exact weighted physical key domain for this input batch.
+     *
+     * <p>The capability check must not mutate aggregate state. It may inspect input encodings and side streams so
+     * the engine can fall back atomically before invoking any aggregate in the physical program.
+     */
+    default boolean supportsRawGroupedDomainInput(AggregationInput input)
+    {
+        return false;
+    }
+
+    /**
+     * Adds raw input once per physical key using exact selected-row multiplicities.
+     *
+     * <p>Implementations own value, null, and numerical-reduction semantics. The engine supplies only resolved group
+     * ids and exact weights; it does not identify or rewrite aggregate functions.
+     */
+    default void addRawGroupedDomainInput(Object state, GroupedAggregationDomain domain, AggregationInput input)
+    {
+        throw new UnsupportedOperationException("raw grouped domain input is not supported");
+    }
+
+    /**
      * Optionally binds a direct single-position update to one physical input batch.
      *
      * <p>Window execution uses this capability for running frames. Returning {@code null} retains the ordinary

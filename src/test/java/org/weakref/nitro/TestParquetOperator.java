@@ -968,6 +968,49 @@ public class TestParquetOperator
     }
 
     @Test
+    void testNitroParquetSourcePreservesFilteredDictionaryDomainSelection()
+            throws IOException
+    {
+        List<ParquetRow> rows = new ArrayList<>();
+        for (int position = 0; position < 2_048; position++) {
+            rows.add(new ParquetRow((position % 3) * 10, true, 0L));
+        }
+        java.nio.file.Path file = writeParquetFile("nitro-filtered-numeric-domain.parquet", true, rows);
+        assertDictionaryEncoding(file, "x");
+        Schema schema = new Schema(List.of(new Field("x", BIGINT, false)));
+
+        try (AllocationResources allocationResources = AllocationResources.createDefault();
+                Allocator allocator = new Allocator(allocationResources);
+                NitroParquetBatchSource source = new NitroParquetBatchSource(
+                        executableRuntimeFilterResources(),
+                        allocator,
+                        List.of(file),
+                        schema)) {
+            source.protocol(SourceOutputDemandProtocol.OUTPUT_DEMAND)
+                    .orElseThrow()
+                    .retainOutputs(Map.of(source.column(0), ValueDemand.FULL_WITH_DOMAIN_COUNTS));
+            assertThat(source.addRuntimeFilter(new RuntimeFilter(
+                    source.column(0),
+                    new TestingTypedLongDomain(source.column(0).type(), DynamicFilter.fromRange(0, 10, 10)),
+                    false).withoutResidual()))
+                    .isEqualTo(RuntimeFilterAcceptance.ENFORCED);
+
+            try (var batch = ((SourcePoll.Ready) source.poll()).batch()) {
+                DictionaryVector dictionary = (DictionaryVector) batch.column(0).borrow(Stream.VALUES);
+                Mask mask = ((org.weakref.nitro.data.MaskSelection) batch.selection()).mask();
+                Mask.DictionaryDomainSelection selection = mask.dictionaryDomainSelection(dictionary);
+
+                assertThat(selection).isNotNull();
+                assertThat(mask.count()).isEqualTo(683);
+                assertThat(java.util.stream.IntStream.range(0, dictionary.values().length())
+                        .filter(selection::selects)
+                        .map(dictionary::domainFrequency)
+                        .sum()).isEqualTo(mask.count());
+            }
+        }
+    }
+
+    @Test
     void testNitroParquetSourceProducesDemandedDictionaryDomainPresence()
             throws IOException
     {

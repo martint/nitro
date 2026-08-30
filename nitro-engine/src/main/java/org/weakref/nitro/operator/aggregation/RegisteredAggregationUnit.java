@@ -16,6 +16,7 @@ package org.weakref.nitro.operator.aggregation;
 import org.weakref.nitro.core.function.aggregation.AggregationExecution;
 import org.weakref.nitro.core.function.aggregation.AggregationImplementation;
 import org.weakref.nitro.core.function.aggregation.AggregationInput;
+import org.weakref.nitro.core.function.aggregation.GroupedAggregationDomain;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Streams;
@@ -188,6 +189,21 @@ public class RegisteredAggregationUnit
     public boolean supportsEncodedGroupedInput()
     {
         return implementation.supportsEncodedGroupedInput();
+    }
+
+    @Override
+    public boolean supportsGroupedDomainInput(StreamAccessor streams)
+    {
+        return inputMode == InputMode.RAW && implementation.supportsRawGroupedDomainInput(input(streams));
+    }
+
+    @Override
+    public void accumulateGroupedDomain(Object state, GroupedAggregationDomain domain, StreamAccessor streams)
+    {
+        if (!supportsGroupedDomainInput(streams)) {
+            throw new UnsupportedOperationException("grouped domain input is not supported");
+        }
+        implementation.addRawGroupedDomainInput(state, domain, input(streams));
     }
 
     @Override

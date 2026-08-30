@@ -1831,6 +1831,11 @@ public class Mask
 
     Mask copy(AllocatorPolicy.MaskFiltering resultPolicy)
     {
+        if (dictionaryDomainSelection != null) {
+            Mask result = none(size, resultPolicy);
+            result.copyDictionaryDomainFrom(this, dictionaryDomainSelection.selectedDomainBits(), selectedCount);
+            return result;
+        }
         if (allSelected) {
             return all(size, resultPolicy);
         }

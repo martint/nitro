@@ -124,6 +124,27 @@ class TestAllocator
     }
 
     @Test
+    void testCopyMaskPreservesCompactDictionaryDomainAcrossPoolReuse()
+    {
+        try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
+            Allocator.Context context = new Allocator.Context("dictionary-copy");
+            int[] ids = {3, 1, 2, 0, 3, 2, 1};
+            DictionaryVector dictionary = DictionaryVector.wrap(ids, ids.length, new I64Vector(new long[] {10, 20, 30, 40}));
+            Mask selected = allocator.allocateAllMask(context, ids.length);
+            selected.retainDictionaryComparison(ids, new boolean[] {false, true, false, true});
+
+            Mask first = allocator.copyMask(context, selected);
+            assertThat(first.dictionaryDomainSelection(dictionary)).isNotNull();
+            assertThat(first).containsExactly(0, 1, 4, 6);
+            allocator.release(context, first);
+
+            Mask reused = allocator.copyMask(context, selected);
+            assertThat(reused.dictionaryDomainSelection(dictionary)).isNotNull();
+            assertThat(reused).containsExactly(0, 1, 4, 6);
+        }
+    }
+
+    @Test
     void testLateVectorReleaseAfterAllocatorCloseIsSatisfied()
     {
         try (EngineResources resources = EngineResources.createDefault()) {
