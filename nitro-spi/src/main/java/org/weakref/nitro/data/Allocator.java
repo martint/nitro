@@ -2924,17 +2924,22 @@ public class Allocator
             if (closed) {
                 throw new IllegalStateException("asynchronous vector tree lease is closed");
             }
-            boolean leased = false;
-            for (Vector candidate : vectors) {
-                if (candidate == vector) {
-                    leased = true;
-                    break;
-                }
-            }
-            if (!leased) {
+            if (!contains(vector)) {
                 throw new IllegalArgumentException("vector is not part of this asynchronous lease");
             }
             allocator.externalizeAsyncVectorStorage(vector);
+        }
+
+        /** Returns whether this lease owns the exact vector identity. */
+        public boolean contains(Vector vector)
+        {
+            requireNonNull(vector, "vector is null");
+            for (Vector candidate : vectors) {
+                if (candidate == vector) {
+                    return true;
+                }
+            }
+            return false;
         }
 
         @Override
