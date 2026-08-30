@@ -434,6 +434,12 @@ public final class DictionaryVector
         return ownedIds != null;
     }
 
+    /** Returns allocator-owned mapping storage when the raw IDs participate in this vector's ownership tree. */
+    public I32Vector ownedIdStorageOrNull()
+    {
+        return ownedIds;
+    }
+
     /**
      * Replaces the value domain while retaining this dictionary's allocator-owned mapping and frequency metadata.
      * The result is an ownership replacement, not an independent sibling: callers must publish only the returned

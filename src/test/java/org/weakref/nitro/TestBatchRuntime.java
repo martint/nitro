@@ -1361,6 +1361,28 @@ public class TestBatchRuntime
     }
 
     @Test
+    void testAsyncVectorTreeDetachExternalizesOnlySelectedStorage()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator producer = new Allocator(resources)) {
+            Allocator.Context owner = new Allocator.Context("Owner");
+            I64Vector externalized = I64Vector.allocate(producer, owner, 32_768);
+            I64Vector recyclable = I64Vector.allocate(producer, owner, 65_536);
+            long[] externalizedStorage = externalized.values();
+            long[] recyclableStorage = recyclable.values();
+
+            Allocator.AsyncVectorTreeLease lease = producer.detachVectorTreeForAsyncRelease(List.of(externalized, recyclable));
+            lease.externalizeStorage(externalized);
+            lease.close();
+
+            try (Allocator consumer = new Allocator(resources)) {
+                assertThat(I64Vector.allocate(consumer, owner, 32_768).values()).isNotSameAs(externalizedStorage);
+                assertThat(I64Vector.allocate(consumer, owner, 65_536).values()).isSameAs(recyclableStorage);
+            }
+        }
+    }
+
+    @Test
     void testAllocatorCloseRecyclesBinaryStorageWithoutReusingVectorIdentity()
     {
         try (EngineResources resources = EngineResources.createDefault()) {

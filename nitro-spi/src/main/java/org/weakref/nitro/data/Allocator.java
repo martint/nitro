@@ -1865,6 +1865,15 @@ public class Allocator
         releaseStorage(vector);
     }
 
+    private synchronized void externalizeAsyncVectorStorage(Vector vector)
+    {
+        AsyncVectorLeaseState lease = asyncVectorLeases.get(vector);
+        if (lease == null) {
+            throw new IllegalStateException("vector does not have an asynchronous lease");
+        }
+        lease.recyclable = false;
+    }
+
     private void transferOwnedVector(Context context, Vector vector)
     {
         vector.prepareBufferTransfer(this, context);
@@ -2902,6 +2911,32 @@ public class Allocator
             this.vectors = List.copyOf(requireNonNull(vectors, "vectors is null"));
         }
 
+        /**
+         * Relinquishes recyclable storage exposed to an owner whose lifetime is independent of this lease.
+         *
+         * <p>The vector wrapper remains part of this lease, but its primitive storage will not return to Nitro's
+         * reuse pool when the last asynchronous reference closes. Callers must invoke this only for a vector whose
+         * backing storage they have actually exposed; sibling vectors in the same detached tree remain recyclable.
+         */
+        public void externalizeStorage(Vector vector)
+        {
+            requireNonNull(vector, "vector is null");
+            if (closed) {
+                throw new IllegalStateException("asynchronous vector tree lease is closed");
+            }
+            boolean leased = false;
+            for (Vector candidate : vectors) {
+                if (candidate == vector) {
+                    leased = true;
+                    break;
+                }
+            }
+            if (!leased) {
+                throw new IllegalArgumentException("vector is not part of this asynchronous lease");
+            }
+            allocator.externalizeAsyncVectorStorage(vector);
+        }
+
         @Override
         public void close()
         {
@@ -2932,7 +2967,7 @@ public class Allocator
 
     private static final class AsyncVectorLeaseState
     {
-        private final boolean recyclable;
+        private boolean recyclable;
         private int references = 1;
 
         private AsyncVectorLeaseState(boolean recyclable)
