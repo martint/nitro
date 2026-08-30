@@ -862,6 +862,36 @@ class TestGroupedAggregationSession
     }
 
     @Test
+    void testCardinalityObservationPreservesCompactDictionarySelection()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            allocator.beginExecution();
+            DictionaryVector dictionary = DictionaryVector.ofTrustedIdsWithDomainFrequencies(
+                    new int[] {0, 1, 2, 3, 0, 1, 2, 3},
+                    8,
+                    new I64Vector(new long[] {11, 22, 33, 44}),
+                    new int[] {2, 2, 2, 2});
+            Mask mask = Mask.all(dictionary.length());
+            mask.retainDictionaryComparison(dictionary, new boolean[] {false, true, false, true});
+            Batch batch = new Batch(mask, Output.of(Streams.ofValues(dictionary)));
+            try (batch) {
+                PartialAggregationInputStatistics encoded = GroupingCardinalitySampler.sample(batch, List.of(0), 4, allocator.primitiveArrays());
+                assertThat(encoded.sampledRows()).isEqualTo(4);
+                assertThat(encoded.distinctKeyHashes()).isEqualTo(2);
+                assertThat(mask.dictionaryDomainSelection(dictionary)).isNotNull();
+
+                try (Batch logical = new Batch(
+                        Mask.sparse(new int[] {1, 3, 5, 7}, dictionary.length()),
+                        Output.of(Streams.ofValues(dictionary)))) {
+                    assertThat(GroupingCardinalitySampler.sample(logical, List.of(0), 4, allocator.primitiveArrays()))
+                            .isEqualTo(encoded);
+                }
+            }
+        }
+    }
+
+    @Test
     void testCardinalityObservationUsesTypeAuthoredStructuralKeys()
     {
         TypeBinding scalar = Schema.unspecified(1).field(0).type();

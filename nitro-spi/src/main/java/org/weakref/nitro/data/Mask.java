@@ -1291,6 +1291,12 @@ public class Mask
         return selection;
     }
 
+    /** Whether this mask still carries a compact dictionary-domain selection for some row mapping. */
+    public boolean hasDictionaryDomainSelection()
+    {
+        return dictionaryDomainSelection != null;
+    }
+
     /**
      * Copies the exact logical-row frequency of every entry from the current compact dictionary-domain selection.
      * The returned immutable-by-contract snapshot can travel with a derived encoded vector after this mask is

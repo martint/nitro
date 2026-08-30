@@ -1203,6 +1203,15 @@ public class GroupedAggregationOperator
             }
 
             Vector inputNulls = input.borrowOrNull(Stream.NULLS);
+            if (VectorAccess.isAllTrueNulls(inputNulls)) {
+                int[] frequencies = dictionaryDomainInputCounts[update];
+                if (frequencies == null || frequencies.length < slots) {
+                    frequencies = new int[Allocator.computeCapacity(slots)];
+                    dictionaryDomainInputCounts[update] = frequencies;
+                }
+                Arrays.fill(frequencies, 0, slots, 0);
+                continue;
+            }
             if (!VectorAccess.isAllFalseNulls(inputNulls)) {
                 try {
                     dictionaryDomainInputNulls[update] = VectorAccess.booleanValues(inputNulls);

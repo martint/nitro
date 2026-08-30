@@ -13,10 +13,12 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.data.VectorAccess;
 
 import java.util.Arrays;
 import java.util.IdentityHashMap;
@@ -87,6 +89,61 @@ final class GroupingCardinalitySampler
             // Some structural representations require their type-authored grouping kernel. Do not substitute a
             // different equality model merely for admission; zero sampled rows means no observation is available.
             return new PartialAggregationInputStatistics(0, new long[0]);
+        }
+
+        if (values.length == 1 &&
+                values[0] instanceof DictionaryVector dictionary &&
+                dictionary.hasDomainFrequencies() &&
+                VectorAccess.isAllFalseNulls(nulls[0])) {
+            Mask.DictionaryDomainSelection selection = mask.dictionaryDomainSelection(dictionary);
+            if (selection != null) {
+                int domainSize = dictionary.values().length();
+                long[] hashes = arrays.borrowLongs(domainSize);
+                try {
+                    int hashCount = 0;
+                    for (int domain = 0; domain < domainSize; domain++) {
+                        if (selection.selects(domain) && dictionary.domainFrequency(domain) != 0) {
+                            long keyHash = keyKernels == null
+                                    ? OperatorKeySemantics.hash(dictionary.values(), null, domain)
+                                    : keyKernels.getFirst().hash(dictionary.values(), null, domain);
+                            hashes[hashCount++] = Long.rotateLeft(0x9E3779B97F4A7C15L, 27) * 0xC2B2AE3D27D4EB4FL + keyHash;
+                            if (hashCount == sampledRows) {
+                                break;
+                            }
+                        }
+                    }
+                    Arrays.sort(hashes, 0, hashCount);
+                    int distinct = hashCount == 0 ? 0 : 1;
+                    for (int index = 1; index < hashCount; index++) {
+                        if (hashes[index] != hashes[index - 1]) {
+                            distinct++;
+                        }
+                    }
+                    long[] distinctHashes = new long[distinct];
+                    if (distinct != 0) {
+                        distinctHashes[0] = hashes[0];
+                        int output = 1;
+                        for (int index = 1; index < hashCount; index++) {
+                            if (hashes[index] != hashes[index - 1]) {
+                                distinctHashes[output++] = hashes[index];
+                            }
+                        }
+                    }
+                    return new PartialAggregationInputStatistics(
+                            sampledRows,
+                            distinctHashes,
+                            sampledRetainedKeyBytes(values, sampledRows, mask.size()),
+                            dictionary.values().isVariableWidth(),
+                            aggregationReadsInput);
+                }
+                catch (IllegalArgumentException ignored) {
+                    // Fall through to logical-row sampling when the type-authored kernel cannot hash the physical
+                    // dictionary domain directly.
+                }
+                finally {
+                    arrays.release(hashes);
+                }
+            }
         }
 
         long[] hashes = arrays.borrowLongs(sampledRows);

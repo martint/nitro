@@ -243,6 +243,24 @@ public class TestGroupingStatePoolReuse
     }
 
     @Test
+    public void testSingleLongInitializationPreservesCompactDictionarySelection()
+    {
+        GroupingState state = new GroupingState(arrayPool, codeGeneration, groupingResources, adaptiveLongGroupingPolicy, flatKeyTablePolicy);
+        DictionaryVector dictionary = DictionaryVector.ofTrustedIdsWithDomainFrequencies(
+                new int[] {0, 1, 2, 3, 0, 1, 2, 3},
+                8,
+                new I64Vector(new long[] {11, 22, 33, 44}),
+                new int[] {2, 2, 2, 2});
+        Mask mask = Mask.all(dictionary.length());
+        mask.retainDictionaryComparison(dictionary, new boolean[] {true, false, true, false});
+
+        state.initializeSchema(new Vector[] {dictionary}, new Vector[] {null}, mask);
+
+        assertThat(mask.dictionaryDomainSelection(dictionary)).isNotNull();
+        state.releaseBuffers();
+    }
+
+    @Test
     public void testIndependentStructuralDictionaryKeysHashPhysicalCombinationsOnly()
             throws ReflectiveOperationException
     {

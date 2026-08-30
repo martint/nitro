@@ -27,6 +27,7 @@ import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Utf8Traits;
@@ -559,6 +560,76 @@ class TestFusedGroupedAggregation
         assertThat(actual).containsExactlyInAnyOrderEntriesOf(Map.of(22L, (long) frequencies[1], 44L, (long) frequencies[3]));
         assertThat(implementation.groupedDomainObserved).isTrue();
         assertThat(implementation.logicalRowsObserved).isFalse();
+    }
+
+    @Test
+    void allNullAggregationInputPreservesCompactDictionarySelection()
+    {
+        int size = 16_384;
+        int[] ids = new int[size];
+        int[] frequencies = new int[4];
+        for (int position = 0; position < size; position++) {
+            int id = (position * 3 + 1) & 3;
+            ids[position] = id;
+            frequencies[id]++;
+        }
+        DictionaryVector keys = DictionaryVector.ofTrustedIdsWithDomainFrequencies(
+                ids,
+                size,
+                new I64Vector(new long[] {11, 22, 33, 44}),
+                frequencies);
+        Mask selected = Mask.all(size);
+        selected.retainDictionaryComparison(keys, new boolean[] {false, true, false, true});
+        Mask operatorMask = selected.copy();
+        Batch input = new Batch(
+                operatorMask,
+                Output.of(Streams.ofValues(keys)),
+                Output.of(Streams.ofValues(keys.sharedMappingWithValues(new I64Vector(new long[] {1, 1, 1, 1})))
+                        .with(Stream.NULLS, new RleVector(new int[] {size}, new BooleanVector(new boolean[] {true})))));
+        Operator source = new Operator()
+        {
+            private boolean available = true;
+
+            @Override
+            public int outputCount()
+            {
+                return 2;
+            }
+
+            @Override
+            public boolean hasNext()
+            {
+                return available;
+            }
+
+            @Override
+            public Batch next()
+            {
+                available = false;
+                return input;
+            }
+
+            @Override
+            public void constrain(Mask mask) {}
+
+            @Override
+            public void close() {}
+        };
+
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        try (Operator operator = new GroupedAggregationOperator(
+                allocator,
+                List.of(0),
+                List.of(new CountColumn(1)),
+                source)) {
+            while (operator.hasNext()) {
+                try (Batch ignored = operator.next()) {
+                    assertThat(ignored.borrowMask().count()).isEqualTo(2);
+                }
+            }
+        }
+
+        assertThat(operatorMask.dictionaryDomainSelection(keys)).isNotNull();
     }
 
     @Test

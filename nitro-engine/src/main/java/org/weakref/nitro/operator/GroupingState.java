@@ -102,6 +102,11 @@ final class GroupingState
     private int[] independentDictionaryPositions = new int[0];
     long nextGroupId;
     private long nullGroup = -1;
+    private long exactDictionaryDomainBatches;
+    private long logicalDictionaryDomainBatches;
+    private long dictionaryDomainFrequencyBatches;
+    private long alignedDictionaryDomainSelectionBatches;
+    private long compactDictionaryDomainSelectionBatches;
     private boolean useLongGrouping;
     private boolean useIdIndexedLongGrouping;
     private int[] longGroupHashes = new int[0];
@@ -1422,6 +1427,35 @@ final class GroupingState
         }
 
         VectorAccess.LongValues keyValues = VectorAccess.longValues(values);
+        if (mask != null && values instanceof DictionaryVector dictionary && dictionary.hasDomainFrequencies() &&
+                VectorAccess.isAllFalseNulls(nulls)) {
+            Mask.DictionaryDomainSelection selection = mask.dictionaryDomainSelection(dictionary);
+            if (selection != null) {
+                VectorAccess.LongValues domainValues = VectorAccess.longValues(dictionary.values());
+                int distinctDomains = 0;
+                for (int domain = 0; domain < dictionary.values().length(); domain++) {
+                    if (!selection.selects(domain) || dictionary.domainFrequency(domain) == 0) {
+                        continue;
+                    }
+                    long value = domainValues.value(domain);
+                    boolean found = false;
+                    for (int previous = 0; previous < domain; previous++) {
+                        if (selection.selects(previous) && dictionary.domainFrequency(previous) != 0 &&
+                                domainValues.value(previous) == value) {
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found) {
+                        distinctDomains++;
+                        if (distinctDomains == sampleSize) {
+                            break;
+                        }
+                    }
+                }
+                return Math.max(16, distinctDomains * longPolicy.initialLowCardinalityHeadroom());
+            }
+        }
         long[] distinctValues = new long[sampleSize];
         int distinctCount = 0;
         boolean sampledNull = false;
@@ -2911,6 +2945,13 @@ final class GroupingState
         boolean exactDomainFrequencies = (mask.all() || domainSelection != null) &&
                 VectorAccess.isAllFalseNulls(nullVector) &&
                 dictionary.hasDomainFrequencies();
+        if (compositePolicy.debugGroupingShapes()) {
+            dictionaryDomainFrequencyBatches += dictionary.hasDomainFrequencies() ? 1 : 0;
+            alignedDictionaryDomainSelectionBatches += domainSelection != null ? 1 : 0;
+            compactDictionaryDomainSelectionBatches += mask.hasDictionaryDomainSelection() ? 1 : 0;
+            exactDictionaryDomainBatches += exactDomainFrequencies ? 1 : 0;
+            logicalDictionaryDomainBatches += exactDomainFrequencies ? 0 : 1;
+        }
         if (exactDomainFrequencies) {
             for (int domain = 0; domain < domainSize; domain++) {
                 int frequency = domainSelection == null || domainSelection.selects(domain)
@@ -3739,14 +3780,19 @@ final class GroupingState
     {
         if (compositePolicy.debugGroupingShapes()) {
             System.err.printf(
-                    "[grouping-final] groups=%d single-long=%s direct=%s id-indexed=%s disabled=%s staged-disabled=%s next-check=%d%n",
+                    "[grouping-final] groups=%d single-long=%s direct=%s id-indexed=%s disabled=%s staged-disabled=%s next-check=%d domain-exact=%d domain-logical=%d domain-frequencies=%d domain-compact=%d domain-aligned=%d%n",
                     nextGroupId,
                     useLongGrouping,
                     useLongDirectGrouping,
                     useIdIndexedLongGrouping,
                     longDirectGroupingDisabled,
                     stagedLongDirectGroupingDisabled,
-                    longDirectNextCheck);
+                    longDirectNextCheck,
+                    exactDictionaryDomainBatches,
+                    logicalDictionaryDomainBatches,
+                    dictionaryDomainFrequencyBatches,
+                    compactDictionaryDomainSelectionBatches,
+                    alignedDictionaryDomainSelectionBatches);
         }
         arrayPool.release(packedIntPairControl);
         packedIntPairControl = null;
