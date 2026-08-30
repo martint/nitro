@@ -240,6 +240,7 @@ class TestOperatorCodeGenerationResources
                     false,
                     false,
                     false,
+                    false,
                     new boolean[] {false},
                     new boolean[] {false},
                     new boolean[] {false},
@@ -285,6 +286,7 @@ class TestOperatorCodeGenerationResources
                     false,
                     false,
                     false,
+                    false,
                     new boolean[] {false},
                     new boolean[] {true},
                     new boolean[] {false},
@@ -317,10 +319,55 @@ class TestOperatorCodeGenerationResources
         }
     }
 
+    @Test
+    void testGeneratedGroupingConsumesPreResolvedDictionaryGroups()
+    {
+        try (OperatorCodeGenerationResources resources = new OperatorCodeGenerationResources()) {
+            FusedGroupingKernel kernel = resources.fusedGrouping().create(
+                    List.of(GroupedAggregationUpdate.inputValue(0)),
+                    false,
+                    false,
+                    true,
+                    true,
+                    false,
+                    false,
+                    false,
+                    false,
+                    new boolean[] {false},
+                    new boolean[] {false},
+                    new boolean[] {true},
+                    new boolean[] {false},
+                    new boolean[] {false},
+                    new boolean[] {false});
+            ScaledState state = new ScaledState(2);
+
+            long nextGroup = kernel.accumulate(
+                    null,
+                    4,
+                    new long[] {90, 10},
+                    new int[] {1, 0, 1, 0},
+                    new long[0],
+                    new int[] {0, 1},
+                    0,
+                    new long[0],
+                    2,
+                    null,
+                    new Object[] {new long[] {1, 2, 4, 8}},
+                    new int[][] {new int[] {0, 1, 2, 3}},
+                    new boolean[1][],
+                    new int[1][],
+                    new GroupedStateUpdate[] {state});
+
+            assertThat(nextGroup).isEqualTo(2);
+            assertThat(state.values).containsExactly(10, 5);
+        }
+    }
+
     private static FusedGroupingKernel createCountKernel(FusedGroupingAggregationKernelGenerator generator)
     {
         return generator.create(
                 List.of(GroupedAggregationUpdate.constant(1)),
+                false,
                 false,
                 false,
                 false,

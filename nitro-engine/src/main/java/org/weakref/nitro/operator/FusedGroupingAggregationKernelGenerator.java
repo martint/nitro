@@ -99,6 +99,7 @@ final class FusedGroupingAggregationKernelGenerator
             boolean writeGroups,
             boolean intKey,
             boolean keyMapped,
+            boolean preResolvedKeyDomain,
             boolean runCache,
             boolean constantRuns,
             boolean directGrouping,
@@ -111,10 +112,10 @@ final class FusedGroupingAggregationKernelGenerator
             boolean[] inputNullUsesKeyIds)
     {
         checkOpen();
-        String physicalShape = (intKey ? "i" : "l") + ":km=" + keyMapped + ":runs=" + runCache + ":constantRuns=" + constantRuns + ":direct=" + directGrouping + ":idIndexed=" + idIndexedGrouping + Arrays.toString(intInputs) + Arrays.toString(doubleInputs) + Arrays.toString(mappedInputs) + Arrays.toString(mappedInputNulls) + Arrays.toString(inputUsesKeyIds) + Arrays.toString(inputNullUsesKeyIds);
+        String physicalShape = (intKey ? "i" : "l") + ":km=" + keyMapped + ":resolved=" + preResolvedKeyDomain + ":runs=" + runCache + ":constantRuns=" + constantRuns + ":direct=" + directGrouping + ":idIndexed=" + idIndexedGrouping + Arrays.toString(intInputs) + Arrays.toString(doubleInputs) + Arrays.toString(mappedInputs) + Arrays.toString(mappedInputNulls) + Arrays.toString(inputUsesKeyIds) + Arrays.toString(inputNullUsesKeyIds);
         return kernels.computeIfAbsent(
                 cacheKey(specs) + ":groups=" + writeGroups + ":physical=" + physicalShape,
-                key -> generate(specs, writeGroups, intKey, keyMapped, runCache, constantRuns, directGrouping, idIndexedGrouping, intInputs, doubleInputs, mappedInputs, mappedInputNulls, inputUsesKeyIds, inputNullUsesKeyIds));
+                key -> generate(specs, writeGroups, intKey, keyMapped, preResolvedKeyDomain, runCache, constantRuns, directGrouping, idIndexedGrouping, intInputs, doubleInputs, mappedInputs, mappedInputNulls, inputUsesKeyIds, inputNullUsesKeyIds));
     }
 
     private static String cacheKey(List<GroupedAggregationUpdate> specs)
@@ -131,6 +132,7 @@ final class FusedGroupingAggregationKernelGenerator
             boolean writeGroups,
             boolean intKey,
             boolean keyMapped,
+            boolean preResolvedKeyDomain,
             boolean runCache,
             boolean constantRuns,
             boolean directGrouping,
@@ -162,7 +164,7 @@ final class FusedGroupingAggregationKernelGenerator
             });
 
             builder.withMethodBody("accumulate", accumulateType, ClassFile.ACC_PUBLIC,
-                    code -> emitAccumulate(code, specs, writeGroups, intKey, keyMapped, runCache, constantRuns, directGrouping, idIndexedGrouping, intInputs, doubleInputs, mappedInputs, mappedInputNulls, inputUsesKeyIds, inputNullUsesKeyIds));
+                    code -> emitAccumulate(code, specs, writeGroups, intKey, keyMapped, preResolvedKeyDomain, runCache, constantRuns, directGrouping, idIndexedGrouping, intInputs, doubleInputs, mappedInputs, mappedInputNulls, inputUsesKeyIds, inputNullUsesKeyIds));
         });
 
         try {
@@ -196,6 +198,7 @@ final class FusedGroupingAggregationKernelGenerator
             boolean writeGroups,
             boolean intKey,
             boolean keyMapped,
+            boolean preResolvedKeyDomain,
             boolean runCache,
             boolean constantRuns,
             boolean directGrouping,
@@ -248,11 +251,11 @@ final class FusedGroupingAggregationKernelGenerator
         code.aload(POSITIONS);
         code.ifnonnull(sparse);
 
-        emitLoop(code, specs, false, writeGroups, intKey, keyMapped, runCache, constantRuns, directGrouping, idIndexedGrouping, intInputs, doubleInputs, mappedInputs, mappedInputNulls, inputUsesKeyIds, inputNullUsesKeyIds);
+        emitLoop(code, specs, false, writeGroups, intKey, keyMapped, preResolvedKeyDomain, runCache, constantRuns, directGrouping, idIndexedGrouping, intInputs, doubleInputs, mappedInputs, mappedInputNulls, inputUsesKeyIds, inputNullUsesKeyIds);
         code.goto_(end);
 
         code.labelBinding(sparse);
-        emitLoop(code, specs, true, writeGroups, intKey, keyMapped, runCache, constantRuns, directGrouping, idIndexedGrouping, intInputs, doubleInputs, mappedInputs, mappedInputNulls, inputUsesKeyIds, inputNullUsesKeyIds);
+        emitLoop(code, specs, true, writeGroups, intKey, keyMapped, preResolvedKeyDomain, runCache, constantRuns, directGrouping, idIndexedGrouping, intInputs, doubleInputs, mappedInputs, mappedInputNulls, inputUsesKeyIds, inputNullUsesKeyIds);
 
         code.labelBinding(end);
         code.lload(NEXT_ID);
@@ -260,7 +263,7 @@ final class FusedGroupingAggregationKernelGenerator
     }
 
     // for (int index = 0; index < count; index++) { position = sparse ? positions[index] : index; <body> }
-    private static void emitLoop(CodeBuilder code, List<GroupedAggregationUpdate> specs, boolean sparse, boolean writeGroups, boolean intKey, boolean keyMapped, boolean runCache, boolean constantRuns, boolean directGrouping, boolean idIndexedGrouping, boolean[] intInputs, boolean[] doubleInputs, boolean[] mappedInputs, boolean[] mappedInputNulls, boolean[] inputUsesKeyIds, boolean[] inputNullUsesKeyIds)
+    private static void emitLoop(CodeBuilder code, List<GroupedAggregationUpdate> specs, boolean sparse, boolean writeGroups, boolean intKey, boolean keyMapped, boolean preResolvedKeyDomain, boolean runCache, boolean constantRuns, boolean directGrouping, boolean idIndexedGrouping, boolean[] intInputs, boolean[] doubleInputs, boolean[] mappedInputs, boolean[] mappedInputNulls, boolean[] inputUsesKeyIds, boolean[] inputNullUsesKeyIds)
     {
         code.loadConstant(0);
         code.istore(INDEX);
@@ -284,7 +287,7 @@ final class FusedGroupingAggregationKernelGenerator
         }
 
         boolean batchConstantRuns = batchesConstantRuns(specs, constantRuns);
-        emitProbeAndAccumulate(code, specs, writeGroups, intKey, keyMapped, runCache, batchConstantRuns, directGrouping, idIndexedGrouping, intInputs, doubleInputs, mappedInputs, mappedInputNulls, inputUsesKeyIds, inputNullUsesKeyIds);
+        emitProbeAndAccumulate(code, specs, writeGroups, intKey, keyMapped, preResolvedKeyDomain, runCache, batchConstantRuns, directGrouping, idIndexedGrouping, intInputs, doubleInputs, mappedInputs, mappedInputNulls, inputUsesKeyIds, inputNullUsesKeyIds);
 
         code.iinc(INDEX, 1);
         code.goto_(top);
@@ -294,7 +297,7 @@ final class FusedGroupingAggregationKernelGenerator
         }
     }
 
-    private static void emitProbeAndAccumulate(CodeBuilder code, List<GroupedAggregationUpdate> specs, boolean writeGroups, boolean intKey, boolean keyMapped, boolean runCache, boolean batchConstantRuns, boolean directGrouping, boolean idIndexedGrouping, boolean[] intInputs, boolean[] doubleInputs, boolean[] mappedInputs, boolean[] mappedInputNulls, boolean[] inputUsesKeyIds, boolean[] inputNullUsesKeyIds)
+    private static void emitProbeAndAccumulate(CodeBuilder code, List<GroupedAggregationUpdate> specs, boolean writeGroups, boolean intKey, boolean keyMapped, boolean preResolvedKeyDomain, boolean runCache, boolean batchConstantRuns, boolean directGrouping, boolean idIndexedGrouping, boolean[] intInputs, boolean[] doubleInputs, boolean[] mappedInputs, boolean[] mappedInputNulls, boolean[] inputUsesKeyIds, boolean[] inputNullUsesKeyIds)
     {
         // long key = keys[position];
         code.aload(KEYS);
@@ -324,7 +327,17 @@ final class FusedGroupingAggregationKernelGenerator
         Label accumulateSameRun = batchConstantRuns ? code.newLabel() : accumulateNewRun;
         Label accumulateCommon = batchConstantRuns ? code.newLabel() : accumulateNewRun;
 
-        if (runCache) {
+        if (preResolvedKeyDomain) {
+            // The batch boundary resolved each referenced physical dictionary key once. TABLE_IDS is the compact
+            // domain-id -> group-id map for this shape, so the generated row loop retains its monomorphic state
+            // updates while eliminating per-logical-row hashing and collision probes.
+            code.aload(TABLE_IDS);
+            code.iload(KEY_POSITION);
+            code.iaload();
+            code.istore(GROUP);
+            code.goto_(accumulateNewRun);
+        }
+        else if (runCache) {
             Label probe = code.newLabel();
             code.iload(CACHED_VALID);
             code.ifeq(probe);

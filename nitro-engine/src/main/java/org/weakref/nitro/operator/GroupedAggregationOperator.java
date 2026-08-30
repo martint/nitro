@@ -1312,7 +1312,23 @@ public class GroupedAggregationOperator
         }
 
         fusedBindings.finish();
+        boolean preResolvedKeyDomain = dictionaryDomainAggregation
+                && keyMapped
+                && filteredAggregationIndexes.length == 0
+                && distinctAggregationGroups.length == 0
+                && fusedBindings.keyDomainSize() * (long) dictionaryDomainAggregationMinReduction <= mask.count()
+                && resolveFusedKeyDomainGroups(mask);
+        if (preResolvedKeyDomain) {
+            // Group identity is already exact for every referenced physical key. Retain the generated state-update
+            // loop but remove its logical-row hash/probe work; the run/direct/id-indexed probe policies no longer
+            // participate in this physical shape.
+            runCache = false;
+            constantRuns = false;
+            directGrouping = false;
+            idIndexedGrouping = false;
+        }
         int physicalShape = fusedBindings.physicalShape();
+        physicalShape = physicalShape * 31 + (preResolvedKeyDomain ? 1 : 0);
         physicalShape = physicalShape * 31 + (runCache ? 1 : 0);
         physicalShape = physicalShape * 31 + (constantRuns ? 1 : 0);
         physicalShape = physicalShape * 31 + (directGrouping ? 1 : 0);
@@ -1323,6 +1339,7 @@ public class GroupedAggregationOperator
                     filteredAggregationIndexes.length != 0 || distinctAggregationGroups.length != 0,
                     intKey,
                     keyMapped,
+                    preResolvedKeyDomain,
                     runCache,
                     constantRuns,
                     directGrouping,
@@ -1347,8 +1364,10 @@ public class GroupedAggregationOperator
         // Pre-reserve so the inlined probe needs no rehash branch and no per-row state growth.
         // A dictionary's value count is a safe upper bound on new groups in this batch. Reserving by logical row
         // count instead can substantially over-allocate state for a low-cardinality encoded key.
-        int additionalGroups = fusedBindings.additionalGroupUpperBound(count);
-        inlineGroupingState.reserveSingleLongTable(additionalGroups);
+        int additionalGroups = preResolvedKeyDomain ? 0 : fusedBindings.additionalGroupUpperBound(count);
+        if (!preResolvedKeyDomain) {
+            inlineGroupingState.reserveSingleLongTable(additionalGroups);
+        }
         ensureFusedStateCapacity(toIntExact(inlineGroupingState.groupCount() + additionalGroups));
         if (filteredAggregationIndexes.length != 0 || distinctAggregationGroups.length != 0) {
             reusableGroups = allocator.reallocateIfNecessary(allocationContext, reusableGroups, I64Vector.class, mask.maxPosition() + 1, I64Vector::new);
@@ -1360,7 +1379,7 @@ public class GroupedAggregationOperator
                 keyValues,
                 keyIds,
                 inlineGroupingState.longGroupKeys,
-                inlineGroupingState.longGroupIds,
+                preResolvedKeyDomain ? dictionaryDomainGroups : inlineGroupingState.longGroupIds,
                 inlineGroupingState.longGroupMask,
                 inlineGroupingState.longKeysByGroup,
                 inlineGroupingState.nextGroupId,
@@ -1373,6 +1392,26 @@ public class GroupedAggregationOperator
 
         inlineGroupingState.nextGroupId = nextId;
         inlineGroupingState.longGroupCount = (int) nextId;
+        return true;
+    }
+
+    /** Resolves each referenced physical dictionary key once while preserving the authoritative grouping table. */
+    private boolean resolveFusedKeyDomainGroups(Mask mask)
+    {
+        int domainSize = fusedBindings.keyDomainSize();
+        if (dictionaryDomainCounts.length < domainSize) {
+            dictionaryDomainCounts = new int[Allocator.computeCapacity(domainSize)];
+            dictionaryDomainGroups = new int[dictionaryDomainCounts.length];
+        }
+        if (fusedBindings.countKeyDomain(mask, dictionaryDomainCounts) == 0) {
+            return false;
+        }
+        inlineGroupingState.reserveSingleLongTable(domainSize);
+        for (int domain = 0; domain < domainSize; domain++) {
+            if (dictionaryDomainCounts[domain] != 0) {
+                dictionaryDomainGroups[domain] = inlineGroupingState.groupForLongKey(fusedBindings.keyDomainValue(domain));
+            }
+        }
         return true;
     }
 
