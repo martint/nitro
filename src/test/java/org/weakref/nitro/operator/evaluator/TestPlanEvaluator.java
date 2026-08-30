@@ -2443,6 +2443,35 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testMergeForwardsUniformEncodedBranch()
+    {
+        Variable result = new Variable(0);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(
+                        result,
+                        new org.weakref.nitro.operator.evaluator.ir.Merge(
+                                new ReferenceMask(new Reference(new Input(0), Stream.VALUES)),
+                                new Reference(new Input(1), Stream.VALUES),
+                                new Reference(new Input(2), Stream.VALUES)),
+                        AllMask.ALL)),
+                List.of(new Reference(result, Stream.VALUES)));
+
+        int[] ids = {0, 1, 0, 1};
+        RleVector selected = new RleVector(new int[] {ids.length}, new I64Vector(new long[] {11}));
+        PlanEvaluator evaluator = planEvaluator(
+                plan,
+                new PrimitiveRegistry(),
+                inputResolver(Map.of(
+                        new Reference(new Input(0), Stream.VALUES),
+                        DictionaryVector.wrap(ids, new BooleanVector(new boolean[] {true, true})),
+                        new Reference(new Input(1), Stream.VALUES), selected)),
+                new Allocator(EngineResources.createDefault()));
+
+        assertThat(evaluator.evaluate(new Reference(result, Stream.VALUES), Mask.all(ids.length)).values())
+                .isSameAs(selected);
+    }
+
+    @Test
     void testNestedDictionaryMergeTreatsNullStreamAsConditionValues()
     {
         Variable nullable = new Variable(0);

@@ -1374,6 +1374,23 @@ public final class PlanEvaluator
             return null;
         }
 
+        byte uniformBranch = uniformEncodedMergeBranch(condition);
+        if (uniformBranch != 0) {
+            Reference branch = uniformBranch == 1 ? merge.whenTrue() : merge.whenFalse();
+            Streams.Builder result = Streams.builder();
+            for (Stream stream : requestedStreams) {
+                Reference reference = remapReference(branch, stream);
+                Vector vector = tryEvaluateMergeBranchVector(reference, mask);
+                if (stream == Stream.VALUES && vector == null) {
+                    return null;
+                }
+                if (vector != null) {
+                    result.put(stream, vector);
+                }
+            }
+            return result.build();
+        }
+
         Mask trueMask = encodedMergeBranchMask(condition, (byte) 1);
         Mask.DictionaryDomainSelection domainSelection = trueMask.dictionaryDomainSelection(condition.mapping());
         int[] domainFrequencies = domainSelection == null ? null : trueMask.copyDictionaryDomainFrequencies(domainSelection);
@@ -1413,6 +1430,21 @@ public final class PlanEvaluator
             }
         }
         return result.build();
+    }
+
+    private static byte uniformEncodedMergeBranch(EncodedMergeCondition condition)
+    {
+        byte[] choices = condition.choices();
+        if (choices.length == 0) {
+            return 0;
+        }
+        byte branch = choices[0];
+        for (int index = 1; index < choices.length; index++) {
+            if (choices[index] != branch) {
+                return 0;
+            }
+        }
+        return branch;
     }
 
     private Vector tryEvaluateMergeBranchVector(Reference reference, Mask branchMask)
