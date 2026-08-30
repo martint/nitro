@@ -34,6 +34,7 @@ interface FusedGroupingKernel
      * @param keys the primitive group-key base values ({@code int[]} or {@code long[]}); the generated
      *        implementation is specialized to the concrete array and optional one-level dictionary shape
      * @param keyIds optional dictionary ids mapping logical positions into {@code keys}
+     * @param keyOffset physical base offset added after optional dictionary mapping
      * @param tableKeys open-addressed table: key per slot, or empty when the physical shape resolves exact keys
      *        through {@code keysByGroup}
      * @param tableIds open-addressed table: either a group id per slot ({@code -1} when empty), or a packed hash
@@ -45,9 +46,11 @@ interface FusedGroupingKernel
      *        {@code inputs[a]} is {@code null} when accumulator
      *        {@code a} increments by a constant)
      * @param inputIds optional per-accumulator dictionary ids mapping logical positions into {@code inputs}
+     * @param inputOffsets physical base offsets added after optional dictionary mapping
      * @param inputNulls per-accumulator null base column, or {@code null} when that input is known
      *        null-free (and for constant-increment accumulators)
      * @param inputNullIds optional per-accumulator dictionary ids mapping logical positions into {@code inputNulls}
+     * @param inputNullOffsets physical base offsets added after optional dictionary mapping
      * @param states per-accumulator opaque state-update target
      * @return the next group id after assigning any new groups encountered
      */
@@ -56,6 +59,7 @@ interface FusedGroupingKernel
             int count,
             Object keys,
             int[] keyIds,
+            int keyOffset,
             long[] tableKeys,
             int[] tableIds,
             int tableMask,
@@ -64,7 +68,9 @@ interface FusedGroupingKernel
             long[] outputGroups,
             Object[] inputs,
             int[][] inputIds,
+            int[] inputOffsets,
             boolean[][] inputNulls,
             int[][] inputNullIds,
+            int[] inputNullOffsets,
             GroupedStateUpdate[] states);
 }

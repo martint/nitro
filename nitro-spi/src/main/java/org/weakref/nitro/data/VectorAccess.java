@@ -307,6 +307,11 @@ public final class VectorAccess
         return switch (vector) {
             case I64Vector values -> position -> values.values()[position];
             case I32Vector values -> position -> values.values()[position];
+            case RegionVector region -> {
+                LongValues values = longValues(region.values());
+                int offset = region.offset();
+                yield position -> values.value(offset + position);
+            }
             case DictionaryVector values -> {
                 int[] ids = values.ids();
                 yield switch (values.values()) {
@@ -397,6 +402,11 @@ public final class VectorAccess
         return switch (vector) {
             case BooleanVector values -> position -> values.values()[position];
             case ConcatenatedBooleanVector values -> values::value;
+            case RegionVector region -> {
+                BooleanValues values = booleanValues(region.values());
+                int offset = region.offset();
+                yield position -> values.value(offset + position);
+            }
             case DictionaryVector values -> dictionaryBooleanValues(values);
             case RleVector values -> {
                 BooleanValues runValues = booleanValues(values.values());
@@ -585,6 +595,11 @@ public final class VectorAccess
     {
         return switch (vector) {
             case F64Vector values -> position -> values.values()[position];
+            case RegionVector region -> {
+                DoubleValues values = doubleValues(region.values());
+                int offset = region.offset();
+                yield position -> values.value(offset + position);
+            }
             case DictionaryVector values -> {
                 DoubleValues dictionaryValues = doubleValues(values.values());
                 int[] ids = values.ids();
@@ -638,6 +653,11 @@ public final class VectorAccess
     {
         return switch (vector) {
             case BinaryVector values -> position -> new BinarySlice(values.data(), values.startOffset(position), values.length(position));
+            case RegionVector region -> {
+                BinaryValues values = binaryValues(region.values());
+                int offset = region.offset();
+                yield position -> values.value(offset + position);
+            }
             case DictionaryVector values -> {
                 BinaryValues dictionaryValues = binaryValues(values.values());
                 int[] ids = values.ids();
@@ -684,6 +704,30 @@ public final class VectorAccess
                     return values.length(position);
                 }
             };
+            case RegionVector region -> {
+                BinaryRegions values = binaryRegions(region.values());
+                int offset = region.offset();
+                yield new BinaryRegions()
+                {
+                    @Override
+                    public byte[] data(int position)
+                    {
+                        return values.data(offset + position);
+                    }
+
+                    @Override
+                    public int offset(int position)
+                    {
+                        return values.offset(offset + position);
+                    }
+
+                    @Override
+                    public int length(int position)
+                    {
+                        return values.length(offset + position);
+                    }
+                };
+            }
             case DictionaryVector values -> {
                 BinaryRegions dictionaryValues = binaryRegions(values.values());
                 int[] ids = values.ids();

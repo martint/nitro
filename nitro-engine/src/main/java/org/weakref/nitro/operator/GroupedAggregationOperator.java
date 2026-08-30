@@ -1344,12 +1344,15 @@ public class GroupedAggregationOperator
                     constantRuns,
                     directGrouping,
                     idIndexedGrouping,
+                    fusedBindings.keyOffsetInput(),
                     fusedBindings.intInputs(),
                     fusedBindings.doubleInputs(),
                     fusedBindings.mappedInputs(),
                     fusedBindings.mappedInputNulls(),
                     fusedBindings.inputUsesKeyIds(),
-                    fusedBindings.inputNullUsesKeyIds());
+                    fusedBindings.inputNullUsesKeyIds(),
+                    fusedBindings.offsetInputs(),
+                    fusedBindings.offsetInputNulls());
             fusedPhysicalShape = physicalShape;
         }
 
@@ -1378,6 +1381,7 @@ public class GroupedAggregationOperator
                 count,
                 keyValues,
                 keyIds,
+                fusedBindings.keyOffset(),
                 inlineGroupingState.longGroupKeys,
                 preResolvedKeyDomain ? dictionaryDomainGroups : inlineGroupingState.longGroupIds,
                 inlineGroupingState.longGroupMask,
@@ -1386,8 +1390,10 @@ public class GroupedAggregationOperator
                 filteredAggregationIndexes.length == 0 && distinctAggregationGroups.length == 0 ? null : reusableGroups.values(),
                 fusedBindings.inputs(),
                 fusedBindings.inputIds(),
+                fusedBindings.inputOffsets(),
                 fusedBindings.inputNulls(),
                 fusedBindings.inputNullIds(),
+                fusedBindings.inputNullOffsets(),
                 fusedStateVectors);
 
         inlineGroupingState.nextGroupId = nextId;

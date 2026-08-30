@@ -27,8 +27,10 @@ public final class GeneratedLongGroupingBindings
     private final boolean dictionaryInput;
     private final Object[] inputs;
     private final int[][] inputIds;
+    private final int[] inputOffsets;
     private final boolean[][] inputNulls;
     private final int[][] inputNullIds;
+    private final int[] inputNullOffsets;
     private final boolean[] readsInput;
     private final boolean[] readsValue;
     private final boolean[] intInputs;
@@ -37,9 +39,12 @@ public final class GeneratedLongGroupingBindings
     private final boolean[] mappedInputNulls;
     private final boolean[] inputUsesKeyIds;
     private final boolean[] inputNullUsesKeyIds;
+    private final boolean[] offsetInputs;
+    private final boolean[] offsetInputNulls;
 
     private Object keyValues;
     private int[] keyIds;
+    private int keyOffset;
     private int keyPhysicalLength;
     private boolean intKey;
     private boolean keyMapped;
@@ -52,8 +57,10 @@ public final class GeneratedLongGroupingBindings
         this.dictionaryInput = dictionaryInput;
         inputs = new Object[inputCount];
         inputIds = new int[inputCount][];
+        inputOffsets = new int[inputCount];
         inputNulls = new boolean[inputCount][];
         inputNullIds = new int[inputCount][];
+        inputNullOffsets = new int[inputCount];
         readsInput = new boolean[inputCount];
         readsValue = new boolean[inputCount];
         intInputs = new boolean[inputCount];
@@ -62,12 +69,15 @@ public final class GeneratedLongGroupingBindings
         mappedInputNulls = new boolean[inputCount];
         inputUsesKeyIds = new boolean[inputCount];
         inputNullUsesKeyIds = new boolean[inputCount];
+        offsetInputs = new boolean[inputCount];
+        offsetInputNulls = new boolean[inputCount];
     }
 
     public boolean bindKey(Vector values, Vector nulls)
     {
         keyValues = null;
         keyIds = null;
+        keyOffset = 0;
         keyPhysicalLength = 0;
         intKey = false;
         keyMapped = false;
@@ -83,14 +93,23 @@ public final class GeneratedLongGroupingBindings
             keyMapped = true;
             values = dictionary.values();
         }
+        if (values instanceof RegionVector region) {
+            keyOffset = region.offset();
+            keyPhysicalLength = region.length();
+            values = region.values();
+        }
         if (values instanceof I64Vector longs) {
             keyValues = longs.values();
-            keyPhysicalLength = longs.length();
+            if (keyPhysicalLength == 0) {
+                keyPhysicalLength = longs.length();
+            }
             return true;
         }
         if (values instanceof I32Vector ints) {
             keyValues = ints.values();
-            keyPhysicalLength = ints.length();
+            if (keyPhysicalLength == 0) {
+                keyPhysicalLength = ints.length();
+            }
             intKey = true;
             return true;
         }
@@ -111,6 +130,11 @@ public final class GeneratedLongGroupingBindings
                 inputIds[index] = dictionary.ids();
                 mappedInputs[index] = true;
                 values = dictionary.values();
+            }
+            if (values instanceof RegionVector region) {
+                inputOffsets[index] = region.offset();
+                offsetInputs[index] = region.offset() != 0;
+                values = region.values();
             }
             if (doubleValue && values instanceof F64Vector doubles) {
                 inputs[index] = doubles.values();
@@ -139,6 +163,11 @@ public final class GeneratedLongGroupingBindings
             mappedInputNulls[index] = true;
             nulls = dictionary.values();
         }
+        if (nulls instanceof RegionVector region) {
+            inputNullOffsets[index] = region.offset();
+            offsetInputNulls[index] = region.offset() != 0;
+            nulls = region.values();
+        }
         if (nulls instanceof BooleanVector booleans) {
             inputNulls[index] = booleans.values();
             return true;
@@ -150,8 +179,10 @@ public final class GeneratedLongGroupingBindings
     {
         inputs[index] = null;
         inputIds[index] = null;
+        inputOffsets[index] = 0;
         inputNulls[index] = null;
         inputNullIds[index] = null;
+        inputNullOffsets[index] = 0;
         readsInput[index] = false;
         readsValue[index] = false;
         intInputs[index] = false;
@@ -160,6 +191,8 @@ public final class GeneratedLongGroupingBindings
         mappedInputNulls[index] = false;
         inputUsesKeyIds[index] = false;
         inputNullUsesKeyIds[index] = false;
+        offsetInputs[index] = false;
+        offsetInputNulls[index] = false;
     }
 
     public void finish()
@@ -174,16 +207,19 @@ public final class GeneratedLongGroupingBindings
     {
         int shape = intKey ? 1 : 0;
         shape = shape * 31 + (keyMapped ? 1 : 0);
+        shape = shape * 31 + (keyOffset != 0 ? 1 : 0);
         for (int index = 0; index < inputs.length; index++) {
             if (readsValue[index]) {
                 shape = shape * 31 + (intInputs[index] ? 1 : 0);
                 shape = shape * 31 + (doubleInputs[index] ? 1 : 0);
                 shape = shape * 31 + (mappedInputs[index] ? 1 : 0);
                 shape = shape * 31 + (inputUsesKeyIds[index] ? 1 : 0);
+                shape = shape * 31 + (offsetInputs[index] ? 1 : 0);
             }
             if (readsInput[index]) {
                 shape = shape * 31 + (mappedInputNulls[index] ? 1 : 0);
                 shape = shape * 31 + (inputNullUsesKeyIds[index] ? 1 : 0);
+                shape = shape * 31 + (offsetInputNulls[index] ? 1 : 0);
             }
         }
         return shape;
@@ -196,7 +232,7 @@ public final class GeneratedLongGroupingBindings
         boolean havePrevious = false;
         long previous = 0;
         for (int position : mask) {
-            int keyPosition = keyIds == null ? position : keyIds[position];
+            int keyPosition = (keyIds == null ? position : keyIds[position]) + keyOffset;
             long key = intKey ? ((int[]) keyValues)[keyPosition] : ((long[]) keyValues)[keyPosition];
             if (havePrevious) {
                 comparisons++;
@@ -247,7 +283,7 @@ public final class GeneratedLongGroupingBindings
         if (!keyMapped || position < 0 || position >= keyPhysicalLength) {
             throw new IllegalArgumentException("invalid key domain position");
         }
-        return intKey ? ((int[]) keyValues)[position] : ((long[]) keyValues)[position];
+        return intKey ? ((int[]) keyValues)[keyOffset + position] : ((long[]) keyValues)[keyOffset + position];
     }
 
     public Object keyValues()
@@ -258,6 +294,11 @@ public final class GeneratedLongGroupingBindings
     public int[] keyIds()
     {
         return keyIds;
+    }
+
+    public int keyOffset()
+    {
+        return keyOffset;
     }
 
     public boolean intKey()
@@ -280,6 +321,11 @@ public final class GeneratedLongGroupingBindings
         return inputIds;
     }
 
+    public int[] inputOffsets()
+    {
+        return inputOffsets;
+    }
+
     public boolean[][] inputNulls()
     {
         return inputNulls;
@@ -288,6 +334,26 @@ public final class GeneratedLongGroupingBindings
     public int[][] inputNullIds()
     {
         return inputNullIds;
+    }
+
+    public int[] inputNullOffsets()
+    {
+        return inputNullOffsets;
+    }
+
+    public boolean keyOffsetInput()
+    {
+        return keyOffset != 0;
+    }
+
+    public boolean[] offsetInputs()
+    {
+        return offsetInputs;
+    }
+
+    public boolean[] offsetInputNulls()
+    {
+        return offsetInputNulls;
     }
 
     public boolean[] intInputs()

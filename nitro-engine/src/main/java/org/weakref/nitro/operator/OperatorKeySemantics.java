@@ -100,6 +100,7 @@ final class OperatorKeySemantics
             case BinaryVector binary -> binary.copyBytes(position);
             case org.weakref.nitro.data.DictionaryVector dictionary -> copyBinaryBytes(dictionary.values(), dictionary.ids()[position]);
             case org.weakref.nitro.data.RleVector rle -> copyBinaryBytes(rle.values(), OperatorVectorSupport.runIndex(rle, position));
+            case org.weakref.nitro.data.RegionVector region -> copyBinaryBytes(region.values(), region.offset() + position);
             default -> throw new IllegalArgumentException("Expected binary vector but found " + values.getClass().getSimpleName());
         };
     }

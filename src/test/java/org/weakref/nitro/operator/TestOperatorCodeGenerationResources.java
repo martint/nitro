@@ -250,6 +250,9 @@ class TestOperatorCodeGenerationResources
                     false,
                     false,
                     false,
+                    false,
+                    new boolean[] {false},
+                    new boolean[] {false},
                     new boolean[] {false},
                     new boolean[] {false},
                     new boolean[] {false},
@@ -265,6 +268,7 @@ class TestOperatorCodeGenerationResources
                     3,
                     new long[] {1, 1, 2},
                     null,
+                    0,
                     new long[8],
                     tableIds,
                     7,
@@ -273,8 +277,10 @@ class TestOperatorCodeGenerationResources
                     null,
                     new Object[] {null},
                     new int[1][],
+                    new int[1],
                     new boolean[1][],
                     new int[1][],
+                    new int[1],
                     new GroupedStateUpdate[] {state});
 
             assertThat(nextGroup).isEqualTo(2);
@@ -296,8 +302,11 @@ class TestOperatorCodeGenerationResources
                     false,
                     false,
                     false,
+                    false,
                     new boolean[] {false},
                     new boolean[] {true},
+                    new boolean[] {false},
+                    new boolean[] {false},
                     new boolean[] {false},
                     new boolean[] {false},
                     new boolean[] {false},
@@ -311,6 +320,7 @@ class TestOperatorCodeGenerationResources
                     3,
                     new long[] {1, 1, 2},
                     null,
+                    0,
                     new long[8],
                     tableIds,
                     7,
@@ -319,8 +329,10 @@ class TestOperatorCodeGenerationResources
                     null,
                     new Object[] {new double[] {1.25, 2.75, -3.5}},
                     new int[1][],
+                    new int[1],
                     new boolean[1][],
                     new int[1][],
+                    new int[1],
                     new GroupedStateUpdate[] {state});
 
             assertThat(nextGroup).isEqualTo(2);
@@ -342,9 +354,12 @@ class TestOperatorCodeGenerationResources
                     false,
                     false,
                     false,
+                    false,
                     new boolean[] {false},
                     new boolean[] {false},
                     new boolean[] {true},
+                    new boolean[] {false},
+                    new boolean[] {false},
                     new boolean[] {false},
                     new boolean[] {false},
                     new boolean[] {false});
@@ -355,6 +370,7 @@ class TestOperatorCodeGenerationResources
                     4,
                     new long[] {90, 10},
                     new int[] {1, 0, 1, 0},
+                    0,
                     new long[0],
                     new int[] {0, 1},
                     0,
@@ -363,12 +379,66 @@ class TestOperatorCodeGenerationResources
                     null,
                     new Object[] {new long[] {1, 2, 4, 8}},
                     new int[][] {new int[] {0, 1, 2, 3}},
+                    new int[1],
                     new boolean[1][],
                     new int[1][],
+                    new int[1],
                     new GroupedStateUpdate[] {state});
 
             assertThat(nextGroup).isEqualTo(2);
             assertThat(state.values).containsExactly(10, 5);
+        }
+    }
+
+    @Test
+    void testGeneratedGroupingConsumesContiguousRegions()
+    {
+        try (OperatorCodeGenerationResources resources = new OperatorCodeGenerationResources()) {
+            FusedGroupingKernel kernel = resources.fusedGrouping().create(
+                    List.of(GroupedAggregationUpdate.inputValue(0)),
+                    false,
+                    false,
+                    false,
+                    false,
+                    false,
+                    false,
+                    false,
+                    false,
+                    true,
+                    new boolean[] {false},
+                    new boolean[] {false},
+                    new boolean[] {false},
+                    new boolean[] {false},
+                    new boolean[] {false},
+                    new boolean[] {false},
+                    new boolean[] {true},
+                    new boolean[] {true});
+            int[] tableIds = new int[8];
+            Arrays.fill(tableIds, -1);
+            ScaledState state = new ScaledState(2);
+
+            long nextGroup = kernel.accumulate(
+                    null,
+                    3,
+                    new long[] {99, 99, 1, 1, 2},
+                    null,
+                    2,
+                    new long[8],
+                    tableIds,
+                    7,
+                    new long[2],
+                    0,
+                    null,
+                    new Object[] {new long[] {99, 10, 20, 30}},
+                    new int[1][],
+                    new int[] {1},
+                    new boolean[][] {new boolean[] {true, false, false, false}},
+                    new int[1][],
+                    new int[] {1},
+                    new GroupedStateUpdate[] {state});
+
+            assertThat(nextGroup).isEqualTo(2);
+            assertThat(state.values).containsExactly(30, 30);
         }
     }
 
@@ -384,6 +454,9 @@ class TestOperatorCodeGenerationResources
                 false,
                 false,
                 false,
+                false,
+                new boolean[] {false},
+                new boolean[] {false},
                 new boolean[] {false},
                 new boolean[] {false},
                 new boolean[] {false},
