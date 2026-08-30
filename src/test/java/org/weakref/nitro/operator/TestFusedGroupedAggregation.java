@@ -571,7 +571,11 @@ class TestFusedGroupedAggregation
         for (int position = 0; position < size; position++) {
             ids[position] = (position * 3 + 1) & 3;
         }
-        DictionaryVector keys = DictionaryVector.wrapNested(ids, size, utf8(values));
+        DictionaryVector keys = DictionaryVector.ofTrustedIdsWithDomainFrequencies(
+                ids,
+                size,
+                utf8(values),
+                new int[] {size / 4, size / 4, size / 4, size / 4});
         DictionaryVector input = keys.sharedMappingWithValues(utf8(values));
         EncodedMinUtf8 minimum = new EncodedMinUtf8(1);
 
@@ -592,6 +596,7 @@ class TestFusedGroupedAggregation
             }
         }
         assertThat(minimum.encodedGroupsObserved).isTrue();
+        assertThat(minimum.encodedGroupFrequenciesObserved).isTrue();
     }
 
     @Test
@@ -900,6 +905,7 @@ class TestFusedGroupedAggregation
             extends MinUtf8
     {
         private boolean encodedGroupsObserved;
+        private boolean encodedGroupFrequenciesObserved;
 
         private EncodedMinUtf8(int inputColumn)
         {
@@ -916,6 +922,7 @@ class TestFusedGroupedAggregation
         public void accumulate(Streams state, Vector groups, Mask mask, StreamAccessor streams)
         {
             encodedGroupsObserved |= groups instanceof DictionaryVector;
+            encodedGroupFrequenciesObserved |= groups instanceof DictionaryVector dictionary && dictionary.hasDomainFrequencies();
             VectorAccess.LongValues groupValues = VectorAccess.longValues(groups);
             I64Vector flatGroups = new I64Vector(groups.length());
             for (int position : mask) {

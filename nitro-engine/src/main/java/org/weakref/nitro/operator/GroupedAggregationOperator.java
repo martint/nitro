@@ -1081,9 +1081,12 @@ public class GroupedAggregationOperator
                         domainPresence |= 1L << domain;
                     }
                 }
-                DictionaryVector encodedGroups = dictionary.sharedMappingWithValuesAndDomainPresence(
-                        reusableDictionaryDomainGroups,
-                        domainPresence);
+                // An all-row mapping with exact source frequencies remains exact after replacing only its physical
+                // values with resolved group ids. Preserve that stronger metadata so registry aggregations can
+                // update once per physical key. A selected subset has only the presence proof computed above.
+                DictionaryVector encodedGroups = mask.all() && dictionary.hasDomainFrequencies()
+                        ? dictionary.sharedMappingWithValues(reusableDictionaryDomainGroups)
+                        : dictionary.sharedMappingWithValuesAndDomainPresence(reusableDictionaryDomainGroups, domainPresence);
                 org.weakref.nitro.operator.aggregation.StreamAccessor streams = StreamAccessors.forBatch(batch);
                 for (int aggregationIndex : plainAggregationIndexes) {
                     aggregations[aggregationIndex].accumulate(states[aggregationIndex], encodedGroups, mask, streams);
