@@ -4293,6 +4293,31 @@ public final class ColumnReader
         return minimum <= maximum && domain.mayOverlap(minimum, maximum);
     }
 
+    /** Whether metadata proves that a pushed non-null domain accepts every row in a numeric row-group chunk. */
+    public boolean chunkFullyAccepted(int index, LongDomain domain)
+    {
+        requireNonNull(domain, "domain is null");
+        if (index < 0 || index >= chunks.size()) {
+            throw new IndexOutOfBoundsException(index);
+        }
+        if (kind == Kind.BINARY || physicalType == Type.DOUBLE || flbaDecimal) {
+            return false;
+        }
+        var statistics = chunks.get(index).metadata().statistics;
+        if (statistics == null || !statistics.isSetNull_count() || statistics.getNull_count() != 0) {
+            return false;
+        }
+        byte[] minimumBytes = statistics.isSetMin_value() ? statistics.getMin_value() : statistics.getMin();
+        byte[] maximumBytes = statistics.isSetMax_value() ? statistics.getMax_value() : statistics.getMax();
+        int width = kind == Kind.INT ? Integer.BYTES : Long.BYTES;
+        if (minimumBytes == null || maximumBytes == null || minimumBytes.length != width || maximumBytes.length != width) {
+            return false;
+        }
+        long minimum = numericStatistic(minimumBytes);
+        long maximum = numericStatistic(maximumBytes);
+        return minimum <= maximum && domain.containsAll(minimum, maximum);
+    }
+
     /**
      * Whether a dictionary-only numeric row group contains at least one value accepted by the domain.
      *

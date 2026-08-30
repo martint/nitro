@@ -38,4 +38,13 @@ public interface LongDomain
     {
         return true;
     }
+
+    /// Whether every value in the inclusive physical range is accepted.
+    ///
+    /// Sources use this conservative proof to avoid installing a predicate that cannot reject any value described
+    /// by their storage metadata. Implementations that do not expose complete coverage return false by default.
+    default boolean containsAll(long minimum, long maximum)
+    {
+        return false;
+    }
 }

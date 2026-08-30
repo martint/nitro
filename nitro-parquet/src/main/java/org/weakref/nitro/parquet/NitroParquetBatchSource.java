@@ -982,6 +982,12 @@ public final class NitroParquetBatchSource
         if (readers[column].kind() == ColumnReader.Kind.BINARY || readers[column].isDouble()) {
             return false;
         }
+        // A broad late join domain can otherwise force every deferred reader into lockstep and add a membership
+        // test to every remaining row even though Parquet statistics prove that it cannot reject anything. Treat a
+        // metadata-proven tautology as enforced without changing the source's execution mode.
+        if (allChunksFullyAccepted(column, filter)) {
+            return true;
+        }
         if (runtimeFilterPolicy.rowGroupFiltering()) {
             LongDomain existingRowGroupFilter = rowGroupFiltersByColumn[column];
             if (existingRowGroupFilter == null || filter.size() < existingRowGroupFilter.size()) {
@@ -1034,6 +1040,16 @@ public final class NitroParquetBatchSource
                 : null;
         hasFilters = true;
         lateFilterAlignmentPending |= firstRowLevelFilter && nextRow > 0;
+        return true;
+    }
+
+    private boolean allChunksFullyAccepted(int column, LongDomain filter)
+    {
+        for (int index = 0; index < rowGroupRows.length; index++) {
+            if (!readers[column].chunkFullyAccepted(index, filter)) {
+                return false;
+            }
+        }
         return true;
     }
 

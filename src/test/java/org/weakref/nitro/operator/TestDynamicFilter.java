@@ -113,6 +113,25 @@ class TestDynamicFilter
         assertThat(filter.mayOverlap(11, 11)).isTrue();
         assertThat(filter.mayOverlap(12, 13)).isTrue();
         assertThat(filter.mayOverlap(13, 20)).isFalse();
+        assertThat(filter.containsAll(10, 12)).isTrue();
+        assertThat(filter.containsAll(9, 12)).isFalse();
+        assertThat(filter.containsAll(10, 13)).isFalse();
+    }
+
+    @Test
+    void exactDenseValuesProveRangeCoverage()
+    {
+        DynamicFilter dense = DynamicFilter.fromValues(
+                0,
+                new it.unimi.dsi.fastutil.longs.LongOpenHashSet(new long[] {10, 11, 12}),
+                DynamicFilterPolicy.defaults());
+        DynamicFilter sparse = DynamicFilter.fromValues(
+                0,
+                new it.unimi.dsi.fastutil.longs.LongOpenHashSet(new long[] {10, 12}),
+                DynamicFilterPolicy.defaults());
+
+        assertThat(dense.containsAll(10, 12)).isTrue();
+        assertThat(sparse.containsAll(10, 12)).isFalse();
     }
 
     @Test

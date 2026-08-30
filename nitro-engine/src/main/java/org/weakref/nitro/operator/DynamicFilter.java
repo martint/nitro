@@ -182,6 +182,16 @@ public final class DynamicFilter
         return distinctSize != 0 && minimum <= max && maximum >= min;
     }
 
+    @Override
+    public boolean containsAll(long minimum, long maximum)
+    {
+        if (minimum > maximum || minimum < min || maximum > max) {
+            return false;
+        }
+        long span = max - min + 1;
+        return span > 0 && distinctSize == span;
+    }
+
     /** Whether {@code value} can join: a range gate, then a bitset read (small domains) or hash-set probe. */
     public boolean accepts(long value)
     {

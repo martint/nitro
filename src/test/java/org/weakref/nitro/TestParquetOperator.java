@@ -1409,6 +1409,46 @@ public class TestParquetOperator
     }
 
     @Test
+    void testMetadataProvenFullDomainDoesNotBecomeLateRowFilter()
+            throws IOException
+    {
+        List<ParquetRow> rows = new ArrayList<>();
+        for (int value = 0; value < 9; value++) {
+            rows.add(new ParquetRow(value, true, (long) value));
+        }
+        java.nio.file.Path file = writeParquetFile("metadata-proven-full-runtime-filter.parquet", true, rows);
+        Schema schema = new Schema(List.of(new Field("maybe", BIGINT, true)));
+        NitroParquetScanResources resources = NitroParquetScanResources.createDefault(
+                org.weakref.nitro.parquet.ParquetArenaPolicy.confined(),
+                new ParquetRuntimeFilterPolicy(true, true, true, 8_096),
+                new ParquetScanBatchPolicy(4));
+
+        try (AllocationResources allocationResources = AllocationResources.createDefault();
+                Allocator allocator = new Allocator(allocationResources);
+                NitroParquetBatchSource source = new NitroParquetBatchSource(resources, allocator, List.of(file), schema)) {
+            int positions;
+            try (var first = ((SourcePoll.Ready) source.poll()).batch()) {
+                positions = first.selection().count();
+            }
+            assertThat(source.addRuntimeFilter(new RuntimeFilter(
+                    source.column(0),
+                    new TestingTypedLongDomain(source.column(0).type(), DynamicFilter.fromRange(0, 0, 8)),
+                    false).withoutResidual()))
+                    .isEqualTo(RuntimeFilterAcceptance.ENFORCED);
+
+            SourcePoll poll = source.poll();
+            while (poll instanceof SourcePoll.Ready ready) {
+                try (var batch = ready.batch()) {
+                    positions += batch.selection().count();
+                }
+                poll = source.poll();
+            }
+            assertThat(poll).isSameAs(SourcePoll.Finished.FINISHED);
+            assertThat(positions).isEqualTo(rows.size());
+        }
+    }
+
+    @Test
     void testNitroParquetSourceCanMatchConnectorColumnNamesIgnoringCase()
             throws IOException
     {
