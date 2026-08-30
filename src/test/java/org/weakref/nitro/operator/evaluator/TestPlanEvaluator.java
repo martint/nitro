@@ -3245,6 +3245,47 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testPredicateValueAndCompanionStreamsAreEvaluatedTogether()
+    {
+        AtomicInteger invocations = new AtomicInteger();
+        PrimitiveRegistry primitiveRegistry = new PrimitiveRegistry();
+        primitiveRegistry.register("counted_predicate", new PrimitiveFunction()
+        {
+            @Override
+            public Streams apply(
+                    List<Streams> inputs,
+                    Mask mask,
+                    Set<Stream> requestedStreams,
+                    Streams output,
+                    PrimitiveExecutionContext context)
+            {
+                invocations.incrementAndGet();
+                return Streams.of(
+                        new BooleanVector(new boolean[] {true, true, true, true}),
+                        new BooleanVector(new boolean[] {false, true, false, false}),
+                        new BooleanVector(new boolean[] {false, false, false, true}));
+            }
+        });
+
+        Variable result = new Variable(0);
+        Reference resultValues = new Reference(result, Stream.VALUES);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(result, new Call("counted_predicate", List.of()), AllMask.ALL)),
+                List.of(resultValues));
+        PlanEvaluator evaluator = planEvaluator(
+                plan,
+                primitiveRegistry,
+                inputResolver(Map.of()),
+                new Allocator(EngineResources.createDefault()));
+
+        Mask resultMask = evaluator.evaluate(new ReferenceMask(resultValues), Mask.all(4));
+        assertThat(resultMask.selectedCount()).isEqualTo(2);
+        assertThat(resultMask.position(0)).isEqualTo(0);
+        assertThat(resultMask.position(1)).isEqualTo(2);
+        assertThat(invocations).hasValue(1);
+    }
+
+    @Test
     void testDirectAndMaskEvaluationDropsRowsThatAreNotUltimatelyTrue()
     {
         PlanEvaluator evaluator = planEvaluator(

@@ -459,15 +459,35 @@ public final class PlanEvaluator
 
     private Streams evaluateUnmemoized(Reference reference, Mask mask, Streams output)
     {
+        return evaluateUnmemoized(
+                reference,
+                mask,
+                output,
+                requestedStreamsFor(reference),
+                hardRequestedStreamsFor(reference));
+    }
+
+    private Streams evaluateUnmemoized(
+            Reference reference,
+            Mask mask,
+            Streams output,
+            Set<Stream> requestedStreams,
+            Set<Stream> hardRequestedStreams)
+    {
         return switch (reference.producer()) {
-            case org.weakref.nitro.operator.evaluator.ir.Input(int index) -> evaluateInput(reference, index, mask);
-            case Variable variable -> evaluateVariable(reference, variable, mask, output);
+            case org.weakref.nitro.operator.evaluator.ir.Input(int index) ->
+                    evaluateInput(reference, index, mask, requestedStreams);
+            case Variable variable -> evaluateVariable(
+                    variable,
+                    mask,
+                    output,
+                    requestedStreams,
+                    hardRequestedStreams);
         };
     }
 
-    private Streams evaluateInput(Reference reference, int inputIndex, Mask mask)
+    private Streams evaluateInput(Reference reference, int inputIndex, Mask mask, Set<Stream> requestedStreams)
     {
-        Set<Stream> requestedStreams = computeRequestedStreams(reference);
         Streams.Builder result = Streams.builder();
         for (Stream stream : requestedStreams) {
             Vector inputVector = input.resolve(new Reference(new org.weakref.nitro.operator.evaluator.ir.Input(inputIndex), stream), mask);
@@ -478,19 +498,24 @@ public final class PlanEvaluator
         return completeRequestedStreams(requestedStreams, result.build(), mask);
     }
 
-    private Streams evaluateVariable(Reference reference, Variable variable, Mask mask, Streams output)
+    private Streams evaluateVariable(
+            Variable variable,
+            Mask mask,
+            Streams output,
+            Set<Stream> requestedStreams,
+            Set<Stream> hardRequestedStreams)
     {
         Assignment assignment = assignments.get(variable);
         checkArgument(assignment != null, "Unknown variable: %s", variable);
 
         return switch (assignment.operation()) {
-            case Literal literal -> evaluateLiteral(requestedStreamsFor(reference), literal, mask);
-            case Copy(Reference source) -> copy(requestedStreamsFor(reference), source, mask, output);
-            case Call call -> evaluateCall(reference, call, mask, output);
-            case Construct construct -> evaluateConstruct(requestedStreamsFor(reference), construct, mask, output);
-            case Merge merge -> evaluateMerge(requestedStreamsFor(reference), merge, mask, output);
-            case Sequence sequence -> evaluateSequence(requestedStreamsFor(reference), sequence, mask, output);
-            case StructField field -> evaluateStructField(requestedStreamsFor(reference), field, mask, output);
+            case Literal literal -> evaluateLiteral(requestedStreams, literal, mask);
+            case Copy(Reference source) -> copy(requestedStreams, source, mask, output);
+            case Call call -> evaluateCall(call, mask, output, requestedStreams, hardRequestedStreams);
+            case Construct construct -> evaluateConstruct(requestedStreams, construct, mask, output);
+            case Merge merge -> evaluateMerge(requestedStreams, merge, mask, output);
+            case Sequence sequence -> evaluateSequence(requestedStreams, sequence, mask, output);
+            case StructField field -> evaluateStructField(requestedStreams, field, mask, output);
             default -> throw new IllegalArgumentException("Unsupported operation in normalized evaluator");
         };
     }
@@ -624,11 +649,14 @@ public final class PlanEvaluator
         return vectorAllocator.runLength(counts, physicalValues);
     }
 
-    private Streams evaluateCall(Reference reference, Call call, Mask mask, Streams output)
+    private Streams evaluateCall(
+            Call call,
+            Mask mask,
+            Streams output,
+            Set<Stream> requestedStreams,
+            Set<Stream> hardRequestedStreams)
     {
         PrimitiveFunction function = primitiveRegistry.get(call.name());
-        Set<Stream> requestedStreams = requestedStreamsFor(reference);
-        Set<Stream> hardRequestedStreams = hardRequestedStreamsFor(reference);
         List<Streams> inputs;
         if (policy.recycleControlFrames()) {
             ArrayList<Streams> frame = callInputFrames.computeIfAbsent(call, _ -> new ArrayList<>(call.arguments().size()));
@@ -2074,9 +2102,10 @@ public final class PlanEvaluator
             return inputMask;
         }
 
-        Vector values = evaluate(reference, mask).get(reference.stream());
-        Vector errors = optionalBooleanStream(reference.producer(), Stream.ERRORS, mask);
-        Vector nulls = optionalBooleanStream(reference.producer(), Stream.NULLS, mask);
+        Streams predicate = evaluatePredicateStreams(reference, mask);
+        Vector values = predicate.get(reference.stream());
+        Vector errors = predicate.getOrNull(Stream.ERRORS);
+        Vector nulls = predicate.getOrNull(Stream.NULLS);
         return classifyTrueBooleanMask(values, nulls, errors, mask);
     }
 
@@ -2097,9 +2126,10 @@ public final class PlanEvaluator
             return inputMask;
         }
 
-        Vector values = evaluate(reference, mask).get(reference.stream());
-        Vector errors = optionalBooleanStream(reference.producer(), Stream.ERRORS, mask);
-        Vector nulls = optionalBooleanStream(reference.producer(), Stream.NULLS, mask);
+        Streams predicate = evaluatePredicateStreams(reference, mask);
+        Vector values = predicate.get(reference.stream());
+        Vector errors = predicate.getOrNull(Stream.ERRORS);
+        Vector nulls = predicate.getOrNull(Stream.NULLS);
         return classifyFalseBooleanMask(values, nulls, errors, mask);
     }
 
@@ -2505,17 +2535,19 @@ public final class PlanEvaluator
             return optimized;
         }
 
-        Vector values = evaluate(reference, mask).get(reference.stream());
-        Vector errors = optionalBooleanStream(reference.producer(), Stream.ERRORS, mask);
-        Vector nulls = optionalBooleanStream(reference.producer(), Stream.NULLS, mask);
+        Streams predicate = evaluatePredicateStreams(reference, mask);
+        Vector values = predicate.get(reference.stream());
+        Vector errors = predicate.getOrNull(Stream.ERRORS);
+        Vector nulls = predicate.getOrNull(Stream.NULLS);
         return classifyBooleanMask(values, nulls, errors, mask);
     }
 
     private MaskOutcome evaluateLongDomainMask(Reference input, LongDomain domain, Mask mask)
     {
-        Vector values = evaluate(input, mask).get(input.stream());
-        Vector errors = optionalBooleanStream(input.producer(), Stream.ERRORS, mask);
-        Vector nulls = optionalBooleanStream(input.producer(), Stream.NULLS, mask);
+        Streams predicate = evaluatePredicateStreams(input, mask);
+        Vector values = predicate.get(input.stream());
+        Vector errors = predicate.getOrNull(Stream.ERRORS);
+        Vector nulls = predicate.getOrNull(Stream.NULLS);
 
         boolean[] dictionaryMatches = null;
         int[] dictionaryIds = null;
@@ -2569,9 +2601,10 @@ public final class PlanEvaluator
 
     private Mask evaluateTrueLongDomainMask(Reference input, LongDomain domain, Mask mask)
     {
-        Vector values = evaluate(input, mask).get(input.stream());
-        Vector errors = optionalBooleanStream(input.producer(), Stream.ERRORS, mask);
-        Vector nulls = optionalBooleanStream(input.producer(), Stream.NULLS, mask);
+        Streams predicate = evaluatePredicateStreams(input, mask);
+        Vector values = predicate.get(input.stream());
+        Vector errors = predicate.getOrNull(Stream.ERRORS);
+        Vector nulls = predicate.getOrNull(Stream.NULLS);
         int capacity = mask.count();
         Mask result = allocator.allocateUninitializedSparseMask(allocationContext, capacity, mask.size());
         int[] positions = result.positionsArrayForOverwrite(capacity);
@@ -2603,9 +2636,10 @@ public final class PlanEvaluator
 
     private boolean evaluateTrueLongDomainMaskInPlace(Reference input, LongDomain domain, Mask mask)
     {
-        Vector values = evaluate(input, mask).get(input.stream());
-        Vector errors = optionalBooleanStream(input.producer(), Stream.ERRORS, mask);
-        Vector nulls = optionalBooleanStream(input.producer(), Stream.NULLS, mask);
+        Streams predicate = evaluatePredicateStreams(input, mask);
+        Vector values = predicate.get(input.stream());
+        Vector errors = predicate.getOrNull(Stream.ERRORS);
+        Vector nulls = predicate.getOrNull(Stream.NULLS);
         if (values instanceof DictionaryVector dictionary &&
                 VectorAccess.isAllFalseNulls(nulls) &&
                 VectorAccess.isAllFalseNulls(errors)) {
@@ -3904,6 +3938,17 @@ public final class PlanEvaluator
         return evaluate(new Reference(producer, stream), mask).getOrNull(stream);
     }
 
+    private Streams evaluatePredicateStreams(Reference reference, Mask mask)
+    {
+        Set<Stream> requestedStreams = PrimitiveFunction.ALL_INPUT_STREAMS;
+        for (Stream stream : requestedStreams) {
+            if (isMemoized(new Reference(reference.producer(), stream))) {
+                return evaluateArgument(reference, mask, requestedStreams, false);
+            }
+        }
+        return evaluateUnmemoized(reference, mask, null, requestedStreams, requestedStreams);
+    }
+
     private Streams completeRequestedStreams(Set<Stream> requestedStreams, Streams streams, Mask mask)
     {
         boolean wantsValues = requestedStreams.contains(Stream.VALUES);
@@ -4249,9 +4294,10 @@ public final class PlanEvaluator
             return;
         }
 
-        Vector values = evaluate(reference, mask).get(reference.stream());
-        Vector errors = optionalBooleanStream(reference.producer(), Stream.ERRORS, mask);
-        Vector nulls = optionalBooleanStream(reference.producer(), Stream.NULLS, mask);
+        Streams predicate = evaluatePredicateStreams(reference, mask);
+        Vector values = predicate.get(reference.stream());
+        Vector errors = predicate.getOrNull(Stream.ERRORS);
+        Vector nulls = predicate.getOrNull(Stream.NULLS);
         if (policy.inPlaceFlatBooleanClassifier() && values instanceof BooleanVector booleanValues &&
                 VectorAccess.isAllFalseNulls(nulls) && VectorAccess.isAllFalseNulls(errors)) {
             mask.retainBooleans(booleanValues.values(), true);
