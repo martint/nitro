@@ -44,6 +44,11 @@ public final class StaticFilterEnforcement
         return acceptance == RuntimeFilterAcceptance.ENFORCED;
     }
 
+    public boolean isComplete()
+    {
+        return acceptance != null;
+    }
+
     public synchronized void complete(RuntimeFilterAcceptance acceptance)
     {
         requireNonNull(acceptance, "acceptance is null");

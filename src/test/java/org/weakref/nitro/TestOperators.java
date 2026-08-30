@@ -4849,6 +4849,47 @@ public class TestOperators
     }
 
     @Test
+    void testFilterOperatorRecomputesResidualAfterDeferredSourceEnforcement()
+    {
+        PrimitiveRegistry primitiveRegistry = primitiveRegistry();
+        Variable literal = new Variable(0);
+        Variable predicate = new Variable(1);
+        EvaluationPlan evaluationPlan = new EvaluationPlan(List.of(
+                new Assignment(literal, new Literal(2L), AllMask.ALL),
+                new Assignment(predicate, new Call("eq", List.of(
+                        new Reference(new Input(0), Stream.VALUES),
+                        new Reference(literal, Stream.VALUES))), AllMask.ALL)), List.of());
+        java.util.concurrent.atomic.AtomicReference<StaticFilterEnforcement> pending = new java.util.concurrent.atomic.AtomicReference<>();
+        ConstantTableOperator source = new ConstantTableOperator(
+                allocator,
+                1,
+                List.of(row(1L), row(2L), row(3L)))
+        {
+            @Override
+            public StaticFilterEnforcement pushStaticFilter(org.weakref.nitro.operator.DynamicFilter filter)
+            {
+                StaticFilterEnforcement enforcement = StaticFilterEnforcement.pending();
+                pending.set(enforcement);
+                return enforcement;
+            }
+        };
+        FilterOperator filter = new FilterOperator(
+                source,
+                evaluationPlan,
+                primitiveRegistry,
+                new Reference(predicate, Stream.VALUES),
+                allocator,
+                EngineResources.from(allocator).operatorResources().filter());
+
+        // Island construction derives source demands before a host-fed source exists, so enforcement is unresolved
+        // during this call. Completing it afterwards must still remove the now source-enforced residual.
+        filter.sourceOutputDemand(Map.of());
+        pending.get().complete(RuntimeFilterAcceptance.ENFORCED);
+
+        assertThat(operator(filter)).matchesExactly(List.of(row(1L), row(2L), row(3L)));
+    }
+
+    @Test
     void testFilterOperatorRemovesPredicateEnforcedThroughProjection()
     {
         PrimitiveRegistry primitiveRegistry = primitiveRegistry();

@@ -21,6 +21,7 @@ import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 
 import java.util.List;
 import java.util.Map;
+import java.util.OptionalLong;
 import java.util.function.Function;
 
 /**
@@ -80,12 +81,15 @@ public final class RangeConstraintLowerer
             }
         }
         return ranges.entrySet().stream()
-                .filter(entry -> entry.getValue().lowerExclusive != null)
-                .filter(entry -> entry.getValue().upperExclusive != null)
+                .filter(entry -> entry.getValue().lowerExclusive != null || entry.getValue().upperExclusive != null)
                 .map(entry -> new LongRange(
                         entry.getKey(),
-                        entry.getValue().lowerExclusive,
-                        entry.getValue().upperExclusive,
+                        entry.getValue().lowerExclusive == null
+                                ? OptionalLong.empty()
+                                : OptionalLong.of(entry.getValue().lowerExclusive),
+                        entry.getValue().upperExclusive == null
+                                ? OptionalLong.empty()
+                                : OptionalLong.of(entry.getValue().upperExclusive),
                         List.copyOf(entry.getValue().terms)))
                 .toList();
     }
@@ -178,7 +182,11 @@ public final class RangeConstraintLowerer
             RangeConstraint.Position position,
             RangeConstraint.Kernel kernel) {}
 
-    public record LongRange(Reference input, long lowerExclusive, long upperExclusive, List<MaskExpression> terms) {}
+    public record LongRange(
+            Reference input,
+            OptionalLong lowerExclusive,
+            OptionalLong upperExclusive,
+            List<MaskExpression> terms) {}
 
     private static final class LongBounds
     {

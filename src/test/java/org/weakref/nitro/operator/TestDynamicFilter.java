@@ -325,4 +325,40 @@ class TestDynamicFilter
         assertThat(filter.accepts(12)).isTrue();
         assertThat(filter.accepts(13)).isFalse();
     }
+
+    @Test
+    void extractsOneSidedStaticLongRangesWithoutOverflow()
+    {
+        DynamicFilter upperFilter = oneSidedStaticLongRange(12, true);
+        assertThat(upperFilter.accepts(Long.MIN_VALUE)).isTrue();
+        assertThat(upperFilter.accepts(11)).isTrue();
+        assertThat(upperFilter.accepts(12)).isFalse();
+
+        DynamicFilter lowerFilter = oneSidedStaticLongRange(4, false);
+        assertThat(lowerFilter.accepts(4)).isFalse();
+        assertThat(lowerFilter.accepts(5)).isTrue();
+        assertThat(lowerFilter.accepts(Long.MAX_VALUE)).isTrue();
+
+        assertThat(oneSidedStaticLongRange(Long.MIN_VALUE, true).isEmpty()).isTrue();
+        assertThat(oneSidedStaticLongRange(Long.MAX_VALUE, false).isEmpty()).isTrue();
+    }
+
+    private static DynamicFilter oneSidedStaticLongRange(long literalValue, boolean inputFirst)
+    {
+        Variable literal = new Variable(0);
+        Variable predicate = new Variable(1);
+        Reference input = new Reference(new Input(2), Stream.VALUES);
+        Reference literalReference = new Reference(literal, Stream.VALUES);
+        EvaluationPlan plan = new EvaluationPlan(List.of(
+                new Assignment(literal, new Literal(literalValue), AllMask.ALL),
+                new Assignment(predicate, new Call("aliased_lt", inputFirst
+                        ? List.of(input, literalReference)
+                        : List.of(literalReference, input)), AllMask.ALL)), List.of());
+        PrimitiveRegistry registry = new PrimitiveRegistry();
+        registry.register("aliased_lt", new LessThanI64(), new LessThanI64RangeOptimization());
+        return FilterOperator.staticLongRangeFilters(
+                plan,
+                new ReferenceMask(new Reference(predicate, Stream.VALUES)),
+                registry).getFirst();
+    }
 }

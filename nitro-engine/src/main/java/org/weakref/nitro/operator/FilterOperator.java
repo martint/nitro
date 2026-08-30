@@ -363,15 +363,27 @@ public class FilterOperator
         return RangeConstraintLowerer.staticLongRanges(plan, primitiveRegistry, predicateMask).stream()
                 .filter(range -> range.input().producer() instanceof Input)
                 .filter(range -> range.input().stream() == Stream.VALUES)
-                .filter(range -> range.lowerExclusive() != Long.MAX_VALUE)
-                .filter(range -> range.upperExclusive() != Long.MIN_VALUE)
                 .map(range -> new StaticFilterCandidate(
-                        DynamicFilter.fromRange(
+                        exactStaticLongRange(
                                 ((Input) range.input().producer()).index(),
-                                range.lowerExclusive() + 1,
-                                range.upperExclusive() - 1),
+                                range.lowerExclusive(),
+                                range.upperExclusive()),
                         range.terms()))
                 .toList();
+    }
+
+    private static DynamicFilter exactStaticLongRange(
+            int column,
+            java.util.OptionalLong lowerExclusive,
+            java.util.OptionalLong upperExclusive)
+    {
+        if ((lowerExclusive.isPresent() && lowerExclusive.getAsLong() == Long.MAX_VALUE) ||
+                (upperExclusive.isPresent() && upperExclusive.getAsLong() == Long.MIN_VALUE)) {
+            return DynamicFilter.fromRange(column, 1, 0);
+        }
+        long minimum = lowerExclusive.isPresent() ? lowerExclusive.getAsLong() + 1 : Long.MIN_VALUE;
+        long maximum = upperExclusive.isPresent() ? upperExclusive.getAsLong() - 1 : Long.MAX_VALUE;
+        return DynamicFilter.fromRange(column, minimum, maximum);
     }
 
     private static java.util.stream.Stream<MaskExpression> conjunctiveTerms(MaskExpression expression)
@@ -434,12 +446,18 @@ public class FilterOperator
                 .collect(java.util.stream.Collectors.toUnmodifiableSet());
         MaskExpression residual = removeEnforcedConjuncts(originalPredicateMask, enforcedTerms);
         residual = replaceResidualDomains(residual);
-        effectivePredicateMask = RangeConstraintLowerer.lower(
+        MaskExpression effective = RangeConstraintLowerer.lower(
                 evaluationPlan,
                 primitiveRegistry,
                 residual,
                 policy.fuseConstantRanges());
-        return effectivePredicateMask;
+        // Host-fed pipelines negotiate static-filter enforcement after the complete Nitro island has derived its
+        // source value demands.  That earlier demand walk must see the conservative residual, but it must not freeze
+        // the residual into this operator after the source subsequently accepts complete enforcement.
+        if (staticPredicatePushdowns.stream().allMatch(pushdown -> pushdown.enforcement().isComplete())) {
+            effectivePredicateMask = effective;
+        }
+        return effective;
     }
 
     private MaskExpression replaceResidualDomains(MaskExpression expression)
