@@ -14,6 +14,11 @@
 package org.weakref.nitro.operator;
 
 import org.junit.jupiter.api.Test;
+import org.weakref.nitro.core.function.aggregation.AggregationExecution;
+import org.weakref.nitro.core.function.aggregation.AggregationImplementation;
+import org.weakref.nitro.core.function.aggregation.AggregationInput;
+import org.weakref.nitro.core.function.aggregation.GroupedAggregationUpdate;
+import org.weakref.nitro.core.function.aggregation.LongStateUpdate;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
@@ -31,7 +36,9 @@ import org.weakref.nitro.operator.aggregation.Accumulator;
 import org.weakref.nitro.operator.aggregation.CountAll;
 import org.weakref.nitro.operator.aggregation.CountColumn;
 import org.weakref.nitro.operator.aggregation.FilteredAccumulator;
+import org.weakref.nitro.operator.aggregation.GeneratedRegisteredAggregationUnit;
 import org.weakref.nitro.operator.aggregation.MinUtf8;
+import org.weakref.nitro.operator.aggregation.PhysicalAggregationProgram;
 import org.weakref.nitro.operator.aggregation.StreamAccessor;
 import org.weakref.nitro.operator.aggregation.Sum;
 
@@ -43,6 +50,8 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.weakref.nitro.operator.aggregation.RegisteredAggregationUnit.InputMode.RAW;
+import static org.weakref.nitro.operator.aggregation.RegisteredAggregationUnit.OutputMode.FINAL;
 
 /**
  * Exercises the generated fused single-long-key path in {@link GroupedAggregationOperator} (flat I32/I64 keys and
@@ -586,6 +595,58 @@ class TestFusedGroupedAggregation
     }
 
     @Test
+    void generatedRegisteredAggregationFallsBackToEncodedProviderForIndependentMappings()
+    {
+        int size = 16_384;
+        int[] keyIds = new int[size];
+        int[] valueIds = new int[size];
+        Map<Long, Long> expected = new HashMap<>();
+        long[] keyDomain = {10, 20};
+        long[] valueDomain = {3, 5, 7, 11};
+        for (int position = 0; position < size; position++) {
+            keyIds[position] = position & 1;
+            valueIds[position] = (position * 3 + 1) & 3;
+            expected.merge(keyDomain[keyIds[position]], valueDomain[valueIds[position]], Long::sum);
+        }
+        DictionaryVector keys = DictionaryVector.wrapNested(keyIds, size, new I64Vector(keyDomain));
+        DictionaryVector values = DictionaryVector.wrapNested(valueIds, size, new I64Vector(valueDomain));
+        EncodedGeneratedSum implementation = new EncodedGeneratedSum();
+        PhysicalAggregationProgram program = PhysicalAggregationProgram.singleUnit(
+                new GeneratedRegisteredAggregationUnit(
+                        implementation,
+                        RAW,
+                        FINAL,
+                        new int[] {1},
+                        -1,
+                        GroupedAggregationUpdate.inputValue(1)));
+
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        Operator operator = new GroupedAggregationOperator(
+                allocator,
+                List.of(0),
+                program,
+                new TableOperator(2, List.of(TableOperator.Page.values(
+                        size,
+                        new Vector[] {keys, values},
+                        Mask.all(size)))));
+        Map<Long, Long> actual = new HashMap<>();
+        try (operator) {
+            while (operator.hasNext()) {
+                try (Batch result = operator.next()) {
+                    VectorAccess.LongValues resultKeys = VectorAccess.longValues(result.output(0).borrow(Stream.VALUES));
+                    VectorAccess.LongValues resultSums = VectorAccess.longValues(result.output(1).borrow(Stream.VALUES));
+                    for (int position : result.borrowMask()) {
+                        actual.put(resultKeys.value(position), resultSums.value(position));
+                    }
+                }
+            }
+        }
+
+        assertThat(actual).isEqualTo(expected);
+        assertThat(implementation.encodedGroupsObserved).isTrue();
+    }
+
+    @Test
     void keyOnlyDictionaryGroupingDiscardsLogicalGroupIds()
     {
         int size = 100_000;
@@ -861,6 +922,115 @@ class TestFusedGroupedAggregation
                 flatGroups.values()[position] = groupValues.value(position);
             }
             super.accumulate(state, flatGroups, mask, streams);
+        }
+    }
+
+    private static final class EncodedGeneratedSum
+            implements AggregationImplementation
+    {
+        private boolean encodedGroupsObserved;
+
+        @Override
+        public Object allocate(AggregationExecution execution, int groups)
+        {
+            return new EncodedGeneratedSumState(groups);
+        }
+
+        @Override
+        public Object grow(Allocator allocator, Allocator.Context allocationContext, Object state, int groups)
+        {
+            EncodedGeneratedSumState previous = (EncodedGeneratedSumState) state;
+            return new EncodedGeneratedSumState(Arrays.copyOf(previous.sums, groups));
+        }
+
+        @Override
+        public void initialize(Object state, int offset, int length)
+        {
+            Arrays.fill(((EncodedGeneratedSumState) state).sums, offset, offset + length, 0);
+        }
+
+        @Override
+        public void addRawInput(Object state, int group, Mask mask, AggregationInput input)
+        {
+            VectorAccess.LongValues values = VectorAccess.longValues(input.stream(0, Stream.VALUES));
+            for (int position : mask) {
+                ((EncodedGeneratedSumState) state).update(group, values.value(position));
+            }
+        }
+
+        @Override
+        public void addRawInput(Object state, Vector groups, Mask mask, AggregationInput input)
+        {
+            encodedGroupsObserved |= groups instanceof DictionaryVector;
+            VectorAccess.LongValues groupValues = VectorAccess.longValues(groups);
+            VectorAccess.LongValues values = VectorAccess.longValues(input.stream(0, Stream.VALUES));
+            for (int position : mask) {
+                ((EncodedGeneratedSumState) state).update((int) groupValues.value(position), values.value(position));
+            }
+        }
+
+        @Override
+        public boolean supportsEncodedGroupedInput()
+        {
+            return true;
+        }
+
+        @Override
+        public void addIntermediate(Object state, int group, Mask mask, AggregationInput input)
+        {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public void addIntermediate(Object state, Vector groups, Mask mask, AggregationInput input)
+        {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public Streams intermediate(
+                int maxGroup,
+                Object state,
+                Streams existing,
+                Allocator allocator,
+                Allocator.Context allocationContext)
+        {
+            return result(maxGroup, state, existing, allocator, allocationContext);
+        }
+
+        @Override
+        public Streams result(
+                int maxGroup,
+                Object state,
+                Streams existing,
+                Allocator allocator,
+                Allocator.Context allocationContext)
+        {
+            I64Vector output = allocator.allocate(allocationContext, I64Vector.class, maxGroup + 1, I64Vector::new);
+            System.arraycopy(((EncodedGeneratedSumState) state).sums, 0, output.values(), 0, maxGroup + 1);
+            return Streams.ofValues(output);
+        }
+    }
+
+    private static final class EncodedGeneratedSumState
+            implements LongStateUpdate
+    {
+        private final long[] sums;
+
+        private EncodedGeneratedSumState(int groups)
+        {
+            this(new long[groups]);
+        }
+
+        private EncodedGeneratedSumState(long[] sums)
+        {
+            this.sums = sums;
+        }
+
+        @Override
+        public void update(int group, long value)
+        {
+            sums[group] += value;
         }
     }
 }

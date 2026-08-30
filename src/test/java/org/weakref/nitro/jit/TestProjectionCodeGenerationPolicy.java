@@ -27,5 +27,7 @@ class TestProjectionCodeGenerationPolicy
         assertThat(policy.pooledDictionaryScratch()).isTrue();
         assertThat(policy.mappedDictionaryDoubleInputs()).isTrue();
         assertThat(policy.returnedConstantComparisonMasks()).isTrue();
+        assertThat(policy.dictionaryEqualityMinimumReuse()).isEqualTo(4);
+        assertThat(policy.fusedDictionaryDomainMinimumReduction()).isEqualTo(4);
     }
 }

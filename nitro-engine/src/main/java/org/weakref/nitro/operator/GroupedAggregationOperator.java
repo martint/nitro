@@ -991,13 +991,12 @@ public class GroupedAggregationOperator
             dictionaryDomainRepresentatives = new int[capacity];
         }
         Vector keyNulls = keyOutput.borrowOrNull(Stream.NULLS);
-        if (!generatedUpdates && !VectorAccess.isAllFalseNulls(keyNulls)) {
-            return false;
-        }
-        if (!generatedUpdates && dictionary.values().length() > Long.SIZE) {
-            return false;
-        }
         if (generatedUpdates && !bindDictionaryDomainInputs(batch, dictionary, keyNulls, mask, slots)) {
+            generatedUpdates = false;
+        }
+        if (!generatedUpdates && (!encodedGroupedInput ||
+                !VectorAccess.isAllFalseNulls(keyNulls) ||
+                dictionary.values().length() > Long.SIZE)) {
             return false;
         }
 

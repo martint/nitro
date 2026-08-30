@@ -1619,6 +1619,114 @@ public class TestOperators
     }
 
     @Test
+    void testFusedProjectionExecutesOverSharedDictionaryDomain()
+    {
+        int[] ids = {0, 1, 0, 1, 1, 0, 1, 0};
+        DictionaryVector values = DictionaryVector.wrap(ids, new I64Vector(new long[] {10, 20}));
+        Operator source = singleBatchOperator(Streams.ofValues(values));
+        Variable one = new Variable(0);
+        Variable incremented = new Variable(1);
+        Variable doubled = new Variable(2);
+        Reference result = new Reference(doubled, Stream.VALUES);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(one, new Literal(1L), AllMask.ALL),
+                        new Assignment(incremented, new Call("add", List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(one, Stream.VALUES))), AllMask.ALL),
+                        new Assignment(doubled, new Call("multiply", List.of(
+                                new Reference(incremented, Stream.VALUES),
+                                new Reference(one, Stream.VALUES))), AllMask.ALL)),
+                List.of(result));
+        Map<String, Long> diagnostics = new LinkedHashMap<>();
+        Vector transferred;
+
+        try (ProjectOperator operator = new ProjectOperator(
+                allocator,
+                plan,
+                primitiveRegistry(),
+                source,
+                Schema.unspecified(1),
+                EngineResources.from(allocator).operatorResources(),
+                (event, value) -> diagnostics.merge(event, value, Long::sum))) {
+            operator.sourceOutputDemand(Map.of(0, ValueDemand.FULL_WITH_DOMAIN_COUNTS));
+            try (Batch batch = operator.next()) {
+                Vector projected = batch.output(0).borrow(Stream.VALUES);
+                assertThat(projected).isInstanceOf(DictionaryVector.class);
+                assertThat(((DictionaryVector) projected).ids()).isSameAs(ids);
+                VectorAccess.LongValues longs = VectorAccess.longValues(projected);
+                assertThat(java.util.stream.IntStream.range(0, projected.length())
+                        .mapToLong(longs::value)
+                        .toArray())
+                        .containsExactly(11, 21, 11, 21, 21, 11, 21, 11);
+                transferred = batch.output(0).take(Stream.VALUES);
+            }
+        }
+
+        try {
+            assertThat(transferred).isInstanceOf(DictionaryVector.class);
+            VectorAccess.LongValues longs = VectorAccess.longValues(transferred);
+            assertThat(java.util.stream.IntStream.range(0, transferred.length())
+                    .mapToLong(longs::value)
+                    .toArray())
+                    .containsExactly(11, 21, 11, 21, 21, 11, 21, 11);
+        }
+        finally {
+            transferred.releaseTransferredBuffers();
+        }
+
+        assertThat(diagnostics)
+                .containsEntry(ProjectOperator.GENERATED_ATTEMPTS, 1L)
+                .containsEntry(ProjectOperator.GENERATED_SUCCESSES, 1L)
+                .containsEntry(ProjectOperator.GENERATED_SELECTED_POSITIONS, 8L)
+                .containsEntry(ProjectOperator.GENERATED_DICTIONARY_DOMAIN_POSITIONS, 2L)
+                .containsEntry(ProjectOperator.DICTIONARY_INPUT_POSITIONS, 8L)
+                .containsEntry(ProjectOperator.DICTIONARY_FLATTENING_POSITIONS, 0L);
+    }
+
+    @Test
+    void testFusedProjectionFlattensDictionaryForOrdinaryFullDemand()
+    {
+        DictionaryVector values = DictionaryVector.wrap(
+                new int[] {0, 1, 0, 1, 1, 0, 1, 0},
+                new I64Vector(new long[] {10, 20}));
+        Operator source = singleBatchOperator(Streams.ofValues(values));
+        Variable one = new Variable(0);
+        Variable incremented = new Variable(1);
+        Variable doubled = new Variable(2);
+        Reference result = new Reference(doubled, Stream.VALUES);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(one, new Literal(1L), AllMask.ALL),
+                        new Assignment(incremented, new Call("add", List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(one, Stream.VALUES))), AllMask.ALL),
+                        new Assignment(doubled, new Call("multiply", List.of(
+                                new Reference(incremented, Stream.VALUES),
+                                new Reference(one, Stream.VALUES))), AllMask.ALL)),
+                List.of(result));
+        Map<String, Long> diagnostics = new LinkedHashMap<>();
+
+        try (ProjectOperator operator = new ProjectOperator(
+                allocator,
+                plan,
+                primitiveRegistry(),
+                source,
+                Schema.unspecified(1),
+                EngineResources.from(allocator).operatorResources(),
+                (event, value) -> diagnostics.merge(event, value, Long::sum))) {
+            operator.sourceOutputDemand(Map.of(0, ValueDemand.FULL));
+            try (Batch batch = operator.next()) {
+                assertThat(batch.output(0).borrow(Stream.VALUES)).isInstanceOf(I64Vector.class);
+            }
+        }
+
+        assertThat(diagnostics)
+                .containsEntry(ProjectOperator.GENERATED_DICTIONARY_DOMAIN_POSITIONS, 0L)
+                .containsEntry(ProjectOperator.DICTIONARY_FLATTENING_POSITIONS, 8L);
+    }
+
+    @Test
     void testFusedProjectionCompilesUtf8InList()
     {
         Variable apple = new Variable(0);

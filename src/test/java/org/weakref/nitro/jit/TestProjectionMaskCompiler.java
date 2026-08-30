@@ -225,7 +225,7 @@ class TestProjectionMaskCompiler
                         (_, _, _) -> {
                             throw new AssertionError("generated row kernel should not be invoked");
                         }),
-                new ProjectionCodeGenerationPolicy(true, true, true, 1));
+                new ProjectionCodeGenerationPolicy(true, true, true, 1, 4));
         ProjectionMaskCompiler.CompiledMask compiled = compiler.tryCompile(
                 new EqualUtf8ProjectionOptimization(),
                 List.of(ProjectionArgument.input(), ProjectionArgument.input()))

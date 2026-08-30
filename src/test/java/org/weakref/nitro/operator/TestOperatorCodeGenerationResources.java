@@ -75,7 +75,7 @@ class TestOperatorCodeGenerationResources
         OperatorCodeGenerationResources first = new OperatorCodeGenerationResources();
         OperatorCodeGenerationResources second = new OperatorCodeGenerationResources();
         OperatorCodeGenerationResources configured = new OperatorCodeGenerationResources(
-                new ProjectionCodeGenerationPolicy(false, false, false, 4));
+                new ProjectionCodeGenerationPolicy(false, false, false, 4, 4));
         PrimitiveRegistry registry = TestPrimitiveFunctions.primitiveRegistry();
         Variable one = new Variable(0);
         Variable incremented = new Variable(1);

@@ -41,8 +41,10 @@ import org.weakref.nitro.operator.evaluator.ir.Producer;
 import org.weakref.nitro.operator.evaluator.ir.Reference;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.EnumSet;
 import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -61,6 +63,7 @@ public class ProjectOperator
     public static final String GENERATED_ERROR_FALLBACKS = "nitro.projection.generated-error-fallbacks";
     public static final String GENERATED_LAYOUT_FALLBACKS = "nitro.projection.generated-layout-fallbacks";
     public static final String GENERATED_SELECTED_POSITIONS = "nitro.projection.generated-selected-positions";
+    public static final String GENERATED_DICTIONARY_DOMAIN_POSITIONS = "nitro.projection.generated-dictionary-domain-positions";
     public static final String FLAT_INPUT_POSITIONS = "nitro.projection.flat-input-positions";
     public static final String DICTIONARY_INPUT_POSITIONS = "nitro.projection.dictionary-input-positions";
     public static final String RLE_INPUT_POSITIONS = "nitro.projection.rle-input-positions";
@@ -99,6 +102,7 @@ public class ProjectOperator
     private final boolean shareEvaluatorBufferPool;
     private final boolean forwardSinglePositionOnly;
     private final boolean recycleEvaluatorOutputs;
+    private boolean fusedDictionaryDomainDemanded;
 
     private final Operator source;
     private BatchState currentBatchState;
@@ -107,6 +111,7 @@ public class ProjectOperator
     private long generatedErrorFallbacks;
     private long generatedLayoutFallbacks;
     private long generatedSelectedPositions;
+    private long generatedDictionaryDomainPositions;
     private long flatInputPositions;
     private long dictionaryInputPositions;
     private long rleInputPositions;
@@ -251,7 +256,7 @@ public class ProjectOperator
                         ? new Output(
                                 exposedStreams(sourceBatch, outputReference),
                                 stream -> evaluateOutput(batchState, outputReference, outputField, stream),
-                                (stream, vector) -> allocator.transfer(allocationContext, batchState.planEvaluator().prepareResultForTransfer(vector)),
+                                (stream, vector) -> allocator.transfer(allocationContext, batchState.prepareResultForTransfer(vector)),
                                 (stream, vector) -> batchState.releaseOutput(vector))
                         : new Output(
                                 exposedStreams(sourceBatch, outputReference),
@@ -290,14 +295,22 @@ public class ProjectOperator
     public java.util.Optional<Map<Integer, ValueDemand>> sourceOutputDemand(Map<Integer, ValueDemand> demandedOutputs)
     {
         requireNonNull(demandedOutputs, "demandedOutputs is null");
+        boolean encodedDomainDemand = false;
+        boolean ordinaryFullDemand = false;
         java.util.HashMap<Reference, ValueDemand> demandedReferences = new java.util.HashMap<>();
         for (Map.Entry<Integer, ValueDemand> entry : demandedOutputs.entrySet()) {
             int output = entry.getKey();
             if (output < 0 || output >= outputReferences.size()) {
                 throw new IllegalArgumentException("demanded output is outside projection schema: " + output);
             }
-            demandedReferences.merge(outputReferences.get(output), entry.getValue(), ValueDemand::merge);
+            Reference reference = outputReferences.get(output);
+            demandedReferences.merge(reference, entry.getValue(), ValueDemand::merge);
+            if (fusedProjection != null && fusedOrdinal.containsKey(reference.producer())) {
+                encodedDomainDemand = true;
+                ordinaryFullDemand |= entry.getValue().compareTo(ValueDemand.FULL) <= 0;
+            }
         }
+        fusedDictionaryDomainDemanded = encodedDomainDemand && !ordinaryFullDemand;
         return source.sourceOutputDemand(InputDependencies.valueDemands(evaluationPlan, primitiveRegistry, demandedReferences));
     }
 
@@ -492,13 +505,13 @@ public class ProjectOperator
         }
     }
 
-    private void recordInputShape(int inputIndex, Streams streams)
+    private void recordInputShape(int inputIndex, Streams streams, boolean dictionaryDomainExecution)
     {
         Vector values = streams.values();
         long positions = values.length();
         if (values instanceof DictionaryVector) {
             dictionaryInputPositions += positions;
-            if (fusedProjection.flattensDictionaryValues().get(inputIndex)) {
+            if (!dictionaryDomainExecution && fusedProjection.flattensDictionaryValues().get(inputIndex)) {
                 dictionaryFlatteningPositions += positions;
             }
         }
@@ -536,6 +549,7 @@ public class ProjectOperator
         diagnostics.record(GENERATED_ERROR_FALLBACKS, generatedErrorFallbacks);
         diagnostics.record(GENERATED_LAYOUT_FALLBACKS, generatedLayoutFallbacks);
         diagnostics.record(GENERATED_SELECTED_POSITIONS, generatedSelectedPositions);
+        diagnostics.record(GENERATED_DICTIONARY_DOMAIN_POSITIONS, generatedDictionaryDomainPositions);
         diagnostics.record(FLAT_INPUT_POSITIONS, flatInputPositions);
         diagnostics.record(DICTIONARY_INPUT_POSITIONS, dictionaryInputPositions);
         diagnostics.record(RLE_INPUT_POSITIONS, rleInputPositions);
@@ -567,6 +581,7 @@ public class ProjectOperator
         private Mask mask;
         private Streams[] fusedResults;
         private boolean fusedResultsComputed;
+        private final Set<Vector> borrowedFusedDictionaryResults = Collections.newSetFromMap(new IdentityHashMap<>());
 
         private BatchState(Batch sourceBatch)
         {
@@ -626,9 +641,15 @@ public class ProjectOperator
                         Vector values = streams.values();
                         Vector nulls = streams.getOrNull(Stream.NULLS);
                         inputs.add(nulls != null ? Streams.of(values, nulls, null) : Streams.ofValues(values));
-                        recordInputShape(inputIndex, streams);
                     }
-                    fusedResults = fusedProjection.kernel().apply(inputs, mask, EnumSet.of(Stream.VALUES, Stream.NULLS), executionContext);
+                    fusedResults = tryFusedDictionaryDomain(inputs);
+                    boolean dictionaryDomainExecution = fusedResults != null;
+                    for (int inputIndex = 0; inputIndex < inputs.size(); inputIndex++) {
+                        recordInputShape(inputIndex, inputs.get(inputIndex), dictionaryDomainExecution);
+                    }
+                    if (!dictionaryDomainExecution) {
+                        fusedResults = fusedProjection.kernel().apply(inputs, mask, EnumSet.of(Stream.VALUES, Stream.NULLS), executionContext);
+                    }
                     if (fusedResults == null) {
                         generatedLayoutFallbacks++;
                     }
@@ -638,6 +659,95 @@ public class ProjectOperator
                 }
             }
             return fusedResults;
+        }
+
+        private Streams[] tryFusedDictionaryDomain(List<Streams> inputs)
+        {
+            if (!fusedDictionaryDomainDemanded || !mask.all()) {
+                return null;
+            }
+
+            DictionaryVector mapping = null;
+            List<Streams> domains = new ArrayList<>(inputs.size());
+            for (Streams streams : inputs) {
+                if (!(streams.values() instanceof DictionaryVector dictionary) || dictionary.length() != mask.size()) {
+                    return null;
+                }
+                if (mapping == null) {
+                    mapping = dictionary;
+                    if ((long) dictionary.values().length() * fusedProjection.dictionaryDomainMinimumReduction() > mask.selectedCount()) {
+                        return null;
+                    }
+                }
+                else if (!mapping.hasSameRowMapping(dictionary) || mapping.values().length() != dictionary.values().length()) {
+                    return null;
+                }
+
+                Vector nulls = streams.getOrNull(Stream.NULLS);
+                Vector domainNulls = null;
+                if (!VectorAccess.isAllFalseNulls(nulls)) {
+                    if (!(nulls instanceof DictionaryVector nullDictionary) ||
+                            !mapping.hasSameRowMapping(nullDictionary) ||
+                            nullDictionary.values().length() != dictionary.values().length()) {
+                        return null;
+                    }
+                    domainNulls = nullDictionary.values();
+                }
+                domains.add(domainNulls == null
+                        ? Streams.ofValues(dictionary.values())
+                        : Streams.of(dictionary.values(), domainNulls, null));
+            }
+
+            if (mapping == null) {
+                return null;
+            }
+            Streams[] domainResults = fusedProjection.kernel().apply(
+                    domains,
+                    Mask.all(mapping.values().length()),
+                    EnumSet.of(Stream.VALUES, Stream.NULLS),
+                    executionContext);
+            if (domainResults == null) {
+                return null;
+            }
+
+            generatedDictionaryDomainPositions += mapping.values().length();
+            Streams[] results = new Streams[domainResults.length];
+            for (int output = 0; output < domainResults.length; output++) {
+                Streams.Builder wrapped = Streams.builder();
+                for (Stream stream : domainResults[output].streams()) {
+                    DictionaryVector dictionary = allocator.adopt(
+                            allocationContext,
+                            mapping.sharedMappingWithValues(domainResults[output].get(stream)));
+                    borrowedFusedDictionaryResults.add(dictionary);
+                    wrapped.put(stream, dictionary);
+                }
+                results[output] = wrapped.build();
+            }
+            return results;
+        }
+
+        private Vector prepareResultForTransfer(Vector vector)
+        {
+            if (!(vector instanceof DictionaryVector dictionary) || !borrowedFusedDictionaryResults.remove(vector)) {
+                return planEvaluator.prepareResultForTransfer(vector);
+            }
+            if (dictionary.hasDomainFrequencies()) {
+                int[] frequencies = new int[dictionary.values().length()];
+                for (int domain = 0; domain < frequencies.length; domain++) {
+                    frequencies[domain] = dictionary.domainFrequency(domain);
+                }
+                return allocator.allocateDictionaryWithDomainFrequencies(
+                        allocationContext,
+                        dictionary.ids(),
+                        dictionary.length(),
+                        dictionary.values(),
+                        frequencies);
+            }
+            return allocator.allocateDictionary(
+                    allocationContext,
+                    dictionary.ids(),
+                    dictionary.length(),
+                    dictionary.values());
         }
 
         private PlanEvaluator planEvaluator()
@@ -698,6 +808,7 @@ public class ProjectOperator
             }
             evaluatedOutputBundles.clear();
             schemaBundles.clear();
+            borrowedFusedDictionaryResults.clear();
             sourceBatch.close();
         }
 

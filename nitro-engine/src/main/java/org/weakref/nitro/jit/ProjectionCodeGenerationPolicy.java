@@ -23,18 +23,22 @@ public record ProjectionCodeGenerationPolicy(
         boolean pooledDictionaryScratch,
         boolean mappedDictionaryDoubleInputs,
         boolean returnedConstantComparisonMasks,
-        int dictionaryEqualityMinimumReuse)
+        int dictionaryEqualityMinimumReuse,
+        int fusedDictionaryDomainMinimumReduction)
 {
     public ProjectionCodeGenerationPolicy
     {
         if (dictionaryEqualityMinimumReuse < 1) {
             throw new IllegalArgumentException("dictionaryEqualityMinimumReuse must be at least one");
         }
+        if (fusedDictionaryDomainMinimumReduction < 1) {
+            throw new IllegalArgumentException("fusedDictionaryDomainMinimumReduction must be at least one");
+        }
     }
 
     public static ProjectionCodeGenerationPolicy defaults()
     {
-        return new ProjectionCodeGenerationPolicy(true, true, true, 4);
+        return new ProjectionCodeGenerationPolicy(true, true, true, 4, 4);
     }
 
     public static ProjectionCodeGenerationPolicy fromSystemProperties()
@@ -44,7 +48,8 @@ public record ProjectionCodeGenerationPolicy(
                 booleanProperty("nitro.project.pooledDictionaryScratch", defaults.pooledDictionaryScratch()),
                 booleanProperty("nitro.project.mappedDictionaryDoubleInputs", defaults.mappedDictionaryDoubleInputs()),
                 booleanProperty("nitro.longComparison.returnedConstantMasks", defaults.returnedConstantComparisonMasks()),
-                integerProperty("nitro.utf8.dictionaryEqualityMinimumReuse", defaults.dictionaryEqualityMinimumReuse()));
+                integerProperty("nitro.utf8.dictionaryEqualityMinimumReuse", defaults.dictionaryEqualityMinimumReuse()),
+                integerProperty("nitro.project.fusedDictionaryDomainMinimumReduction", defaults.fusedDictionaryDomainMinimumReduction()));
     }
 
     private static boolean booleanProperty(String name, boolean defaultValue)

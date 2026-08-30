@@ -116,7 +116,8 @@ public final class FusedProjectionCompiler
             List<Reference> inputs,
             List<InputPhysicalType> inputTypes,
             List<Boolean> flattensDictionaryValues,
-            List<Reference> outputs) {}
+            List<Reference> outputs,
+            int dictionaryDomainMinimumReduction) {}
 
     /**
      * Compile every fusible output among {@code candidateOutputs} into one shared-loop kernel. Returns empty if none
@@ -183,7 +184,8 @@ public final class FusedProjectionCompiler
                 List.copyOf(slice.inputs()),
                 slice.inputTypes().stream().map(FusedProjectionCompiler::inputPhysicalType).toList(),
                 slice.inputTypes().stream().map(this::flattensDictionaryValues).toList(),
-                List.copyOf(fusible)));
+                List.copyOf(fusible),
+                policy.fusedDictionaryDomainMinimumReduction()));
     }
 
     @Override
