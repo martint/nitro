@@ -199,7 +199,10 @@ public class TopNOperator
                 boolean compactOrderingCandidates = mask.size() > (1 << 16);
 
                 if (denseOrdering == null && !mask.none()) {
-                    denseOrdering = n >= policy.columnarOrderingMinLimit() && state.supportsDenseOrdering(batch);
+                    denseOrdering = state.supportsDenseOrdering(
+                            batch,
+                            n >= policy.columnarOrderingMinLimit(),
+                            n >= policy.variableWidthColumnarOrderingMinLimit());
                 }
 
                 int copied = 0;
@@ -396,6 +399,7 @@ public class TopNOperator
             outputMask = null;
         }
         queue.close();
+        state.close();
         allocator.release(allocationContext);
     }
 

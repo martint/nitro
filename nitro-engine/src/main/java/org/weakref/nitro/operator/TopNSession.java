@@ -185,9 +185,10 @@ public final class TopNSession
             return;
         }
         if (denseOrdering == null) {
-            denseOrdering = limit >= policy.columnarOrderingMinLimit() &&
-                    mask.count() <= limit &&
-                    state.supportsDenseOrdering(batch);
+            denseOrdering = mask.count() <= limit && state.supportsDenseOrdering(
+                    batch,
+                    limit >= policy.columnarOrderingMinLimit(),
+                    limit >= policy.variableWidthColumnarOrderingMinLimit());
         }
         try {
             if (!denseOrdering) {
@@ -317,6 +318,7 @@ public final class TopNSession
         }
         closed = true;
         state.releaseFallbackBatch();
+        state.close();
         allocator.release(allocationContext);
     }
 }
