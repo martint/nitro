@@ -16,6 +16,7 @@ package org.weakref.nitro.operator.aggregation;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.ValueDemand;
 import org.weakref.nitro.operator.AuthoritativeHashChannel;
+import org.weakref.nitro.operator.GroupingHashOutput;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -36,16 +37,17 @@ public record PhysicalAggregationProgram(
         List<PhysicalAggregationUnit> units,
         List<Output> outputs,
         Schema outputSchema,
-        Optional<AuthoritativeHashChannel> authoritativeHashChannel)
+        Optional<AuthoritativeHashChannel> authoritativeHashChannel,
+        Optional<GroupingHashOutput> groupingHashOutput)
 {
     public PhysicalAggregationProgram(List<PhysicalAggregationUnit> units, List<Output> outputs)
     {
-        this(units, outputs, Schema.unspecified(outputs.size()), Optional.empty());
+        this(units, outputs, Schema.unspecified(outputs.size()), Optional.empty(), Optional.empty());
     }
 
     public PhysicalAggregationProgram(List<PhysicalAggregationUnit> units, List<Output> outputs, Schema outputSchema)
     {
-        this(units, outputs, outputSchema, Optional.empty());
+        this(units, outputs, outputSchema, Optional.empty(), Optional.empty());
     }
 
     public PhysicalAggregationProgram
@@ -54,6 +56,10 @@ public record PhysicalAggregationProgram(
         outputs = List.copyOf(requireNonNull(outputs, "outputs is null"));
         outputSchema = requireNonNull(outputSchema, "outputSchema is null");
         authoritativeHashChannel = requireNonNull(authoritativeHashChannel, "authoritativeHashChannel is null");
+        groupingHashOutput = requireNonNull(groupingHashOutput, "groupingHashOutput is null");
+        if (authoritativeHashChannel.isPresent() && groupingHashOutput.isPresent()) {
+            throw new IllegalArgumentException("Aggregation cannot consume and compute a grouping hash in the same program");
+        }
         if (outputSchema.size() != outputs.size()) {
             throw new IllegalArgumentException("outputSchema size does not match outputs");
         }
@@ -114,12 +120,28 @@ public record PhysicalAggregationProgram(
                         .toList(),
                 outputs,
                 outputSchema,
-                authoritativeHashChannel);
+                authoritativeHashChannel,
+                groupingHashOutput);
     }
 
     public PhysicalAggregationProgram withAuthoritativeHashChannel(AuthoritativeHashChannel authoritativeHashChannel)
     {
-        return new PhysicalAggregationProgram(units, outputs, outputSchema, Optional.of(requireNonNull(authoritativeHashChannel, "authoritativeHashChannel is null")));
+        return new PhysicalAggregationProgram(
+                units,
+                outputs,
+                outputSchema,
+                Optional.of(requireNonNull(authoritativeHashChannel, "authoritativeHashChannel is null")),
+                Optional.empty());
+    }
+
+    public PhysicalAggregationProgram withGroupingHashOutput(GroupingHashOutput groupingHashOutput)
+    {
+        return new PhysicalAggregationProgram(
+                units,
+                outputs,
+                outputSchema,
+                Optional.empty(),
+                Optional.of(requireNonNull(groupingHashOutput, "groupingHashOutput is null")));
     }
 
     /**

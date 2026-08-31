@@ -79,6 +79,21 @@ class TestGroupedAggregationSession
     }
 
     @Test
+    void testAggregationProgramCarriesPlannerAuthoredGroupingHashOutput()
+    {
+        PhysicalAggregationProgram original = PhysicalAggregationProgram.independent(List.of(new CountAll()));
+        GroupingHashOutput contract = new GroupingHashOutput(
+                "test-v1",
+                new Field(Schema.unspecified(1).field(0).type(), false));
+
+        PhysicalAggregationProgram planned = original.withGroupingHashOutput(contract);
+
+        assertThat(original.groupingHashOutput()).isEmpty();
+        assertThat(planned.groupingHashOutput()).contains(contract);
+        assertThat(planned.physicalIntermediateOutput().groupingHashOutput()).contains(contract);
+    }
+
+    @Test
     void testStreamsFinalGroupsInBoundedBatches()
     {
         try (EngineResources resources = EngineResources.createDefault();
@@ -1359,6 +1374,42 @@ class TestGroupedAggregationSession
     }
 
     @Test
+    void testComputesAndCarriesGroupingHashes()
+    {
+        PhysicalAggregationProgram program = PhysicalAggregationProgram.independent(List.of(new CountAll()))
+                .withGroupingHashOutput(new GroupingHashOutput(
+                        "test-computed-v1",
+                        new Field(Schema.unspecified(1).field(0).type(), false)));
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                GroupedAggregationSession session = new GroupedAggregationSession(
+                        allocator,
+                        Schema.unspecified(2),
+                        List.of(0, 1),
+                        List.of(0, 1),
+                        program,
+                        resources.operatorResources())) {
+            allocator.beginExecution();
+            try (Batch input = new Batch(
+                    Mask.all(4),
+                    Output.of(Streams.ofValues(new I64Vector(new long[] {1, 1, 2, 1}))),
+                    Output.of(Streams.ofValues(new I64Vector(new long[] {10, 10, 20, 30}))))) {
+                session.addInput(input);
+            }
+
+            try (Batch output = session.finish()) {
+                assertThat(selectedLongValues(output, 0)).containsExactly(1, 2, 1);
+                assertThat(selectedLongValues(output, 1)).containsExactly(10, 20, 30);
+                assertThat(selectedLongValues(output, 2)).containsExactly(2, 1, 1);
+                assertThat(selectedLongValues(output, 3)).containsExactly(
+                        31L * Long.hashCode(1) + Long.hashCode(10),
+                        31L * Long.hashCode(2) + Long.hashCode(20),
+                        31L * Long.hashCode(1) + Long.hashCode(30));
+            }
+        }
+    }
+
+    @Test
     void testCarriesAuthoritativeHashesThroughInitialAggregationRows()
     {
         try (EngineResources resources = EngineResources.createDefault();
@@ -1381,6 +1432,34 @@ class TestGroupedAggregationSession
                 assertThat(selectedLongValues(output, 0)).containsExactly(20, 40);
                 assertThat(selectedLongValues(output, 1)).containsExactly(1, 1);
                 assertThat(selectedLongValues(output, 2)).containsExactly(202, 404);
+            }
+        }
+    }
+
+    @Test
+    void testComputesGroupingHashesForInitialAggregationRows()
+    {
+        PhysicalAggregationProgram program = PhysicalAggregationProgram.independent(List.of(new CountAll()))
+                .withGroupingHashOutput(new GroupingHashOutput(
+                        "test-computed-passthrough-v1",
+                        new Field(Schema.unspecified(1).field(0).type(), false)));
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            allocator.beginExecution();
+            InitialAggregationBatchBuilder builder = new InitialAggregationBatchBuilder(
+                    allocator,
+                    Schema.unspecified(1),
+                    List.of(0),
+                    program,
+                    resources.operatorResources());
+
+            try (Batch input = new Batch(
+                    Mask.sparse(new int[] {1, 3}, 4),
+                    Output.of(Streams.ofValues(new I64Vector(new long[] {10, 20, 30, 40}))));
+                    Batch output = builder.build(input)) {
+                assertThat(selectedLongValues(output, 0)).containsExactly(20, 40);
+                assertThat(selectedLongValues(output, 1)).containsExactly(1, 1);
+                assertThat(selectedLongValues(output, 2)).containsExactly(20, 40);
             }
         }
     }

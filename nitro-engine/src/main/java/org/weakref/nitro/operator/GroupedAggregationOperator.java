@@ -84,6 +84,8 @@ public class GroupedAggregationOperator
     private final int[] groupByColumns;
     private final int[] groupedKeyIndexes;
     private final AuthoritativeHashChannel authoritativeHashChannel;
+    private final GroupingHashOutput groupingHashOutput;
+    private final StructuralKeyKernel[] groupingHashKernels;
     private final TypeBinding[] inlineGroupedOutputTypes;
     private final PhysicalAggregationProgram program;
     private final Schema outputSchema;
@@ -105,6 +107,7 @@ public class GroupedAggregationOperator
     private boolean groupIdsDiscarded;
     private GroupedKeySource groupedKeySource;
     private I64Vector reusableGroups;
+    private I64Vector reusableGroupingHashes;
     // Fused single-long-key path: assign the group and accumulate every aggregation in one inlined pass, no
     // group-id vector and no per-row accumulator dispatch. The per-shape kernel is generated as bytecode.
     // Eligibility is decided once the grouping mode is known; falls back to the staged path per batch when a
@@ -478,10 +481,23 @@ public class GroupedAggregationOperator
                 .toArray();
         this.groupByColumns = groupByColumns;
         this.groupedKeyIndexes = groupedKeyIndexes;
-        this.authoritativeHashChannel = authoritativeHashChannel;
-        if (authoritativeHashChannel != null && authoritativeHashChannel.inputChannel() >= source.outputCount()) {
+        AuthoritativeHashChannel plannedHashChannel = program.authoritativeHashChannel().orElse(null);
+        if (authoritativeHashChannel != null && plannedHashChannel != null && !authoritativeHashChannel.equals(plannedHashChannel)) {
+            throw new IllegalArgumentException("Explicit authoritative hash channel does not match the aggregation program");
+        }
+        this.authoritativeHashChannel = authoritativeHashChannel == null ? plannedHashChannel : authoritativeHashChannel;
+        this.groupingHashOutput = program.groupingHashOutput().orElse(null);
+        this.groupingHashKernels = groupingHashOutput == null
+                ? null
+                : inlineGroupingTypes.stream()
+                        .map(operatorResources.codeGeneration().structuralTypes()::key)
+                        .toArray(StructuralKeyKernel[]::new);
+        if (this.authoritativeHashChannel != null && groupingHashOutput != null) {
+            throw new IllegalArgumentException("Aggregation cannot consume and compute a grouping hash in the same operator");
+        }
+        if (this.authoritativeHashChannel != null && this.authoritativeHashChannel.inputChannel() >= source.outputCount()) {
             throw new IllegalArgumentException("Authoritative hash input channel is outside the source schema: " +
-                    authoritativeHashChannel.inputChannel());
+                    this.authoritativeHashChannel.inputChannel());
         }
         this.inlineGroupedOutputTypes = groupByColumns == null
                 ? null
@@ -489,7 +505,12 @@ public class GroupedAggregationOperator
                         .mapToObj(index -> index < inlineGroupingTypes.size() ? inlineGroupingTypes.get(index) : null)
                         .toArray(TypeBinding[]::new);
         this.program = requireNonNull(program, "program is null");
-        this.outputSchema = outputSchema(source.outputSchema(), this.groupedColumns, program.outputSchema(), authoritativeHashChannel);
+        this.outputSchema = outputSchema(
+                source.outputSchema(),
+                this.groupedColumns,
+                program.outputSchema(),
+                this.authoritativeHashChannel,
+                groupingHashOutput);
         this.aggregations = program.units().toArray(PhysicalAggregationUnit[]::new);
         DistinctAggregationPlan distinctAggregationPlan = DistinctAggregationPlan.plan(
                 this.aggregations,
@@ -534,7 +555,7 @@ public class GroupedAggregationOperator
     @Override
     public int outputCount()
     {
-        return groupedColumns.length + program.outputs().size() + (carriesAuthoritativeHash() ? 1 : 0);
+        return groupedColumns.length + program.outputs().size() + (carriesGroupingHash() ? 1 : 0);
     }
 
     @Override
@@ -547,9 +568,10 @@ public class GroupedAggregationOperator
             Schema sourceSchema,
             int[] groupedColumns,
             Schema aggregationSchema,
-            AuthoritativeHashChannel authoritativeHashChannel)
+            AuthoritativeHashChannel authoritativeHashChannel,
+            GroupingHashOutput groupingHashOutput)
     {
-        boolean carryHash = authoritativeHashChannel != null && authoritativeHashChannel.carryToOutput();
+        boolean carryHash = authoritativeHashChannel != null && authoritativeHashChannel.carryToOutput() || groupingHashOutput != null;
         List<Field> fields = new ArrayList<>(groupedColumns.length + aggregationSchema.size() + (carryHash ? 1 : 0));
         Field unspecified = Schema.unspecified(1).field(0);
         for (int groupedColumn : groupedColumns) {
@@ -557,19 +579,21 @@ public class GroupedAggregationOperator
         }
         fields.addAll(aggregationSchema.fields());
         if (carryHash) {
-            fields.add(sourceSchema.field(authoritativeHashChannel.inputChannel()));
+            fields.add(groupingHashOutput == null
+                    ? sourceSchema.field(authoritativeHashChannel.inputChannel())
+                    : groupingHashOutput.field());
         }
         return new Schema(fields);
     }
 
-    private boolean carriesAuthoritativeHash()
+    private boolean carriesGroupingHash()
     {
-        return authoritativeHashChannel != null && authoritativeHashChannel.carryToOutput();
+        return authoritativeHashChannel != null && authoritativeHashChannel.carryToOutput() || groupingHashOutput != null;
     }
 
-    private boolean isAuthoritativeHashOutput(int output)
+    private boolean isGroupingHashOutput(int output)
     {
-        return carriesAuthoritativeHash() && output == outputCount() - 1;
+        return carriesGroupingHash() && output == outputCount() - 1;
     }
 
     @Override
@@ -876,7 +900,7 @@ public class GroupedAggregationOperator
         // Fuse only while the group table + state stay cache-resident. Beyond that the staged two-pass
         // wins on memory-level parallelism (each pass streams one random-access array the OOO window
         // overlaps), whereas fusion serializes probe-miss -> state-miss per row.
-        if (authoritativeHashChannel == null && fusedEligible && inlineGroupingState.groupCount() < fuseLocalGroupLimit) {
+        if (authoritativeHashChannel == null && groupingHashOutput == null && fusedEligible && inlineGroupingState.groupCount() < fuseLocalGroupLimit) {
             long start = System.nanoTime();
             boolean fused;
             try {
@@ -903,7 +927,7 @@ public class GroupedAggregationOperator
         }
 
         long previousMaxGroup = maxObservedGroup;
-        if (aggregations.length == 0 && authoritativeHashChannel == null) {
+        if (aggregations.length == 0 && authoritativeHashChannel == null && groupingHashOutput == null) {
             long start = System.nanoTime();
             boolean discarded;
             try {
@@ -1026,6 +1050,9 @@ public class GroupedAggregationOperator
      */
     private boolean tryEncodedKeyDomainAggregation(Batch batch, Mask mask)
     {
+        if (groupingHashOutput != null) {
+            return false;
+        }
         boolean generatedUpdates = fusedSpecs != null;
         boolean encodedGroupedInput = supportsEncodedGroupedInput();
         org.weakref.nitro.operator.aggregation.StreamAccessor streams = StreamAccessors.forBatch(batch);
@@ -1877,7 +1904,7 @@ public class GroupedAggregationOperator
                     return;
                 }
             }
-            if (authoritativeHashChannel == null) {
+            if (authoritativeHashChannel == null && groupingHashOutput == null) {
                 inlineGroupingState.initializeSchema(inlineGroupValues, inlineGroupNulls, mask);
             }
             else {
@@ -1894,6 +1921,10 @@ public class GroupedAggregationOperator
     {
         if (authoritativeHashChannel != null) {
             assignInlineGroupsWithAuthoritativeHashes(batch, mask, groups);
+            return;
+        }
+        if (groupingHashOutput != null) {
+            assignInlineGroupsWithComputedHashes(batch, mask, groups);
             return;
         }
         if (groupByColumns.length == 1) {
@@ -1917,6 +1948,51 @@ public class GroupedAggregationOperator
         finally {
             Arrays.fill(inlineGroupValues, null);
             Arrays.fill(inlineGroupNulls, null);
+        }
+    }
+
+    private void assignInlineGroupsWithComputedHashes(Batch batch, Mask mask, I64Vector groups)
+    {
+        reusableGroupingHashes = allocator.reallocateIfNecessary(
+                allocationContext,
+                reusableGroupingHashes,
+                I64Vector.class,
+                mask.maxPosition() + 1,
+                I64Vector::new);
+        try {
+            for (int index = 0; index < groupByColumns.length; index++) {
+                Output output = batch.output(groupByColumns[index]);
+                inlineGroupValues[index] = output.borrow(Stream.VALUES);
+                inlineGroupNulls[index] = output.borrowOrNull(Stream.NULLS);
+            }
+            computeGroupingHashes(inlineGroupValues, inlineGroupNulls, mask, reusableGroupingHashes);
+            if (!inlineGroupingState.assignGroupsWithAuthoritativeHashes(
+                    inlineGroupValues,
+                    inlineGroupNulls,
+                    mask,
+                    groups,
+                    reusableGroupingHashes)) {
+                throw new IllegalStateException("Grouping representation cannot produce grouping hash contract '%s'"
+                        .formatted(groupingHashOutput.contractIdentifier()));
+            }
+        }
+        finally {
+            Arrays.fill(inlineGroupValues, null);
+            Arrays.fill(inlineGroupNulls, null);
+        }
+    }
+
+    private void computeGroupingHashes(Vector[] values, Vector[] nulls, Mask mask, I64Vector result)
+    {
+        for (int position : mask) {
+            long hash = 0;
+            for (int key = 0; key < groupingHashKernels.length; key++) {
+                long fieldHash = OperatorVectorSupport.isNull(nulls[key], position)
+                        ? 0
+                        : groupingHashKernels[key].hash(values[key], nulls[key], position);
+                hash = 31 * hash + fieldHash;
+            }
+            result.values()[position] = hash;
         }
     }
 
@@ -2150,10 +2226,10 @@ public class GroupedAggregationOperator
 
     private Output resultOutput(int output, BatchState batchState)
     {
-        if (isAuthoritativeHashOutput(output)) {
+        if (isGroupingHashOutput(output)) {
             return new Output(
                     EnumSet.of(Stream.VALUES),
-                    _ -> authoritativeHashOutput(batchState).values(),
+                    _ -> groupingHashOutput(batchState).values(),
                     (_, vector) -> allocator.transfer(allocationContext, vector),
                     (_, _) -> {});
         }
@@ -2244,7 +2320,7 @@ public class GroupedAggregationOperator
                 (existing, sourcePosition, outputPosition, size) -> aggregationCopyPosition(output - groupedResults.length, existing, sourcePosition, outputPosition, size));
     }
 
-    private Streams authoritativeHashOutput(BatchState batchState)
+    private Streams groupingHashOutput(BatchState batchState)
     {
         if (batchState.authoritativeHash != null) {
             return batchState.authoritativeHash;
@@ -2257,7 +2333,7 @@ public class GroupedAggregationOperator
                 allocationContext);
         if (hashes == null) {
             throw new IllegalStateException("Grouping representation cannot carry authoritative hashes for contract: " +
-                    authoritativeHashChannel.contractIdentifier());
+                    groupingHashContractIdentifier());
         }
         batchState.authoritativeHash = Streams.ofValues(hashes);
         return batchState.authoritativeHash;
@@ -2428,7 +2504,7 @@ public class GroupedAggregationOperator
             if (streams != null) {
                 return streams;
             }
-            if (isAuthoritativeHashOutput(output)) {
+            if (isGroupingHashOutput(output)) {
                 I64Vector hashes = inlineGroupingState.groupedHashRange(
                         sourceStart,
                         size,
@@ -2437,7 +2513,7 @@ public class GroupedAggregationOperator
                         allocationContext);
                 if (hashes == null) {
                     throw new IllegalStateException("Grouping representation cannot carry authoritative hashes for contract: " +
-                            authoritativeHashChannel.contractIdentifier());
+                            groupingHashContractIdentifier());
                 }
                 streams = Streams.ofValues(hashes);
                 materialized[output] = streams;
@@ -2529,6 +2605,13 @@ public class GroupedAggregationOperator
                     outputPosition,
                     size);
         }
+    }
+
+    private String groupingHashContractIdentifier()
+    {
+        return groupingHashOutput == null
+                ? authoritativeHashChannel.contractIdentifier()
+                : groupingHashOutput.contractIdentifier();
     }
 
     private Streams emptyDenseOutput(int output)

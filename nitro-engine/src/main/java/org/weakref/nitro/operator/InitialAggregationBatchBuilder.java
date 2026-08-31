@@ -21,6 +21,7 @@ import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
+import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.operator.aggregation.AggregationExecutionContext;
 import org.weakref.nitro.operator.aggregation.PhysicalAggregationProgram;
@@ -49,6 +50,8 @@ final class InitialAggregationBatchBuilder
     private final OperatorResources operatorResources;
     private final MutableAggregationPhaseMetrics phaseMetrics;
     private final AuthoritativeHashChannel authoritativeHashChannel;
+    private final GroupingHashOutput groupingHashOutput;
+    private final StructuralKeyKernel[] groupingHashKernels;
     private final Schema outputSchema;
 
     InitialAggregationBatchBuilder(
@@ -89,12 +92,30 @@ final class InitialAggregationBatchBuilder
         this.program = requireNonNull(program, "program is null");
         this.operatorResources = requireNonNull(operatorResources, "operatorResources is null");
         this.phaseMetrics = requireNonNull(phaseMetrics, "phaseMetrics is null");
-        this.authoritativeHashChannel = authoritativeHashChannel;
-        if (authoritativeHashChannel != null && authoritativeHashChannel.inputChannel() >= inputSchema.size()) {
-            throw new IllegalArgumentException("Authoritative hash input channel is outside the input schema: " +
-                    authoritativeHashChannel.inputChannel());
+        AuthoritativeHashChannel plannedHashChannel = program.authoritativeHashChannel().orElse(null);
+        if (authoritativeHashChannel != null && plannedHashChannel != null && !authoritativeHashChannel.equals(plannedHashChannel)) {
+            throw new IllegalArgumentException("Explicit authoritative hash channel does not match the aggregation program");
         }
-        this.outputSchema = outputSchema(inputSchema, this.groupedColumns, program.outputSchema(), authoritativeHashChannel);
+        this.authoritativeHashChannel = authoritativeHashChannel == null ? plannedHashChannel : authoritativeHashChannel;
+        groupingHashOutput = program.groupingHashOutput().orElse(null);
+        if (this.authoritativeHashChannel != null && groupingHashOutput != null) {
+            throw new IllegalArgumentException("Aggregation cannot consume and compute a grouping hash in the same initial batch");
+        }
+        groupingHashKernels = groupingHashOutput == null
+                ? null
+                : java.util.Arrays.stream(this.groupedColumns)
+                        .mapToObj(column -> operatorResources.codeGeneration().structuralTypes().key(inputSchema.field(column).type()))
+                        .toArray(StructuralKeyKernel[]::new);
+        if (this.authoritativeHashChannel != null && this.authoritativeHashChannel.inputChannel() >= inputSchema.size()) {
+            throw new IllegalArgumentException("Authoritative hash input channel is outside the input schema: " +
+                    this.authoritativeHashChannel.inputChannel());
+        }
+        this.outputSchema = outputSchema(
+                inputSchema,
+                this.groupedColumns,
+                program.outputSchema(),
+                this.authoritativeHashChannel,
+                groupingHashOutput);
     }
 
     Schema outputSchema()
@@ -199,10 +220,8 @@ final class InitialAggregationBatchBuilder
             finally {
                 phaseMetrics.recordInitialAggregation(System.nanoTime() - start);
             }
-            if (carriesAuthoritativeHash()) {
-                outputs[outputs.length - 1] = retainInput
-                        ? input.output(authoritativeHashChannel.inputChannel())
-                        : ownedOutput(copyStreams(input, authoritativeHashChannel.inputChannel(), inputMask, context), context);
+            if (carriesGroupingHash()) {
+                outputs[outputs.length - 1] = hashOutput(input, inputMask, retainInput && !inputMask.all(), retainInput, context);
             }
             return new Batch(
                     outputMask,
@@ -328,10 +347,8 @@ final class InitialAggregationBatchBuilder
         finally {
             phaseMetrics.recordInitialAggregation(System.nanoTime() - start);
         }
-        if (carriesAuthoritativeHash()) {
-            outputs[outputs.length - 1] = retainInput
-                    ? input.output(authoritativeHashChannel.inputChannel())
-                    : ownedOutput(copyStreams(input, authoritativeHashChannel.inputChannel(), inputMask, context), context);
+        if (carriesGroupingHash()) {
+            outputs[outputs.length - 1] = hashOutput(input, inputMask, preservePositions, retainInput, context);
         }
         return new Batch(
                 outputMask,
@@ -400,9 +417,40 @@ final class InitialAggregationBatchBuilder
         return allocator.copyStreams(context, borrowedStreams(input.output(inputColumn)), inputMask);
     }
 
-    private boolean carriesAuthoritativeHash()
+    private boolean carriesGroupingHash()
     {
-        return authoritativeHashChannel != null && authoritativeHashChannel.carryToOutput();
+        return authoritativeHashChannel != null && authoritativeHashChannel.carryToOutput() || groupingHashOutput != null;
+    }
+
+    private Output hashOutput(Batch input, Mask inputMask, boolean preservePositions, boolean retainInput, Allocator.Context context)
+    {
+        if (groupingHashOutput == null) {
+            return retainInput
+                    ? input.output(authoritativeHashChannel.inputChannel())
+                    : ownedOutput(copyStreams(input, authoritativeHashChannel.inputChannel(), inputMask, context), context);
+        }
+
+        int size = preservePositions && !inputMask.none() ? inputMask.maxPosition() + 1 : inputMask.count();
+        I64Vector hashes = allocator.allocate(context, I64Vector.class, size, I64Vector::new);
+        Vector[] values = new Vector[groupedColumns.length];
+        Vector[] nulls = new Vector[groupedColumns.length];
+        for (int key = 0; key < groupedColumns.length; key++) {
+            Output keyOutput = input.output(groupedColumns[key]);
+            values[key] = keyOutput.borrow(Stream.VALUES);
+            nulls[key] = keyOutput.borrowOrNull(Stream.NULLS);
+        }
+        int compactPosition = 0;
+        for (int position : inputMask) {
+            long hash = 0;
+            for (int key = 0; key < groupingHashKernels.length; key++) {
+                long fieldHash = OperatorVectorSupport.isNull(nulls[key], position)
+                        ? 0
+                        : groupingHashKernels[key].hash(values[key], nulls[key], position);
+                hash = 31 * hash + fieldHash;
+            }
+            hashes.values()[preservePositions ? position : compactPosition++] = hash;
+        }
+        return ownedOutput(Streams.ofValues(hashes), context);
     }
 
     private static Streams borrowedStreams(Output output)
@@ -418,16 +466,19 @@ final class InitialAggregationBatchBuilder
             Schema inputSchema,
             int[] groupedColumns,
             Schema aggregationSchema,
-            AuthoritativeHashChannel authoritativeHashChannel)
+            AuthoritativeHashChannel authoritativeHashChannel,
+            GroupingHashOutput groupingHashOutput)
     {
-        boolean carryHash = authoritativeHashChannel != null && authoritativeHashChannel.carryToOutput();
+        boolean carryHash = authoritativeHashChannel != null && authoritativeHashChannel.carryToOutput() || groupingHashOutput != null;
         List<Field> fields = new ArrayList<>(groupedColumns.length + aggregationSchema.size() + (carryHash ? 1 : 0));
         for (int groupedColumn : groupedColumns) {
             fields.add(inputSchema.field(groupedColumn));
         }
         fields.addAll(aggregationSchema.fields());
         if (carryHash) {
-            fields.add(inputSchema.field(authoritativeHashChannel.inputChannel()));
+            fields.add(groupingHashOutput == null
+                    ? inputSchema.field(authoritativeHashChannel.inputChannel())
+                    : groupingHashOutput.field());
         }
         return new Schema(fields);
     }

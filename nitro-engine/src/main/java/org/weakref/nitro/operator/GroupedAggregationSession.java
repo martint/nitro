@@ -160,10 +160,17 @@ public final class GroupedAggregationSession
         this.groupedColumns = List.copyOf(requireNonNull(groupedColumns, "groupedColumns is null"));
         this.program = requireNonNull(program, "program is null");
         this.groupingResources = requireNonNull(groupingResources, "groupingResources is null");
-        this.authoritativeHashChannel = authoritativeHashChannel;
-        if (authoritativeHashChannel != null && authoritativeHashChannel.inputChannel() >= inputSchema.size()) {
+        AuthoritativeHashChannel plannedHashChannel = program.authoritativeHashChannel().orElse(null);
+        if (authoritativeHashChannel != null && plannedHashChannel != null && !authoritativeHashChannel.equals(plannedHashChannel)) {
+            throw new IllegalArgumentException("Explicit authoritative hash channel does not match the aggregation program");
+        }
+        this.authoritativeHashChannel = authoritativeHashChannel == null ? plannedHashChannel : authoritativeHashChannel;
+        if (this.authoritativeHashChannel != null && program.groupingHashOutput().isPresent()) {
+            throw new IllegalArgumentException("Aggregation cannot consume and compute a grouping hash in the same session");
+        }
+        if (this.authoritativeHashChannel != null && this.authoritativeHashChannel.inputChannel() >= inputSchema.size()) {
             throw new IllegalArgumentException("Authoritative hash input channel is outside the input schema: " +
-                    authoritativeHashChannel.inputChannel());
+                    this.authoritativeHashChannel.inputChannel());
         }
         this.partialAggregationControl = partialAggregationControl;
         StructuralTypeKernelFactory structuralTypes = this.operatorResources.codeGeneration().structuralTypes();
@@ -183,7 +190,7 @@ public final class GroupedAggregationSession
                 program,
                 operatorResources,
                 phaseMetrics,
-                authoritativeHashChannel);
+                this.authoritativeHashChannel);
         currentAggregation = createAggregation();
     }
 
