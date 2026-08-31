@@ -285,6 +285,12 @@ public class HashJoinOperator
     private final Vector[] composedOuterMappingSources;
     private final int[][] composedOuterMappingIds;
     private int composedOuterMappingCount;
+    // Retained build columns can likewise be sibling dictionary/RLE vectors over one physical mapping. The join
+    // position source is part of the cache key because logical and source-position wraps are not interchangeable.
+    private final Vector[] composedInnerMappingSources;
+    private final int[][] composedInnerMappingPositionSources;
+    private final int[][] composedInnerMappingIds;
+    private int composedInnerMappingCount;
     private int[] currentInnerLogicalDictionaryIds;
     private int[] currentInnerSourceDictionaryIds;
     private JoinBufferSupport.PositionMappingCache innerPositionMappingCache;
@@ -493,6 +499,9 @@ public class HashJoinOperator
         this.inner = inner;
         this.composedOuterMappingSources = new Vector[totalOutputCount * 3];
         this.composedOuterMappingIds = new int[totalOutputCount * 3][];
+        this.composedInnerMappingSources = new Vector[totalOutputCount * 3];
+        this.composedInnerMappingPositionSources = new int[totalOutputCount * 3][];
+        this.composedInnerMappingIds = new int[totalOutputCount * 3][];
         this.probeOuterJoin = probeOuterJoin;
         this.outerJoinColumns = outerJoinColumns.clone();
         this.innerJoinColumns = innerJoinColumns.clone();
@@ -695,6 +704,7 @@ public class HashJoinOperator
         currentOuterDictionaryIds = null;
         currentOwnedOuterDictionaryIds = null;
         clearComposedOuterMappings();
+        clearComposedInnerMappings();
         currentInnerLogicalDictionaryIds = null;
         currentInnerSourceDictionaryIds = null;
         innerPositionMappingCache = buffers.newPositionMappingCache();
@@ -2777,6 +2787,14 @@ public class HashJoinOperator
         composedOuterMappingCount = 0;
     }
 
+    private void clearComposedInnerMappings()
+    {
+        Arrays.fill(composedInnerMappingSources, 0, composedInnerMappingCount, null);
+        Arrays.fill(composedInnerMappingPositionSources, 0, composedInnerMappingCount, null);
+        Arrays.fill(composedInnerMappingIds, 0, composedInnerMappingCount, null);
+        composedInnerMappingCount = 0;
+    }
+
     /** Returns true when two encoded columns apply the identical position mapping to different leaf vectors. */
     private static boolean sameEncodingMapping(Vector left, Vector right)
     {
@@ -2875,7 +2893,7 @@ public class HashJoinOperator
     private Vector wrapInnerLogicalDictionary(Vector source)
     {
         if (source instanceof DictionaryVector || source instanceof org.weakref.nitro.data.RleVector) {
-            return wrapComposedDictionary(copyCurrentBatchPositions(outputInnerLogicalPositions), source);
+            return wrapComposedInnerDictionary(outputInnerLogicalPositions, source);
         }
         return DictionaryVector.wrap(innerLogicalDictionaryIds(), currentOutputCount, source);
     }
@@ -2883,9 +2901,32 @@ public class HashJoinOperator
     private Vector wrapInnerSourceDictionary(Vector source)
     {
         if (source instanceof DictionaryVector || source instanceof org.weakref.nitro.data.RleVector) {
-            return wrapComposedDictionary(copyCurrentBatchPositions(innerSourcePositions()), source);
+            return wrapComposedInnerDictionary(innerSourcePositions(), source);
         }
         return DictionaryVector.wrap(innerSourceDictionaryIds(), currentOutputCount, source);
+    }
+
+    private Vector wrapComposedInnerDictionary(int[] positionSource, Vector source)
+    {
+        if (!outputPolicy.cacheInnerDictionaryIds()) {
+            return wrapComposedDictionary(copyCurrentBatchPositions(positionSource), source);
+        }
+        for (int index = 0; index < composedInnerMappingCount; index++) {
+            if (positionSource == composedInnerMappingPositionSources[index] &&
+                    sameEncodingMapping(source, composedInnerMappingSources[index])) {
+                return DictionaryVector.wrap(
+                        composedInnerMappingIds[index],
+                        currentOutputCount,
+                        encodingLeaf(source));
+            }
+        }
+
+        DictionaryVector composed = wrapComposedDictionary(copyCurrentBatchPositions(positionSource), source);
+        composedInnerMappingSources[composedInnerMappingCount] = source;
+        composedInnerMappingPositionSources[composedInnerMappingCount] = positionSource;
+        composedInnerMappingIds[composedInnerMappingCount] = composed.ids();
+        composedInnerMappingCount++;
+        return composed;
     }
 
     private void constrainOuterIfNecessary()

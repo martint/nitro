@@ -6526,6 +6526,79 @@ public class TestOperators
     }
 
     @Test
+    void testHashJoinSharesComposedMappingsAcrossEncodedBuildColumns()
+    {
+        int[] sharedIds = {0, 1, 0};
+        DictionaryVector first = DictionaryVector.wrap(sharedIds, new I64Vector(new long[] {10, 20}));
+        DictionaryVector second = DictionaryVector.wrap(sharedIds, new I64Vector(new long[] {100, 200}));
+        DictionaryVector third = DictionaryVector.wrap(sharedIds, new I64Vector(new long[] {1000, 2000}));
+        Operator build = new Operator()
+        {
+            private boolean done;
+
+            @Override
+            public int outputCount()
+            {
+                return 4;
+            }
+
+            @Override
+            public boolean hasNext()
+            {
+                return !done;
+            }
+
+            @Override
+            public Batch next()
+            {
+                done = true;
+                return new Batch(
+                        Mask.all(3),
+                        ignored -> {},
+                        Function.identity(),
+                        new Output(Set.of(Stream.VALUES), ignored -> new I64Vector(new long[] {1, 2, 3})),
+                        new Output(Set.of(Stream.VALUES), ignored -> first),
+                        new Output(Set.of(Stream.VALUES), ignored -> second),
+                        new Output(Set.of(Stream.VALUES), ignored -> third));
+            }
+
+            @Override
+            public void constrain(Mask mask) {}
+
+            @Override
+            public boolean supportsRetainedBatches()
+            {
+                return true;
+            }
+
+            @Override
+            public void close() {}
+        };
+
+        try (HashJoinOperator join = new HashJoinOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 1, List.of(row(1L), row(2L), row(3L))),
+                0,
+                build,
+                0).withOutputs(2, 3, 4);
+                Batch batch = join.next()) {
+            DictionaryVector firstOutput = (DictionaryVector) batch.output(0).borrow(Stream.VALUES);
+            DictionaryVector secondOutput = (DictionaryVector) batch.output(1).borrow(Stream.VALUES);
+            DictionaryVector thirdOutput = (DictionaryVector) batch.output(2).borrow(Stream.VALUES);
+
+            assertThat(secondOutput.ids()).isSameAs(firstOutput.ids());
+            assertThat(thirdOutput.ids()).isSameAs(firstOutput.ids());
+            assertThat(firstOutput.ids()).isNotSameAs(sharedIds);
+            assertThat(new long[] {readI64(firstOutput, 0), readI64(firstOutput, 1), readI64(firstOutput, 2)})
+                    .containsExactly(10, 20, 10);
+            assertThat(new long[] {readI64(secondOutput, 0), readI64(secondOutput, 1), readI64(secondOutput, 2)})
+                    .containsExactly(100, 200, 100);
+            assertThat(new long[] {readI64(thirdOutput, 0), readI64(thirdOutput, 1), readI64(thirdOutput, 2)})
+                    .containsExactly(1000, 2000, 1000);
+        }
+    }
+
+    @Test
     void testTakenHashJoinDictionarySurvivesFollowingBatch()
     {
         int rowCount = HashJoinExecutionPolicy.defaults().maxBatchRows() + 1;
