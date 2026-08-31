@@ -4394,6 +4394,134 @@ public class TestOperatorBatches
         }
     }
 
+    private static String topNDescription(int rowId)
+    {
+        return "description-%04d-with-a-common-prefix-that-forces-full-comparison".formatted((rowId * 613) % 1_009);
+    }
+
+    private static String topNWarehouse(int rowId)
+    {
+        return "warehouse-%03d".formatted((rowId * 17) % 31);
+    }
+
+    @Test
+    void testTopNOperatorRetainsVariableWidthCompositeOrderingAcrossPages()
+    {
+        int limit = 512;
+        int rowCount = 800;
+        int pageSize = rowCount / 2;
+        List<TableOperator.Page> pages = new ArrayList<>();
+        for (int page = 0; page < 2; page++) {
+            long[] counts = new long[pageSize];
+            BinaryVector descriptions = new BinaryVector(pageSize, pageSize * 96);
+            BinaryVector warehouses = new BinaryVector(pageSize, pageSize * 32);
+            long[] weeks = new long[pageSize];
+            long[] rowIds = new long[pageSize];
+            for (int position = 0; position < pageSize; position++) {
+                int rowId = page * pageSize + position;
+                counts[position] = 2;
+                descriptions.setBytes(position, ("description-%04d-with-a-common-prefix-that-forces-full-comparison".formatted(rowCount - rowId)).getBytes(UTF_8));
+                warehouses.setBytes(position, ("warehouse-%03d".formatted(rowId % 17)).getBytes(UTF_8));
+                weeks[position] = rowId % 11;
+                rowIds[position] = rowId;
+            }
+            pages.add(TableOperator.Page.values(
+                    pageSize,
+                    new Vector[] {
+                            new I64Vector(counts),
+                            descriptions,
+                            warehouses,
+                            new I64Vector(weeks),
+                            new I64Vector(rowIds),
+                    },
+                    Mask.all(pageSize)));
+        }
+
+        try (Operator operator = new TopNOperator(
+                new Allocator(EngineResources.createDefault()),
+                limit,
+                new int[] {0, 1, 2, 3},
+                new boolean[] {true, false, false, false},
+                new TableOperator(5, pages))) {
+            try (Batch result = operator.next()) {
+                assertThat(result.borrowMask().count()).isEqualTo(limit);
+                VectorAccess.LongValues counts = VectorAccess.longValues(result.output(0).borrow(Stream.VALUES));
+                VectorAccess.BinaryRegions descriptions = VectorAccess.binaryRegions(result.output(1).borrow(Stream.VALUES));
+                VectorAccess.BinaryRegions warehouses = VectorAccess.binaryRegions(result.output(2).borrow(Stream.VALUES));
+                VectorAccess.LongValues weeks = VectorAccess.longValues(result.output(3).borrow(Stream.VALUES));
+                VectorAccess.LongValues rowIds = VectorAccess.longValues(result.output(4).borrow(Stream.VALUES));
+                for (int index = 0; index < limit; index++) {
+                    int expectedRowId = rowCount - 1 - index;
+                    assertThat(counts.value(index)).isEqualTo(2);
+                    assertThat(binaryValue(descriptions, index)).isEqualTo(
+                            "description-%04d-with-a-common-prefix-that-forces-full-comparison".formatted(index + 1));
+                    assertThat(binaryValue(warehouses, index)).isEqualTo("warehouse-%03d".formatted(expectedRowId % 17));
+                    assertThat(weeks.value(index)).isEqualTo(expectedRowId % 11);
+                    assertThat(rowIds.value(index)).isEqualTo(expectedRowId);
+                }
+            }
+        }
+    }
+
+    @Test
+    void testTopNOperatorOrdersCompositeGroupedAggregationOutput()
+    {
+        int groupCount = 2_400;
+        int limit = 100;
+        List<org.weakref.nitro.data.Row> inputRows = new ArrayList<>();
+        for (int groupId = groupCount - 1; groupId >= 0; groupId--) {
+            int count = 1 + groupId % 5;
+            for (int occurrence = 0; occurrence < count; occurrence++) {
+                inputRows.add(row(topNDescription(groupId), topNWarehouse(groupId), (long) groupId % 11));
+            }
+        }
+        List<Integer> expected = java.util.stream.IntStream.range(0, groupCount)
+                .boxed()
+                .sorted((left, right) -> {
+                    int comparison = Long.compare(1 + right % 5, 1 + left % 5);
+                    if (comparison != 0) {
+                        return comparison;
+                    }
+                    comparison = topNDescription(left).compareTo(topNDescription(right));
+                    if (comparison != 0) {
+                        return comparison;
+                    }
+                    comparison = topNWarehouse(left).compareTo(topNWarehouse(right));
+                    if (comparison != 0) {
+                        return comparison;
+                    }
+                    return Long.compare(left % 11, right % 11);
+                })
+                .limit(limit)
+                .toList();
+
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        try (Operator operator = new TopNOperator(
+                allocator,
+                limit,
+                new int[] {3, 0, 1, 2},
+                new boolean[] {true, false, false, false},
+                new GroupedAggregationOperator(
+                        allocator,
+                        List.of(0, 1, 2),
+                        List.of(new CountAll()),
+                        new ConstantTableOperator(allocator, 3, inputRows)));
+                Batch result = operator.next()) {
+            assertThat(result.borrowMask().count()).isEqualTo(limit);
+            VectorAccess.BinaryRegions descriptions = VectorAccess.binaryRegions(result.output(0).borrow(Stream.VALUES));
+            VectorAccess.BinaryRegions warehouses = VectorAccess.binaryRegions(result.output(1).borrow(Stream.VALUES));
+            VectorAccess.LongValues weeks = VectorAccess.longValues(result.output(2).borrow(Stream.VALUES));
+            VectorAccess.LongValues counts = VectorAccess.longValues(result.output(3).borrow(Stream.VALUES));
+            for (int index = 0; index < limit; index++) {
+                int groupId = expected.get(index);
+                assertThat(binaryValue(descriptions, index)).isEqualTo(topNDescription(groupId));
+                assertThat(binaryValue(warehouses, index)).isEqualTo(topNWarehouse(groupId));
+                assertThat(weeks.value(index)).isEqualTo(groupId % 11);
+                assertThat(counts.value(index)).isEqualTo(1 + groupId % 5);
+            }
+        }
+    }
+
     @Test
     void testTopNSessionCombinesCompactAndGenericOrderingAcrossHostBatches()
     {
