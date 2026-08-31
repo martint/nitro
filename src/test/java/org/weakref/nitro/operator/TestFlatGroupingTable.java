@@ -3063,7 +3063,7 @@ class TestFlatGroupingTable
     }
 
     @Test
-    void testGroupedDictionaryRangeRequiresCompleteGroupDomain()
+    void testGroupedDictionaryRangePreservesRepeatedValues()
     {
         int[] ids = {0, 1, 0, 1, 0, 1, 0, 1};
         Vector[] values = {
@@ -3083,8 +3083,11 @@ class TestFlatGroupingTable
             }
             table.endBatch();
 
-            assertThat(table.groupedValueRangeAsDictionary(
-                    0, 2, 4, Mask.all(4), allocator, allocationContext)).isNull();
+            DictionaryVector range = (DictionaryVector) table.groupedValueRangeAsDictionary(
+                    0, 2, 4, Mask.all(4), allocator, allocationContext).values();
+            assertThat(range.length()).isEqualTo(4);
+            assertThat(range.values()).isInstanceOf(BinaryVector.class);
+            assertThat(range.ids()).containsExactly(0, 1, 0, 1);
             assertThat(table.groupedValueRangeAsDictionary(
                     0, 0, ids.length, Mask.all(ids.length), allocator, allocationContext).values())
                     .isInstanceOf(DictionaryVector.class);
