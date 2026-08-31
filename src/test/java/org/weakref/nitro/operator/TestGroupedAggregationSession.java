@@ -1386,7 +1386,7 @@ class TestGroupedAggregationSession
     }
 
     @Test
-    void testUsesFlatGroupingWhenSingleLongInputHasAuthoritativeHashes()
+    void testUsesSpecializedGroupingWhenSingleLongInputHasAuthoritativeHashes()
     {
         try (EngineResources resources = EngineResources.createDefault();
                 Allocator allocator = new Allocator(resources);

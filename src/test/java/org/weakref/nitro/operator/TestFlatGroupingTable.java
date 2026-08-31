@@ -3857,11 +3857,13 @@ class TestFlatGroupingTable
     }
 
     @Test
-    void testGroupingStateUsesFlatGroupingForSuppliedLongHashes()
+    void testGroupingStateRetainsSuppliedHashesInSpecializedLongGrouping()
     {
-        Vector[] values = {new I64Vector(new long[] {1, 2, 1})};
+        Vector[] values = {new I64Vector(new long[] {1, 2, 1, 3, 2})};
         Vector[] nulls = {null};
-        I64Vector groupIds = new I64Vector(3);
+        I64Vector groupIds = new I64Vector(5);
+        Allocator allocator = new Allocator(engineResources);
+        Allocator.Context context = new Allocator.Context("authoritative-long-hashes");
         GroupingState state = new GroupingState(
                 arrayPool,
                 codeGeneration,
@@ -3872,15 +3874,98 @@ class TestFlatGroupingTable
             assertThat(state.assignGroupsWithAuthoritativeHashes(
                     values,
                     nulls,
-                    Mask.all(3),
+                    Mask.all(5),
                     groupIds,
-                    new I64Vector(new long[] {31, 37, 31})))
+                    // The first two keys deliberately collide. Complete-key equality remains authoritative.
+                    new I64Vector(new long[] {31, 31, 31, 43, 31})))
                     .isTrue();
-            assertThat(groupIds.values()).containsExactly(0, 1, 0);
-            assertThat(state.groupCount()).isEqualTo(2);
+            assertThat(state.usesSingleLongGrouping()).isTrue();
+            assertThat(groupIds.values()).containsExactly(0, 1, 0, 2, 1);
+            assertThat(state.groupCount()).isEqualTo(3);
+            assertThat(state.groupedHashRange(0, 3, null, allocator, context).values())
+                    .containsExactly(31, 31, 43);
         }
         finally {
             state.releaseBuffers();
+            allocator.release(context);
+        }
+    }
+
+    @Test
+    void testSpecializedLongGroupingRetainsAuthoritativeNullHash()
+    {
+        Vector[] values = {new I64Vector(new long[] {11, 0, 22, 0})};
+        Vector[] nulls = {new BooleanVector(new boolean[] {false, true, false, true})};
+        I64Vector groupIds = new I64Vector(4);
+        Allocator allocator = new Allocator(engineResources);
+        Allocator.Context context = new Allocator.Context("authoritative-null-hash");
+        GroupingState state = new GroupingState(
+                arrayPool,
+                codeGeneration,
+                groupingResources,
+                adaptiveLongGroupingPolicy,
+                flatKeyTablePolicy);
+        try {
+            assertThat(state.assignGroupsWithAuthoritativeHashes(
+                    values,
+                    nulls,
+                    Mask.all(4),
+                    groupIds,
+                    new I64Vector(new long[] {101, 7, 202, 7})))
+                    .isTrue();
+            assertThat(groupIds.values()).containsExactly(0, 1, 2, 1);
+            assertThat(state.groupedHashRange(0, 3, null, allocator, context).values())
+                    .containsExactly(101, 7, 202);
+        }
+        finally {
+            state.releaseBuffers();
+            allocator.release(context);
+        }
+    }
+
+    @Test
+    void testSpecializedLongGroupingRehashesWithAuthoritativeHashes()
+    {
+        long[] keys = new long[48];
+        long[] hashes = new long[48];
+        for (int index = 0; index < keys.length; index++) {
+            keys[index] = index;
+            hashes[index] = index % 3;
+        }
+        Allocator allocator = new Allocator(engineResources);
+        Allocator.Context context = new Allocator.Context("authoritative-long-rehash");
+        GroupingState state = new GroupingState(
+                arrayPool,
+                codeGeneration,
+                groupingResources,
+                adaptiveLongGroupingPolicy,
+                flatKeyTablePolicy);
+        try {
+            I64Vector groupIds = new I64Vector(keys.length);
+            assertThat(state.assignGroupsWithAuthoritativeHashes(
+                    new Vector[] {new I64Vector(keys)},
+                    new Vector[] {null},
+                    Mask.all(keys.length),
+                    groupIds,
+                    new I64Vector(hashes)))
+                    .isTrue();
+            assertThat(groupIds.values()).containsExactly(keys);
+
+            I64Vector repeatedGroups = new I64Vector(3);
+            assertThat(state.assignGroupsWithAuthoritativeHashes(
+                    new Vector[] {new I64Vector(new long[] {47, 0, 23})},
+                    new Vector[] {null},
+                    Mask.all(3),
+                    repeatedGroups,
+                    new I64Vector(new long[] {2, 0, 2})))
+                    .isTrue();
+            assertThat(repeatedGroups.values()).containsExactly(47, 0, 23);
+            assertThat(state.groupedHashRange(0, keys.length, null, allocator, context).values())
+                    .containsExactly(hashes);
+        }
+        finally {
+            state.releaseBuffers();
+            allocator.release(context);
         }
     }
 

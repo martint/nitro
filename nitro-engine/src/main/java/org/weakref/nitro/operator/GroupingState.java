@@ -108,6 +108,8 @@ final class GroupingState
     private long alignedDictionaryDomainSelectionBatches;
     private long compactDictionaryDomainSelectionBatches;
     private boolean useLongGrouping;
+    private boolean useAuthoritativeLongHashes;
+    private long[] authoritativeHashesByGroup = new long[0];
     private boolean useIdIndexedLongGrouping;
     private int[] longGroupHashes = new int[0];
     private boolean longRunCacheValid;
@@ -492,7 +494,7 @@ final class GroupingState
             for (int slot = 0; slot < previousIds.length; slot++) {
                 int id = previousIds[slot];
                 if (id != -1) {
-                    previousIds[slot] = encodeIdIndexedLongGroup(hashLong(previousKeys[slot]), id);
+                    previousIds[slot] = encodeIdIndexedLongGroup(longGroupingHash(previousKeys[slot], id), id);
                 }
                 else {
                     previousIds[slot] = 0;
@@ -509,7 +511,7 @@ final class GroupingState
                     continue;
                 }
                 long key = longKeysByGroup[id];
-                int hash = hashLong(key);
+                int hash = longGroupingHash(key, id);
                 int slot = hash & longGroupMask;
                 while (longGroupIds[slot] != 0) {
                     slot = (slot + 1) & longGroupMask;
@@ -539,7 +541,7 @@ final class GroupingState
                 continue;
             }
             long key = longKeysByGroup[id];
-            int slot = hashLong(key) & longGroupMask;
+            int slot = longGroupingHash(key, id) & longGroupMask;
             while (previousIds[slot] != -1) {
                 slot = (slot + 1) & longGroupMask;
             }
@@ -667,8 +669,9 @@ final class GroupingState
      * use identical key order, null semantics, and hash semantics. The flat table continues to compare complete
      * keys, so hash collisions cannot merge unequal groups.
      *
-     * @return {@code true} when this grouping representation consumed the supplied hashes; {@code false} when the
-     * representation has a cheaper specialized grouping path and the caller should use {@link #assignGroups}.
+     * @return {@code true} when this grouping representation consumed the supplied hashes; {@code false} when an
+     * already initialized representation cannot adopt the contract or the selected representation does not yet
+     * support authoritative hashes.
      */
     public boolean assignGroupsWithAuthoritativeHashes(
             Vector[] values,
@@ -684,6 +687,14 @@ final class GroupingState
             }
             initializeIfNecessary(values, nulls, mask, true);
             decideDictionaryFlatSingleIdentity(values, nulls, mask);
+            if (useLongGrouping) {
+                if (!useAuthoritativeLongHashes) {
+                    return false;
+                }
+                reserveAdditionalGroups(mask.count() + 1L);
+                assignLongGroupsWithAuthoritativeHashes(values[0], nulls[0], mask, result, hashes);
+                return true;
+            }
             if (!useFlatGrouping) {
                 return false;
             }
@@ -773,6 +784,9 @@ final class GroupingState
             useFullWidthPairPackedIdentity = admitsFullWidthPairPackedIdentity(values, nulls, mask);
         }
         initializeIfNecessary(values, nulls, mask);
+        if (useAuthoritativeLongHashes) {
+            throw new IllegalStateException("Authoritative long grouping requires a hash vector for every input batch");
+        }
         decideDictionaryFlatSingleIdentity(values, nulls, mask);
         if (useSharedDictionaryGrouping && assignSharedDictionaryGroups(values, nulls, mask, result)) {
             return;
@@ -876,6 +890,7 @@ final class GroupingState
         bytes += referenceArrayBytes(keyHandlers);
         bytes += referenceArrayBytes(binaryTraits);
         bytes += longArrayBytes(longKeysByGroup);
+        bytes += longArrayBytes(authoritativeHashesByGroup);
         bytes += longArrayBytes(dictionaryGroupsById);
         bytes += intArrayBytes(dictionaryGenerations);
         bytes += referenceArrayBytes(cachedSharedDictionaryValues);
@@ -1321,8 +1336,9 @@ final class GroupingState
             binaryTraits[index] = OperatorVectorSupport.binaryTraits(values[index]);
         }
 
-        if (!requireAuthoritativeHashSupport && values.length == 1 && isSingleLongGroupingCandidate(values[0])) {
+        if (values.length == 1 && isSingleLongGroupingCandidate(values[0])) {
             useLongGrouping = true;
+            useAuthoritativeLongHashes = requireAuthoritativeHashSupport;
             initLongGroupTable(initialLongGroupExpectedSize(values[0], nulls[0], mask));
             return;
         }
@@ -2245,6 +2261,31 @@ final class GroupingState
         longRunCacheGroupId = cachedGroupId;
     }
 
+    private void assignLongGroupsWithAuthoritativeHashes(
+            Vector values,
+            Vector nullVector,
+            Mask mask,
+            I64Vector result,
+            Vector hashes)
+    {
+        int required = mask.none() ? 0 : mask.maxPosition() + 1;
+        if (hashes.length() < required) {
+            throw new IllegalArgumentException("Hash vector has %s positions, but mask requires %s".formatted(hashes.length(), required));
+        }
+        VectorAccess.LongValues keyValues = VectorAccess.longValues(values);
+        VectorAccess.BooleanValues nullValues = VectorAccess.booleanValues(nullVector);
+        VectorAccess.LongValues hashValues = VectorAccess.longValues(hashes);
+        long[] out = result.values();
+        for (int position : mask) {
+            long authoritativeHash = hashValues.value(position);
+            if (nullValues.value(position)) {
+                out[position] = nullGroup(authoritativeHash);
+                continue;
+            }
+            out[position] = groupForLongKey(keyValues.value(position), authoritativeHash);
+        }
+    }
+
     private void ensureLongGroupHashCapacity(int size)
     {
         if (longGroupHashes.length >= size) {
@@ -2659,7 +2700,7 @@ final class GroupingState
                     continue;
                 }
                 long key = longKeysByGroup[id];
-                int hash = hashLong(key);
+                int hash = longGroupingHash(key, id);
                 int slot = hash & longGroupMask;
                 while (longGroupIds[slot] != 0) {
                     slot = (slot + 1) & longGroupMask;
@@ -2675,7 +2716,7 @@ final class GroupingState
                 }
                 int id = useIdIndexedLongGrouping ? decodeIdIndexedLongGroup(encoded) : encoded;
                 long key = useIdIndexedLongGrouping ? longKeysByGroup[id] : previousKeys[index];
-                int hash = hashLong(key);
+                int hash = longGroupingHash(key, id);
                 int slot = hash & longGroupMask;
                 while (longGroupIds[slot] != (useIdIndexedLongGrouping ? 0 : -1)) {
                     slot = (slot + 1) & longGroupMask;
@@ -2747,7 +2788,7 @@ final class GroupingState
                 continue;
             }
             long key = longKeysByGroup[group];
-            int slot = hashLong(key) & longGroupMask;
+            int slot = longGroupingHash(key, group) & longGroupMask;
             while (longGroupIds[slot] != -1) {
                 slot = (slot + 1) & longGroupMask;
             }
@@ -2858,6 +2899,32 @@ final class GroupingState
         hash *= 0xC4CEB9FE1A85EC53L;
         hash ^= hash >>> 33;
         return (int) hash;
+    }
+
+    private int longGroupingHash(long key, int groupId)
+    {
+        return useAuthoritativeLongHashes ? (int) authoritativeHashesByGroup[groupId] : hashLong(key);
+    }
+
+    private void recordAuthoritativeHash(int groupId, long hash)
+    {
+        ensureAuthoritativeHashCapacity(groupId);
+        authoritativeHashesByGroup[groupId] = hash;
+    }
+
+    private void ensureAuthoritativeHashCapacity(int groupId)
+    {
+        if (groupId < authoritativeHashesByGroup.length) {
+            return;
+        }
+        int newSize = Math.max(16, authoritativeHashesByGroup.length);
+        while (groupId >= newSize) {
+            newSize *= 2;
+        }
+        long[] previous = authoritativeHashesByGroup;
+        authoritativeHashesByGroup = arrayPool.borrowLongs(newSize);
+        System.arraycopy(previous, 0, authoritativeHashesByGroup, 0, previous.length);
+        arrayPool.release(previous);
     }
 
     private static boolean allSingleLongGroupingCandidates(Vector[] values)
@@ -3282,6 +3349,57 @@ final class GroupingState
         }
     }
 
+    private int groupForLongKey(long key, long authoritativeHash)
+    {
+        if (useLongDirectGrouping) {
+            long directKey = useCompressedLongDirectGrouping ? Long.compress(key, longDirectCompressionMask) : key;
+            boolean compatible = key >= 0 &&
+                    (!useCompressedLongDirectGrouping || (key & ~longDirectCompressionMask) == longDirectConstantBits) &&
+                    directKey < longGroupIds.length;
+            if (compatible) {
+                int encodedGroup = longGroupIds[(int) directKey];
+                if (encodedGroup != 0) {
+                    return encodedGroup - 1;
+                }
+                int groupId = (int) nextGroupId++;
+                longGroupIds[(int) directKey] = groupId + 1;
+                ensureLongGroupingCapacity(groupId);
+                longKeysByGroup[groupId] = key;
+                recordAuthoritativeHash(groupId, authoritativeHash);
+                longGroupCount++;
+                return groupId;
+            }
+            disableLongDirectGrouping();
+            longDirectGroupingDisabled = true;
+        }
+
+        int hash = (int) authoritativeHash;
+        int slot = hash & longGroupMask;
+        while (true) {
+            int encoded = longGroupIds[slot];
+            if (useIdIndexedLongGrouping ? encoded == 0 : encoded == -1) {
+                int groupId = (int) nextGroupId++;
+                if (!useIdIndexedLongGrouping) {
+                    longGroupKeys[slot] = key;
+                }
+                longGroupIds[slot] = useIdIndexedLongGrouping ? encodeIdIndexedLongGroup(hash, groupId) : groupId;
+                ensureLongGroupingCapacity(groupId);
+                longKeysByGroup[groupId] = key;
+                recordAuthoritativeHash(groupId, authoritativeHash);
+                if (++longGroupCount >= longGroupMaxFill) {
+                    rehashLongGroupTable();
+                }
+                return groupId;
+            }
+            int groupId = useIdIndexedLongGrouping ? decodeIdIndexedLongGroup(encoded) : encoded;
+            if ((!useIdIndexedLongGrouping || encoded >>> ID_INDEXED_LONG_HASH_SHIFT == hash >>> ID_INDEXED_LONG_HASH_SHIFT) &&
+                    (useIdIndexedLongGrouping ? longKeysByGroup[groupId] : longGroupKeys[slot]) == key) {
+                return groupId;
+            }
+            slot = (slot + 1) & longGroupMask;
+        }
+    }
+
     private void ensureDictionaryCacheCapacity(int size)
     {
         if (dictionaryGroupsById.length >= size) {
@@ -3624,6 +3742,20 @@ final class GroupingState
             Allocator allocator,
             Allocator.Context allocationContext)
     {
+        if (useAuthoritativeLongHashes) {
+            if (sourceStart < 0 || size < 0 || sourceStart + size > nextGroupId) {
+                throw new IndexOutOfBoundsException("Invalid grouped hash range: start=%s, size=%s, groups=%s"
+                        .formatted(sourceStart, size, nextGroupId));
+            }
+            I64Vector result = allocator.allocateOrGrow(
+                    allocationContext,
+                    output,
+                    I64Vector.class,
+                    size,
+                    I64Vector::new);
+            System.arraycopy(authoritativeHashesByGroup, sourceStart, result.values(), 0, size);
+            return result;
+        }
         if (!useFlatGrouping && !sharedDictionaryFlatBacking) {
             return null;
         }
@@ -3799,6 +3931,19 @@ final class GroupingState
         return nullGroup;
     }
 
+    private long nullGroup(long authoritativeHash)
+    {
+        boolean newGroup = nullGroup == -1;
+        long groupId = nullGroup();
+        if (newGroup) {
+            recordAuthoritativeHash(toIntExact(groupId), authoritativeHash);
+        }
+        else if (authoritativeHashesByGroup[toIntExact(groupId)] != authoritativeHash) {
+            throw new IllegalStateException("Authoritative hash contract supplied inconsistent hashes for the null key");
+        }
+        return groupId;
+    }
+
     private static boolean hasNull(Vector[] nulls, int position)
     {
         for (Vector nullVector : nulls) {
@@ -3919,6 +4064,8 @@ final class GroupingState
         longGroupIds = null;
         arrayPool.release(longKeysByGroup);
         longKeysByGroup = new long[0];
+        arrayPool.release(authoritativeHashesByGroup);
+        authoritativeHashesByGroup = new long[0];
         arrayPool.release(packedIntTripleThirdByGroup);
         packedIntTripleThirdByGroup = new int[0];
         arrayPool.release(packedIntTripleNullMasksByGroup);
