@@ -816,7 +816,20 @@ final class TopNState
             Streams columnSchema = ensureMaterializedSchema(index);
             output = materializeColumn(columnSchema, index);
         }
+        output = restoreExposedOptionalStreams(index, output);
         materialized[index] = output;
+        return output;
+    }
+
+    private Streams restoreExposedOptionalStreams(int index, Streams output)
+    {
+        Set<Stream> streams = outputStreams(index);
+        if (streams.contains(Stream.NULLS) && !output.hasNulls()) {
+            output = output.with(Stream.NULLS, allocator.borrowAllFalseBoolean(allocationContext, outputMask.size()));
+        }
+        if (streams.contains(Stream.ERRORS) && !output.hasErrors()) {
+            output = output.with(Stream.ERRORS, allocator.borrowAllFalseBoolean(allocationContext, outputMask.size()));
+        }
         return output;
     }
 

@@ -2520,6 +2520,30 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testTopNOperatorPreservesExposedAllFalseSideStreams()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        Operator operator = new TopNOperator(
+                allocator,
+                2,
+                0,
+                new TableOperator(
+                        1,
+                        List.of(new TableOperator.Page(
+                                3,
+                                new Streams[] {Streams.of(
+                                        new I64Vector(new long[] {1, 5, 3}),
+                                        new BooleanVector(3),
+                                        new BooleanVector(3))},
+                                Mask.all(3)))));
+
+        Batch batch = operator.next();
+        assertThat(batch.output(0).streams()).containsExactlyInAnyOrder(Stream.VALUES, Stream.NULLS, Stream.ERRORS);
+        assertThat(VectorAccess.isAllFalseNulls(batch.output(0).borrow(Stream.NULLS))).isTrue();
+        assertThat(VectorAccess.isAllFalseNulls(batch.output(0).borrow(Stream.ERRORS))).isTrue();
+    }
+
+    @Test
     void testTopNOperatorSupportsI32OrderingAndPayloadColumns()
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());
