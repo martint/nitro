@@ -14,12 +14,30 @@
 package org.weakref.nitro.data;
 
 import org.junit.jupiter.api.Test;
+import org.weakref.nitro.execution.EngineResources;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class TestStructVector
 {
+    @Test
+    void testSinglePositionReplacementPreservesOtherFields()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        Allocator.Context context = new Allocator.Context("test");
+        StructVector existing = new StructVector(3);
+        existing.setField("value", Streams.ofValues(new I64Vector(new long[] {1, 2, 3})));
+        StructVector source = new StructVector(1);
+        source.setField("value", Streams.ofValues(new I64Vector(new long[] {5})));
+
+        StructVector result = (StructVector) source.copySinglePositionInto(allocator, context, existing, 0, 0, 3);
+
+        assertThat(result).isSameAs(existing);
+        assertThat(((I64Vector) result.fieldValues("value")).values()).containsExactly(5, 2, 3);
+        allocator.release(context);
+    }
+
     @Test
     void testFieldViewsPreserveSemanticOrder()
     {

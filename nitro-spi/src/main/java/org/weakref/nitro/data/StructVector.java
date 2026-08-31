@@ -150,10 +150,13 @@ public final class StructVector
     public Vector copyPositionsInto(Allocator allocator, Allocator.Context allocationContext, Vector existing, int[] sourcePositions, int sourceCount, int outputStart, int size)
     {
         StructVector output = allocator.reallocateIfNecessary(allocationContext, existing instanceof StructVector vector ? vector : null, StructVector.class, size, StructVector::new);
-        if (outputStart == 0) {
+        Map<String, Streams> existingFields = existing instanceof StructVector vector ? vector.fields() : Map.of();
+        if (outputStart == 0 && !hasSameFieldLayout(output, this)) {
+            if (output == existing && !existingFields.isEmpty()) {
+                existingFields = new LinkedHashMap<>(existingFields);
+            }
             output.clearFields();
         }
-        Map<String, Streams> existingFields = existing instanceof StructVector vector ? vector.fields() : Map.of();
         for (Map.Entry<String, Streams> entry : fields.entrySet()) {
             output.setField(entry.getKey(), copyStreams(entry.getValue(), existingFields.get(entry.getKey()), allocator, allocationContext, sourcePositions, sourceCount, outputStart, size));
         }
@@ -164,10 +167,13 @@ public final class StructVector
     public Vector copySinglePositionInto(Allocator allocator, Allocator.Context allocationContext, Vector existing, int sourcePosition, int outputPosition, int size)
     {
         StructVector output = allocator.reallocateIfNecessary(allocationContext, existing instanceof StructVector vector ? vector : null, StructVector.class, size, StructVector::new);
-        if (outputPosition == 0) {
+        Map<String, Streams> existingFields = existing instanceof StructVector vector ? vector.fields() : Map.of();
+        if (outputPosition == 0 && !hasSameFieldLayout(output, this)) {
+            if (output == existing && !existingFields.isEmpty()) {
+                existingFields = new LinkedHashMap<>(existingFields);
+            }
             output.clearFields();
         }
-        Map<String, Streams> existingFields = existing instanceof StructVector vector ? vector.fields() : Map.of();
         for (Map.Entry<String, Streams> entry : fields.entrySet()) {
             output.setField(entry.getKey(), copySingleStreams(entry.getValue(), existingFields.get(entry.getKey()), allocator, allocationContext, sourcePosition, outputPosition, size));
         }
@@ -178,10 +184,13 @@ public final class StructVector
     public Vector copySinglePositionRangeInto(Allocator allocator, Allocator.Context allocationContext, Vector existing, int sourcePosition, int outputStart, int outputEnd, int size)
     {
         StructVector output = allocator.reallocateIfNecessary(allocationContext, existing instanceof StructVector vector ? vector : null, StructVector.class, size, StructVector::new);
-        if (outputStart == 0) {
+        Map<String, Streams> existingFields = existing instanceof StructVector vector ? vector.fields() : Map.of();
+        if (outputStart == 0 && !hasSameFieldLayout(output, this)) {
+            if (output == existing && !existingFields.isEmpty()) {
+                existingFields = new LinkedHashMap<>(existingFields);
+            }
             output.clearFields();
         }
-        Map<String, Streams> existingFields = existing instanceof StructVector vector ? vector.fields() : Map.of();
         for (Map.Entry<String, Streams> entry : fields.entrySet()) {
             output.setField(entry.getKey(), copySingleRangeStreams(entry.getValue(), existingFields.get(entry.getKey()), allocator, allocationContext, sourcePosition, outputStart, outputEnd, size));
         }
@@ -283,6 +292,21 @@ public final class StructVector
     public void forEachChildVector(Consumer<Vector> consumer)
     {
         fields.values().forEach(streams -> streams.asMap().values().forEach(consumer));
+    }
+
+    private static boolean hasSameFieldLayout(StructVector left, StructVector right)
+    {
+        if (left.fields.size() != right.fields.size()) {
+            return false;
+        }
+        var leftNames = left.fields.keySet().iterator();
+        var rightNames = right.fields.keySet().iterator();
+        while (leftNames.hasNext()) {
+            if (!leftNames.next().equals(rightNames.next())) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static Streams copyStreams(Streams source, Streams existing, Allocator allocator, Allocator.Context allocationContext, int[] sourcePositions, int sourceCount, int outputStart, int size)

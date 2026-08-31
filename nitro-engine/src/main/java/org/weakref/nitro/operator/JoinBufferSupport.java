@@ -35,6 +35,7 @@ import org.weakref.nitro.data.VectorAccess;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.IdentityHashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
 
@@ -1681,10 +1682,13 @@ final class JoinBufferSupport
     private StructVector copyStructPositions(StructVector source, Vector existing, int[] sourcePositions, int sourceStart, int sourceCount, int outputStart, int size)
     {
         StructVector output = ensureStructCapacity(existing instanceof StructVector vector ? vector : null, size);
-        if (outputStart == 0) {
+        Map<String, Streams> existingFields = existing instanceof StructVector vector ? vector.fields() : Map.of();
+        if (outputStart == 0 && !hasSameStructLayout(output, source)) {
+            if (output == existing && !existingFields.isEmpty()) {
+                existingFields = new LinkedHashMap<>(existingFields);
+            }
             output.clearFields();
         }
-        Map<String, Streams> existingFields = existing instanceof StructVector vector ? vector.fields() : Map.of();
         for (Map.Entry<String, Streams> entry : source.fields().entrySet()) {
             output.setField(entry.getKey(), copyPositions(existingFields.get(entry.getKey()), entry.getValue(), sourcePositions, sourceStart, sourceCount, outputStart, size));
         }
@@ -1694,14 +1698,32 @@ final class JoinBufferSupport
     private StructVector copyStructSinglePosition(StructVector source, Vector existing, int sourcePosition, int outputPosition, int size)
     {
         StructVector output = ensureStructCapacity(existing instanceof StructVector vector ? vector : null, size);
-        if (outputPosition == 0) {
+        Map<String, Streams> existingFields = existing instanceof StructVector vector ? vector.fields() : Map.of();
+        if (outputPosition == 0 && !hasSameStructLayout(output, source)) {
+            if (output == existing && !existingFields.isEmpty()) {
+                existingFields = new LinkedHashMap<>(existingFields);
+            }
             output.clearFields();
         }
-        Map<String, Streams> existingFields = existing instanceof StructVector vector ? vector.fields() : Map.of();
         for (Map.Entry<String, Streams> entry : source.fields().entrySet()) {
             output.setField(entry.getKey(), copySinglePosition(existingFields.get(entry.getKey()), entry.getValue(), size, outputPosition, sourcePosition));
         }
         return output;
+    }
+
+    private static boolean hasSameStructLayout(StructVector left, StructVector right)
+    {
+        if (left.fields().size() != right.fields().size()) {
+            return false;
+        }
+        var leftNames = left.fieldNames().iterator();
+        var rightNames = right.fieldNames().iterator();
+        while (leftNames.hasNext()) {
+            if (!leftNames.next().equals(rightNames.next())) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private I64Vector materializeLongs(Vector[] rows)

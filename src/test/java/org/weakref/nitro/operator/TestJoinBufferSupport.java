@@ -95,6 +95,18 @@ public class TestJoinBufferSupport
                 2).values();
         assertThat(((I64Vector) copiedStructs.fieldValues("value")).values()).containsExactly(13, 11);
 
+        Streams retainedStructs = buffers.copyPositionsFresh(
+                (Streams) null,
+                Streams.ofValues(structs),
+                new int[] {0, 1, 2},
+                0,
+                3,
+                0,
+                3);
+        retainedStructs = buffers.copySinglePosition(retainedStructs, Streams.ofValues(structs), 3, 0, 3);
+        assertThat(((I64Vector) ((StructVector) retainedStructs.values()).fieldValues("value")).values())
+                .containsExactly(13, 11, 12);
+
         ArrayVector arrays = new ArrayVector(4);
         System.arraycopy(new int[] {0, 1, 3, 3, 4}, 0, arrays.offsets(), 0, 5);
         arrays.setElements(Streams.ofValues(new I64Vector(new long[] {20, 30, 31, 40})));
