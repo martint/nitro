@@ -195,6 +195,7 @@ class FlatKeyLayout
     // Parquet writer marks columns optional even when they are semantically NOT NULL -- pays no per-row null check.
     private boolean[] batchFieldNullFree;
     private boolean[] batchFieldAllNull;
+    private boolean[] fieldMayHaveNull;
 
     // Global value-id equality for variable-width dictionary keys (Velox VectorHasher technique). Each field's
     // interner maps every distinct value to a dense id that is stable across batches AND across per-page
@@ -906,6 +907,7 @@ class FlatKeyLayout
             fieldIdComparable = new boolean[handlers.length];
             batchFieldNullFree = new boolean[handlers.length];
             batchFieldAllNull = new boolean[handlers.length];
+            fieldMayHaveNull = new boolean[handlers.length];
             fieldInterners = new ValueIdInterner[handlers.length];
             batchEntryGlobalId = new int[handlers.length][];
             batchEntryGlobalIdDict = new Vector[handlers.length];
@@ -974,6 +976,7 @@ class FlatKeyLayout
             Vector fieldNulls = (nulls != null && channel < nulls.length) ? nulls[channel] : null;
             batchFieldNullFree[index] = VectorAccess.isAllFalseNulls(fieldNulls);
             batchFieldAllNull[index] = policy.allNullBatchMetadata() && VectorAccess.isAllTrueNulls(fieldNulls);
+            fieldMayHaveNull[index] |= !batchFieldNullFree[index];
             // Resolve this field's typed value/null accessors once for the batch (layer-2 monomorphization).
             Vector fieldValue = channel < values.length ? values[channel] : null;
             fieldLong[index] = fieldKinds[index] == FlatTypeHandler.Kind.LONG && fieldValue != null
@@ -4104,6 +4107,11 @@ class FlatKeyLayout
     public boolean fieldNull(byte[] fixedChunk, int fixedOffset, int fieldIndex)
     {
         return isNull(fixedChunk, fixedOffset, fieldIndex);
+    }
+
+    boolean fieldMayHaveNull(int fieldIndex)
+    {
+        return fieldMayHaveNull == null || fieldMayHaveNull[fieldIndex];
     }
 
     private static boolean fieldNull(Vector[] nulls, int inputChannel, int position)

@@ -2060,6 +2060,14 @@ public class GroupedAggregationOperator
                 result.withPositionAccessor(new Output.PositionAccessor()
                 {
                     @Override
+                    public boolean mayHaveNulls()
+                    {
+                        return groupByColumns == null
+                                ? groupedKeySource.groupedKeyPositionsMayBeNull(groupedKeyIndex)
+                                : inlineGroupingState.groupedValuePositionsMayBeNull(groupedKeyIndex);
+                    }
+
+                    @Override
                     public boolean isNull(int position)
                     {
                         return groupByColumns == null

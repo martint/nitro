@@ -34,6 +34,11 @@ public final class Output
 {
     public interface PositionAccessor
     {
+        default boolean mayHaveNulls()
+        {
+            return true;
+        }
+
         boolean isNull(int position);
 
         int compareNonNull(int position, Vector otherValues, int otherPosition);

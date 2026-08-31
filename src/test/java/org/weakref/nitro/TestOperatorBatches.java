@@ -4180,6 +4180,7 @@ public class TestOperatorBatches
         Allocator allocator = new Allocator(EngineResources.createDefault());
         AtomicInteger maximumMaterializedPositions = new AtomicInteger();
         AtomicInteger directComparisons = new AtomicInteger();
+        AtomicInteger nullChecks = new AtomicInteger();
         List<org.weakref.nitro.data.Row> rows = new ArrayList<>();
         // Keep the input below the ordinary 64 rows per TopN slot admission threshold.
         // The position accessor itself must select the retained-position representation.
@@ -4214,6 +4215,13 @@ public class TestOperatorBatches
                 directComparisons.incrementAndGet();
                 return super.compareGroupedKeyPositions(outputIndex, leftPosition, rightPosition);
             }
+
+            @Override
+            public boolean groupedKeyPositionIsNull(int outputIndex, int position)
+            {
+                nullChecks.incrementAndGet();
+                return super.groupedKeyPositionIsNull(outputIndex, position);
+            }
         };
 
         try (Operator operator = new TopNOperator(
@@ -4232,6 +4240,7 @@ public class TestOperatorBatches
                     row("key-001", 1L));
         }
         assertThat(directComparisons).hasPositiveValue();
+        assertThat(nullChecks).hasValue(0);
         assertThat(maximumMaterializedPositions).hasValue(2);
     }
 

@@ -31,6 +31,11 @@ interface GroupedKeySource
         return false;
     }
 
+    default boolean groupedKeyPositionsMayBeNull(int outputIndex)
+    {
+        return true;
+    }
+
     default boolean groupedKeyPositionIsNull(int outputIndex, int position)
     {
         throw new UnsupportedOperationException("Grouped-key position comparison is not supported");

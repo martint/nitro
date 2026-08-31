@@ -74,6 +74,7 @@ final class TopNState
     private Vector[] retainedOrderingValues;
     private Vector[] retainedOrderingNulls;
     private Output.PositionAccessor[] retainedOrderingAccessors;
+    private boolean[] retainedOrderingMayHaveNulls;
 
     @SuppressWarnings("unchecked")
     TopNState(
@@ -259,7 +260,7 @@ final class TopNState
             boolean currentNull = compactCandidate
                     ? positionAccessor == null
                             ? OperatorVectorSupport.isNull(currentOrdering.getOrNull(Stream.NULLS), 0)
-                            : positionAccessor.isNull(position)
+                            : positionAccessor.mayHaveNulls() && positionAccessor.isNull(position)
                     : candidateIsNull(orderingColumn, output, position);
             boolean slotNull = OperatorVectorSupport.isNull(slotOrdering.getOrNull(Stream.NULLS), slotPosition);
             int comparison;
@@ -310,15 +311,18 @@ final class TopNState
         retainedOrderingValues = new Vector[slotColumns.length];
         retainedOrderingNulls = new Vector[slotColumns.length];
         retainedOrderingAccessors = new Output.PositionAccessor[slotColumns.length];
+        retainedOrderingMayHaveNulls = new boolean[slotColumns.length];
         for (int orderingColumn : orderingColumns) {
             Output output = batch.output(orderingColumn);
             Output.PositionAccessor positionAccessor = output.positionAccessor();
             if (positionAccessor != null && positionAccessor.supportsPositionComparison()) {
                 retainedOrderingAccessors[orderingColumn] = positionAccessor;
+                retainedOrderingMayHaveNulls[orderingColumn] = positionAccessor.mayHaveNulls();
                 continue;
             }
             retainedOrderingValues[orderingColumn] = output.borrow(Stream.VALUES);
             retainedOrderingNulls[orderingColumn] = output.borrowOrNull(Stream.NULLS);
+            retainedOrderingMayHaveNulls[orderingColumn] = !VectorAccess.isAllFalseNulls(retainedOrderingNulls[orderingColumn]);
         }
     }
 
@@ -339,12 +343,13 @@ final class TopNState
             int orderingColumn = orderingColumns[orderingIndex];
             Output.PositionAccessor positionAccessor = retainedOrderingAccessors[orderingColumn];
             Vector nulls = retainedOrderingNulls[orderingColumn];
-            boolean leftNull = positionAccessor == null
+            boolean mayHaveNulls = retainedOrderingMayHaveNulls[orderingColumn];
+            boolean leftNull = mayHaveNulls && (positionAccessor == null
                     ? OperatorVectorSupport.isNull(nulls, leftPosition)
-                    : positionAccessor.isNull(leftPosition);
-            boolean rightNull = positionAccessor == null
+                    : positionAccessor.isNull(leftPosition));
+            boolean rightNull = mayHaveNulls && (positionAccessor == null
                     ? OperatorVectorSupport.isNull(nulls, rightPosition)
-                    : positionAccessor.isNull(rightPosition);
+                    : positionAccessor.isNull(rightPosition));
             if (leftNull || rightNull) {
                 if (leftNull == rightNull) {
                     continue;

@@ -1317,6 +1317,11 @@ final class FlatGroupingTable
         return kind == FlatTypeHandler.Kind.LONG || kind == FlatTypeHandler.Kind.BINARY;
     }
 
+    boolean groupedValuePositionsMayBeNull(int groupedColumnIndex)
+    {
+        return layout.fieldMayHaveNull(groupedColumnIndex);
+    }
+
     boolean groupedValuePositionIsNull(int groupedColumnIndex, int groupId)
     {
         int recordIndex = recordIndex(groupId);

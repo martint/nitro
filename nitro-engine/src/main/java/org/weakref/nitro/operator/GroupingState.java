@@ -3348,6 +3348,18 @@ final class GroupingState
                 (useLongGrouping || usePackedIntPairGrouping || useMultiLongGrouping);
     }
 
+    boolean groupedValuePositionsMayBeNull(int groupedColumnIndex)
+    {
+        if (useFlatGrouping || sharedDictionaryFlatBacking) {
+            return flatGroupingTable.groupedValuePositionsMayBeNull(groupedColumnIndex);
+        }
+        if (useLongGrouping) {
+            return nullGroup >= 0;
+        }
+        // Other compact representations do not currently retain a column-level nullability summary.
+        return true;
+    }
+
     boolean groupedValuePositionIsNull(int groupedColumnIndex, int sourcePosition)
     {
         if (useFlatGrouping || sharedDictionaryFlatBacking) {

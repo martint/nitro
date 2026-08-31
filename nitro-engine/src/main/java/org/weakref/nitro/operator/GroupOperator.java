@@ -265,6 +265,12 @@ public class GroupOperator
     }
 
     @Override
+    public boolean groupedKeyPositionsMayBeNull(int outputIndex)
+    {
+        return groupingState.groupedValuePositionsMayBeNull(groupedKeyIndex(outputIndex));
+    }
+
+    @Override
     public boolean groupedKeyPositionIsNull(int outputIndex, int position)
     {
         return groupingState.groupedValuePositionIsNull(groupedKeyIndex(outputIndex), position);
