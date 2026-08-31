@@ -202,7 +202,8 @@ public class TopNOperator
                     denseOrdering = state.supportsDenseOrdering(
                             batch,
                             n >= policy.columnarOrderingMinLimit(),
-                            n >= policy.variableWidthColumnarOrderingMinLimit());
+                            n >= policy.variableWidthColumnarOrderingMinLimit(),
+                            n >= policy.hybridColumnarOrderingMinLimit());
                 }
 
                 int copied = 0;

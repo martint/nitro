@@ -16,16 +16,29 @@ package org.weakref.nitro.operator;
 public record TopNOperatorPolicy(
         int columnarOrderingMinLimit,
         int variableWidthColumnarOrderingMinLimit,
+        int hybridColumnarOrderingMinLimit,
         int retainedSingleBatchMinimumRowsPerLimit)
 {
     public TopNOperatorPolicy(int columnarOrderingMinLimit)
     {
-        this(columnarOrderingMinLimit, columnarOrderingMinLimit, 64);
+        this(columnarOrderingMinLimit, columnarOrderingMinLimit, columnarOrderingMinLimit, 64);
     }
 
     public TopNOperatorPolicy(int columnarOrderingMinLimit, int retainedSingleBatchMinimumRowsPerLimit)
     {
-        this(columnarOrderingMinLimit, columnarOrderingMinLimit, retainedSingleBatchMinimumRowsPerLimit);
+        this(columnarOrderingMinLimit, columnarOrderingMinLimit, columnarOrderingMinLimit, retainedSingleBatchMinimumRowsPerLimit);
+    }
+
+    public TopNOperatorPolicy(
+            int columnarOrderingMinLimit,
+            int variableWidthColumnarOrderingMinLimit,
+            int retainedSingleBatchMinimumRowsPerLimit)
+    {
+        this(
+                columnarOrderingMinLimit,
+                variableWidthColumnarOrderingMinLimit,
+                variableWidthColumnarOrderingMinLimit,
+                retainedSingleBatchMinimumRowsPerLimit);
     }
 
     public TopNOperatorPolicy
@@ -36,6 +49,9 @@ public record TopNOperatorPolicy(
         if (variableWidthColumnarOrderingMinLimit < 1) {
             throw new IllegalArgumentException("variableWidthColumnarOrderingMinLimit must be positive");
         }
+        if (hybridColumnarOrderingMinLimit < 1) {
+            throw new IllegalArgumentException("hybridColumnarOrderingMinLimit must be positive");
+        }
         if (retainedSingleBatchMinimumRowsPerLimit < 1) {
             throw new IllegalArgumentException("retainedSingleBatchMinimumRowsPerLimit must be positive");
         }
@@ -43,7 +59,7 @@ public record TopNOperatorPolicy(
 
     public static TopNOperatorPolicy defaults()
     {
-        return new TopNOperatorPolicy(4_096, 512, 64);
+        return new TopNOperatorPolicy(4_096, 512, 64, 64);
     }
 
     public static TopNOperatorPolicy fromSystemProperties()
@@ -56,6 +72,9 @@ public record TopNOperatorPolicy(
                 Integer.getInteger(
                         "nitro.topN.variableWidthColumnarOrderingMinLimit",
                         defaults.variableWidthColumnarOrderingMinLimit()),
+                Integer.getInteger(
+                        "nitro.topN.hybridColumnarOrderingMinLimit",
+                        defaults.hybridColumnarOrderingMinLimit()),
                 Integer.getInteger(
                         "nitro.topN.retainedSingleBatchMinimumRowsPerLimit",
                         defaults.retainedSingleBatchMinimumRowsPerLimit()));

@@ -4371,6 +4371,47 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testTopNSessionCombinesCompactAndGenericOrderingAcrossHostBatches()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        try (Operator first = new ConstantTableOperator(
+                allocator,
+                3,
+                List.of(
+                        row("b", false, "first"),
+                        row("a", true, "second")));
+                TopNSession session = new TopNSession(
+                        allocator,
+                        3,
+                        new int[] {0, 1},
+                        new boolean[] {true, true},
+                        first.outputSchema(),
+                        new TopNOperatorPolicy(1))) {
+            try (Batch batch = first.next()) {
+                session.addInput(batch);
+            }
+            try (Operator second = new ConstantTableOperator(
+                    allocator,
+                    3,
+                    List.of(
+                            row("b", false, "third"),
+                            row("c", false, "fourth"),
+                            row("b", true, "fifth")));
+                    Batch batch = second.next()) {
+                session.addInput(batch);
+            }
+
+            try (Batch result = session.finish().orElseThrow()) {
+                assertThat(OperatorAssertions.OperatorAssert.toRows(new SingleBatchOperator(session.outputSchema(), result)))
+                        .containsExactly(
+                                row("c", 0L, "fourth"),
+                                row("b", 1L, "fifth"),
+                                row("b", 0L, "first"));
+            }
+        }
+    }
+
+    @Test
     void testSortSessionRetainsRowsAcrossHostBatches()
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());

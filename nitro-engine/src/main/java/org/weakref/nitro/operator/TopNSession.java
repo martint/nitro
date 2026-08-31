@@ -188,7 +188,8 @@ public final class TopNSession
             denseOrdering = mask.count() <= limit && state.supportsDenseOrdering(
                     batch,
                     limit >= policy.columnarOrderingMinLimit(),
-                    limit >= policy.variableWidthColumnarOrderingMinLimit());
+                    limit >= policy.variableWidthColumnarOrderingMinLimit(),
+                    limit >= policy.hybridColumnarOrderingMinLimit());
         }
         try {
             if (!denseOrdering) {
