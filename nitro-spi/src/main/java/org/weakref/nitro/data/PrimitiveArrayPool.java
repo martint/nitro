@@ -39,6 +39,11 @@ public final class PrimitiveArrayPool
     private long retainedBytes;
     private long borrowedBytes;
     private long reusedBytes;
+    private long allocatedBytes;
+    private long allocationCount;
+    private long reuseCount;
+    private long evictedBytes;
+    private long evictionCount;
     private boolean closed;
 
     public PrimitiveArrayPool(long maxRetainedBytes, long minRetainedBytes)
@@ -56,7 +61,11 @@ public final class PrimitiveArrayPool
     public int[] borrowInts(int length)
     {
         int[] array = tryBorrowInts(length);
-        return array != null ? array : new int[length];
+        if (array != null) {
+            return array;
+        }
+        recordAllocation((long) length * Integer.BYTES);
+        return new int[length];
     }
 
     /**
@@ -73,7 +82,11 @@ public final class PrimitiveArrayPool
     public byte[] borrowBytes(int length)
     {
         byte[] array = borrow(byte[].class, length, byte[].class);
-        return array != null ? array : new byte[length];
+        if (array != null) {
+            return array;
+        }
+        recordAllocation(length);
+        return new byte[length];
     }
 
     /** Borrows the smallest retained byte array that can satisfy {@code minimumLength}. */
@@ -100,6 +113,7 @@ public final class PrimitiveArrayPool
             }
         }
         if (best == null) {
+            recordAllocation(minimumLength);
             return new byte[minimumLength];
         }
         return borrow(best.family, best.capacity, byte[].class);
@@ -108,19 +122,31 @@ public final class PrimitiveArrayPool
     public long[] borrowLongs(int length)
     {
         long[] array = borrow(long[].class, length, long[].class);
-        return array != null ? array : new long[length];
+        if (array != null) {
+            return array;
+        }
+        recordAllocation((long) length * Long.BYTES);
+        return new long[length];
     }
 
     public double[] borrowDoubles(int length)
     {
         double[] array = borrow(double[].class, length, double[].class);
-        return array != null ? array : new double[length];
+        if (array != null) {
+            return array;
+        }
+        recordAllocation((long) length * Double.BYTES);
+        return new double[length];
     }
 
     public boolean[] borrowBooleans(int length)
     {
         boolean[] array = borrow(boolean[].class, length, boolean[].class);
-        return array != null ? array : new boolean[length];
+        if (array != null) {
+            return array;
+        }
+        recordAllocation(length);
+        return new boolean[length];
     }
 
     public synchronized void release(int[] array)
@@ -182,6 +208,7 @@ public final class PrimitiveArrayPool
         retainedBytes -= entry.bytes;
         borrowedBytes += entry.bytes;
         reusedBytes += entry.bytes;
+        reuseCount++;
         return type.cast(entry.buffer);
     }
 
@@ -237,6 +264,32 @@ public final class PrimitiveArrayPool
         return reusedBytes;
     }
 
+    /** Bytes in primitive arrays physically allocated after a typed borrow missed this pool. */
+    public synchronized long allocatedBytes()
+    {
+        return allocatedBytes;
+    }
+
+    public synchronized long allocationCount()
+    {
+        return allocationCount;
+    }
+
+    public synchronized long reuseCount()
+    {
+        return reuseCount;
+    }
+
+    public synchronized long evictedBytes()
+    {
+        return evictedBytes;
+    }
+
+    public synchronized long evictionCount()
+    {
+        return evictionCount;
+    }
+
     public synchronized void clear()
     {
         buckets.clear();
@@ -288,6 +341,14 @@ public final class PrimitiveArrayPool
             retainedBuffers.remove(entry.buffer);
         }
         retainedBytes -= entry.bytes;
+        evictedBytes += entry.bytes;
+        evictionCount++;
+    }
+
+    private synchronized void recordAllocation(long bytes)
+    {
+        allocatedBytes += bytes;
+        allocationCount++;
     }
 
     private void unlink(Entry entry)

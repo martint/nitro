@@ -56,6 +56,9 @@ public class TestPrimitiveArrayPool
         assertThat(pool.borrowLongs(64)).isSameAs(longs);
         assertThat(pool.borrowInts(63)).isNotSameAs(ints);
         assertThat(pool.retainedBytes()).isZero();
+        assertThat(pool.reuseCount()).isEqualTo(2);
+        assertThat(pool.allocationCount()).isEqualTo(1);
+        assertThat(pool.allocatedBytes()).isEqualTo(63L * Integer.BYTES);
     }
 
     @Test
@@ -133,8 +136,28 @@ public class TestPrimitiveArrayPool
         pool.release(newest);
 
         assertThat(pool.retainedBytes()).isEqualTo(384);
+        assertThat(pool.evictionCount()).isEqualTo(1);
+        assertThat(pool.evictedBytes()).isEqualTo(256);
         assertThat(pool.borrowInts(96)).isSameAs(newest);
         assertThat(pool.borrowInts(64)).isNotSameAs(oldest);
+    }
+
+    @Test
+    public void testTypedAllocationCountersExcludeNonAllocatingProbe()
+    {
+        PrimitiveArrayPool pool = new PrimitiveArrayPool(1024, 0);
+
+        assertThat(pool.tryBorrowInts(8)).isNull();
+        assertThat(pool.allocationCount()).isZero();
+        assertThat(pool.allocatedBytes()).isZero();
+
+        pool.borrowBytes(3);
+        pool.borrowBooleans(5);
+        pool.borrowLongs(7);
+        pool.borrowDoubles(11);
+
+        assertThat(pool.allocationCount()).isEqualTo(4);
+        assertThat(pool.allocatedBytes()).isEqualTo(3 + 5 + 7L * Long.BYTES + 11L * Double.BYTES);
     }
 
     @Test
