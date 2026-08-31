@@ -1063,9 +1063,6 @@ public class GroupedAggregationOperator
             return false;
         }
         if (groupByColumns.length != 1) {
-            if (authoritativeHashChannel != null) {
-                return false;
-            }
             return trySharedDictionaryKeyDomainAggregation(batch, mask, streams, groupedDomainInput, encodedGroupedInput);
         }
         Output keyOutput = batch.output(groupByColumns[0]);
@@ -1314,6 +1311,17 @@ public class GroupedAggregationOperator
                 return false;
             }
         }
+        Vector authoritativeDomainHashes = null;
+        if (authoritativeHashChannel != null) {
+            Output hashOutput = batch.output(authoritativeHashChannel.inputChannel());
+            if (!VectorAccess.isAllFalseNulls(hashOutput.borrowOrNull(Stream.NULLS)) ||
+                    !(hashOutput.borrow(Stream.VALUES) instanceof DictionaryVector hashDictionary) ||
+                    hashDictionary.values().length() != domainSize ||
+                    !first.hasSameRowMapping(hashDictionary)) {
+                return false;
+            }
+            authoritativeDomainHashes = hashDictionary.values();
+        }
         if ((long) domainSize * dictionaryDomainAggregationMinReduction > mask.count()) {
             return false;
         }
@@ -1371,7 +1379,7 @@ public class GroupedAggregationOperator
         long previousMaxGroup = maxObservedGroup;
         long start = System.nanoTime();
         try {
-            if (groupingHashOutput == null) {
+            if (groupingHashOutput == null && authoritativeDomainHashes == null) {
                 inlineGroupingState.assignGroups(
                         dictionaryDomainKeyValues,
                         dictionaryDomainKeyNulls,
@@ -1379,25 +1387,29 @@ public class GroupedAggregationOperator
                         reusableDictionaryDomainGroups);
             }
             else {
-                reusableGroupingHashes = allocator.reallocateIfNecessary(
-                        allocationContext,
-                        reusableGroupingHashes,
-                        I64Vector.class,
-                        domainSize,
-                        I64Vector::new);
-                computeGroupingHashes(
-                        dictionaryDomainKeyValues,
-                        dictionaryDomainKeyNulls,
-                        reusableDictionaryDomainMask,
-                        reusableGroupingHashes);
+                Vector groupingHashes = authoritativeDomainHashes;
+                if (groupingHashOutput != null) {
+                    reusableGroupingHashes = allocator.reallocateIfNecessary(
+                            allocationContext,
+                            reusableGroupingHashes,
+                            I64Vector.class,
+                            domainSize,
+                            I64Vector::new);
+                    computeGroupingHashes(
+                            dictionaryDomainKeyValues,
+                            dictionaryDomainKeyNulls,
+                            reusableDictionaryDomainMask,
+                            reusableGroupingHashes);
+                    groupingHashes = reusableGroupingHashes;
+                }
                 if (!inlineGroupingState.assignGroupsWithAuthoritativeHashes(
                         dictionaryDomainKeyValues,
                         dictionaryDomainKeyNulls,
                         reusableDictionaryDomainMask,
                         reusableDictionaryDomainGroups,
-                        reusableGroupingHashes)) {
-                    throw new IllegalStateException("Grouping representation cannot produce grouping hash contract '%s'"
-                            .formatted(groupingHashOutput.contractIdentifier()));
+                        groupingHashes)) {
+                    throw new IllegalStateException("Grouping representation cannot consume grouping hash contract '%s'"
+                            .formatted(groupingHashContractIdentifier()));
                 }
             }
         }

@@ -669,6 +669,17 @@ class TestFusedGroupedAggregation
     @Test
     void groupingHashProducerPreservesArbitraryAritySharedDictionaryDomain()
     {
+        assertGroupingHashContractPreservesArbitraryAritySharedDictionaryDomain(true);
+    }
+
+    @Test
+    void authoritativeHashConsumerPreservesArbitraryAritySharedDictionaryDomain()
+    {
+        assertGroupingHashContractPreservesArbitraryAritySharedDictionaryDomain(false);
+    }
+
+    private static void assertGroupingHashContractPreservesArbitraryAritySharedDictionaryDomain(boolean producer)
+    {
         int size = 16_384;
         int[] ids = new int[size];
         int[] frequencies = new int[4];
@@ -683,27 +694,42 @@ class TestFusedGroupedAggregation
 
         WeightedDomainCount implementation = new WeightedDomainCount();
         PhysicalAggregationProgram program = PhysicalAggregationProgram.singleUnit(
-                        new RegisteredAggregationUnit(implementation, RAW, FINAL, new int[0]))
-                .withGroupingHashOutput(new GroupingHashOutput(
+                new RegisteredAggregationUnit(implementation, RAW, FINAL, new int[0]));
+        program = producer
+                ? program.withGroupingHashOutput(new GroupingHashOutput(
                         "test-shared-composite-domain-hash-v1",
-                        new Field(Schema.unspecified(1).field(0).type(), false)));
+                        new Field(Schema.unspecified(1).field(0).type(), false)))
+                : program.withAuthoritativeHashChannel(new AuthoritativeHashChannel(
+                        "test-shared-composite-domain-hash-v1",
+                        3,
+                        true));
         DictionaryVector firstDictionary = DictionaryVector.ofTrustedIdsWithDomainFrequencies(
                 ids,
                 size,
                 new I64Vector(firstKeys),
                 frequencies);
+        long[] domainHashes = new long[firstKeys.length];
+        for (int domain = 0; domain < domainHashes.length; domain++) {
+            domainHashes[domain] = 31L * (31L * Long.hashCode(firstKeys[domain]) + Long.hashCode(secondKeys[domain])) +
+                    Long.hashCode(thirdKeys[domain]);
+        }
+        Vector[] inputs = {
+                firstDictionary,
+                firstDictionary.sharedMappingWithValues(new I64Vector(secondKeys)),
+                firstDictionary.sharedMappingWithValues(new I64Vector(thirdKeys))};
+        if (!producer) {
+            inputs = Arrays.copyOf(inputs, 4);
+            inputs[3] = firstDictionary.sharedMappingWithValues(new I64Vector(domainHashes));
+        }
         try (EngineResources resources = EngineResources.createDefault();
                 Allocator allocator = new Allocator(resources);
                 Operator operator = new GroupedAggregationOperator(
                         allocator,
                         List.of(0, 1, 2),
                         program,
-                        new TableOperator(3, List.of(TableOperator.Page.values(
+                        new TableOperator(inputs.length, List.of(TableOperator.Page.values(
                                 size,
-                                new Vector[] {
-                                        firstDictionary,
-                                        firstDictionary.sharedMappingWithValues(new I64Vector(secondKeys)),
-                                        firstDictionary.sharedMappingWithValues(new I64Vector(thirdKeys))},
+                                inputs,
                                 Mask.all(size)))))) {
             Map<String, Long> counts = new HashMap<>();
             Map<String, Long> hashes = new HashMap<>();
@@ -724,10 +750,8 @@ class TestFusedGroupedAggregation
 
             for (int domain = 0; domain < firstKeys.length; domain++) {
                 String key = firstKeys[domain] + ":" + secondKeys[domain] + ":" + thirdKeys[domain];
-                long expectedHash = 31L * (31L * Long.hashCode(firstKeys[domain]) + Long.hashCode(secondKeys[domain])) +
-                        Long.hashCode(thirdKeys[domain]);
                 assertThat(counts.get(key)).isEqualTo(frequencies[domain]);
-                assertThat(hashes.get(key)).isEqualTo(expectedHash);
+                assertThat(hashes.get(key)).isEqualTo(domainHashes[domain]);
             }
         }
         assertThat(implementation.groupedDomainObserved).isTrue();
