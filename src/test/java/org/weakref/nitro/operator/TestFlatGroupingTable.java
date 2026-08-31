@@ -27,6 +27,7 @@ import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.PrimitiveArrayPool;
+import org.weakref.nitro.data.RegionVector;
 import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
@@ -3801,6 +3802,34 @@ class TestFlatGroupingTable
         finally {
             state.releaseBuffers();
             allocator.release(context);
+        }
+    }
+
+    @Test
+    void testGroupingStateConsumesRegionOfSuppliedFlatHashes()
+    {
+        Vector[] values = {utf8("alpha", "beta", "alpha")};
+        Vector[] nulls = {null};
+        I64Vector groups = new I64Vector(3);
+        GroupingState state = new GroupingState(
+                arrayPool,
+                codeGeneration,
+                groupingResources,
+                adaptiveLongGroupingPolicy,
+                flatKeyTablePolicy);
+        try {
+            assertThat(state.assignGroupsWithAuthoritativeHashes(
+                    values,
+                    nulls,
+                    Mask.all(3),
+                    groups,
+                    new RegionVector(new I64Vector(new long[] {99, 23, 23, 23}), 1, 3)))
+                    .isTrue();
+            assertThat(groups.values()).containsExactly(0, 1, 0);
+            assertThat(state.groupCount()).isEqualTo(2);
+        }
+        finally {
+            state.releaseBuffers();
         }
     }
 

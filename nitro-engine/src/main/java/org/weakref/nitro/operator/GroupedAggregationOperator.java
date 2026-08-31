@@ -1897,10 +1897,6 @@ public class GroupedAggregationOperator
     {
         Output hashOutput = batch.output(authoritativeHashChannel.inputChannel());
         Vector hashValues = hashOutput.borrow(Stream.VALUES);
-        if (!(hashValues instanceof I64Vector hashes)) {
-            throw new IllegalStateException("Authoritative hash contract '%s' requires a direct I64Vector, but received %s"
-                    .formatted(authoritativeHashChannel.contractIdentifier(), hashValues.getClass().getSimpleName()));
-        }
         Vector hashNulls = hashOutput.borrowOrNull(Stream.NULLS);
         if (hashNulls != null && !VectorAccess.isAllFalseNulls(hashNulls)) {
             throw new IllegalStateException("Authoritative hash contract '%s' contains null hashes"
@@ -1918,7 +1914,7 @@ public class GroupedAggregationOperator
                     inlineGroupNulls,
                     mask,
                     groups,
-                    hashes)) {
+                    hashValues)) {
                 throw new IllegalStateException("Grouping representation cannot consume authoritative hash contract '%s'"
                         .formatted(authoritativeHashChannel.contractIdentifier()));
             }

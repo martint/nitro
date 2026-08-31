@@ -97,7 +97,7 @@ final class FlatGroupingTable
     // keys so grouping can reuse work performed by an upstream partial aggregation or exchange. Keep that storage
     // distinct from the table-owned scratch: endBatch() drops the borrow and releaseBuffers() must never return it
     // to this table's pool.
-    private long[] authoritativeBatchHashes;
+    private VectorAccess.LongValues authoritativeBatchHashes;
     // Internal table hashes are allowed to use a discriminating subset of a composite key because complete-key
     // equality remains authoritative. Such a discriminator must not escape as an exchange hash: it can produce
     // pathological partition skew. This remains true only while every inserted record came from the explicit
@@ -409,7 +409,7 @@ final class FlatGroupingTable
      * equal hashes. Hash equality is only a probe discriminator: the table still compares every complete key before
      * returning a group, so collisions cannot merge unequal keys.
      */
-    void prepareAuthoritativeBatchHashes(I64Vector hashes, Mask mask)
+    void prepareAuthoritativeBatchHashes(Vector hashes, Mask mask)
     {
         requireNonNull(hashes, "hashes is null");
         int required = mask.none() ? 0 : mask.maxPosition() + 1;
@@ -418,14 +418,14 @@ final class FlatGroupingTable
         }
         prepareSingleDictionaryGroupCache(mask.selectedCount(), mask.all());
         considerSparseCompositeAdmission(mask);
-        authoritativeBatchHashes = hashes.values();
+        authoritativeBatchHashes = VectorAccess.longValues(hashes);
         batchNormalizedHashesValid = false;
         batchHashesValid = true;
     }
 
     private long batchHash(int position)
     {
-        return authoritativeBatchHashes == null ? batchHashes[position] : authoritativeBatchHashes[position];
+        return authoritativeBatchHashes == null ? batchHashes[position] : authoritativeBatchHashes.value(position);
     }
 
     /**

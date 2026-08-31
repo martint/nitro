@@ -675,7 +675,7 @@ final class GroupingState
             Vector[] nulls,
             Mask mask,
             I64Vector result,
-            I64Vector hashes)
+            Vector hashes)
     {
         requireNonNull(hashes, "hashes is null");
         try {
@@ -1669,7 +1669,7 @@ final class GroupingState
         assignFlatGroups(values, nulls, mask, result, null);
     }
 
-    private void assignFlatGroups(Vector[] values, Vector[] nulls, Mask mask, I64Vector result, I64Vector authoritativeHashes)
+    private void assignFlatGroups(Vector[] values, Vector[] nulls, Mask mask, I64Vector result, Vector authoritativeHashes)
     {
         if (compositePolicy.flatSingleKeyRecordIdentity() &&
                 values.length == 1 &&
