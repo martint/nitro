@@ -767,8 +767,11 @@ public class GroupedAggregationOperator
         Output[] outputs = new Output[outputCount()];
         for (int output = 0; output < outputs.length; output++) {
             int outputIndex = output;
+            Set<Stream> outputStreams = isGroupingHashOutput(output)
+                    ? EnumSet.of(Stream.VALUES)
+                    : EnumSet.of(Stream.VALUES, Stream.NULLS);
             outputs[output] = new Output(
-                    EnumSet.of(Stream.VALUES, Stream.NULLS),
+                    outputStreams,
                     stream -> batchState.output(outputIndex).get(stream),
                     (_, vector) -> allocator.transfer(allocationContext, vector),
                     (_, vector) -> allocator.release(allocationContext, vector),

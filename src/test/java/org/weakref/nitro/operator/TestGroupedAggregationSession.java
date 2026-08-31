@@ -1410,6 +1410,40 @@ class TestGroupedAggregationSession
     }
 
     @Test
+    void testStreamsComputedGroupingHashesWithoutAdvertisingNulls()
+    {
+        PhysicalAggregationProgram program = PhysicalAggregationProgram.independent(List.of(new CountAll()))
+                .withGroupingHashOutput(new GroupingHashOutput(
+                        "test-streamed-computed-v1",
+                        new Field(Schema.unspecified(1).field(0).type(), false)));
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                GroupedAggregationSession session = new GroupedAggregationSession(
+                        allocator,
+                        Schema.unspecified(1),
+                        List.of(0),
+                        List.of(0),
+                        program,
+                        resources.operatorResources(),
+                        null,
+                        2)) {
+            allocator.beginExecution();
+            try (Batch input = batch(10, 20, 30)) {
+                session.addInput(input);
+            }
+
+            try (Batch first = session.finish()) {
+                assertThat(first.output(2).borrowOrNull(Stream.NULLS)).isNull();
+                assertThat(selectedLongValues(first, 2)).containsExactly(Long.hashCode(10), Long.hashCode(20));
+            }
+            try (Batch second = session.getOutput()) {
+                assertThat(second.output(2).borrowOrNull(Stream.NULLS)).isNull();
+                assertThat(selectedLongValues(second, 2)).containsExactly(Long.hashCode(30));
+            }
+        }
+    }
+
+    @Test
     void testCarriesAuthoritativeHashesThroughInitialAggregationRows()
     {
         try (EngineResources resources = EngineResources.createDefault();
