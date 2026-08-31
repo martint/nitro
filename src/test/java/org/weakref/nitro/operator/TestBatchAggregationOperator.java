@@ -15,7 +15,9 @@ package org.weakref.nitro.operator;
 
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.core.type.Schema;
+import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.ValueDemand;
 
 import java.util.ArrayDeque;
@@ -26,6 +28,7 @@ import java.util.Queue;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
 import static org.weakref.nitro.operator.BatchAggregationSession.InputOwnership.CALLER;
 import static org.weakref.nitro.operator.BatchAggregationSession.InputOwnership.SESSION;
 
@@ -101,6 +104,27 @@ final class TestBatchAggregationOperator
             assertThat(operator.hasNext()).isFalse();
         }
         assertThat(aggregation.finished).isTrue();
+    }
+
+    @Test
+    void testRejectsOutputThatDoesNotMatchDeclaredSchema()
+    {
+        TestingOperator source = new TestingOperator(INPUT_SCHEMA, batches(1));
+        TestingAggregationSession aggregation = new TestingAggregationSession(OUTPUT_SCHEMA, true, false)
+        {
+            @Override
+            public Batch getOutput()
+            {
+                try (Batch ignored = super.getOutput()) {
+                    return new Batch(Mask.all(1));
+                }
+            }
+        };
+        try (BatchAggregationOperator operator = new BatchAggregationOperator(source, aggregation, _ -> 0)) {
+            assertThatIllegalStateException()
+                    .isThrownBy(operator::next)
+                    .withMessage("Aggregation output batch does not match its declared schema: expected 1 channels, got 0");
+        }
     }
 
     private static List<TrackingBatch> batches(int... positions)
@@ -210,7 +234,7 @@ final class TestBatchAggregationOperator
                 return SESSION;
             }
             if (incrementalOutput && output == null) {
-                output = new Batch(Mask.all(1));
+                output = outputBatch();
             }
             return CALLER;
         }
@@ -240,11 +264,23 @@ final class TestBatchAggregationOperator
         {
             finished = true;
             if (retainedInput != null) {
-                Batch result = retainedInput;
+                Batch retained = retainedInput;
                 retainedInput = null;
-                return result;
+                return outputBatch(retained::close);
             }
-            return new Batch(Mask.all(1));
+            return outputBatch();
+        }
+
+        private Batch outputBatch()
+        {
+            return outputBatch(() -> {});
+        }
+
+        private Batch outputBatch(Runnable close)
+        {
+            Output[] outputs = new Output[schema.size()];
+            java.util.Arrays.setAll(outputs, _ -> Output.of(Streams.ofValues(new I64Vector(new long[] {0}))));
+            return new Batch(Mask.all(1), _ -> {}, java.util.function.Function.identity(), _ -> {}, close, outputs);
         }
 
         @Override

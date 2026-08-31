@@ -123,6 +123,13 @@ public final class BatchAggregationOperator
             throw new IllegalStateException("No more rows");
         }
         currentOutput = aggregation.hasOutput() ? aggregation.getOutput() : takeFinalOutput();
+        if (currentOutput.outputCount() != outputCount()) {
+            int actualOutputCount = currentOutput.outputCount();
+            currentOutput.close();
+            currentOutput = null;
+            throw new IllegalStateException("Aggregation output batch does not match its declared schema: expected %s channels, got %s"
+                    .formatted(outputCount(), actualOutputCount));
+        }
         return currentOutput;
     }
 
