@@ -23,6 +23,11 @@ final class MutableAggregationPhaseMetrics
     private long initialAggregationNanos;
     private long initialFlatKeyNanos;
     private long initialEncodedKeyNanos;
+    private long encodedKeyDomainBatches;
+    private long authoritativeHashDomainBatches;
+    private long computedHashDomainBatches;
+    private long authoritativeHashRowBatches;
+    private long computedHashRowBatches;
 
     public void recordFused(long nanos)
     {
@@ -64,6 +69,23 @@ final class MutableAggregationPhaseMetrics
         initialEncodedKeyNanos += nanos;
     }
 
+    public void recordEncodedKeyDomain(boolean authoritativeHash, boolean computedHash)
+    {
+        encodedKeyDomainBatches++;
+        authoritativeHashDomainBatches += authoritativeHash ? 1 : 0;
+        computedHashDomainBatches += computedHash ? 1 : 0;
+    }
+
+    public void recordAuthoritativeHashRowBatch()
+    {
+        authoritativeHashRowBatches++;
+    }
+
+    public void recordComputedHashRowBatch()
+    {
+        computedHashRowBatches++;
+    }
+
     public AggregationPhaseMetrics snapshot()
     {
         return new AggregationPhaseMetrics(
@@ -74,6 +96,11 @@ final class MutableAggregationPhaseMetrics
                 initialKeyNanos,
                 initialAggregationNanos,
                 initialFlatKeyNanos,
-                initialEncodedKeyNanos);
+                initialEncodedKeyNanos,
+                encodedKeyDomainBatches,
+                authoritativeHashDomainBatches,
+                computedHashDomainBatches,
+                authoritativeHashRowBatches,
+                computedHashRowBatches);
     }
 }

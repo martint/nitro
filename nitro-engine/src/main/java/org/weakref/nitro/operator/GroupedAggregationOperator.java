@@ -1214,6 +1214,7 @@ public class GroupedAggregationOperator
         finally {
             phaseMetrics.recordAccumulation(System.nanoTime() - start);
         }
+        phaseMetrics.recordEncodedKeyDomain(authoritativeHashChannel != null, groupingHashOutput != null);
         return true;
     }
 
@@ -1443,6 +1444,7 @@ public class GroupedAggregationOperator
         finally {
             phaseMetrics.recordAccumulation(System.nanoTime() - start);
         }
+        phaseMetrics.recordEncodedKeyDomain(authoritativeHashChannel != null, groupingHashOutput != null);
         return true;
     }
 
@@ -2040,6 +2042,7 @@ public class GroupedAggregationOperator
                 throw new IllegalStateException("Grouping representation cannot produce grouping hash contract '%s'"
                         .formatted(groupingHashOutput.contractIdentifier()));
             }
+            phaseMetrics.recordComputedHashRowBatch();
         }
         finally {
             Arrays.fill(inlineGroupValues, null);
@@ -2086,6 +2089,7 @@ public class GroupedAggregationOperator
                 throw new IllegalStateException("Grouping representation cannot consume authoritative hash contract '%s'"
                         .formatted(authoritativeHashChannel.contractIdentifier()));
             }
+            phaseMetrics.recordAuthoritativeHashRowBatch();
         }
         finally {
             Arrays.fill(inlineGroupValues, null);

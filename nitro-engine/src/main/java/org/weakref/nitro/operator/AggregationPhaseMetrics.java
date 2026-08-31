@@ -22,7 +22,12 @@ public record AggregationPhaseMetrics(
         long initialKeyNanos,
         long initialAggregationNanos,
         long initialFlatKeyNanos,
-        long initialEncodedKeyNanos)
+        long initialEncodedKeyNanos,
+        long encodedKeyDomainBatches,
+        long authoritativeHashDomainBatches,
+        long computedHashDomainBatches,
+        long authoritativeHashRowBatches,
+        long computedHashRowBatches)
 {
-    public static final AggregationPhaseMetrics EMPTY = new AggregationPhaseMetrics(0, 0, 0, 0, 0, 0, 0, 0);
+    public static final AggregationPhaseMetrics EMPTY = new AggregationPhaseMetrics(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 }

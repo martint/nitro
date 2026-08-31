@@ -721,16 +721,22 @@ class TestFusedGroupedAggregation
             inputs = Arrays.copyOf(inputs, 4);
             inputs[3] = firstDictionary.sharedMappingWithValues(new I64Vector(domainHashes));
         }
+        MutableAggregationPhaseMetrics phaseMetrics = new MutableAggregationPhaseMetrics();
         try (EngineResources resources = EngineResources.createDefault();
                 Allocator allocator = new Allocator(resources);
                 Operator operator = new GroupedAggregationOperator(
                         allocator,
                         List.of(0, 1, 2),
+                        List.of(0, 1, 2),
                         program,
                         new TableOperator(inputs.length, List.of(TableOperator.Page.values(
                                 size,
                                 inputs,
-                                Mask.all(size)))))) {
+                                Mask.all(size)))),
+                        resources.operatorResources(),
+                        resources.operatorResources().grouping(),
+                        new Allocator.Context("grouping-hash-domain-metrics"),
+                        phaseMetrics)) {
             Map<String, Long> counts = new HashMap<>();
             Map<String, Long> hashes = new HashMap<>();
             while (operator.hasNext()) {
@@ -756,6 +762,12 @@ class TestFusedGroupedAggregation
         }
         assertThat(implementation.groupedDomainObserved).isTrue();
         assertThat(implementation.logicalRowsObserved).isFalse();
+        AggregationPhaseMetrics metrics = phaseMetrics.snapshot();
+        assertThat(metrics.encodedKeyDomainBatches()).isOne();
+        assertThat(metrics.authoritativeHashDomainBatches()).isEqualTo(producer ? 0 : 1);
+        assertThat(metrics.computedHashDomainBatches()).isEqualTo(producer ? 1 : 0);
+        assertThat(metrics.authoritativeHashRowBatches()).isZero();
+        assertThat(metrics.computedHashRowBatches()).isZero();
     }
 
     @Test
