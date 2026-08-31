@@ -26,6 +26,7 @@ import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.GeneratedLongGroupingBindings;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.RegionVector;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
@@ -1053,9 +1054,6 @@ public class GroupedAggregationOperator
      */
     private boolean tryEncodedKeyDomainAggregation(Batch batch, Mask mask)
     {
-        if (groupingHashOutput != null) {
-            return false;
-        }
         boolean generatedUpdates = fusedSpecs != null;
         boolean encodedGroupedInput = supportsEncodedGroupedInput();
         org.weakref.nitro.operator.aggregation.StreamAccessor streams = StreamAccessors.forBatch(batch);
@@ -1075,6 +1073,7 @@ public class GroupedAggregationOperator
         if (!(keyVector instanceof DictionaryVector dictionary)) {
             return false;
         }
+        Vector keyNulls = keyOutput.borrowOrNull(Stream.NULLS);
         DictionaryVector authoritativeHashes = null;
         if (authoritativeHashChannel != null) {
             Output hashOutput = batch.output(authoritativeHashChannel.inputChannel());
@@ -1087,12 +1086,17 @@ public class GroupedAggregationOperator
             }
             authoritativeHashes = hashDictionary;
         }
+        else if (groupingHashOutput != null) {
+            if (!VectorAccess.isAllFalseNulls(keyNulls)) {
+                return false;
+            }
+            authoritativeHashes = computeDictionaryDomainGroupingHashes(dictionary, mask);
+        }
         int slots = dictionary.values().length() + 1;
         if ((long) slots * dictionaryDomainAggregationMinReduction > mask.count()) {
             return false;
         }
         ensureDictionaryDomainScratchCapacity(slots);
-        Vector keyNulls = keyOutput.borrowOrNull(Stream.NULLS);
         if (authoritativeHashes != null && !VectorAccess.isAllFalseNulls(keyNulls)) {
             return false;
         }
@@ -1214,6 +1218,28 @@ public class GroupedAggregationOperator
             phaseMetrics.recordAccumulation(System.nanoTime() - start);
         }
         return true;
+    }
+
+    private DictionaryVector computeDictionaryDomainGroupingHashes(DictionaryVector dictionary, Mask mask)
+    {
+        int domainSize = dictionary.values().length();
+        reusableGroupingHashes = allocator.reallocateIfNecessary(
+                allocationContext,
+                reusableGroupingHashes,
+                I64Vector.class,
+                domainSize,
+                I64Vector::new);
+        Vector domain = dictionary.values();
+        long[] hashes = reusableGroupingHashes.values();
+        if (!dictionary.visitSelectedDomain(mask, position -> {
+            hashes[position] = groupingHashKernels[0].hash(domain, null, position);
+            return true;
+        })) {
+            for (int position = 0; position < domainSize; position++) {
+                hashes[position] = groupingHashKernels[0].hash(domain, null, position);
+            }
+        }
+        return dictionary.sharedMappingWithValues(new RegionVector(reusableGroupingHashes, 0, domainSize));
     }
 
     /**
@@ -1345,11 +1371,35 @@ public class GroupedAggregationOperator
         long previousMaxGroup = maxObservedGroup;
         long start = System.nanoTime();
         try {
-            inlineGroupingState.assignGroups(
-                    dictionaryDomainKeyValues,
-                    dictionaryDomainKeyNulls,
-                    reusableDictionaryDomainMask,
-                    reusableDictionaryDomainGroups);
+            if (groupingHashOutput == null) {
+                inlineGroupingState.assignGroups(
+                        dictionaryDomainKeyValues,
+                        dictionaryDomainKeyNulls,
+                        reusableDictionaryDomainMask,
+                        reusableDictionaryDomainGroups);
+            }
+            else {
+                reusableGroupingHashes = allocator.reallocateIfNecessary(
+                        allocationContext,
+                        reusableGroupingHashes,
+                        I64Vector.class,
+                        domainSize,
+                        I64Vector::new);
+                computeGroupingHashes(
+                        dictionaryDomainKeyValues,
+                        dictionaryDomainKeyNulls,
+                        reusableDictionaryDomainMask,
+                        reusableGroupingHashes);
+                if (!inlineGroupingState.assignGroupsWithAuthoritativeHashes(
+                        dictionaryDomainKeyValues,
+                        dictionaryDomainKeyNulls,
+                        reusableDictionaryDomainMask,
+                        reusableDictionaryDomainGroups,
+                        reusableGroupingHashes)) {
+                    throw new IllegalStateException("Grouping representation cannot produce grouping hash contract '%s'"
+                            .formatted(groupingHashOutput.contractIdentifier()));
+                }
+            }
         }
         finally {
             phaseMetrics.recordGrouping(System.nanoTime() - start);

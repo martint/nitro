@@ -1410,7 +1410,8 @@ final class GroupingState
                 codeGeneration,
                 flatKeyTablePolicy,
                 keyTypes);
-        if (compositePolicy.sharedDictionaryComposite() &&
+        if (!requireAuthoritativeHashSupport &&
+                compositePolicy.sharedDictionaryComposite() &&
                 values.length > 1 &&
                 values.length <= compositePolicy.sharedDictionaryMaxFields() &&
                 sharedDictionaryIds(values, mask) != null &&

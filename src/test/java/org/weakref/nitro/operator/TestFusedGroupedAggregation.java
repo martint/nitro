@@ -20,6 +20,8 @@ import org.weakref.nitro.core.function.aggregation.AggregationInput;
 import org.weakref.nitro.core.function.aggregation.GroupedAggregationDomain;
 import org.weakref.nitro.core.function.aggregation.GroupedAggregationUpdate;
 import org.weakref.nitro.core.function.aggregation.LongStateUpdate;
+import org.weakref.nitro.core.type.Field;
+import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
@@ -540,6 +542,71 @@ class TestFusedGroupedAggregation
     }
 
     @Test
+    void groupingHashProducerPreservesBinaryDictionaryDomainAggregation()
+    {
+        int size = 16_384;
+        int[] ids = new int[size];
+        int[] frequencies = new int[4];
+        String[] keys = {"alpha", "beta", "gamma", "delta"};
+        for (int position = 0; position < size; position++) {
+            int id = (position * 3 + 1) & 3;
+            ids[position] = id;
+            frequencies[id]++;
+        }
+
+        WeightedDomainCount implementation = new WeightedDomainCount();
+        PhysicalAggregationProgram program = PhysicalAggregationProgram.singleUnit(
+                        new RegisteredAggregationUnit(implementation, RAW, FINAL, new int[0]))
+                .withGroupingHashOutput(new GroupingHashOutput(
+                        "test-dictionary-domain-hash-v1",
+                        new Field(Schema.unspecified(1).field(0).type(), false)));
+        DictionaryVector dictionary = DictionaryVector.ofTrustedIdsWithDomainFrequencies(
+                ids,
+                size,
+                utf8(keys),
+                frequencies);
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                Operator operator = new GroupedAggregationOperator(
+                        allocator,
+                        List.of(0),
+                        program,
+                        new TableOperator(1, List.of(TableOperator.Page.values(
+                                size,
+                                new Vector[] {dictionary},
+                                Mask.all(size)))))) {
+            Map<String, Long> counts = new HashMap<>();
+            Map<String, Long> hashes = new HashMap<>();
+            while (operator.hasNext()) {
+                try (Batch result = operator.next()) {
+                    Vector resultKeys = result.output(0).borrow(Stream.VALUES);
+                    VectorAccess.LongValues resultCounts = VectorAccess.longValues(result.output(1).borrow(Stream.VALUES));
+                    VectorAccess.LongValues resultHashes = VectorAccess.longValues(result.output(2).borrow(Stream.VALUES));
+                    for (int position : result.borrowMask()) {
+                        String key = utf8(resultKeys, position);
+                        counts.put(key, resultCounts.value(position));
+                        hashes.put(key, resultHashes.value(position));
+                    }
+                }
+            }
+
+            assertThat(counts).containsExactlyInAnyOrderEntriesOf(Map.of(
+                    "alpha", (long) frequencies[0],
+                    "beta", (long) frequencies[1],
+                    "gamma", (long) frequencies[2],
+                    "delta", (long) frequencies[3]));
+            Vector domain = dictionary.values();
+            assertThat(hashes).containsExactlyInAnyOrderEntriesOf(Map.of(
+                    "alpha", (long) OperatorVectorSupport.binaryHash(domain, 0),
+                    "beta", (long) OperatorVectorSupport.binaryHash(domain, 1),
+                    "gamma", (long) OperatorVectorSupport.binaryHash(domain, 2),
+                    "delta", (long) OperatorVectorSupport.binaryHash(domain, 3)));
+        }
+        assertThat(implementation.groupedDomainObserved).isTrue();
+        assertThat(implementation.logicalRowsObserved).isFalse();
+    }
+
+    @Test
     void registeredAggregationConsumesSharedCompositeDictionaryDomain()
     {
         int size = 16_384;
@@ -595,6 +662,74 @@ class TestFusedGroupedAggregation
         }
 
         assertThat(actual).isEqualTo(expected);
+        assertThat(implementation.groupedDomainObserved).isTrue();
+        assertThat(implementation.logicalRowsObserved).isFalse();
+    }
+
+    @Test
+    void groupingHashProducerPreservesArbitraryAritySharedDictionaryDomain()
+    {
+        int size = 16_384;
+        int[] ids = new int[size];
+        int[] frequencies = new int[4];
+        long[] firstKeys = {1, 1, 2, 2};
+        long[] secondKeys = {10, 20, 10, 20};
+        long[] thirdKeys = {100, 200, 300, 400};
+        for (int position = 0; position < size; position++) {
+            int id = (position * 3 + 1) & 3;
+            ids[position] = id;
+            frequencies[id]++;
+        }
+
+        WeightedDomainCount implementation = new WeightedDomainCount();
+        PhysicalAggregationProgram program = PhysicalAggregationProgram.singleUnit(
+                        new RegisteredAggregationUnit(implementation, RAW, FINAL, new int[0]))
+                .withGroupingHashOutput(new GroupingHashOutput(
+                        "test-shared-composite-domain-hash-v1",
+                        new Field(Schema.unspecified(1).field(0).type(), false)));
+        DictionaryVector firstDictionary = DictionaryVector.ofTrustedIdsWithDomainFrequencies(
+                ids,
+                size,
+                new I64Vector(firstKeys),
+                frequencies);
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                Operator operator = new GroupedAggregationOperator(
+                        allocator,
+                        List.of(0, 1, 2),
+                        program,
+                        new TableOperator(3, List.of(TableOperator.Page.values(
+                                size,
+                                new Vector[] {
+                                        firstDictionary,
+                                        firstDictionary.sharedMappingWithValues(new I64Vector(secondKeys)),
+                                        firstDictionary.sharedMappingWithValues(new I64Vector(thirdKeys))},
+                                Mask.all(size)))))) {
+            Map<String, Long> counts = new HashMap<>();
+            Map<String, Long> hashes = new HashMap<>();
+            while (operator.hasNext()) {
+                try (Batch result = operator.next()) {
+                    VectorAccess.LongValues first = VectorAccess.longValues(result.output(0).borrow(Stream.VALUES));
+                    VectorAccess.LongValues second = VectorAccess.longValues(result.output(1).borrow(Stream.VALUES));
+                    VectorAccess.LongValues third = VectorAccess.longValues(result.output(2).borrow(Stream.VALUES));
+                    VectorAccess.LongValues resultCounts = VectorAccess.longValues(result.output(3).borrow(Stream.VALUES));
+                    VectorAccess.LongValues resultHashes = VectorAccess.longValues(result.output(4).borrow(Stream.VALUES));
+                    for (int position : result.borrowMask()) {
+                        String key = first.value(position) + ":" + second.value(position) + ":" + third.value(position);
+                        counts.put(key, resultCounts.value(position));
+                        hashes.put(key, resultHashes.value(position));
+                    }
+                }
+            }
+
+            for (int domain = 0; domain < firstKeys.length; domain++) {
+                String key = firstKeys[domain] + ":" + secondKeys[domain] + ":" + thirdKeys[domain];
+                long expectedHash = 31L * (31L * Long.hashCode(firstKeys[domain]) + Long.hashCode(secondKeys[domain])) +
+                        Long.hashCode(thirdKeys[domain]);
+                assertThat(counts.get(key)).isEqualTo(frequencies[domain]);
+                assertThat(hashes.get(key)).isEqualTo(expectedHash);
+            }
+        }
         assertThat(implementation.groupedDomainObserved).isTrue();
         assertThat(implementation.logicalRowsObserved).isFalse();
     }
