@@ -3099,6 +3099,38 @@ class TestFlatGroupingTable
     }
 
     @Test
+    void testNullableGroupedValueDoesNotExposeSplitDictionaryDomain()
+    {
+        int[] ids = {0, 1, 0, 1};
+        Vector[] values = {
+                DictionaryVector.wrapNested(ids, ids.length, utf8("alpha", "beta")),
+                new I64Vector(new long[] {0, 1, 2, 3})};
+        org.weakref.nitro.data.BooleanVector fieldNulls = new org.weakref.nitro.data.BooleanVector(4);
+        fieldNulls.values()[2] = true;
+        Vector[] nulls = {fieldNulls, null};
+        FlatGroupingTable table = new FlatGroupingTable(
+                FlatKeyLayout.tryCreate(values, true, arrayPool, codeGeneration, flatKeyTablePolicy),
+                ids.length,
+                true);
+        Allocator allocator = new Allocator(engineResources);
+        Allocator.Context allocationContext = new Allocator.Context("nullableGroupedDictionaryDomain");
+        try {
+            table.beginBatch(values, nulls);
+            for (int position = 0; position < ids.length; position++) {
+                assertThat(table.assignGroup(values, nulls, position, position)).isEqualTo(position);
+            }
+            table.endBatch();
+
+            assertThat(table.groupedValueRangeAsDictionary(
+                    0, 0, ids.length, Mask.all(ids.length), allocator, allocationContext)).isNull();
+        }
+        finally {
+            table.releaseBuffers();
+            allocator.release(allocationContext);
+        }
+    }
+
+    @Test
     void testNormalizedIntKeyPreservesCompleteEqualityAcrossBinaryEncodings()
     {
         Vector[] firstValues = {

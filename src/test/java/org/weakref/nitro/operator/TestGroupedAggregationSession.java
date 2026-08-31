@@ -32,6 +32,7 @@ import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.StructVector;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.data.VectorAllocator;
 import org.weakref.nitro.execution.EngineResources;
 import org.weakref.nitro.operator.aggregation.CountAll;
@@ -183,19 +184,134 @@ class TestGroupedAggregationSession
             }
 
             try (Batch first = session.finish()) {
-                assertThat(first.output(0).borrow(Stream.VALUES)).isInstanceOf(DictionaryVector.class);
-                assertThat(selectedBinaryValues(first, 0).subList(0, 4)).containsExactly("a", "b", "a", "b");
+                assertThat(first.output(0).borrow(Stream.VALUES)).isInstanceOf(BinaryVector.class);
+                assertThat(selectedBinaryValues(first, 0).subList(0, 4)).containsExactly("a", "b", "", "b");
                 assertThat(((BooleanVector) first.output(0).borrow(Stream.NULLS)).values()[2]).isTrue();
                 assertThat(((BooleanVector) first.output(1).borrow(Stream.NULLS)).values()[3]).isTrue();
             }
             try (Batch second = session.getOutput()) {
-                assertThat(second.output(0).borrow(Stream.VALUES)).isInstanceOf(DictionaryVector.class);
-                assertThat(selectedBinaryValues(second, 0).subList(0, 4)).containsExactly("a", "b", "a", "b");
+                assertThat(second.output(0).borrow(Stream.VALUES)).isInstanceOf(BinaryVector.class);
+                assertThat(selectedBinaryValues(second, 0).subList(0, 4)).containsExactly("a", "b", "", "b");
                 assertThat(((BooleanVector) second.output(0).borrow(Stream.NULLS)).values()[2]).isTrue();
                 assertThat(((BooleanVector) second.output(1).borrow(Stream.NULLS)).values()[3]).isTrue();
                 long[] values = ((I64Vector) second.output(2).borrow(Stream.VALUES)).values();
                 assertThat(values[0]).isEqualTo(rows / 2);
                 assertThat(values[rows / 2 - 1]).isEqualTo(rows - 1);
+            }
+        }
+    }
+
+    @Test
+    void testFullCompositeGroupOutputPreservesRepeatedBinaryKey()
+    {
+        int rows = 16_468;
+        int outputRows = 1_500;
+        String[] warehouseNames = {
+                "unused-null-value",
+                "Bad cards must make.",
+                "Conventional childr",
+                "Doors canno",
+                "Important issues liv",
+                "Local, mass universi",
+                "National, comple",
+                "Plain, reluctant",
+                "Quite effectiv",
+                "Rooms cook ",
+        };
+        Schema schema = new Schema(List.of(
+                Schema.unspecified(1).field(0),
+                new Field(binaryType(), true),
+                Schema.unspecified(1).field(0)));
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                GroupedAggregationSession session = new GroupedAggregationSession(
+                        allocator,
+                        schema,
+                        List.of(0, 1, 2),
+                        List.of(0, 1, 2),
+                        PhysicalAggregationProgram.independent(List.of(new CountAll())),
+                        resources.operatorResources(),
+                        null,
+                        outputRows)) {
+            allocator.beginExecution();
+            long[] firstKeys = new long[rows];
+            long[] secondKeys = new long[rows];
+            boolean[] warehouseNulls = new boolean[rows];
+            BinaryVector warehouses = new BinaryVector(rows, rows * 24);
+            for (int position = 0; position < rows; position++) {
+                firstKeys[position] = position / 261;
+                secondKeys[position] = position;
+                warehouses.setBytes(position, warehouseNames[position % 10].getBytes(UTF_8));
+                warehouseNulls[position] = position % 10 == 0;
+            }
+            try (Batch input = new Batch(
+                    Mask.all(rows),
+                    Output.of(Streams.ofValues(new I64Vector(firstKeys))),
+                    Output.of(Streams.ofValuesAndNulls(warehouses, new BooleanVector(warehouseNulls))),
+                    Output.of(Streams.ofValues(new I64Vector(secondKeys))))) {
+                session.addInput(input);
+            }
+
+            Schema regroupingSchema = new Schema(List.of(
+                        Schema.unspecified(1).field(0),
+                        new Field(binaryType(), true),
+                        Schema.unspecified(1).field(0),
+                        Schema.unspecified(1).field(0)));
+            try (GroupedAggregationSession regrouping = new GroupedAggregationSession(
+                        allocator,
+                        regroupingSchema,
+                        List.of(1),
+                        List.of(1),
+                        PhysicalAggregationProgram.independent(List.of(new CountAll())),
+                        resources.operatorResources(),
+                        null,
+                        rows)) {
+                int sourceStart = 0;
+                try (Batch output = session.finish()) {
+                    assertCompositeOutputRange(output, sourceStart, warehouseNames);
+                    regrouping.addInput(output);
+                    sourceStart += output.borrowMask().count();
+                }
+                while (session.hasOutput()) {
+                    try (Batch output = session.getOutput()) {
+                        assertCompositeOutputRange(output, sourceStart, warehouseNames);
+                        regrouping.addInput(output);
+                        sourceStart += output.borrowMask().count();
+                    }
+                }
+                assertThat(sourceStart).isEqualTo(rows);
+                try (Batch regrouped = regrouping.finish()) {
+                    assertThat(regrouped.borrowMask().count()).isEqualTo(10);
+                    assertThat(selectedBinaryValues(regrouped, 0)).containsExactlyInAnyOrder(
+                            "",
+                            "Bad cards must make.",
+                            "Conventional childr",
+                            "Doors canno",
+                            "Important issues liv",
+                            "Local, mass universi",
+                            "National, comple",
+                            "Plain, reluctant",
+                            "Quite effectiv",
+                            "Rooms cook ");
+                }
+            }
+        }
+    }
+
+    private static void assertCompositeOutputRange(Batch output, int sourceStart, String[] warehouseNames)
+    {
+        VectorAccess.BinaryRegions regions = VectorAccess.binaryRegions(output.output(1).borrow(Stream.VALUES));
+        for (int position = 0; position < output.borrowMask().count(); position++) {
+            int sourcePosition = sourceStart + position;
+            if (sourcePosition % 10 == 0) {
+                assertThat(VectorAccess.isNull(output.output(1).borrow(Stream.NULLS), position)).isTrue();
+            }
+            else {
+                assertThat(new String(
+                        regions.data(position),
+                        regions.offset(position),
+                        regions.length(position),
+                        UTF_8)).isEqualTo(warehouseNames[sourcePosition % 10]);
             }
         }
     }

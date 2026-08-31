@@ -2247,12 +2247,13 @@ class FlatKeyLayout
      * (base indexed by global id) using each group's stored id, when every group carried a valid interned id and
      * the values repeat enough that the dictionary is smaller than a flat per-group copy. A downstream re-group or
      * join over the key then sees a compact dictionary rather than one entry per row. Returns {@code null} to fall
-     * back to the flat {@code materializeValues} path. Nulls ride the separate NULLS stream, so a null or absent
-     * group can point at any base entry.
+     * back to the flat {@code materializeValues} path. Nullable grouped keys remain flat because a dictionary VALUES
+     * stream paired with a logically indexed NULLS stream is not one shared encoded domain. Treating it as such at a
+     * downstream encoded-domain boundary can associate the row nulls with unrelated dictionary entries.
      */
     Vector tryGroupedValuesAsDictionary(FlatGroupingTable table, int fieldIndex, int size, org.weakref.nitro.data.Mask mask, org.weakref.nitro.data.Allocator allocator, org.weakref.nitro.data.Allocator.Context allocationContext)
     {
-        if (fieldKinds[fieldIndex] != FlatTypeHandler.Kind.BINARY) {
+        if (fieldKinds[fieldIndex] != FlatTypeHandler.Kind.BINARY || table.fieldHasNull(fieldIndex)) {
             return null;
         }
         ValueIdInterner interner = fieldInterners == null ? null : fieldInterners[fieldIndex];
@@ -2306,7 +2307,7 @@ class FlatKeyLayout
             org.weakref.nitro.data.Allocator allocator,
             org.weakref.nitro.data.Allocator.Context allocationContext)
     {
-        if (fieldKinds[fieldIndex] != FlatTypeHandler.Kind.BINARY) {
+        if (fieldKinds[fieldIndex] != FlatTypeHandler.Kind.BINARY || table.fieldHasNull(fieldIndex)) {
             return null;
         }
         ValueIdInterner interner = fieldInterners == null ? null : fieldInterners[fieldIndex];

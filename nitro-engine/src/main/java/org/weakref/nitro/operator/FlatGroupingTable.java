@@ -57,6 +57,7 @@ final class FlatGroupingTable
     private final boolean packedHashRecordSlots;
     private final boolean intHashRecords;
     private final PrimitiveArrayPool arrayPool;
+    private final boolean[] fieldHasNull;
 
     private byte[] control;
     private int[] groupIdsByHash;
@@ -137,6 +138,7 @@ final class FlatGroupingTable
     {
         this.arrayPool = layout.primitiveArrays();
         this.layout = layout;
+        this.fieldHasNull = new boolean[layout.fieldCount()];
         this.policy = layout.tablePolicy();
         this.identityGroupIds = identityGroupIds &&
                 policy.identityGroupIds();
@@ -205,6 +207,11 @@ final class FlatGroupingTable
         singleDictionaryGroupCacheActive = false;
         singleDictionaryIds = null;
         encodedDictionaryDomainBatchActive = false;
+    }
+
+    boolean fieldHasNull(int fieldIndex)
+    {
+        return fieldHasNull[fieldIndex];
     }
 
     public void beginBatch(Vector[] values, Vector[] nulls, Mask mask)
@@ -1868,6 +1875,11 @@ final class FlatGroupingTable
             groupHashesHaveAuthoritativeProvenance = false;
         }
         layout.establishHashStrategy();
+        if (nulls != null) {
+            for (int fieldIndex = 0; fieldIndex < fieldHasNull.length; fieldIndex++) {
+                fieldHasNull[fieldIndex] |= OperatorVectorSupport.isNull(nulls[fieldIndex], position);
+            }
+        }
         int recordIndex = nextRecordIndex;
         setControl(index, (byte) ((packedHashRecordSlots ? packedTableHash(hash) : hash) & 0x7F | 0x80));
         nextRecordIndex++;
