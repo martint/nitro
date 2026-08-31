@@ -3970,6 +3970,90 @@ class TestFlatGroupingTable
     }
 
     @Test
+    void testSpecializedLongGroupingConsumesAlignedAuthoritativeDictionaryDomain()
+    {
+        int[] ids = {2, 0, 2, 1, 0, 2};
+        DictionaryVector keys = DictionaryVector.ofTrustedIds(ids, new I64Vector(new long[] {11, 22, 33}));
+        DictionaryVector hashes = keys.sharedMappingWithValues(new I64Vector(new long[] {101, 202, 303}));
+        int[] counts = new int[4];
+        int[] groups = new int[4];
+        int[] representatives = new int[4];
+        Allocator allocator = new Allocator(engineResources);
+        Allocator.Context context = new Allocator.Context("authoritative-long-dictionary-domain");
+        GroupingState state = new GroupingState(
+                arrayPool,
+                codeGeneration,
+                groupingResources,
+                adaptiveLongGroupingPolicy,
+                flatKeyTablePolicy);
+        try {
+            state.initializeSchemaWithAuthoritativeHashes(
+                    new Vector[] {keys},
+                    new Vector[] {null},
+                    Mask.all(ids.length));
+            assertThat(state.assignSingleDictionaryDomainWithAuthoritativeHashes(
+                    keys,
+                    null,
+                    Mask.all(ids.length),
+                    counts,
+                    groups,
+                    representatives,
+                    hashes))
+                    .isEqualTo(4);
+            assertThat(counts).containsExactly(2, 1, 3, 0);
+            assertThat(groups).startsWith(0, 1, 2);
+            assertThat(state.groupedHashRange(0, 3, null, allocator, context).values())
+                    .containsExactly(101, 202, 303);
+        }
+        finally {
+            state.releaseBuffers();
+            allocator.release(context);
+        }
+    }
+
+    @Test
+    void testFlatGroupingConsumesAlignedAuthoritativeDictionaryDomain()
+    {
+        int[] ids = {1, 0, 1, 2, 0, 1};
+        DictionaryVector keys = DictionaryVector.ofTrustedIds(ids, utf8("alpha", "beta", "gamma"));
+        DictionaryVector hashes = keys.sharedMappingWithValues(new I64Vector(new long[] {17, 17, 29}));
+        int[] counts = new int[4];
+        int[] groups = new int[4];
+        int[] representatives = new int[4];
+        Allocator allocator = new Allocator(engineResources);
+        Allocator.Context context = new Allocator.Context("authoritative-flat-dictionary-domain");
+        GroupingState state = new GroupingState(
+                arrayPool,
+                codeGeneration,
+                groupingResources,
+                adaptiveLongGroupingPolicy,
+                flatKeyTablePolicy);
+        try {
+            state.initializeSchemaWithAuthoritativeHashes(
+                    new Vector[] {keys},
+                    new Vector[] {null},
+                    Mask.all(ids.length));
+            assertThat(state.assignSingleDictionaryDomainWithAuthoritativeHashes(
+                    keys,
+                    null,
+                    Mask.all(ids.length),
+                    counts,
+                    groups,
+                    representatives,
+                    hashes))
+                    .isEqualTo(4);
+            assertThat(counts).containsExactly(2, 3, 1, 0);
+            assertThat(groups).startsWith(0, 1, 2);
+            assertThat(state.groupedHashRange(0, 3, null, allocator, context).values())
+                    .containsExactly(17, 17, 29);
+        }
+        finally {
+            state.releaseBuffers();
+            allocator.release(context);
+        }
+    }
+
+    @Test
     void testGroupingStateDoesNotExportIncompleteHashesForExternalNullGroup()
     {
         Vector[] values = {utf8("ignored", "alpha")};

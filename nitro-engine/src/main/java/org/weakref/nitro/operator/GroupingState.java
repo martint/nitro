@@ -3084,6 +3084,48 @@ final class GroupingState
             int[] domainGroups,
             int[] representatives)
     {
+        return assignSingleDictionaryDomain(
+                dictionary,
+                nullVector,
+                mask,
+                counts,
+                domainGroups,
+                representatives,
+                null);
+    }
+
+    int assignSingleDictionaryDomainWithAuthoritativeHashes(
+            DictionaryVector dictionary,
+            Vector nullVector,
+            Mask mask,
+            int[] counts,
+            int[] domainGroups,
+            int[] representatives,
+            DictionaryVector hashes)
+    {
+        requireNonNull(hashes, "hashes is null");
+        if (!dictionary.hasSameRowMapping(hashes) || dictionary.values().length() != hashes.values().length()) {
+            throw new IllegalArgumentException("Authoritative hash dictionary does not share the grouping-key row mapping");
+        }
+        return assignSingleDictionaryDomain(
+                dictionary,
+                nullVector,
+                mask,
+                counts,
+                domainGroups,
+                representatives,
+                hashes);
+    }
+
+    private int assignSingleDictionaryDomain(
+            DictionaryVector dictionary,
+            Vector nullVector,
+            Mask mask,
+            int[] counts,
+            int[] domainGroups,
+            int[] representatives,
+            DictionaryVector authoritativeHashes)
+    {
         int domainSize = dictionary.values().length();
         int slots = domainSize + 1;
         Arrays.fill(counts, 0, slots, 0);
@@ -3125,7 +3167,13 @@ final class GroupingState
         reserveAdditionalGroups(used);
 
         Vector dictionaryValues = dictionary.values();
+        VectorAccess.LongValues domainHashes = authoritativeHashes == null
+                ? null
+                : VectorAccess.longValues(authoritativeHashes.values());
         if (structuralGrouping != null) {
+            if (authoritativeHashes != null) {
+                throw new IllegalStateException("Structural grouping cannot consume authoritative dictionary-domain hashes");
+            }
             nextGroupId = structuralGrouping.assignDictionaryDomain(
                     dictionaryValues,
                     counts,
@@ -3133,10 +3181,15 @@ final class GroupingState
                     nextGroupId);
         }
         else if (useLongGrouping) {
+            if (useAuthoritativeLongHashes != (authoritativeHashes != null)) {
+                throw new IllegalStateException("Authoritative long grouping requires a hash dictionary for every domain batch");
+            }
             VectorAccess.LongValues values = VectorAccess.longValues(dictionaryValues);
             for (int domain = 0; domain < domainSize; domain++) {
                 if (counts[domain] != 0) {
-                    domainGroups[domain] = groupForLongKey(values.value(domain));
+                    domainGroups[domain] = authoritativeHashes == null
+                            ? groupForLongKey(values.value(domain))
+                            : groupForLongKey(values.value(domain), domainHashes.value(domain));
                 }
             }
         }
@@ -3145,6 +3198,11 @@ final class GroupingState
             Vector[] nulls = {exactDomainFrequencies ? null : nullVector};
             flatGroupingTable.beginBatch(values, nulls);
             try {
+                if (authoritativeHashes != null) {
+                    flatGroupingTable.prepareAuthoritativeBatchHashes(
+                            exactDomainFrequencies ? authoritativeHashes.values() : authoritativeHashes,
+                            exactDomainFrequencies ? Mask.all(domainSize) : mask);
+                }
                 for (int domain = 0; domain < domainSize; domain++) {
                     if (counts[domain] != 0) {
                         long newGroupId = nextGroupId;
@@ -3162,6 +3220,9 @@ final class GroupingState
             }
         }
         else {
+            if (authoritativeHashes != null) {
+                throw new IllegalStateException("Object grouping cannot consume authoritative dictionary-domain hashes");
+            }
             for (int domain = 0; domain < domainSize; domain++) {
                 if (counts[domain] != 0) {
                     OperatorKeySemantics.Key key = OperatorKeySemantics.probeKey(
@@ -3183,7 +3244,9 @@ final class GroupingState
                 domainGroups[domainSize] = toIntExact(groupId);
             }
             else {
-                domainGroups[domainSize] = toIntExact(nullGroup());
+                domainGroups[domainSize] = authoritativeHashes == null
+                        ? toIntExact(nullGroup())
+                        : toIntExact(nullGroup(VectorAccess.longValues(authoritativeHashes).value(representatives[domainSize])));
             }
         }
         accountRetainedState();

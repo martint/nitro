@@ -869,7 +869,7 @@ public class GroupedAggregationOperator
             fusedChecked = true;
         }
 
-        if (authoritativeHashChannel == null && tryEncodedKeyDomainAggregation(batch, mask)) {
+        if (tryEncodedKeyDomainAggregation(batch, mask)) {
             return;
         }
 
@@ -1035,6 +1035,9 @@ public class GroupedAggregationOperator
             return false;
         }
         if (groupByColumns.length != 1) {
+            if (authoritativeHashChannel != null) {
+                return false;
+            }
             return trySharedDictionaryKeyDomainAggregation(batch, mask, streams, groupedDomainInput, encodedGroupedInput);
         }
         Output keyOutput = batch.output(groupByColumns[0]);
@@ -1042,12 +1045,27 @@ public class GroupedAggregationOperator
         if (!(keyVector instanceof DictionaryVector dictionary)) {
             return false;
         }
+        DictionaryVector authoritativeHashes = null;
+        if (authoritativeHashChannel != null) {
+            Output hashOutput = batch.output(authoritativeHashChannel.inputChannel());
+            Vector hashNulls = hashOutput.borrowOrNull(Stream.NULLS);
+            if (!VectorAccess.isAllFalseNulls(hashNulls) ||
+                    !(hashOutput.borrow(Stream.VALUES) instanceof DictionaryVector hashDictionary) ||
+                    dictionary.values().length() != hashDictionary.values().length() ||
+                    !dictionary.hasSameRowMapping(hashDictionary)) {
+                return false;
+            }
+            authoritativeHashes = hashDictionary;
+        }
         int slots = dictionary.values().length() + 1;
         if ((long) slots * dictionaryDomainAggregationMinReduction > mask.count()) {
             return false;
         }
         ensureDictionaryDomainScratchCapacity(slots);
         Vector keyNulls = keyOutput.borrowOrNull(Stream.NULLS);
+        if (authoritativeHashes != null && !VectorAccess.isAllFalseNulls(keyNulls)) {
+            return false;
+        }
         if (generatedUpdates && !bindDictionaryDomainInputs(batch, dictionary, keyNulls, mask, slots)) {
             generatedUpdates = false;
         }
@@ -1062,13 +1080,22 @@ public class GroupedAggregationOperator
         long start = System.nanoTime();
         int domainSlots;
         try {
-            domainSlots = inlineGroupingState.assignSingleDictionaryDomain(
-                    dictionary,
-                    keyNulls,
-                    mask,
-                    dictionaryDomainCounts,
-                    dictionaryDomainGroups,
-                    dictionaryDomainRepresentatives);
+            domainSlots = authoritativeHashes == null
+                    ? inlineGroupingState.assignSingleDictionaryDomain(
+                            dictionary,
+                            keyNulls,
+                            mask,
+                            dictionaryDomainCounts,
+                            dictionaryDomainGroups,
+                            dictionaryDomainRepresentatives)
+                    : inlineGroupingState.assignSingleDictionaryDomainWithAuthoritativeHashes(
+                            dictionary,
+                            keyNulls,
+                            mask,
+                            dictionaryDomainCounts,
+                            dictionaryDomainGroups,
+                            dictionaryDomainRepresentatives,
+                            authoritativeHashes);
         }
         finally {
             phaseMetrics.recordGrouping(System.nanoTime() - start);
