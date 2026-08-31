@@ -17,6 +17,7 @@ import java.util.ArrayDeque;
 import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.Map;
+import java.util.concurrent.atomic.LongAdder;
 
 /**
  * An explicitly owned, bounded lease for large primitive work arrays.
@@ -39,8 +40,8 @@ public final class PrimitiveArrayPool
     private long retainedBytes;
     private long borrowedBytes;
     private long reusedBytes;
-    private long allocatedBytes;
-    private long allocationCount;
+    private final LongAdder allocatedBytes = new LongAdder();
+    private final LongAdder allocationCount = new LongAdder();
     private long reuseCount;
     private long evictedBytes;
     private long evictionCount;
@@ -267,12 +268,12 @@ public final class PrimitiveArrayPool
     /** Bytes in primitive arrays physically allocated after a typed borrow missed this pool. */
     public synchronized long allocatedBytes()
     {
-        return allocatedBytes;
+        return allocatedBytes.sum();
     }
 
     public synchronized long allocationCount()
     {
-        return allocationCount;
+        return allocationCount.sum();
     }
 
     public synchronized long reuseCount()
@@ -345,10 +346,10 @@ public final class PrimitiveArrayPool
         evictionCount++;
     }
 
-    private synchronized void recordAllocation(long bytes)
+    private void recordAllocation(long bytes)
     {
-        allocatedBytes += bytes;
-        allocationCount++;
+        allocatedBytes.add(bytes);
+        allocationCount.increment();
     }
 
     private void unlink(Entry entry)

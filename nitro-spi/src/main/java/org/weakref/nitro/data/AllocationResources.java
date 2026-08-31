@@ -26,7 +26,9 @@ public final class AllocationResources
 {
     private static final long MIN_DEFAULT_MAX_RETAINED_BYTES = 512L << 20;
     private static final long MAX_DEFAULT_MAX_RETAINED_BYTES = 1L << 30;
-    private static final long DEFAULT_MIN_RETAINED_BYTES = 256L << 10;
+    // Scan masks and null vectors commonly occupy 32-256 KiB. Retaining them removes a bounded but recurring
+    // steady-state allocation floor while the pool's byte ceiling still bounds total storage and entry count.
+    private static final long DEFAULT_MIN_RETAINED_BYTES = 32L << 10;
     private static final long DEFAULT_MAX_RETAINED_NATIVE_BYTES = 256L << 20;
 
     private final PrimitiveArrayPool primitiveArrays;
