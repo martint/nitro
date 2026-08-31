@@ -39,6 +39,7 @@ public final class GroupedAggregationSession
     private final PhysicalAggregationProgram program;
     private final OperatorResources operatorResources;
     private final GroupingStateResources groupingResources;
+    private final AuthoritativeHashChannel authoritativeHashChannel;
     private final Object aggregationPoolGroup = new Object();
     private final Allocator.Context groupingAllocationContext = new Allocator.Context("GroupedAggregationSession.grouping", aggregationPoolGroup);
     private final Allocator.Context aggregationAllocationContext = new Allocator.Context("GroupedAggregationSession.aggregate-state", aggregationPoolGroup);
@@ -127,6 +128,31 @@ public final class GroupedAggregationSession
             PartialAggregationControl partialAggregationControl,
             int maxFinalOutputBatchRows)
     {
+        this(
+                allocator,
+                inputSchema,
+                groupByColumns,
+                groupedColumns,
+                program,
+                operatorResources,
+                groupingResources,
+                partialAggregationControl,
+                maxFinalOutputBatchRows,
+                null);
+    }
+
+    public GroupedAggregationSession(
+            Allocator allocator,
+            Schema inputSchema,
+            List<Integer> groupByColumns,
+            List<Integer> groupedColumns,
+            PhysicalAggregationProgram program,
+            OperatorResources operatorResources,
+            GroupingStateResources groupingResources,
+            PartialAggregationControl partialAggregationControl,
+            int maxFinalOutputBatchRows,
+            AuthoritativeHashChannel authoritativeHashChannel)
+    {
         this.allocator = requireNonNull(allocator, "allocator is null");
         this.inputSchema = requireNonNull(inputSchema, "inputSchema is null");
         this.operatorResources = requireNonNull(operatorResources, "operatorResources is null");
@@ -134,6 +160,11 @@ public final class GroupedAggregationSession
         this.groupedColumns = List.copyOf(requireNonNull(groupedColumns, "groupedColumns is null"));
         this.program = requireNonNull(program, "program is null");
         this.groupingResources = requireNonNull(groupingResources, "groupingResources is null");
+        this.authoritativeHashChannel = authoritativeHashChannel;
+        if (authoritativeHashChannel != null && authoritativeHashChannel.inputChannel() >= inputSchema.size()) {
+            throw new IllegalArgumentException("Authoritative hash input channel is outside the input schema: " +
+                    authoritativeHashChannel.inputChannel());
+        }
         this.partialAggregationControl = partialAggregationControl;
         StructuralTypeKernelFactory structuralTypes = this.operatorResources.codeGeneration().structuralTypes();
         this.cardinalityKeyKernels = partialAggregationControl == null
@@ -359,7 +390,8 @@ public final class GroupedAggregationSession
                 groupingResources,
                 groupingAllocationContext,
                 aggregationAllocationContext,
-                phaseMetrics);
+                phaseMetrics,
+                authoritativeHashChannel);
     }
 
     private void ensureAggregation()

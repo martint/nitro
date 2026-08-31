@@ -1296,6 +1296,76 @@ class TestGroupedAggregationSession
     }
 
     @Test
+    void testConsumesPlannerSuppliedAuthoritativeHashes()
+    {
+        Schema schema = new Schema(List.of(
+                new Field(binaryType(), false),
+                Schema.unspecified(1).field(0),
+                Schema.unspecified(1).field(0)));
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                GroupedAggregationSession session = new GroupedAggregationSession(
+                        allocator,
+                        schema,
+                        List.of(0, 1),
+                        List.of(0, 1),
+                        PhysicalAggregationProgram.independent(List.of(new CountAll())),
+                        resources.operatorResources(),
+                        resources.operatorResources().grouping(),
+                        null,
+                        Integer.MAX_VALUE,
+                        new AuthoritativeHashChannel("test-composite-v1", 2))) {
+            allocator.beginExecution();
+            BinaryVector firstKey = new BinaryVector(4, 20);
+            firstKey.setBytes(0, "alpha".getBytes(UTF_8));
+            firstKey.setBytes(1, "beta".getBytes(UTF_8));
+            firstKey.setBytes(2, "alpha".getBytes(UTF_8));
+            firstKey.setBytes(3, "alpha".getBytes(UTF_8));
+            // Deliberately collide every key. Complete-key equality must remain authoritative.
+            try (Batch input = new Batch(
+                    Mask.all(4),
+                    Output.of(Streams.ofValues(firstKey)),
+                    Output.of(Streams.ofValues(new I64Vector(new long[] {1, 2, 1, 3}))),
+                    Output.of(Streams.ofValues(new I64Vector(new long[] {7, 7, 7, 7}))))) {
+                session.addInput(input);
+            }
+
+            try (Batch output = session.finish()) {
+                assertThat(selectedBinaryValues(output, 0)).containsExactly("alpha", "beta", "alpha");
+                assertThat(selectedLongValues(output, 1)).containsExactly(1, 2, 3);
+                assertThat(selectedLongValues(output, 2)).containsExactly(2, 1, 1);
+            }
+        }
+    }
+
+    @Test
+    void testRejectsAuthoritativeHashesForIncompatibleGroupingRepresentation()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                GroupedAggregationSession session = new GroupedAggregationSession(
+                        allocator,
+                        Schema.unspecified(2),
+                        List.of(0),
+                        List.of(0),
+                        PhysicalAggregationProgram.independent(List.of(new CountAll())),
+                        resources.operatorResources(),
+                        resources.operatorResources().grouping(),
+                        null,
+                        Integer.MAX_VALUE,
+                        new AuthoritativeHashChannel("test-long-v1", 1));
+                Batch input = new Batch(
+                        Mask.all(2),
+                        Output.of(Streams.ofValues(new I64Vector(new long[] {11, 22}))),
+                        Output.of(Streams.ofValues(new I64Vector(new long[] {101, 202}))))) {
+            allocator.beginExecution();
+            assertThatIllegalStateException()
+                    .isThrownBy(() -> session.addInput(input))
+                    .withMessage("Grouping representation cannot consume authoritative hash contract 'test-long-v1'");
+        }
+    }
+
+    @Test
     void testEmptyInputProducesNoGroups()
     {
         try (EngineResources resources = EngineResources.createDefault();
