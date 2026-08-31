@@ -650,6 +650,11 @@ final class GroupingState
         initializeIfNecessary(values, nulls, requireNonNull(mask, "mask is null"));
     }
 
+    void initializeSchemaWithAuthoritativeHashes(Vector[] values, Vector[] nulls, Mask mask)
+    {
+        initializeIfNecessary(values, nulls, requireNonNull(mask, "mask is null"), true);
+    }
+
     @SuppressWarnings("unchecked")
     public void assignGroups(Vector[] values, Vector[] nulls, Mask mask, I64Vector result)
     {
@@ -677,7 +682,7 @@ final class GroupingState
             if (!initialized && allowsLegacyKeyShortcuts) {
                 useFullWidthPairPackedIdentity = admitsFullWidthPairPackedIdentity(values, nulls, mask);
             }
-            initializeIfNecessary(values, nulls, mask);
+            initializeIfNecessary(values, nulls, mask, true);
             decideDictionaryFlatSingleIdentity(values, nulls, mask);
             if (!useFlatGrouping) {
                 return false;
@@ -1265,6 +1270,11 @@ final class GroupingState
 
     private void initializeIfNecessary(Vector[] values, Vector[] nulls, Mask mask)
     {
+        initializeIfNecessary(values, nulls, mask, false);
+    }
+
+    private void initializeIfNecessary(Vector[] values, Vector[] nulls, Mask mask, boolean requireAuthoritativeHashSupport)
+    {
         validateKeyTypes(values);
         if (initialized) {
             return;
@@ -1311,13 +1321,13 @@ final class GroupingState
             binaryTraits[index] = OperatorVectorSupport.binaryTraits(values[index]);
         }
 
-        if (values.length == 1 && isSingleLongGroupingCandidate(values[0])) {
+        if (!requireAuthoritativeHashSupport && values.length == 1 && isSingleLongGroupingCandidate(values[0])) {
             useLongGrouping = true;
             initLongGroupTable(initialLongGroupExpectedSize(values[0], nulls[0], mask));
             return;
         }
         boolean nullableCompositeKeys = values.length > 1 && hasNullableKeys(nulls);
-        if (useFullWidthPairPackedIdentity) {
+        if (!requireAuthoritativeHashSupport && useFullWidthPairPackedIdentity) {
             useFlatGrouping = true;
             flatGroupingLayout = BigintPairFlatKeyLayout.create(
                     values,
@@ -1337,7 +1347,7 @@ final class GroupingState
             }
             return;
         }
-        if (values.length >= 2 && values.length <= AbstractMultiLongGroupingTable.MAX_ARITY && allSingleLongGroupingCandidates(values)) {
+        if (!requireAuthoritativeHashSupport && values.length >= 2 && values.length <= AbstractMultiLongGroupingTable.MAX_ARITY && allSingleLongGroupingCandidates(values)) {
             if (compositePolicy.adaptiveCompactLong() ||
                     (compositePolicy.generatedCompactLongPair() && values.length == 2) ||
                     values.length >= compositePolicy.generatedCompactLongMinArity()) {

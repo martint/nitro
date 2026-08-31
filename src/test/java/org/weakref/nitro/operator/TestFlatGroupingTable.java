@@ -3828,10 +3828,11 @@ class TestFlatGroupingTable
     }
 
     @Test
-    void testGroupingStateDeclinesSuppliedHashesForSpecializedLongGrouping()
+    void testGroupingStateUsesFlatGroupingForSuppliedLongHashes()
     {
         Vector[] values = {new I64Vector(new long[] {1, 2, 1})};
         Vector[] nulls = {null};
+        I64Vector groupIds = new I64Vector(3);
         GroupingState state = new GroupingState(
                 arrayPool,
                 codeGeneration,
@@ -3843,10 +3844,11 @@ class TestFlatGroupingTable
                     values,
                     nulls,
                     Mask.all(3),
-                    new I64Vector(3),
+                    groupIds,
                     new I64Vector(new long[] {31, 37, 31})))
-                    .isFalse();
-            assertThat(state.groupCount()).isZero();
+                    .isTrue();
+            assertThat(groupIds.values()).containsExactly(0, 1, 0);
+            assertThat(state.groupCount()).isEqualTo(2);
         }
         finally {
             state.releaseBuffers();

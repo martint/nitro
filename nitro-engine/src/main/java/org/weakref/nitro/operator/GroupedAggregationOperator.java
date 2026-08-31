@@ -1850,7 +1850,12 @@ public class GroupedAggregationOperator
                     return;
                 }
             }
-            inlineGroupingState.initializeSchema(inlineGroupValues, inlineGroupNulls, mask);
+            if (authoritativeHashChannel == null) {
+                inlineGroupingState.initializeSchema(inlineGroupValues, inlineGroupNulls, mask);
+            }
+            else {
+                inlineGroupingState.initializeSchemaWithAuthoritativeHashes(inlineGroupValues, inlineGroupNulls, mask);
+            }
         }
         finally {
             Arrays.fill(inlineGroupValues, null);

@@ -1373,7 +1373,7 @@ class TestGroupedAggregationSession
     }
 
     @Test
-    void testRejectsAuthoritativeHashesForIncompatibleGroupingRepresentation()
+    void testUsesFlatGroupingWhenSingleLongInputHasAuthoritativeHashes()
     {
         try (EngineResources resources = EngineResources.createDefault();
                 Allocator allocator = new Allocator(resources);
@@ -1387,15 +1387,18 @@ class TestGroupedAggregationSession
                         resources.operatorResources().grouping(),
                         null,
                         Integer.MAX_VALUE,
-                        new AuthoritativeHashChannel("test-long-v1", 1));
+                        new AuthoritativeHashChannel("test-long-v1", 1, true));
                 Batch input = new Batch(
                         Mask.all(2),
                         Output.of(Streams.ofValues(new I64Vector(new long[] {11, 22}))),
                         Output.of(Streams.ofValues(new I64Vector(new long[] {101, 202}))))) {
             allocator.beginExecution();
-            assertThatIllegalStateException()
-                    .isThrownBy(() -> session.addInput(input))
-                    .withMessage("Grouping representation cannot consume authoritative hash contract 'test-long-v1'");
+            session.addInput(input);
+            try (Batch output = session.finish()) {
+                assertThat(selectedLongValues(output, 0)).containsExactly(11, 22);
+                assertThat(selectedLongValues(output, 1)).containsExactly(1, 1);
+                assertThat(selectedLongValues(output, 2)).containsExactly(101, 202);
+            }
         }
     }
 
