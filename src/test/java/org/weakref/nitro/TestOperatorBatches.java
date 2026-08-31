@@ -4468,13 +4468,6 @@ public class TestOperatorBatches
     {
         int groupCount = 2_400;
         int limit = 100;
-        List<org.weakref.nitro.data.Row> inputRows = new ArrayList<>();
-        for (int groupId = groupCount - 1; groupId >= 0; groupId--) {
-            int count = 1 + groupId % 5;
-            for (int occurrence = 0; occurrence < count; occurrence++) {
-                inputRows.add(row(topNDescription(groupId), topNWarehouse(groupId), (long) groupId % 11));
-            }
-        }
         List<Integer> expected = java.util.stream.IntStream.range(0, groupCount)
                 .boxed()
                 .sorted((left, right) -> {
@@ -4482,11 +4475,15 @@ public class TestOperatorBatches
                     if (comparison != 0) {
                         return comparison;
                     }
-                    comparison = topNDescription(left).compareTo(topNDescription(right));
+                    comparison = q72Description(left).compareTo(q72Description(right));
                     if (comparison != 0) {
                         return comparison;
                     }
-                    comparison = topNWarehouse(left).compareTo(topNWarehouse(right));
+                    String leftWarehouse = q72Warehouse(left);
+                    String rightWarehouse = q72Warehouse(right);
+                    comparison = leftWarehouse == null
+                            ? rightWarehouse == null ? 0 : 1
+                            : rightWarehouse == null ? -1 : leftWarehouse.compareTo(rightWarehouse);
                     if (comparison != 0) {
                         return comparison;
                     }
@@ -4495,31 +4492,58 @@ public class TestOperatorBatches
                 .limit(limit)
                 .toList();
 
-        Allocator allocator = new Allocator(EngineResources.createDefault());
-        try (Operator operator = new TopNOperator(
-                allocator,
-                limit,
-                new int[] {3, 0, 1, 2},
-                new boolean[] {true, false, false, false},
-                new GroupedAggregationOperator(
-                        allocator,
-                        List.of(0, 1, 2),
-                        List.of(new CountAll()),
-                        new ConstantTableOperator(allocator, 3, inputRows)));
-                Batch result = operator.next()) {
-            assertThat(result.borrowMask().count()).isEqualTo(limit);
-            VectorAccess.BinaryRegions descriptions = VectorAccess.binaryRegions(result.output(0).borrow(Stream.VALUES));
-            VectorAccess.BinaryRegions warehouses = VectorAccess.binaryRegions(result.output(1).borrow(Stream.VALUES));
-            VectorAccess.LongValues weeks = VectorAccess.longValues(result.output(2).borrow(Stream.VALUES));
-            VectorAccess.LongValues counts = VectorAccess.longValues(result.output(3).borrow(Stream.VALUES));
-            for (int index = 0; index < limit; index++) {
-                int groupId = expected.get(index);
-                assertThat(binaryValue(descriptions, index)).isEqualTo(topNDescription(groupId));
-                assertThat(binaryValue(warehouses, index)).isEqualTo(topNWarehouse(groupId));
-                assertThat(weeks.value(index)).isEqualTo(groupId % 11);
-                assertThat(counts.value(index)).isEqualTo(1 + groupId % 5);
+        for (int rotation = 0; rotation < 32; rotation++) {
+            List<org.weakref.nitro.data.Row> inputRows = new ArrayList<>();
+            for (int orderIndex = 0; orderIndex < groupCount; orderIndex++) {
+                int groupId = (orderIndex * 997 + rotation * 47) % groupCount;
+                int count = 1 + groupId % 5;
+                for (int occurrence = 0; occurrence < count; occurrence++) {
+                    inputRows.add(row(q72Description(groupId), q72Warehouse(groupId), (long) groupId % 2));
+                }
+            }
+
+            Allocator allocator = new Allocator(EngineResources.createDefault());
+            try (Operator operator = new TopNOperator(
+                    allocator,
+                    limit,
+                    new int[] {3, 0, 1, 2},
+                    new boolean[] {true, false, false, false},
+                    new GroupedAggregationOperator(
+                            allocator,
+                            List.of(0, 1, 2),
+                            List.of(new CountAll()),
+                            new ConstantTableOperator(allocator, 3, inputRows)));
+                    Batch result = operator.next()) {
+                assertThat(result.borrowMask().count()).isEqualTo(limit);
+                VectorAccess.BinaryRegions descriptions = VectorAccess.binaryRegions(result.output(0).borrow(Stream.VALUES));
+                VectorAccess.BinaryRegions warehouses = VectorAccess.binaryRegions(result.output(1).borrow(Stream.VALUES));
+                VectorAccess.LongValues weeks = VectorAccess.longValues(result.output(2).borrow(Stream.VALUES));
+                VectorAccess.LongValues counts = VectorAccess.longValues(result.output(3).borrow(Stream.VALUES));
+                for (int index = 0; index < limit; index++) {
+                    int groupId = expected.get(index);
+                    assertThat(binaryValue(descriptions, index)).as("rotation %s, position %s", rotation, index).isEqualTo(q72Description(groupId));
+                    if (q72Warehouse(groupId) == null) {
+                        assertThat(VectorAccess.isNull(result.output(1).borrow(Stream.NULLS), index)).isTrue();
+                    }
+                    else {
+                        assertThat(binaryValue(warehouses, index)).isEqualTo(q72Warehouse(groupId));
+                    }
+                    assertThat(weeks.value(index)).isEqualTo(groupId % 2);
+                    assertThat(counts.value(index)).isEqualTo(1 + groupId % 5);
+                }
             }
         }
+    }
+
+    private static String q72Description(int groupId)
+    {
+        return "item-description-%04d-with-a-common-prefix-that-forces-full-comparison".formatted(groupId / 12);
+    }
+
+    private static String q72Warehouse(int groupId)
+    {
+        int warehouse = (groupId / 2) % 6;
+        return warehouse == 0 ? null : "warehouse-%03d".formatted(warehouse);
     }
 
     @Test
