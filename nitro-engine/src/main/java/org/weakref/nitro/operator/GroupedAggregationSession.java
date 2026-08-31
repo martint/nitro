@@ -182,7 +182,8 @@ public final class GroupedAggregationSession
                 groupedColumns,
                 program,
                 operatorResources,
-                phaseMetrics);
+                phaseMetrics,
+                authoritativeHashChannel);
         currentAggregation = createAggregation();
     }
 

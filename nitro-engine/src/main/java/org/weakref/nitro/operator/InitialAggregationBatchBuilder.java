@@ -48,6 +48,7 @@ final class InitialAggregationBatchBuilder
     private final PhysicalAggregationProgram program;
     private final OperatorResources operatorResources;
     private final MutableAggregationPhaseMetrics phaseMetrics;
+    private final AuthoritativeHashChannel authoritativeHashChannel;
     private final Schema outputSchema;
 
     InitialAggregationBatchBuilder(
@@ -68,6 +69,18 @@ final class InitialAggregationBatchBuilder
             OperatorResources operatorResources,
             MutableAggregationPhaseMetrics phaseMetrics)
     {
+        this(allocator, inputSchema, groupedColumns, program, operatorResources, phaseMetrics, null);
+    }
+
+    InitialAggregationBatchBuilder(
+            Allocator allocator,
+            Schema inputSchema,
+            List<Integer> groupedColumns,
+            PhysicalAggregationProgram program,
+            OperatorResources operatorResources,
+            MutableAggregationPhaseMetrics phaseMetrics,
+            AuthoritativeHashChannel authoritativeHashChannel)
+    {
         this.allocator = requireNonNull(allocator, "allocator is null");
         this.inputSchema = requireNonNull(inputSchema, "inputSchema is null");
         this.groupedColumns = requireNonNull(groupedColumns, "groupedColumns is null").stream()
@@ -76,7 +89,12 @@ final class InitialAggregationBatchBuilder
         this.program = requireNonNull(program, "program is null");
         this.operatorResources = requireNonNull(operatorResources, "operatorResources is null");
         this.phaseMetrics = requireNonNull(phaseMetrics, "phaseMetrics is null");
-        this.outputSchema = outputSchema(inputSchema, this.groupedColumns, program.outputSchema());
+        this.authoritativeHashChannel = authoritativeHashChannel;
+        if (authoritativeHashChannel != null && authoritativeHashChannel.inputChannel() >= inputSchema.size()) {
+            throw new IllegalArgumentException("Authoritative hash input channel is outside the input schema: " +
+                    authoritativeHashChannel.inputChannel());
+        }
+        this.outputSchema = outputSchema(inputSchema, this.groupedColumns, program.outputSchema(), authoritativeHashChannel);
     }
 
     Schema outputSchema()
@@ -157,7 +175,7 @@ final class InitialAggregationBatchBuilder
                 }
             }
 
-            Output[] outputs = new Output[groupedColumns.length + program.outputs().size()];
+            Output[] outputs = new Output[outputSchema.size()];
             for (int output = 0; output < groupedColumns.length; output++) {
                 outputs[output] = retainInput
                         ? input.output(groupedColumns[output])
@@ -180,6 +198,11 @@ final class InitialAggregationBatchBuilder
             }
             finally {
                 phaseMetrics.recordInitialAggregation(System.nanoTime() - start);
+            }
+            if (carriesAuthoritativeHash()) {
+                outputs[outputs.length - 1] = retainInput
+                        ? input.output(authoritativeHashChannel.inputChannel())
+                        : ownedOutput(copyStreams(input, authoritativeHashChannel.inputChannel(), inputMask, context), context);
             }
             return new Batch(
                     outputMask,
@@ -273,7 +296,7 @@ final class InitialAggregationBatchBuilder
         Mask outputMask = preservePositions
                 ? allocator.copyMask(context, inputMask)
                 : allocator.allocateAllMask(context, groupCount);
-        Output[] outputs = new Output[groupedColumns.length + program.outputs().size()];
+        Output[] outputs = new Output[outputSchema.size()];
         for (int output = 0; output < groupedColumns.length; output++) {
             outputs[output] = retainInput
                     ? input.output(groupedColumns[output])
@@ -304,6 +327,11 @@ final class InitialAggregationBatchBuilder
         }
         finally {
             phaseMetrics.recordInitialAggregation(System.nanoTime() - start);
+        }
+        if (carriesAuthoritativeHash()) {
+            outputs[outputs.length - 1] = retainInput
+                    ? input.output(authoritativeHashChannel.inputChannel())
+                    : ownedOutput(copyStreams(input, authoritativeHashChannel.inputChannel(), inputMask, context), context);
         }
         return new Batch(
                 outputMask,
@@ -367,6 +395,16 @@ final class InitialAggregationBatchBuilder
         }
     }
 
+    private Streams copyStreams(Batch input, int inputColumn, Mask inputMask, Allocator.Context context)
+    {
+        return allocator.copyStreams(context, borrowedStreams(input.output(inputColumn)), inputMask);
+    }
+
+    private boolean carriesAuthoritativeHash()
+    {
+        return authoritativeHashChannel != null && authoritativeHashChannel.carryToOutput();
+    }
+
     private static Streams borrowedStreams(Output output)
     {
         Streams.Builder streams = Streams.builder();
@@ -376,13 +414,21 @@ final class InitialAggregationBatchBuilder
         return streams.build();
     }
 
-    private static Schema outputSchema(Schema inputSchema, int[] groupedColumns, Schema aggregationSchema)
+    private static Schema outputSchema(
+            Schema inputSchema,
+            int[] groupedColumns,
+            Schema aggregationSchema,
+            AuthoritativeHashChannel authoritativeHashChannel)
     {
-        List<Field> fields = new ArrayList<>(groupedColumns.length + aggregationSchema.size());
+        boolean carryHash = authoritativeHashChannel != null && authoritativeHashChannel.carryToOutput();
+        List<Field> fields = new ArrayList<>(groupedColumns.length + aggregationSchema.size() + (carryHash ? 1 : 0));
         for (int groupedColumn : groupedColumns) {
             fields.add(inputSchema.field(groupedColumn));
         }
         fields.addAll(aggregationSchema.fields());
+        if (carryHash) {
+            fields.add(inputSchema.field(authoritativeHashChannel.inputChannel()));
+        }
         return new Schema(fields);
     }
 }

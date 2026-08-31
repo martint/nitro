@@ -1313,8 +1313,8 @@ class TestGroupedAggregationSession
                         resources.operatorResources(),
                         resources.operatorResources().grouping(),
                         null,
-                        Integer.MAX_VALUE,
-                        new AuthoritativeHashChannel("test-composite-v1", 2))) {
+                        2,
+                        new AuthoritativeHashChannel("test-composite-v1", 2, true))) {
             allocator.beginExecution();
             BinaryVector firstKey = new BinaryVector(4, 20);
             firstKey.setBytes(0, "alpha".getBytes(UTF_8));
@@ -1331,9 +1331,43 @@ class TestGroupedAggregationSession
             }
 
             try (Batch output = session.finish()) {
-                assertThat(selectedBinaryValues(output, 0)).containsExactly("alpha", "beta", "alpha");
-                assertThat(selectedLongValues(output, 1)).containsExactly(1, 2, 3);
-                assertThat(selectedLongValues(output, 2)).containsExactly(2, 1, 1);
+                assertThat(selectedBinaryValues(output, 0)).containsExactly("alpha", "beta");
+                assertThat(selectedLongValues(output, 1)).containsExactly(1, 2);
+                assertThat(selectedLongValues(output, 2)).containsExactly(2, 1);
+                assertThat(selectedLongValues(output, 3)).containsExactly(7, 7);
+            }
+            try (Batch output = session.getOutput()) {
+                assertThat(selectedBinaryValues(output, 0)).containsExactly("alpha");
+                assertThat(selectedLongValues(output, 1)).containsExactly(3);
+                assertThat(selectedLongValues(output, 2)).containsExactly(1);
+                assertThat(selectedLongValues(output, 3)).containsExactly(7);
+            }
+        }
+    }
+
+    @Test
+    void testCarriesAuthoritativeHashesThroughInitialAggregationRows()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            allocator.beginExecution();
+            InitialAggregationBatchBuilder builder = new InitialAggregationBatchBuilder(
+                    allocator,
+                    Schema.unspecified(2),
+                    List.of(0),
+                    PhysicalAggregationProgram.independent(List.of(new CountAll())),
+                    resources.operatorResources(),
+                    new MutableAggregationPhaseMetrics(),
+                    new AuthoritativeHashChannel("test-passthrough-v1", 1, true));
+
+            try (Batch input = new Batch(
+                    Mask.sparse(new int[] {1, 3}, 4),
+                    Output.of(Streams.ofValues(new I64Vector(new long[] {10, 20, 30, 40}))),
+                    Output.of(Streams.ofValues(new I64Vector(new long[] {101, 202, 303, 404}))));
+                    Batch output = builder.build(input)) {
+                assertThat(selectedLongValues(output, 0)).containsExactly(20, 40);
+                assertThat(selectedLongValues(output, 1)).containsExactly(1, 1);
+                assertThat(selectedLongValues(output, 2)).containsExactly(202, 404);
             }
         }
     }

@@ -489,7 +489,7 @@ public class GroupedAggregationOperator
                         .mapToObj(index -> index < inlineGroupingTypes.size() ? inlineGroupingTypes.get(index) : null)
                         .toArray(TypeBinding[]::new);
         this.program = requireNonNull(program, "program is null");
-        this.outputSchema = outputSchema(source.outputSchema(), this.groupedColumns, program.outputSchema());
+        this.outputSchema = outputSchema(source.outputSchema(), this.groupedColumns, program.outputSchema(), authoritativeHashChannel);
         this.aggregations = program.units().toArray(PhysicalAggregationUnit[]::new);
         DistinctAggregationPlan distinctAggregationPlan = DistinctAggregationPlan.plan(
                 this.aggregations,
@@ -534,7 +534,7 @@ public class GroupedAggregationOperator
     @Override
     public int outputCount()
     {
-        return groupedColumns.length + program.outputs().size();
+        return groupedColumns.length + program.outputs().size() + (carriesAuthoritativeHash() ? 1 : 0);
     }
 
     @Override
@@ -543,15 +543,33 @@ public class GroupedAggregationOperator
         return outputSchema;
     }
 
-    private static Schema outputSchema(Schema sourceSchema, int[] groupedColumns, Schema aggregationSchema)
+    private static Schema outputSchema(
+            Schema sourceSchema,
+            int[] groupedColumns,
+            Schema aggregationSchema,
+            AuthoritativeHashChannel authoritativeHashChannel)
     {
-        List<Field> fields = new ArrayList<>(groupedColumns.length + aggregationSchema.size());
+        boolean carryHash = authoritativeHashChannel != null && authoritativeHashChannel.carryToOutput();
+        List<Field> fields = new ArrayList<>(groupedColumns.length + aggregationSchema.size() + (carryHash ? 1 : 0));
         Field unspecified = Schema.unspecified(1).field(0);
         for (int groupedColumn : groupedColumns) {
             fields.add(groupedColumn >= 0 && groupedColumn < sourceSchema.size() ? sourceSchema.field(groupedColumn) : unspecified);
         }
         fields.addAll(aggregationSchema.fields());
+        if (carryHash) {
+            fields.add(sourceSchema.field(authoritativeHashChannel.inputChannel()));
+        }
         return new Schema(fields);
+    }
+
+    private boolean carriesAuthoritativeHash()
+    {
+        return authoritativeHashChannel != null && authoritativeHashChannel.carryToOutput();
+    }
+
+    private boolean isAuthoritativeHashOutput(int output)
+    {
+        return carriesAuthoritativeHash() && output == outputCount() - 1;
     }
 
     @Override
@@ -2104,6 +2122,13 @@ public class GroupedAggregationOperator
 
     private Output resultOutput(int output, BatchState batchState)
     {
+        if (isAuthoritativeHashOutput(output)) {
+            return new Output(
+                    EnumSet.of(Stream.VALUES),
+                    _ -> authoritativeHashOutput(batchState).values(),
+                    (_, vector) -> allocator.transfer(allocationContext, vector),
+                    (_, _) -> {});
+        }
         if (output < groupedResults.length) {
             int groupedOutput = output;
             Set<Stream> outputStreams = groupedKeyStreams(batchState);
@@ -2189,6 +2214,25 @@ public class GroupedAggregationOperator
                 // take() transfers them or close() releases the context.
                 (stream, vector) -> {},
                 (existing, sourcePosition, outputPosition, size) -> aggregationCopyPosition(output - groupedResults.length, existing, sourcePosition, outputPosition, size));
+    }
+
+    private Streams authoritativeHashOutput(BatchState batchState)
+    {
+        if (batchState.authoritativeHash != null) {
+            return batchState.authoritativeHash;
+        }
+        I64Vector hashes = inlineGroupingState.groupedHashRange(
+                0,
+                maxGroup + 1,
+                null,
+                allocator,
+                allocationContext);
+        if (hashes == null) {
+            throw new IllegalStateException("Grouping representation cannot carry authoritative hashes for contract: " +
+                    authoritativeHashChannel.contractIdentifier());
+        }
+        batchState.authoritativeHash = Streams.ofValues(hashes);
+        return batchState.authoritativeHash;
     }
 
     private Streams aggregationOutput(int output, BatchState batchState)
@@ -2323,6 +2367,7 @@ public class GroupedAggregationOperator
         private Mask mask;
         private final Mask[] materializedMask = new Mask[groupedColumns.length];
         private final Mask[] aggregationMaterializedMask = new Mask[program.outputs().size()];
+        private Streams authoritativeHash;
 
         private BatchState(Mask mask)
         {
@@ -2353,6 +2398,21 @@ public class GroupedAggregationOperator
         {
             Streams streams = materialized[output];
             if (streams != null) {
+                return streams;
+            }
+            if (isAuthoritativeHashOutput(output)) {
+                I64Vector hashes = inlineGroupingState.groupedHashRange(
+                        sourceStart,
+                        size,
+                        null,
+                        allocator,
+                        allocationContext);
+                if (hashes == null) {
+                    throw new IllegalStateException("Grouping representation cannot carry authoritative hashes for contract: " +
+                            authoritativeHashChannel.contractIdentifier());
+                }
+                streams = Streams.ofValues(hashes);
+                materialized[output] = streams;
                 return streams;
             }
             if (output < groupedResults.length && groupByColumns != null) {

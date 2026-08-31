@@ -23,8 +23,13 @@ import static java.util.Objects.requireNonNull;
  * match, but equal keys must carry equal hashes so they enter the same probe sequence. The identifier is diagnostic
  * and must describe a stable, versioned physical convention; it is not interpreted by operators.
  */
-public record AuthoritativeHashChannel(String contractIdentifier, int inputChannel)
+public record AuthoritativeHashChannel(String contractIdentifier, int inputChannel, boolean carryToOutput)
 {
+    public AuthoritativeHashChannel(String contractIdentifier, int inputChannel)
+    {
+        this(contractIdentifier, inputChannel, false);
+    }
+
     public AuthoritativeHashChannel
     {
         contractIdentifier = requireNonNull(contractIdentifier, "contractIdentifier is null");
