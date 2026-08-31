@@ -32,6 +32,7 @@ import java.util.Arrays;
 import static java.lang.Math.max;
 import static java.lang.Math.toIntExact;
 import static java.nio.ByteOrder.LITTLE_ENDIAN;
+import static java.util.Objects.requireNonNull;
 
 final class FlatGroupingTable
 {
@@ -91,6 +92,11 @@ final class FlatGroupingTable
     // batchHashesValid is set, assignGroupHashed reads the precomputed hash for the position instead of hashing
     // inline, so the probe pass issues independent, back-to-back record loads whose cache misses overlap.
     private long[] batchHashes;
+    // Borrowed for the current batch only. A physical plan may carry an authoritative key hash beside the logical
+    // keys so grouping can reuse work performed by an upstream partial aggregation or exchange. Keep that storage
+    // distinct from the table-owned scratch: endBatch() drops the borrow and releaseBuffers() must never return it
+    // to this table's pool.
+    private long[] authoritativeBatchHashes;
     private boolean batchHashesValid;
     private long[] batchNormalizedFirst;
     private long[] batchNormalizedSecond;
@@ -188,6 +194,7 @@ final class FlatGroupingTable
     {
         layout.prepareBatchMask(null);
         layout.beginBatch(values, nulls);
+        authoritativeBatchHashes = null;
         batchHashesValid = false;
         batchNormalizedHashesValid = false;
         singleDictionaryGroupCacheActive = false;
@@ -199,6 +206,7 @@ final class FlatGroupingTable
     {
         layout.prepareBatchMask(mask);
         layout.beginBatch(values, nulls);
+        authoritativeBatchHashes = null;
         batchHashesValid = false;
         batchNormalizedHashesValid = false;
         singleDictionaryGroupCacheActive = false;
@@ -209,6 +217,7 @@ final class FlatGroupingTable
     public void endBatch()
     {
         layout.endBatch();
+        authoritativeBatchHashes = null;
         batchHashesValid = false;
         batchNormalizedHashesValid = false;
         singleDictionaryGroupCacheActive = false;
@@ -346,6 +355,7 @@ final class FlatGroupingTable
      */
     public void prepareBatchHashes(Vector[] values, Vector[] nulls, Mask mask)
     {
+        authoritativeBatchHashes = null;
         prepareSingleDictionaryGroupCache(mask.selectedCount(), mask.all());
         considerSparseCompositeAdmission(mask);
         int size = mask.none() ? 0 : mask.maxPosition() + 1;
@@ -379,6 +389,31 @@ final class FlatGroupingTable
             batchHashes[position] = prepareBatchHash(values, nulls, position, batchNormalizedHashesValid);
         }
         batchHashesValid = true;
+    }
+
+    /**
+     * Borrows an authoritative, position-aligned physical-key hash vector for the current batch. The producer and
+     * consumer must be connected by an explicit physical-plan hash contract; equal logical keys must always carry
+     * equal hashes. Hash equality is only a probe discriminator: the table still compares every complete key before
+     * returning a group, so collisions cannot merge unequal keys.
+     */
+    void prepareAuthoritativeBatchHashes(I64Vector hashes, Mask mask)
+    {
+        requireNonNull(hashes, "hashes is null");
+        int required = mask.none() ? 0 : mask.maxPosition() + 1;
+        if (hashes.length() < required) {
+            throw new IllegalArgumentException("Hash vector has %s positions, but mask requires %s".formatted(hashes.length(), required));
+        }
+        prepareSingleDictionaryGroupCache(mask.selectedCount(), mask.all());
+        considerSparseCompositeAdmission(mask);
+        authoritativeBatchHashes = hashes.values();
+        batchNormalizedHashesValid = false;
+        batchHashesValid = true;
+    }
+
+    private long batchHash(int position)
+    {
+        return authoritativeBatchHashes == null ? batchHashes[position] : authoritativeBatchHashes[position];
     }
 
     /**
@@ -509,7 +544,7 @@ final class FlatGroupingTable
 
         long[] output = result.values();
         for (int position : mask) {
-            long hash = batchHashes[position];
+            long hash = batchHash(position);
             int index = getNullFreeSingleBinaryIndex(values[0], position, hash);
             long groupId;
             if (index >= 0) {
@@ -549,7 +584,7 @@ final class FlatGroupingTable
             int tileEnd = Math.min(count, tileStart + tileRows);
             for (int selectedIndex = tileStart; selectedIndex < tileEnd; selectedIndex++) {
                 int position = positions == null ? selectedIndex : positions[selectedIndex];
-                long hash = batchHashes[position];
+                long hash = batchHash(position);
                 int bucket = bucket((int) (hash >> 7));
                 int tileIndex = selectedIndex - tileStart;
                 prefetchedBuckets[tileIndex] = bucket;
@@ -558,7 +593,7 @@ final class FlatGroupingTable
             for (int selectedIndex = tileStart; selectedIndex < tileEnd; selectedIndex++) {
                 int position = positions == null ? selectedIndex : positions[selectedIndex];
                 int tileIndex = selectedIndex - tileStart;
-                long hash = batchHashes[position];
+                long hash = batchHash(position);
                 int index = getNullFreeSingleBinaryIndex(
                         value,
                         position,
@@ -603,7 +638,7 @@ final class FlatGroupingTable
             int tileEnd = Math.min(count, tileStart + tileRows);
             for (int selectedIndex = tileStart; selectedIndex < tileEnd; selectedIndex++) {
                 int position = positions == null ? selectedIndex : positions[selectedIndex];
-                long hash = batchHashes[position];
+                long hash = batchHash(position);
                 int packedHash = packedHashRecordSlots ? packedTableHash(hash) : 0;
                 int bucket = bucket(packedHashRecordSlots ? Integer.rotateRight(packedHash, 7) : (int) (hash >> 7));
                 int tileIndex = selectedIndex - tileStart;
@@ -645,6 +680,7 @@ final class FlatGroupingTable
     /** Position-list counterpart used when a caller has already removed rows that will not probe the table. */
     public void prepareBatchHashes(Vector[] values, Vector[] nulls, int[] positions, int positionCount)
     {
+        authoritativeBatchHashes = null;
         prepareSingleDictionaryGroupCache(positionCount, false);
         considerSparseCompositeAdmission(positions, positionCount);
         int size = 0;
@@ -720,6 +756,7 @@ final class FlatGroupingTable
     {
         arrayPool.release(batchHashes);
         batchHashes = null;
+        authoritativeBatchHashes = null;
         batchHashesValid = false;
         arrayPool.release(batchNormalizedFirst);
         batchNormalizedFirst = null;
@@ -1040,7 +1077,7 @@ final class FlatGroupingTable
         long normalizedSecond = 0;
         long hash;
         if (batchHashesValid) {
-            hash = batchHashes[position];
+            hash = batchHash(position);
             normalized = batchNormalizedHashesValid && batchNormalizedValid[position] != 0;
             if (normalized) {
                 normalizedFirst = batchNormalizedFirst[position];
@@ -1084,7 +1121,7 @@ final class FlatGroupingTable
         boolean normalized = batchNormalizedHashesValid && batchNormalizedValid[position] != 0;
         long normalizedFirst = normalized ? batchNormalizedFirst[position] : 0;
         long normalizedSecond = normalized ? batchNormalizedSecond[position] : 0;
-        long hash = batchHashes[position];
+        long hash = batchHash(position);
         int index = getIndex(
                 values,
                 nulls,
@@ -1244,7 +1281,7 @@ final class FlatGroupingTable
         long normalizedSecond = 0;
         long hash;
         if (batchHashesValid) {
-            hash = batchHashes[position];
+            hash = batchHash(position);
             normalized = batchNormalizedHashesValid && batchNormalizedValid[position] != 0;
             if (normalized) {
                 normalizedFirst = batchNormalizedFirst[position];
@@ -2194,6 +2231,35 @@ final class FlatGroupingTable
         return intHashRecords
                 ? (int) INT_HANDLE.get(fixedChunk, fixedOffset)
                 : (long) LONG_HANDLE.get(fixedChunk, fixedOffset);
+    }
+
+    I64Vector groupedHashRange(
+            int sourceStart,
+            int size,
+            I64Vector output,
+            Allocator allocator,
+            Allocator.Context allocationContext)
+    {
+        if (packedHashRecordSlots) {
+            return null;
+        }
+        if (sourceStart < 0 || size < 0 || sourceStart + size > nextRecordIndex) {
+            throw new IndexOutOfBoundsException("Invalid grouped hash range: start=%s, size=%s, groups=%s"
+                    .formatted(sourceStart, size, nextRecordIndex));
+        }
+        I64Vector result = allocator.allocateOrGrow(
+                allocationContext,
+                output,
+                I64Vector.class,
+                size,
+                I64Vector::new);
+        for (int position = 0; position < size; position++) {
+            int recordIndex = recordIndex(sourceStart + position);
+            result.values()[position] = normalizedRecordValid(recordIndex)
+                    ? FlatKeyLayout.normalizedIntKeyHash(normalizedFirst(recordIndex), normalizedSecond(recordIndex))
+                    : recordHash(fixedChunk(recordIndex), fixedOffset(recordIndex));
+        }
+        return result;
     }
 
     private void writeRecordHash(byte[] fixedChunk, int fixedOffset, long hash)

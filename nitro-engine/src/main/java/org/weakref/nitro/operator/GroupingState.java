@@ -656,6 +656,43 @@ final class GroupingState
         assignGroups(values, nulls, mask, result, false);
     }
 
+    /**
+     * Attempts to consume an authoritative, position-aligned physical-key hash vector. This is the execution-side
+     * half of an explicit physical-plan contract: the planner must prove that the hash producer and this grouping
+     * use identical key order, null semantics, and hash semantics. The flat table continues to compare complete
+     * keys, so hash collisions cannot merge unequal groups.
+     *
+     * @return {@code true} when this grouping representation consumed the supplied hashes; {@code false} when the
+     * representation has a cheaper specialized grouping path and the caller should use {@link #assignGroups}.
+     */
+    public boolean assignGroupsWithAuthoritativeHashes(
+            Vector[] values,
+            Vector[] nulls,
+            Mask mask,
+            I64Vector result,
+            I64Vector hashes)
+    {
+        requireNonNull(hashes, "hashes is null");
+        try {
+            if (!initialized && allowsLegacyKeyShortcuts) {
+                useFullWidthPairPackedIdentity = admitsFullWidthPairPackedIdentity(values, nulls, mask);
+            }
+            initializeIfNecessary(values, nulls, mask);
+            decideDictionaryFlatSingleIdentity(values, nulls, mask);
+            if (!useFlatGrouping) {
+                return false;
+            }
+            reserveAdditionalGroups(mask.count() + 1L);
+            long previousGroupCount = nextGroupId;
+            assignFlatGroups(values, nulls, mask, result, hashes);
+            reserveFlatGroupingLookahead(mask.count(), nextGroupId - previousGroupCount);
+            return true;
+        }
+        finally {
+            accountRetainedState();
+        }
+    }
+
     void assignGroups(Vector[] values, Vector[] nulls, Mask mask, I64Vector result, boolean moreInputExpected)
     {
         assignGroups(values, nulls, mask, result, moreInputExpected, false);
@@ -1619,6 +1656,11 @@ final class GroupingState
 
     private void assignFlatGroups(Vector[] values, Vector[] nulls, Mask mask, I64Vector result)
     {
+        assignFlatGroups(values, nulls, mask, result, null);
+    }
+
+    private void assignFlatGroups(Vector[] values, Vector[] nulls, Mask mask, I64Vector result, I64Vector authoritativeHashes)
+    {
         if (compositePolicy.flatSingleKeyRecordIdentity() &&
                 values.length == 1 &&
                 !flatSingleIdentityAdmissionDecided &&
@@ -1630,6 +1672,39 @@ final class GroupingState
         }
         flatGroupingTable.beginBatch(values, nulls, mask);
         try {
+            if (authoritativeHashes != null) {
+                flatGroupingTable.prepareAuthoritativeBatchHashes(authoritativeHashes, mask);
+                long preparedNextGroupId = flatGroupingTable.assignPreparedPhysicalBatch(
+                        values, nulls, mask, result, nextGroupId);
+                if (preparedNextGroupId >= 0) {
+                    nextGroupId = preparedNextGroupId;
+                    return;
+                }
+                long prefetchedNextGroupId = flatGroupingTable.assignPrefetchedBatch(
+                        values, nulls, mask, result, nextGroupId);
+                if (prefetchedNextGroupId >= 0) {
+                    nextGroupId = prefetchedNextGroupId;
+                    return;
+                }
+                int[] positions = mask.selectedPositions();
+                int count = mask.count();
+                for (int index = 0; index < count; index++) {
+                    int position = positions == null ? index : positions[index];
+                    if (values.length == 1 &&
+                            !flatSingleNullInTable &&
+                            OperatorVectorSupport.isNull(nulls[0], position)) {
+                        result.values()[position] = nullGroup();
+                        continue;
+                    }
+                    long newGroupId = nextGroupId;
+                    long groupId = flatGroupingTable.assignGroup(values, nulls, position, newGroupId);
+                    if (groupId == newGroupId) {
+                        nextGroupId++;
+                    }
+                    result.values()[position] = groupId;
+                }
+                return;
+            }
             long encodedDomainNextGroupId = flatGroupingTable.assignEncodedDictionaryDomainBatch(
                     values, nulls, mask, result, nextGroupId);
             if (encodedDomainNextGroupId >= 0) {
@@ -3526,6 +3601,23 @@ final class GroupingState
         return Streams.ofValuesAndNulls(
                 values.values(),
                 materializeNulls(size, outputMask, keysByGroup, null, allocator, allocationContext));
+    }
+
+    /** Returns the authoritative hash stored for a contiguous flat-grouping output range, when available. */
+    I64Vector groupedHashRange(
+            int sourceStart,
+            int size,
+            I64Vector output,
+            Allocator allocator,
+            Allocator.Context allocationContext)
+    {
+        if (!useFlatGrouping && !sharedDictionaryFlatBacking) {
+            return null;
+        }
+        if (useFlatGrouping && !flatSingleNullInTable && nullGroup >= 0) {
+            return null;
+        }
+        return flatGroupingTable.groupedHashRange(sourceStart, size, output, allocator, allocationContext);
     }
 
     private I64Vector materializeLongGroupedValues(Mask mask, Vector output, Allocator allocator, Allocator.Context allocationContext)

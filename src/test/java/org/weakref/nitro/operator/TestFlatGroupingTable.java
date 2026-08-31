@@ -3684,6 +3684,143 @@ class TestFlatGroupingTable
         }
     }
 
+    @Test
+    void testSuppliedBatchHashesRetainExactCollisionChecks()
+    {
+        Vector[] values = {utf8("alpha", "beta", "alpha")};
+        Vector[] nulls = {null};
+        Mask mask = Mask.all(3);
+        FlatGroupingTable table = new FlatGroupingTable(
+                FlatKeyLayout.tryCreate(values, true, arrayPool, codeGeneration, flatKeyTablePolicy),
+                3,
+                true);
+        try {
+            table.beginBatch(values, nulls, mask);
+            // Deliberately collide every logical key. The supplied hash is authoritative for probe placement, but
+            // the complete key remains authoritative for equality.
+            table.prepareAuthoritativeBatchHashes(new I64Vector(new long[] {11, 11, 11}), mask);
+            long nextGroupId = 0;
+            long[] groups = new long[3];
+            for (int position = 0; position < groups.length; position++) {
+                groups[position] = table.assignGroup(values, nulls, position, nextGroupId);
+                if (groups[position] == nextGroupId) {
+                    nextGroupId++;
+                }
+            }
+
+            assertThat(groups).containsExactly(0, 1, 0);
+            assertThat(nextGroupId).isEqualTo(2);
+            table.endBatch();
+        }
+        finally {
+            table.releaseBuffers();
+        }
+    }
+
+    @Test
+    void testSuppliedBatchHashesMustCoverMaskAddressSpace()
+    {
+        Vector[] values = {utf8("alpha", "beta")};
+        Vector[] nulls = {null};
+        FlatGroupingTable table = new FlatGroupingTable(
+                FlatKeyLayout.tryCreate(values, true, arrayPool, codeGeneration, flatKeyTablePolicy),
+                2,
+                true);
+        try {
+            Mask mask = Mask.all(2);
+            table.beginBatch(values, nulls, mask);
+            assertThatThrownBy(() -> table.prepareAuthoritativeBatchHashes(new I64Vector(1), mask))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessage("Hash vector has 1 positions, but mask requires 2");
+            table.endBatch();
+        }
+        finally {
+            table.releaseBuffers();
+        }
+    }
+
+    @Test
+    void testGroupingStateConsumesSuppliedFlatHashes()
+    {
+        Vector[] values = {utf8("alpha", "beta", "alpha")};
+        Vector[] nulls = {null};
+        I64Vector groups = new I64Vector(3);
+        Allocator allocator = new Allocator(engineResources);
+        Allocator.Context context = new Allocator.Context("supplied-grouping-hashes");
+        GroupingState state = new GroupingState(
+                arrayPool,
+                codeGeneration,
+                groupingResources,
+                adaptiveLongGroupingPolicy,
+                flatKeyTablePolicy);
+        try {
+            assertThat(state.assignGroupsWithAuthoritativeHashes(
+                    values,
+                    nulls,
+                    Mask.all(3),
+                    groups,
+                    new I64Vector(new long[] {23, 23, 23})))
+                    .isTrue();
+            assertThat(groups.values()).containsExactly(0, 1, 0);
+            assertThat(state.groupCount()).isEqualTo(2);
+            assertThat(state.groupedHashRange(0, 2, null, allocator, context).values())
+                    .containsExactly(23, 23);
+        }
+        finally {
+            state.releaseBuffers();
+            allocator.release(context);
+        }
+    }
+
+    @Test
+    void testGroupingStateDeclinesSuppliedHashesForSpecializedLongGrouping()
+    {
+        Vector[] values = {new I64Vector(new long[] {1, 2, 1})};
+        Vector[] nulls = {null};
+        GroupingState state = new GroupingState(
+                arrayPool,
+                codeGeneration,
+                groupingResources,
+                adaptiveLongGroupingPolicy,
+                flatKeyTablePolicy);
+        try {
+            assertThat(state.assignGroupsWithAuthoritativeHashes(
+                    values,
+                    nulls,
+                    Mask.all(3),
+                    new I64Vector(3),
+                    new I64Vector(new long[] {31, 37, 31})))
+                    .isFalse();
+            assertThat(state.groupCount()).isZero();
+        }
+        finally {
+            state.releaseBuffers();
+        }
+    }
+
+    @Test
+    void testGroupingStateDoesNotExportIncompleteHashesForExternalNullGroup()
+    {
+        Vector[] values = {utf8("ignored", "alpha")};
+        Vector[] nulls = {new BooleanVector(new boolean[] {true, false})};
+        Allocator allocator = new Allocator(engineResources);
+        Allocator.Context context = new Allocator.Context("external-null-group-hashes");
+        GroupingState state = new GroupingState(
+                arrayPool,
+                codeGeneration,
+                groupingResources,
+                adaptiveLongGroupingPolicy,
+                flatKeyTablePolicy);
+        try {
+            state.assignGroups(values, nulls, Mask.all(2), new I64Vector(2));
+            assertThat(state.groupedHashRange(0, 2, null, allocator, context)).isNull();
+        }
+        finally {
+            state.releaseBuffers();
+            allocator.release(context);
+        }
+    }
+
     private static BinaryVector utf8(String... values)
     {
         int bytes = 0;
