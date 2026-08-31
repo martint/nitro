@@ -16,6 +16,7 @@ package org.weakref.nitro.data;
 import org.weakref.nitro.core.execution.MemoryReservation;
 
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
@@ -1329,7 +1330,7 @@ public class Allocator
         closed = true;
         Set<Vector> vectors = Collections.newSetFromMap(new IdentityHashMap<>());
         for (ContextState state : states.values()) {
-            vectors.addAll(state.inUseVectors);
+            state.collectOwnedVectors(vectors);
         }
         for (PoolState pool : pools.values()) {
             vectors.addAll(pool.vectorPoolGlobalOrder);
@@ -2090,7 +2091,11 @@ public class Allocator
         private final PoolState pool;
         private final PoolState compatibilityCandidate;
         private PoolState compatibilityPool;
-        private final Set<Vector> inUseVectors = Collections.newSetFromMap(new IdentityHashMap<>());
+        // The allocator-wide identity map is the authoritative owner index. Keeping a second identity hash table
+        // per context duplicated every ownership transition; this append-only generation log makes release linear
+        // in the vectors observed by the context without another hash operation on the hot allocation path.
+        private final List<Vector> inUseVectors = new ArrayList<>();
+        private int inUseVectorCount;
         private final Map<Object, Integer> inUseVectorCounts = new HashMap<>();
         private final Map<Object, Integer> vectorHighWater = new HashMap<>();
         private final Map<String, Long> allocatedVectorBytesByType = new HashMap<>();
@@ -2190,17 +2195,10 @@ public class Allocator
             // independently, so recording the wrapper in the identity map adds lifecycle work without protecting a
             // resource. Dynamically sized vectors remain tracked even when their initial retained size is zero.
             Object family = vector.poolFamily();
-            if (requiresTracking(vector) && inUseVectors.add(vector)) {
-                ContextState previousOwner = allocator.vectorOwners.put(vector, this);
-                if (previousOwner != null) {
-                    inUseVectors.remove(vector);
-                    allocator.vectorOwners.put(vector, previousOwner);
-                    throw new IllegalStateException("vector is already owned by an allocation context");
-                }
+            if (requiresTracking(vector) && trackVectorOwnership(vector)) {
                 if (family != null) {
-                    int inUse = inUseVectorCounts.merge(family, 1, Integer::sum);
                     if (allocator.policy.adaptiveVectorPoolHighWater()) {
-                        vectorHighWater.merge(family, inUse, Math::max);
+                        vectorHighWater.merge(family, inUseVectorCounts.get(family), Math::max);
                     }
                 }
             }
@@ -2213,12 +2211,59 @@ public class Allocator
             }
         }
 
+        private boolean trackVectorOwnership(Vector vector)
+        {
+            ContextState previousOwner = allocator.vectorOwners.get(vector);
+            if (previousOwner == this) {
+                return false;
+            }
+            if (previousOwner != null) {
+                throw new IllegalStateException("vector is already owned by an allocation context");
+            }
+            compactVectorLogIfNeeded();
+            allocator.vectorOwners.put(vector, this);
+            inUseVectors.add(vector);
+            inUseVectorCount++;
+            Object family = vector.poolFamily();
+            if (family != null) {
+                inUseVectorCounts.merge(family, 1, Integer::sum);
+            }
+            return true;
+        }
+
+        private void compactVectorLogIfNeeded()
+        {
+            if (inUseVectors.size() <= 1_024 || inUseVectors.size() <= (long) inUseVectorCount * 4) {
+                return;
+            }
+            Set<Vector> retained = Collections.newSetFromMap(new IdentityHashMap<>(inUseVectorCount));
+            int writeIndex = 0;
+            for (Vector vector : inUseVectors) {
+                if (allocator.vectorOwners.get(vector) == this && retained.add(vector)) {
+                    inUseVectors.set(writeIndex++, vector);
+                }
+            }
+            if (writeIndex != inUseVectorCount) {
+                throw new IllegalStateException("vector ownership log is inconsistent");
+            }
+            inUseVectors.subList(writeIndex, inUseVectors.size()).clear();
+        }
+
+        private void collectOwnedVectors(Set<Vector> target)
+        {
+            for (Vector vector : inUseVectors) {
+                if (allocator.vectorOwners.get(vector) == this) {
+                    target.add(vector);
+                }
+            }
+        }
+
         public void replaceSharedGrowth(Vector previous, Vector replacement)
         {
             if (previous == replacement) {
                 return;
             }
-            if (!inUseVectors.contains(previous)) {
+            if (allocator.vectorOwners.get(previous) != this) {
                 throw new IllegalArgumentException("previous vector is not owned by allocation context");
             }
             if (!Objects.equals(previous.poolFamily(), replacement.poolFamily())) {
@@ -2237,12 +2282,12 @@ public class Allocator
             }
             long delta = replacementBytes - previousBytes;
             allocator.reserveResident(delta);
-            inUseVectors.remove(previous);
-            inUseVectors.add(replacement);
-            if (allocator.vectorOwners.remove(previous) != this) {
+            if (!untrackVector(previous)) {
                 throw new IllegalStateException("previous vector owner is inconsistent");
             }
-            allocator.vectorOwners.put(replacement, this);
+            if (!trackVectorOwnership(replacement)) {
+                throw new IllegalStateException("replacement vector could not be tracked");
+            }
             stats.replaceSharedGrowth(previousBytes, replacementBytes);
             if (delta > 0) {
                 allocatedVectorBytesByType.merge(replacement.getClass().getSimpleName(), delta, Math::addExact);
@@ -2273,7 +2318,7 @@ public class Allocator
             if (delta == 0) {
                 return;
             }
-            if (allocator.memoryReservation != null && !inUseVectors.contains(vector)) {
+            if (allocator.memoryReservation != null && allocator.vectorOwners.get(vector) != this) {
                 throw new IllegalArgumentException("vector is not owned by allocation context");
             }
             if (delta > 0) {
@@ -2369,11 +2414,10 @@ public class Allocator
                 return;
             }
             if (lifecycleEpoch == ownerEpoch) {
-                if (allocator.vectorOwners.containsKey(vector) || !inUseVectors.add(vector)) {
+                requireNonNull(vector.poolFamily(), "leased vector has no pool family");
+                if (allocator.vectorOwners.containsKey(vector) || !trackVectorOwnership(vector)) {
                     throw new IllegalStateException("leased vector is already owned by an allocation context");
                 }
-                allocator.vectorOwners.put(vector, this);
-                inUseVectorCounts.merge(requireNonNull(vector.poolFamily(), "leased vector has no pool family"), 1, Integer::sum);
                 stats.acquire(vector.retainedBytes(), true);
                 return;
             }
@@ -2456,11 +2500,14 @@ public class Allocator
             // The normal BatchBufferScope close path has already released every resolved output and its owned mask.
             // Avoid constructing an IdentityHashMap iterator for that overwhelmingly common empty generation; the
             // full sweep below remains the safety net for lazy or otherwise unexposed allocations.
-            if (inUseVectors.isEmpty() && inUseMasksHead == null && retainedBytesByOwner.isEmpty()) {
+            if (inUseVectorCount == 0 && inUseMasksHead == null && retainedBytesByOwner.isEmpty()) {
                 stats.release();
                 return;
             }
             for (Vector vector : inUseVectors) {
+                if (allocator.vectorOwners.get(vector) != this) {
+                    continue;
+                }
                 if (allocator.vectorOwners.remove(vector) != this) {
                     throw new IllegalStateException("vector owner is inconsistent during context release");
                 }
@@ -2481,6 +2528,7 @@ public class Allocator
             }
             inUseMasksHead = null;
             inUseVectors.clear();
+            inUseVectorCount = 0;
             inUseVectorCounts.clear();
             releaseRetainedBytes();
             stats.release();
@@ -2526,12 +2574,16 @@ public class Allocator
             }
             inUseMasksHead = null;
             for (Vector vector : inUseVectors) {
+                if (allocator.vectorOwners.get(vector) != this) {
+                    continue;
+                }
                 if (allocator.vectorOwners.remove(vector) != this) {
                     throw new IllegalStateException("vector owner is inconsistent during context discard");
                 }
                 allocator.releaseResident(vector.retainedBytes());
             }
             inUseVectors.clear();
+            inUseVectorCount = 0;
             inUseVectorCounts.clear();
             releaseRetainedBytes();
             stats.release();
@@ -2549,12 +2601,13 @@ public class Allocator
 
         private boolean untrackVector(Vector vector)
         {
-            if (!inUseVectors.remove(vector)) {
+            if (allocator.vectorOwners.get(vector) != this) {
                 return false;
             }
             if (allocator.vectorOwners.remove(vector) != this) {
                 throw new IllegalStateException("vector owner is inconsistent during release");
             }
+            inUseVectorCount--;
             Object family = vector.poolFamily();
             if (family == null) {
                 return true;

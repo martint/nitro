@@ -356,6 +356,29 @@ class TestAllocator
     }
 
     @Test
+    void testReusesVectorAcrossLongLivedContextOwnershipLog()
+    {
+        TestingMemoryReservation memory = new TestingMemoryReservation();
+        Allocator.Context context = new Allocator.Context("long-lived-reuse");
+        I64Vector first;
+        try (Allocator allocator = new Allocator(EngineResources.createDefault(), memory)) {
+            first = allocator.allocate(context, I64Vector.class, 8, I64Vector::new);
+            allocator.release(context, first);
+            for (int iteration = 0; iteration < 2_048; iteration++) {
+                I64Vector reused = allocator.allocate(context, I64Vector.class, 8, I64Vector::new);
+                assertThat(reused).isSameAs(first);
+                allocator.release(context, reused);
+            }
+
+            I64Vector retained = allocator.allocate(context, I64Vector.class, 8, I64Vector::new);
+            assertThat(retained).isSameAs(first);
+            allocator.release(context);
+            assertThat(allocator.allocatedBytes()).isEqualTo(first.retainedBytes());
+        }
+        assertThat(memory.reservedBytes()).isZero();
+    }
+
+    @Test
     void testReportsAllocatedBytesByContextName()
     {
         try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
