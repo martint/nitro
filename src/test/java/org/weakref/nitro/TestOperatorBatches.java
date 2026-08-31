@@ -5350,6 +5350,55 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testHashJoinOperatorPoolsSharedInnerOutputMappingUntilBatchClose()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        BinaryVector firstValues = new BinaryVector(2, 2);
+        firstValues.setBytes(0, "a".getBytes(UTF_8));
+        firstValues.setBytes(1, "b".getBytes(UTF_8));
+        BinaryVector secondValues = new BinaryVector(2, 2);
+        secondValues.setBytes(0, "x".getBytes(UTF_8));
+        secondValues.setBytes(1, "y".getBytes(UTF_8));
+        DictionaryVector firstPayload = DictionaryVector.wrap(
+                new int[] {1, 0},
+                firstValues);
+        DictionaryVector secondPayload = firstPayload.sharedMappingWithValues(
+                secondValues);
+        Operator inner = TableOperator.retained(
+                Schema.unspecified(3),
+                List.of(new TableOperator.Page(
+                        2,
+                        new Streams[] {
+                                Streams.ofValues(new I64Vector(new long[] {2L, 1L})),
+                                Streams.ofValues(firstPayload),
+                                Streams.ofValues(secondPayload),
+                        },
+                        Mask.all(2))));
+
+        try (Operator operator = new HashJoinOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 1, List.of(row(1L), row(2L))),
+                0,
+                inner,
+                0);
+                Batch batch = operator.next()) {
+            DictionaryVector first = (DictionaryVector) batch.output(2).borrow(Stream.VALUES);
+            DictionaryVector second = (DictionaryVector) batch.output(3).borrow(Stream.VALUES);
+
+            assertThat(first.ids()).isSameAs(second.ids());
+            assertThat(utf8(first, 0)).isEqualTo("a");
+            assertThat(utf8(first, 1)).isEqualTo("b");
+            assertThat(utf8(second, 0)).isEqualTo("x");
+            assertThat(utf8(second, 1)).isEqualTo("y");
+
+            DictionaryVector taken = (DictionaryVector) batch.output(3).take(Stream.VALUES);
+            assertThat(taken.ids()).isNotSameAs(first.ids());
+            assertThat(utf8(taken, 0)).isEqualTo("x");
+            assertThat(utf8(taken, 1)).isEqualTo("y");
+        }
+    }
+
+    @Test
     void testHashJoinOperatorPreservesSparseBinaryInnerPayloadsAfterConstrain()
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());

@@ -291,8 +291,7 @@ public class HashJoinOperator
     private final int[][] composedInnerMappingPositionSources;
     private final int[][] composedInnerMappingIds;
     private int composedInnerMappingCount;
-    private int[] currentInnerLogicalDictionaryIds;
-    private int[] currentInnerSourceDictionaryIds;
+    private InnerOutputMappingScope currentInnerOutputMappings;
     private JoinBufferSupport.PositionMappingCache innerPositionMappingCache;
     private int preparedOuterCount;
     private int preparedOuterIndex;
@@ -705,14 +704,14 @@ public class HashJoinOperator
         currentOwnedOuterDictionaryIds = null;
         clearComposedOuterMappings();
         clearComposedInnerMappings();
-        currentInnerLogicalDictionaryIds = null;
-        currentInnerSourceDictionaryIds = null;
+        InnerOutputMappingScope innerOutputMappings = new InnerOutputMappingScope(composedInnerMappingIds.length + 2);
+        currentInnerOutputMappings = innerOutputMappings;
         innerPositionMappingCache = buffers.newPositionMappingCache();
         allRowsNoMatchState = 0;
         java.util.Arrays.fill(currentOutputs, null);
         Output[] outputs = new Output[outputChannels.length];
         for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
-            outputs[outputIndex] = resultOutput(outputChannels[outputIndex]);
+            outputs[outputIndex] = resultOutput(outputChannels[outputIndex], innerOutputMappings);
         }
         long afterBuildOutputs = System.nanoTime();
         return new Batch(
@@ -720,7 +719,7 @@ public class HashJoinOperator
                 _ -> {},
                 takenMask -> allocator.transfer(allocationContext, takenMask),
                 releasedMask -> allocator.release(allocationContext, releasedMask),
-                () -> {},
+                innerOutputMappings,
                 outputs);
     }
 
@@ -2348,7 +2347,7 @@ public class HashJoinOperator
         return this;
     }
 
-    private Output resultOutput(int outputIndex)
+    private Output resultOutput(int outputIndex, InnerOutputMappingScope innerOutputMappings)
     {
         if (currentOutputCount == 0) {
             Streams schema = outputSchema(outputIndex);
@@ -2386,14 +2385,14 @@ public class HashJoinOperator
                     }
                     throw new IllegalArgumentException("Output does not expose stream: " + stream);
                 },
-                (stream, vector) -> takeResultStream(outputIndex, vector),
+                (stream, vector) -> takeResultStream(outputIndex, vector, innerOutputMappings),
                 (stream, vector) -> allocator.release(allocationContext, vector),
                 null,
                 null)
                 .withKnownAllFalse(knownAllFalseStreams);
     }
 
-    private Vector takeResultStream(int outputIndex, Vector vector)
+    private Vector takeResultStream(int outputIndex, Vector vector, InnerOutputMappingScope innerOutputMappings)
     {
         if (outputIndex < outerOutputCount && outerSupportsReborrow && vector instanceof DictionaryVector) {
             // Borrowers inside a pull chain can safely consume the view while the upstream batch is pinned. A
@@ -2404,6 +2403,15 @@ public class HashJoinOperator
             Vector copy = vector.copy(allocator, allocationContext, positions);
             allocator.release(allocationContext, vector);
             return allocator.transfer(allocationContext, copy);
+        }
+        if (outputIndex >= outerOutputCount && vector instanceof DictionaryVector dictionary && innerOutputMappings.owns(dictionary.ids())) {
+            // Borrowed Nitro consumers keep the allocator-owned batch mapping pooled. A taken stream can outlive the
+            // batch, so make the ownership boundary explicit and detach only its row mapping from that batch scope.
+            DictionaryVector detached = DictionaryVector.wrap(
+                    Arrays.copyOf(dictionary.ids(), dictionary.length()),
+                    dictionary.length(),
+                    dictionary.values());
+            return allocator.transfer(allocationContext, detached);
         }
         return allocator.transfer(allocationContext, vector);
     }
@@ -2857,37 +2865,20 @@ public class HashJoinOperator
         }
     }
 
-    private int[] currentBatchPositions(int[] positions)
-    {
-        // See outerDictionaryIds(): output ownership cannot be represented by an alias to reusable join scratch.
-        return Arrays.copyOf(positions, currentOutputCount);
-    }
-
-    private int[] copyCurrentBatchPositions(int[] positions)
-    {
-        return Arrays.copyOf(positions, currentOutputCount);
-    }
-
     private int[] innerLogicalDictionaryIds()
     {
         if (!outputPolicy.cacheInnerDictionaryIds()) {
-            return currentBatchPositions(outputInnerLogicalPositions);
+            return currentInnerOutputMappings.copy(outputInnerLogicalPositions, currentOutputCount);
         }
-        if (currentInnerLogicalDictionaryIds == null) {
-            currentInnerLogicalDictionaryIds = currentBatchPositions(outputInnerLogicalPositions);
-        }
-        return currentInnerLogicalDictionaryIds;
+        return currentInnerOutputMappings.logical(outputInnerLogicalPositions, currentOutputCount);
     }
 
     private int[] innerSourceDictionaryIds()
     {
         if (!outputPolicy.cacheInnerDictionaryIds()) {
-            return currentBatchPositions(innerSourcePositions());
+            return currentInnerOutputMappings.copy(innerSourcePositions(), currentOutputCount);
         }
-        if (currentInnerSourceDictionaryIds == null) {
-            currentInnerSourceDictionaryIds = currentBatchPositions(innerSourcePositions());
-        }
-        return currentInnerSourceDictionaryIds;
+        return currentInnerOutputMappings.source(innerSourcePositions(), currentOutputCount);
     }
 
     private Vector wrapInnerLogicalDictionary(Vector source)
@@ -2909,7 +2900,7 @@ public class HashJoinOperator
     private Vector wrapComposedInnerDictionary(int[] positionSource, Vector source)
     {
         if (!outputPolicy.cacheInnerDictionaryIds()) {
-            return wrapComposedDictionary(copyCurrentBatchPositions(positionSource), source);
+            return wrapComposedDictionary(currentInnerOutputMappings.copy(positionSource, currentOutputCount), source);
         }
         for (int index = 0; index < composedInnerMappingCount; index++) {
             if (positionSource == composedInnerMappingPositionSources[index] &&
@@ -2921,7 +2912,7 @@ public class HashJoinOperator
             }
         }
 
-        DictionaryVector composed = wrapComposedDictionary(copyCurrentBatchPositions(positionSource), source);
+        DictionaryVector composed = wrapComposedDictionary(currentInnerOutputMappings.copy(positionSource, currentOutputCount), source);
         composedInnerMappingSources[composedInnerMappingCount] = source;
         composedInnerMappingPositionSources[composedInnerMappingCount] = positionSource;
         composedInnerMappingIds[composedInnerMappingCount] = composed.ids();
@@ -6904,6 +6895,75 @@ public class HashJoinOperator
                     matches[index] = rowsForKey(rowValues.value(position), singleMatches[index], matchScratch.batchChain(index));
                 }
             }
+        }
+    }
+
+    /**
+     * Owns immutable inner-position snapshots for one output batch. Dictionary wrappers borrow these mappings while
+     * the batch is open, so adjacent Nitro operators avoid allocating a GC-owned {@code int[]} for every batch. A
+     * stream taken across the batch boundary is detached by {@link #takeResultStream(int, Vector, InnerOutputMappingScope)}.
+     */
+    private final class InnerOutputMappingScope
+            implements Runnable
+    {
+        private final I32Vector[] mappings;
+        private int mappingCount;
+        private int[] logical;
+        private int[] source;
+        private boolean closed;
+
+        private InnerOutputMappingScope(int capacity)
+        {
+            mappings = new I32Vector[capacity];
+        }
+
+        private int[] logical(int[] positions, int count)
+        {
+            if (logical == null) {
+                logical = copy(positions, count);
+            }
+            return logical;
+        }
+
+        private int[] source(int[] positions, int count)
+        {
+            if (source == null) {
+                source = copy(positions, count);
+            }
+            return source;
+        }
+
+        private int[] copy(int[] positions, int count)
+        {
+            I32Vector mapping = allocator.allocate(allocationContext, I32Vector.class, count, I32Vector::new);
+            System.arraycopy(positions, 0, mapping.values(), 0, count);
+            mappings[mappingCount++] = mapping;
+            return mapping.values();
+        }
+
+        private boolean owns(int[] ids)
+        {
+            for (int index = 0; index < mappingCount; index++) {
+                if (mappings[index].values() == ids) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        @Override
+        public void run()
+        {
+            if (closed) {
+                return;
+            }
+            closed = true;
+            for (int index = 0; index < mappingCount; index++) {
+                allocator.release(allocationContext, mappings[index]);
+                mappings[index] = null;
+            }
+            logical = null;
+            source = null;
         }
     }
 
