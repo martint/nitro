@@ -158,6 +158,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.weakref.nitro.OperatorAssertions.operator;
 import static org.weakref.nitro.data.Row.row;
+import static org.weakref.nitro.function.scalar.builtin.JoinFilterFunctions.longBitwiseOverlap;
+import static org.weakref.nitro.function.scalar.builtin.JoinFilterFunctions.longNotEqual;
 
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 @Execution(ExecutionMode.SAME_THREAD)
@@ -7297,7 +7299,7 @@ public class TestOperators
                                         row(1L, 30L, 2_000L),
                                         row(1L, null, 3_000L))),
                         0,
-                        HashJoinOperator.JoinFilter.longNotEqual(1, 1))))
+                        longNotEqual(1, 1))))
                 .matchesExactly(List.of(
                         row(1L, 10L, 100L, 1L, 30L, 2_000L),
                         row(1L, 20L, 200L, 1L, 10L, 1_000L),
@@ -7328,7 +7330,7 @@ public class TestOperators
                         0,
                         build,
                         0,
-                        HashJoinOperator.JoinFilter.longNotEqual(1, 1))))
+                        longNotEqual(1, 1))))
                 .matchesExactly(List.of(
                         row(1L, 10L, 1L, 30L),
                         row(1L, 20L, 1L, 10L),
@@ -7360,7 +7362,7 @@ public class TestOperators
                                         row(2L, 30L))),
                         new int[] {0},
                         true,
-                        HashJoinOperator.JoinFilter.longNotEqual(1, 1))))
+                        longNotEqual(1, 1))))
                 .matchesExactly(List.of(
                         row(1L, 10L, 1L, 30L),
                         row(1L, 20L, 1L, 10L),
@@ -7385,7 +7387,7 @@ public class TestOperators
                                 2,
                                 List.of(row(1L, 10L), row(1L, 30L))),
                         0,
-                        HashJoinOperator.JoinFilter.longNotEqual(1, 1))
+                        longNotEqual(1, 1))
                         .withOutputSingleMatch()))
                 .matchesExactly(List.of(row(1L, 10L, 1L, 30L)));
     }
@@ -7406,7 +7408,40 @@ public class TestOperators
                                 2,
                                 List.of(row(1L, 0b010L), row(1L, 0b100L), row(1L, 0L), row(1L, null))),
                         0,
-                        HashJoinOperator.JoinFilter.longBitwiseOverlap(1, 1))))
+                        longBitwiseOverlap(1, 1))))
+                .matchesExactly(List.of(
+                        row(1L, 0b110L, 1L, 0b010L),
+                        row(1L, 0b110L, 1L, 0b100L)));
+    }
+
+    @Test
+    void testHashJoinRegistryLongResidualFilter()
+    {
+        HashJoinOperator.LongJoinFilterFunction function = new HashJoinOperator.LongJoinFilterFunction()
+        {
+            @Override
+            public boolean testLong(long outerValue, long innerValue)
+            {
+                if (innerValue == 0) {
+                    throw new AssertionError("rejected zero value was evaluated");
+                }
+                return (outerValue & innerValue) != 0;
+            }
+
+            @Override
+            public boolean rejectsZeroInnerValue()
+            {
+                return true;
+            }
+        };
+        assertThat(operator(
+                new HashJoinOperator(
+                        allocator,
+                        new ConstantTableOperator(allocator, 2, List.of(row(1L, 0b110L))),
+                        0,
+                        new ConstantTableOperator(allocator, 2, List.of(row(1L, 0L), row(1L, 0b010L), row(1L, 0b100L))),
+                        0,
+                        new HashJoinOperator.JoinFilter(1, 1, function))))
                 .matchesExactly(List.of(
                         row(1L, 0b110L, 1L, 0b010L),
                         row(1L, 0b110L, 1L, 0b100L)));

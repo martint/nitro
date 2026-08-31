@@ -87,6 +87,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.function.Supplier;
 
+import static org.weakref.nitro.function.scalar.builtin.JoinFilterFunctions.longNotEqual;
+
 final class TpcdsParquetSupport
 {
     private static final String NULLS_LAST_SENTINEL_STRING = "\uFFFF";
@@ -5180,7 +5182,7 @@ final class TpcdsParquetSupport
                 1,
                 right,
                 1,
-                HashJoinOperator.JoinFilter.longNotEqual(0, 0));
+                longNotEqual(0, 0));
         joined = projectInputs(allocator, primitiveRegistry, joined, 1);
         return new MarkDistinctOperator(allocator, 0, joined, EngineResources.from(allocator).operatorResources());
     }

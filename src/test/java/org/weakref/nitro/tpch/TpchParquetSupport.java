@@ -64,6 +64,8 @@ import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 
+import static org.weakref.nitro.function.scalar.builtin.JoinFilterFunctions.longBitwiseOverlap;
+
 /**
  * The TPC-H queries as Nitro operator trees, mirroring Trino's optimized logical plans
  * (target/tpch-explain, regenerate via {@link ExplainTpchQueries}). Single-threaded shape: distributed
@@ -620,7 +622,7 @@ final class TpchParquetSupport
                 0,
                 part,
                 0,
-                HashJoinOperator.JoinFilter.longBitwiseOverlap(3, 1)));
+                longBitwiseOverlap(3, 1)));
         Operator projected = profiled(profile, "q19.project.final", projectInputs(allocator, primitiveRegistry, joined, 2));
         return profiled(profile, "q19.aggregate.final", new AggregationOperator(allocator, List.of(new SumF64(0)), projected));
     }

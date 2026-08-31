@@ -20,7 +20,7 @@ package org.weakref.nitro.operator;
 public record HashJoinBuildPolicy(
         boolean exactStreamingCardinality,
         int maxBuildBatchRows,
-        boolean pruneZeroBitwiseOverlapRows,
+        boolean pruneRejectedZeroInnerRows,
         boolean batchSingleLongBuild,
         boolean batchLongPairBuild,
         boolean streamUnusedPayload,
@@ -62,7 +62,7 @@ public record HashJoinBuildPolicy(
         return new HashJoinBuildPolicy(
                 booleanProperty("nitro.join.exactStreamingBuildCardinality", defaults.exactStreamingCardinality()),
                 Math.min(1 << 16, Integer.getInteger("nitro.hash.join.maxBuildBatchRows", defaults.maxBuildBatchRows())),
-                booleanProperty("nitro.hash.join.pruneZeroBitwiseOverlapBuildRows", defaults.pruneZeroBitwiseOverlapRows()),
+                booleanProperty("nitro.hash.join.pruneZeroBitwiseOverlapBuildRows", defaults.pruneRejectedZeroInnerRows()),
                 booleanProperty("nitro.hash.join.batchSingleLongBuild", defaults.batchSingleLongBuild()),
                 booleanProperty("nitro.hash.join.batchLongPairBuild", defaults.batchLongPairBuild()),
                 booleanProperty("nitro.hash.join.streamUnusedBuildPayload", defaults.streamUnusedPayload()),

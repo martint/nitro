@@ -19,6 +19,7 @@ import org.openjdk.jmh.annotations.Fork;
 import org.openjdk.jmh.annotations.Measurement;
 import org.openjdk.jmh.annotations.Mode;
 import org.openjdk.jmh.annotations.OutputTimeUnit;
+import org.openjdk.jmh.annotations.Param;
 import org.openjdk.jmh.annotations.Scope;
 import org.openjdk.jmh.annotations.Setup;
 import org.openjdk.jmh.annotations.State;
@@ -36,6 +37,8 @@ import org.weakref.nitro.operator.TableOperator;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+
+import static org.weakref.nitro.function.scalar.builtin.JoinFilterFunctions.longNotEqual;
 
 /**
  * The duplicate single-long join plus residual inequality shape used repeatedly by TPC-H q21. Every probe key has
@@ -59,6 +62,9 @@ public class BenchmarkLongDuplicateFilteredJoin
     private Allocator allocator;
     private List<TableOperator.Page> probePages;
     private List<TableOperator.Page> buildPages;
+
+    @Param({"factory", "registry"})
+    public String filterImplementation;
 
     @Setup
     public void setup()
@@ -109,7 +115,7 @@ public class BenchmarkLongDuplicateFilteredJoin
                 0,
                 build,
                 0,
-                HashJoinOperator.JoinFilter.longNotEqual(1, 1));
+                filter());
 
         long rows = 0;
         try (join) {
@@ -121,6 +127,17 @@ public class BenchmarkLongDuplicateFilteredJoin
             }
         }
         return rows;
+    }
+
+    private HashJoinOperator.JoinFilter filter()
+    {
+        if (filterImplementation.equals("factory")) {
+            return longNotEqual(1, 1);
+        }
+        return new HashJoinOperator.JoinFilter(
+                1,
+                1,
+                (HashJoinOperator.LongJoinFilterFunction) (outerValue, innerValue) -> outerValue != innerValue);
     }
 
     private static List<TableOperator.Page> pages(long[] keys, long[] payload)
