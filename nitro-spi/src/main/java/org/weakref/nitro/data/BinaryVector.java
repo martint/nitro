@@ -245,6 +245,9 @@ public final class BinaryVector
      */
     public static BinaryVector allocateOrGrowExact(Allocator allocator, Allocator.Context allocationContext, BinaryVector existing, int positionCount, int byteCapacity)
     {
+        if (existing != null && !allocator.ownsVector(allocationContext, existing)) {
+            existing = null;
+        }
         if (existing == null) {
             return allocate(allocator, allocationContext, positionCount, byteCapacity);
         }
@@ -270,6 +273,9 @@ public final class BinaryVector
      */
     public static BinaryVector allocateOrGrow(Allocator allocator, Allocator.Context allocationContext, BinaryVector existing, int positionCount, int byteCapacity, int bytesUsed)
     {
+        if (existing != null && !allocator.ownsVector(allocationContext, existing)) {
+            existing = null;
+        }
         if (existing == null) {
             return allocate(allocator, allocationContext, positionCount, Allocator.growthCapacity(byteCapacity));
         }

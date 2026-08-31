@@ -1531,6 +1531,14 @@ public class Allocator
         return true;
     }
 
+    /** Returns whether this exact allocation context still owns the vector for in-place reuse. */
+    public synchronized boolean ownsVector(Context context, Vector vector)
+    {
+        requireNonNull(context, "context is null");
+        requireNonNull(vector, "vector is null");
+        return vectorOwners.get(vector) == states.get(context);
+    }
+
     /**
      * Returns whether a vector tree can be detached for asynchronous ownership without invalidating an existing
      * producer-local lease. A leased tree is safe to retain inside its current execution island, but an asynchronous

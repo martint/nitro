@@ -65,6 +65,28 @@ class TestAllocator
     }
 
     @Test
+    void testBinaryOutputDoesNotReuseStorageAfterOwnershipIsDetached()
+    {
+        try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
+            Allocator.Context context = new Allocator.Context("detached-binary-output");
+            BinaryVector first = BinaryVector.allocateOrGrowExact(allocator, context, null, 2, 8);
+            first.setBytes(0, new byte[] {1, 2});
+            first.setBytes(1, new byte[] {3, 4});
+
+            try (Allocator.AsyncVectorTreeLease ignored = allocator.detachVectorTreeForAsyncRelease(List.of(first))) {
+                BinaryVector replacement = BinaryVector.allocateOrGrowExact(allocator, context, first, 2, 8);
+                assertThat(replacement).isNotSameAs(first);
+                replacement.setBytes(0, new byte[] {9});
+                replacement.setBytes(1, new byte[] {8});
+
+                assertThat(first.copyBytes(0)).containsExactly(1, 2);
+                assertThat(first.copyBytes(1)).containsExactly(3, 4);
+                allocator.release(context, replacement);
+            }
+        }
+    }
+
+    @Test
     void testExactBinaryOutputUsesRequestedPositionCountWhenGrowingPayload()
     {
         try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
