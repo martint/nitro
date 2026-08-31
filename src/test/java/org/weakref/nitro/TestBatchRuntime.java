@@ -256,6 +256,58 @@ public class TestBatchRuntime
     }
 
     @Test
+    void testAppendOutputMovesBatchOwnershipWithoutResolvingOutputs()
+    {
+        I64Vector firstValues = new I64Vector(new long[] {11});
+        I64Vector secondValues = new I64Vector(new long[] {22});
+        List<Vector> released = new ArrayList<>();
+        List<Mask> releasedMasks = new ArrayList<>();
+        Output first = new Output(Set.of(Stream.VALUES), _ -> firstValues, (_, vector) -> vector, (_, vector) -> released.add(vector));
+        Output second = new Output(Set.of(Stream.VALUES), _ -> secondValues, (_, vector) -> vector, (_, vector) -> released.add(vector));
+        Batch original = new Batch(Mask.all(1), _ -> {}, Function.identity(), releasedMasks::add, () -> {}, first);
+
+        Batch appended = original.appendOutput(second);
+
+        assertThatThrownBy(original::borrowMask)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("already closed");
+        assertThat(appended.outputCount()).isEqualTo(2);
+        assertThat(appended.output(0).borrow(Stream.VALUES)).isSameAs(firstValues);
+        assertThat(appended.output(1).borrow(Stream.VALUES)).isSameAs(secondValues);
+        appended.close();
+        assertThat(released).containsExactly(firstValues, secondValues);
+        assertThat(releasedMasks).hasSize(1);
+    }
+
+    @Test
+    void testAppendOutputPreservesForwardedOutputsAndConstraints()
+    {
+        I64Vector sourceValues = new I64Vector(new long[] {11, 12});
+        I64Vector appendedValues = new I64Vector(new long[] {21, 22});
+        Batch source = new Batch(Mask.all(2), Output.of(Streams.ofValues(sourceValues)));
+        Batch forwarding = Batch.forwarding(
+                Mask.all(2),
+                source::constrain,
+                Function.identity(),
+                _ -> {},
+                source::close,
+                source);
+
+        try (Batch appended = forwarding.appendOutput(Output.of(Streams.ofValues(appendedValues)))) {
+            Mask selected = Mask.range(1, 1);
+            appended.constrain(selected);
+            assertThat(source.borrowMask()).isSameAs(selected);
+            assertThat(appended.outputCount()).isEqualTo(2);
+            assertThat(appended.output(0).borrow(Stream.VALUES)).isSameAs(sourceValues);
+            assertThat(appended.output(1).borrow(Stream.VALUES)).isSameAs(appendedValues);
+        }
+
+        assertThatThrownBy(source::borrowMask)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("already closed");
+    }
+
+    @Test
     void testAllocatorRetainsObservedConcurrentVectorWorkingSet()
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());

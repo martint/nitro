@@ -206,6 +206,22 @@ public final class Batch
         maskTaken = source.maskTaken;
     }
 
+    private Batch(Batch source, Output[] outputs)
+    {
+        mask = source.mask;
+        ownedMask = source.ownedMask;
+        this.outputs = requireNonNull(outputs, "outputs is null");
+        outputDelegate = source.outputDelegate;
+        maskTakeResolver = source.maskTakeResolver;
+        maskReleaseResolver = source.maskReleaseResolver;
+        constrainer = source.constrainer;
+        closeAction = source.closeAction;
+        lifecycle = source.lifecycle;
+        bufferScope = source.bufferScope;
+        asyncOwnershipTransfer = source.asyncOwnershipTransfer;
+        maskTaken = source.maskTaken;
+    }
+
     /**
      * Moves this batch's complete ownership contract to a new facade without resolving or copying any streams.
      * The old facade is closed immediately, so a producer may safely close it after publishing while the returned
@@ -217,6 +233,25 @@ public final class Batch
         Batch transferred = new Batch(this);
         closed = true;
         return transferred;
+    }
+
+    /**
+     * Moves this batch's ownership contract to a new facade with one additional output. Existing outputs are neither
+     * resolved nor copied; only the small output-reference array is extended. The old facade is closed immediately.
+     */
+    public Batch appendOutput(Output output)
+    {
+        checkOpen();
+        requireNonNull(output, "output is null");
+        int existingLocalOutputs = outputs == null ? 0 : outputs.length;
+        Output[] appendedOutputs = new Output[existingLocalOutputs + 1];
+        if (existingLocalOutputs > 0) {
+            System.arraycopy(outputs, 0, appendedOutputs, 0, existingLocalOutputs);
+        }
+        appendedOutputs[existingLocalOutputs] = output;
+        Batch appended = new Batch(this, appendedOutputs);
+        closed = true;
+        return appended;
     }
 
     /**
@@ -276,7 +311,6 @@ public final class Batch
     {
         if (outputDelegate != null) {
             outputDelegate.validateOutputsCanBeInvalidated();
-            return;
         }
         if (outputs == null) {
             return;
@@ -292,7 +326,6 @@ public final class Batch
     {
         if (outputDelegate != null) {
             outputDelegate.invalidateOutputsForConstraint();
-            return;
         }
         if (outputs == null) {
             return;
@@ -305,10 +338,21 @@ public final class Batch
     public Output output(int outputIndex)
     {
         checkOpen();
+        outputIndex = checkIndex(outputIndex, outputCount());
         if (outputDelegate != null) {
-            return outputDelegate.output(outputIndex);
+            int delegateOutputCount = outputDelegate.outputCount();
+            if (outputIndex < delegateOutputCount) {
+                return outputDelegate.output(outputIndex);
+            }
+            outputIndex -= delegateOutputCount;
         }
-        return outputs[checkIndex(outputIndex, outputs.length)];
+        return outputs[outputIndex];
+    }
+
+    public int outputCount()
+    {
+        checkOpen();
+        return (outputDelegate == null ? 0 : outputDelegate.outputCount()) + (outputs == null ? 0 : outputs.length);
     }
 
     @Override
