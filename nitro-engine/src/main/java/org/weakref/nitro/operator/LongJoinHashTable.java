@@ -117,6 +117,15 @@ final class LongJoinHashTable
 
     int findSlot(long key)
     {
+        int slot = findSlotForInsert(key);
+        return slot < 0 ? ~slot : slot;
+    }
+
+    /**
+     * Returns an existing slot, or the bitwise complement of an empty insertion slot.
+     */
+    int findSlotForInsert(long key)
+    {
         ensureAllocated();
         if (grouped) {
             long hash = hash64(key);
@@ -134,14 +143,17 @@ final class LongJoinHashTable
                 }
                 long emptyBits = groupTags.compare(VectorOperators.EQ, (byte) 0).toLong();
                 if (emptyBits != 0) {
-                    return group + Long.numberOfTrailingZeros(emptyBits);
+                    return ~(group + Long.numberOfTrailingZeros(emptyBits));
                 }
                 group = (group + HASH_TAG_GROUP) & mask;
             }
         }
         int index = mix(key) & mask;
         while (true) {
-            if (heads[index] == empty || keys[index] == key) {
+            if (heads[index] == empty) {
+                return ~index;
+            }
+            if (keys[index] == key) {
                 return index;
             }
             index = (index + 1) & mask;

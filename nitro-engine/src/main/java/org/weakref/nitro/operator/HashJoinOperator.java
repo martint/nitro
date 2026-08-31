@@ -6285,8 +6285,11 @@ public class HashJoinOperator
                 materializeDenseBuildAsHash();
                 denseSequence.reject();
             }
-            int slot = hashTable.findSlot(key);
-            boolean newKey = !hashTable.isOccupied(slot);
+            int slot = hashTable.findSlotForInsert(key);
+            boolean newKey = slot < 0;
+            if (newKey) {
+                slot = ~slot;
+            }
             if (!newKey) {
                 hashTable.ensureDuplicateState();
                 if (compressDuplicateReferences) {

@@ -56,4 +56,22 @@ class TestLongJoinHashTable
         assertThat(table.hasDuplicates()).isTrue();
         assertThat(arrayPool.retainedBytes()).isGreaterThan(0);
     }
+
+    @Test
+    void insertionLookupReportsWhetherSlotAlreadyExists()
+    {
+        for (boolean grouped : new boolean[] {false, true}) {
+            PrimitiveArrayPool arrayPool = new PrimitiveArrayPool(1024, 0);
+            LongJoinHashTable table = new LongJoinHashTable(arrayPool, 16, grouped, true, EMPTY);
+
+            int emptySlot = table.findSlotForInsert(37);
+            assertThat(emptySlot).isNegative();
+            int slot = ~emptySlot;
+            table.initialize(slot, 37, 100);
+
+            assertThat(table.findSlotForInsert(37)).isEqualTo(slot);
+            assertThat(table.findSlot(37)).isEqualTo(slot);
+            assertThat(table.head(slot)).isEqualTo(100);
+        }
+    }
 }
