@@ -15,11 +15,13 @@ package org.weakref.nitro.operator.aggregation;
 
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.ValueDemand;
+import org.weakref.nitro.operator.AuthoritativeHashChannel;
 
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static java.util.Objects.requireNonNull;
 
@@ -30,11 +32,20 @@ import static java.util.Objects.requireNonNull;
  * result slot of a unit, allowing a provider-selected unit to share traversal and state across
  * results without any aggregate recognition in execution operators.
  */
-public record PhysicalAggregationProgram(List<PhysicalAggregationUnit> units, List<Output> outputs, Schema outputSchema)
+public record PhysicalAggregationProgram(
+        List<PhysicalAggregationUnit> units,
+        List<Output> outputs,
+        Schema outputSchema,
+        Optional<AuthoritativeHashChannel> authoritativeHashChannel)
 {
     public PhysicalAggregationProgram(List<PhysicalAggregationUnit> units, List<Output> outputs)
     {
-        this(units, outputs, Schema.unspecified(outputs.size()));
+        this(units, outputs, Schema.unspecified(outputs.size()), Optional.empty());
+    }
+
+    public PhysicalAggregationProgram(List<PhysicalAggregationUnit> units, List<Output> outputs, Schema outputSchema)
+    {
+        this(units, outputs, outputSchema, Optional.empty());
     }
 
     public PhysicalAggregationProgram
@@ -42,6 +53,7 @@ public record PhysicalAggregationProgram(List<PhysicalAggregationUnit> units, Li
         units = List.copyOf(requireNonNull(units, "units is null"));
         outputs = List.copyOf(requireNonNull(outputs, "outputs is null"));
         outputSchema = requireNonNull(outputSchema, "outputSchema is null");
+        authoritativeHashChannel = requireNonNull(authoritativeHashChannel, "authoritativeHashChannel is null");
         if (outputSchema.size() != outputs.size()) {
             throw new IllegalArgumentException("outputSchema size does not match outputs");
         }
@@ -101,7 +113,13 @@ public record PhysicalAggregationProgram(List<PhysicalAggregationUnit> units, Li
                         .map(PhysicalAggregationUnit::physicalIntermediateOutput)
                         .toList(),
                 outputs,
-                outputSchema);
+                outputSchema,
+                authoritativeHashChannel);
+    }
+
+    public PhysicalAggregationProgram withAuthoritativeHashChannel(AuthoritativeHashChannel authoritativeHashChannel)
+    {
+        return new PhysicalAggregationProgram(units, outputs, outputSchema, Optional.of(requireNonNull(authoritativeHashChannel, "authoritativeHashChannel is null")));
     }
 
     /**

@@ -66,6 +66,19 @@ class TestGroupedAggregationSession
     }
 
     @Test
+    void testAggregationProgramCarriesPlannerAuthoredHashContract()
+    {
+        PhysicalAggregationProgram original = PhysicalAggregationProgram.independent(List.of(new CountAll()));
+        AuthoritativeHashChannel contract = new AuthoritativeHashChannel("test-v1", 2, true);
+
+        PhysicalAggregationProgram planned = original.withAuthoritativeHashChannel(contract);
+
+        assertThat(original.authoritativeHashChannel()).isEmpty();
+        assertThat(planned.authoritativeHashChannel()).contains(contract);
+        assertThat(planned.physicalIntermediateOutput().authoritativeHashChannel()).contains(contract);
+    }
+
+    @Test
     void testStreamsFinalGroupsInBoundedBatches()
     {
         try (EngineResources resources = EngineResources.createDefault();
