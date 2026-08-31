@@ -3773,6 +3773,29 @@ class TestFlatGroupingTable
     }
 
     @Test
+    void testGroupingStateDoesNotExportInternalCompositeProbeHashes()
+    {
+        Vector[] values = {utf8("alpha", "beta"), new I64Vector(new long[] {11, 22})};
+        Vector[] nulls = {null, null};
+        Allocator allocator = new Allocator(engineResources);
+        Allocator.Context context = new Allocator.Context("internal-grouping-hashes");
+        GroupingState state = new GroupingState(
+                arrayPool,
+                codeGeneration,
+                groupingResources,
+                adaptiveLongGroupingPolicy,
+                flatKeyTablePolicy);
+        try {
+            state.assignGroups(values, nulls, Mask.all(2), new I64Vector(2));
+            assertThat(state.groupedHashRange(0, 2, null, allocator, context)).isNull();
+        }
+        finally {
+            state.releaseBuffers();
+            allocator.release(context);
+        }
+    }
+
+    @Test
     void testGroupingStateDeclinesSuppliedHashesForSpecializedLongGrouping()
     {
         Vector[] values = {new I64Vector(new long[] {1, 2, 1})};

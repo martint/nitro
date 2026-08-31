@@ -97,6 +97,11 @@ final class FlatGroupingTable
     // distinct from the table-owned scratch: endBatch() drops the borrow and releaseBuffers() must never return it
     // to this table's pool.
     private long[] authoritativeBatchHashes;
+    // Internal table hashes are allowed to use a discriminating subset of a composite key because complete-key
+    // equality remains authoritative. Such a discriminator must not escape as an exchange hash: it can produce
+    // pathological partition skew. This remains true only while every inserted record came from the explicit
+    // authoritative-hash input contract.
+    private boolean groupHashesHaveAuthoritativeProvenance = true;
     private boolean batchHashesValid;
     private long[] batchNormalizedFirst;
     private long[] batchNormalizedSecond;
@@ -1859,6 +1864,9 @@ final class FlatGroupingTable
 
     private void addNewGroup(int index, Vector[] values, Vector[] nulls, int position, long hash, long groupId, boolean normalized, long normalizedFirst, long normalizedSecond)
     {
+        if (authoritativeBatchHashes == null) {
+            groupHashesHaveAuthoritativeProvenance = false;
+        }
         layout.establishHashStrategy();
         int recordIndex = nextRecordIndex;
         setControl(index, (byte) ((packedHashRecordSlots ? packedTableHash(hash) : hash) & 0x7F | 0x80));
@@ -2240,7 +2248,7 @@ final class FlatGroupingTable
             Allocator allocator,
             Allocator.Context allocationContext)
     {
-        if (packedHashRecordSlots) {
+        if (!groupHashesHaveAuthoritativeProvenance || packedHashRecordSlots) {
             return null;
         }
         if (sourceStart < 0 || size < 0 || sourceStart + size > nextRecordIndex) {

@@ -3603,7 +3603,10 @@ final class GroupingState
                 materializeNulls(size, outputMask, keysByGroup, null, allocator, allocationContext));
     }
 
-    /** Returns the authoritative hash stored for a contiguous flat-grouping output range, when available. */
+    /**
+     * Returns a contiguous grouped hash range only when every group was created from the explicit authoritative
+     * input-hash contract. Internally computed flat-table probe discriminators are deliberately not exportable.
+     */
     I64Vector groupedHashRange(
             int sourceStart,
             int size,
