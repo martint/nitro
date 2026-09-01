@@ -49,6 +49,8 @@ final class TestEncodedRowBuffer
             assertThat(rows.longValue(0, 2)).isEqualTo(22);
             assertThat(rows.longValue(0, 4)).isEqualTo(22);
             assertThat(rows.column(0, 0).values()).isSameAs(first);
+            assertThat(rows.sourceSize(0)).isEqualTo(4);
+            assertThat(rows.sourceSize(2)).isEqualTo(3);
             assertThat(rows.sharesSource(0, 1)).isTrue();
             assertThat(rows.sharesSource(1, 2)).isFalse();
         }
@@ -67,6 +69,8 @@ final class TestEncodedRowBuffer
             assertThat(rows.longValue(0, 1)).isEqualTo(13);
             assertThat(rows.longValue(0, 2)).isEqualTo(21);
             assertThat(rows.longValue(0, 3)).isEqualTo(23);
+            assertThat(rows.sourceSize(0)).isEqualTo(2);
+            assertThat(rows.sourceSize(2)).isEqualTo(2);
             assertThat(rows.sharesSource(0, 1)).isTrue();
             assertThat(rows.sharesSource(1, 2)).isFalse();
         }

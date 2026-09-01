@@ -25,6 +25,12 @@ public interface RowPositionIndex
 
     int sourcePosition(int position);
 
+    /// Returns the physical row domain size of the source vectors backing the logical position.
+    default int sourceSize(int position)
+    {
+        return column(0, position).values().length();
+    }
+
     /// Returns whether two logical positions are backed by the same physical source vectors.
     boolean sharesSource(int leftPosition, int rightPosition);
 

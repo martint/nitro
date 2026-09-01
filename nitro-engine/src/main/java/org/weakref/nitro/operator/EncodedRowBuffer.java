@@ -172,6 +172,12 @@ final class EncodedRowBuffer
     }
 
     @Override
+    public int sourceSize(int position)
+    {
+        return page(position).mask().size();
+    }
+
+    @Override
     public boolean sharesSource(int leftPosition, int rightPosition)
     {
         return pageIndex(leftPosition) == pageIndex(rightPosition);
