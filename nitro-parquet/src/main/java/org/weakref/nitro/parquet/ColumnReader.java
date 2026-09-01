@@ -2923,15 +2923,53 @@ public final class ColumnReader
         }
 
         if (dictionaryDomainMembershipDemanded && entries <= Long.SIZE) {
-            long allEntries = entries == Long.SIZE ? -1L : (1L << entries) - 1;
-            long presentEntries = 0;
-            int[] rawIds = ids.values();
-            for (int position = 0; position < count && presentEntries != allEntries; position++) {
-                presentEntries |= 1L << rawIds[position];
-            }
-            return DictionaryVector.wrapOwnedIdsWithDomainPresence(ids, count, dictionary, presentEntries);
+            return DictionaryVector.wrapOwnedIdsWithDomainPresence(
+                    ids,
+                    count,
+                    dictionary,
+                    dictionaryDomainPresence(
+                            allocator,
+                            ids.values(),
+                            count,
+                            entries,
+                            materializationPolicy.dictionaryDomainMembershipProbeRowsPerEntry()));
         }
         return DictionaryVector.wrapOwnedIds(ids, count, dictionary);
+    }
+
+    static long dictionaryDomainPresence(Allocator allocator, int[] ids, int count, int entries, int probeRowsPerEntry)
+    {
+        long allEntries = entries == Long.SIZE ? -1L : (1L << entries) - 1;
+        long presentEntries = 0;
+        int prefixLimit = (int) Math.min(count, (long) entries * probeRowsPerEntry);
+        int position = 0;
+        for (; position < prefixLimit && presentEntries != allEntries; position++) {
+            presentEntries |= 1L << ids[position];
+        }
+
+        // Dense domains normally become complete near the start of a batch, where the compact bitmap and its early
+        // exit are cheapest. When an entry is absent or late, continuing the dependency-chained OR across the whole
+        // batch is substantially more expensive than recording independent byte stores.
+        if (presentEntries != allEntries && position < count) {
+            byte[] present = allocator.primitiveArrays().borrowBytes(entries);
+            try {
+                Arrays.fill(present, 0, entries, (byte) 0);
+                for (int entry = 0; entry < entries; entry++) {
+                    present[entry] = (byte) ((presentEntries >>> entry) & 1);
+                }
+                for (; position < count; position++) {
+                    present[ids[position]] = 1;
+                }
+                presentEntries = 0;
+                for (int entry = 0; entry < entries; entry++) {
+                    presentEntries |= (long) present[entry] << entry;
+                }
+            }
+            finally {
+                allocator.primitiveArrays().release(present);
+            }
+        }
+        return presentEntries;
     }
 
     private BinaryVector escapedDictionary(int generation)

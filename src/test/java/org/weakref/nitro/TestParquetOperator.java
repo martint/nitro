@@ -282,7 +282,7 @@ public class TestParquetOperator
     private static final ParquetMaterializationPolicy GENERIC_MATERIALIZATION =
             new ParquetMaterializationPolicy(
                     false, false, false, false, false, false, Long.MAX_VALUE, false, 0, false, false, false, false,
-                    false, 0, 0, false, 0);
+                    false, 0, 0, 0, false, 0);
     private static final ParquetDictionaryFilterPolicy GENERIC_DICTIONARY_FILTER =
             new ParquetDictionaryFilterPolicy(
                     false,
