@@ -24,6 +24,7 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.weakref.nitro.data.Row.row;
+import static org.weakref.nitro.function.scalar.builtin.JoinFilterFunctions.longLessThan;
 
 class TestSharedBuildOuterJoin
 {
@@ -105,6 +106,51 @@ class TestSharedBuildOuterJoin
                 assertThat(readBuildValues(unmatched)).containsExactly(1L, 2L);
             }
             probe.close();
+        }
+    }
+
+    @Test
+    void testSharesNestedLoopMatchesAcrossProbeSessions()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator buildAllocator = new Allocator(resources);
+                Allocator firstProbeAllocator = new Allocator(resources);
+                Allocator secondProbeAllocator = new Allocator(resources);
+                Allocator outputAllocator = new Allocator(resources)) {
+            buildAllocator.beginExecution();
+            firstProbeAllocator.beginExecution();
+            secondProbeAllocator.beginExecution();
+            outputAllocator.beginExecution();
+
+            ConstantTableOperator firstProbe = new ConstantTableOperator(firstProbeAllocator, 1, List.of(row(1L)));
+            ConstantTableOperator secondProbe = new ConstantTableOperator(secondProbeAllocator, 1, List.of(row(3L)));
+            try (SharedBuildOuterJoin shared = SharedBuildOuterJoin.prepare(
+                            resources.operatorResources(),
+                            buildAllocator,
+                            firstProbe.outputSchema(),
+                            new int[0],
+                            new ConstantTableOperator(buildAllocator, 1, List.of(row(0L), row(2L), row(4L))),
+                            new int[0],
+                            false,
+                            new int[] {0, 1},
+                            longLessThan(0, 0))
+                    .orElseThrow();
+                    JoinSession first = shared.newProbeSession(resources.operatorResources(), firstProbeAllocator);
+                    JoinSession second = shared.newProbeSession(resources.operatorResources(), secondProbeAllocator);
+                    Operator unmatched = shared.newUnmatchedBuildOperator(outputAllocator)) {
+                List<Long> matchedBuild = new ArrayList<>();
+                first.addInput(firstProbe.next());
+                first.finish();
+                drainMatches(first, matchedBuild);
+                second.addInput(secondProbe.next());
+                second.finish();
+                drainMatches(second, matchedBuild);
+
+                assertThat(matchedBuild).containsExactly(2L, 4L, 4L);
+                assertThat(readBuildValues(unmatched)).containsExactly(0L);
+            }
+            firstProbe.close();
+            secondProbe.close();
         }
     }
 

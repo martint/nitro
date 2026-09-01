@@ -38,7 +38,7 @@ import static java.lang.Math.toIntExact;
 import static java.util.Objects.requireNonNull;
 
 /**
- * Immutable hash payload and task-wide match state shared by parallel probe sessions of a RIGHT or FULL join.
+ * Immutable build payload and task-wide match state shared by parallel probe sessions of a RIGHT or FULL join.
  *
  * <p>Probe sessions emit matched rows independently and atomically mark the corresponding build identities. After
  * every probe session has closed, the embedding scheduler creates the single unmatched-build operator. Keeping that
@@ -66,6 +66,7 @@ public final class SharedBuildOuterJoin
     private final List<TableOperator.Page> augmentedBuildPages;
     private final int[] buildPageStarts;
     private final AtomicLongArray matchedBuildRows;
+    private final boolean nestedLoop;
     private final HashJoinBuild preparedBuild;
     private boolean closed;
 
@@ -90,7 +91,7 @@ public final class SharedBuildOuterJoin
                 probeOuterJoin,
                 outputChannels,
                 joinFilters);
-        if (shared.preparedBuild == null) {
+        if (!shared.nestedLoop && shared.preparedBuild == null) {
             shared.close();
             return Optional.empty();
         }
@@ -115,6 +116,10 @@ public final class SharedBuildOuterJoin
         requireNonNull(build, "build is null");
         buildSchema = build.outputSchema();
         this.buildJoinColumns = requireNonNull(buildJoinColumns, "buildJoinColumns is null").clone();
+        if ((this.probeJoinColumns.length == 0) != (this.buildJoinColumns.length == 0)) {
+            throw new IllegalArgumentException("Probe and build join columns must both be empty or both be non-empty");
+        }
+        nestedLoop = this.probeJoinColumns.length == 0;
         this.probeOuterJoin = probeOuterJoin;
         maxOutputRows = resources.hashJoin().executionPolicy().maxBatchRows();
         this.outputChannels = requireNonNull(outputChannels, "outputChannels is null").clone();
@@ -131,33 +136,44 @@ public final class SharedBuildOuterJoin
         int hiddenOutputChannel = probeSchema.size() + buildSchema.size();
         joinOutputChannels = Arrays.copyOf(this.outputChannels, this.outputChannels.length + 1);
         joinOutputChannels[joinOutputChannels.length - 1] = hiddenOutputChannel;
-        preparedBuild = HashJoinSession.prepareBuild(
-                        resources,
-                        allocator,
-                        probeSchema,
-                        this.probeJoinColumns,
-                        TableOperator.retained(augmentedBuildSchema, augmentedBuildPages),
-                        this.buildJoinColumns,
-                        probeOuterJoin,
-                        joinOutputChannels,
-                        this.joinFilters)
-                .orElse(null);
+        preparedBuild = nestedLoop
+                ? null
+                : HashJoinSession.prepareBuild(
+                                resources,
+                                allocator,
+                                probeSchema,
+                                this.probeJoinColumns,
+                                TableOperator.retained(augmentedBuildSchema, augmentedBuildPages),
+                                this.buildJoinColumns,
+                                probeOuterJoin,
+                                joinOutputChannels,
+                                this.joinFilters)
+                        .orElse(null);
     }
 
     public JoinSession newProbeSession(OperatorResources resources, Allocator probeAllocator)
     {
         checkOpen();
-        HashJoinSession join = new HashJoinSession(
-                requireNonNull(resources, "resources is null"),
-                requireNonNull(probeAllocator, "probeAllocator is null"),
-                probeSchema,
-                probeJoinColumns,
-                TableOperator.retained(augmentedBuildSchema, augmentedBuildPages),
-                buildJoinColumns,
-                probeOuterJoin,
-                preparedBuild,
-                joinFilters)
-                .withOutputs(joinOutputChannels);
+        JoinSession join = nestedLoop
+                ? new NestedLoopJoinSession(
+                                requireNonNull(resources, "resources is null"),
+                                requireNonNull(probeAllocator, "probeAllocator is null"),
+                                probeSchema,
+                                TableOperator.retained(augmentedBuildSchema, augmentedBuildPages),
+                                probeOuterJoin,
+                                joinFilters)
+                        .withOutputs(joinOutputChannels)
+                : new HashJoinSession(
+                                requireNonNull(resources, "resources is null"),
+                                requireNonNull(probeAllocator, "probeAllocator is null"),
+                                probeSchema,
+                                probeJoinColumns,
+                                TableOperator.retained(augmentedBuildSchema, augmentedBuildPages),
+                                buildJoinColumns,
+                                probeOuterJoin,
+                                preparedBuild,
+                                joinFilters)
+                        .withOutputs(joinOutputChannels);
         return new ProbeSession(join);
     }
 
@@ -211,9 +227,9 @@ public final class SharedBuildOuterJoin
     private final class ProbeSession
             implements JoinSession
     {
-        private final HashJoinSession join;
+        private final JoinSession join;
 
-        private ProbeSession(HashJoinSession join)
+        private ProbeSession(JoinSession join)
         {
             this.join = join;
         }
