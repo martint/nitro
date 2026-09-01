@@ -6632,6 +6632,33 @@ public class TestOperators
     }
 
     @Test
+    void testNestedLoopUsesGenericLongPredicateOverDictionaryDomain()
+    {
+        assertThat(operator(
+                new NestedLoopJoinOperator(
+                        EngineResources.from(allocator).operatorResources(),
+                        allocator,
+                        new TableOperator(
+                                1,
+                                List.of(TableOperator.Page.values(
+                                        4,
+                                        new Vector[] {DictionaryVector.wrap(
+                                                new int[] {0, 1, 0, 2},
+                                                new I64Vector(new long[] {1, 2, 4}))},
+                                        Mask.all(4)))),
+                        new ConstantTableOperator(allocator, 1, List.of(row(2L), row(3L))),
+                        longNotEqual(0, 0))))
+                .matchesExactly(List.of(
+                        row(1L, 2L),
+                        row(1L, 2L),
+                        row(4L, 2L),
+                        row(1L, 3L),
+                        row(2L, 3L),
+                        row(1L, 3L),
+                        row(4L, 3L)));
+    }
+
+    @Test
     void testNestedLoopMultiKeyEquiJoin()
     {
         assertThat(operator(

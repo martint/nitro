@@ -29,6 +29,7 @@ import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.PrimitiveArrayPool;
+import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
@@ -76,6 +77,40 @@ public class HashJoinOperator
         default boolean rejectsZeroInnerValue()
         {
             return false;
+        }
+
+        @Override
+        default boolean supportsOuterMaskPruning(Vector outer)
+        {
+            return outer instanceof I64Vector || outer instanceof DictionaryVector || outer instanceof RleVector;
+        }
+
+        @Override
+        default boolean pruneOuterMask(Vector outer, Mask mask, Vector inner, int innerPosition, boolean[] dictionaryScratch)
+        {
+            long innerValue = VectorAccess.longValues(inner).value(innerPosition);
+            return switch (outer) {
+                case I64Vector values -> {
+                    long[] outerValues = values.values();
+                    mask.retainIf(position -> testLong(outerValues[position], innerValue));
+                    yield true;
+                }
+                case DictionaryVector dictionary when dictionary.values().length() == dictionaryScratch.length -> {
+                    VectorAccess.LongValues domainValues = VectorAccess.longValues(dictionary.values());
+                    for (int domain = 0; domain < dictionaryScratch.length; domain++) {
+                        dictionaryScratch[domain] = testLong(domainValues.value(domain), innerValue);
+                    }
+                    mask.retainDictionaryComparison(dictionary, dictionaryScratch);
+                    yield true;
+                }
+                case RleVector rle -> {
+                    if (!testLong(VectorAccess.longValues(rle.values()).value(0), innerValue)) {
+                        mask.clear(mask.size());
+                    }
+                    yield true;
+                }
+                default -> false;
+            };
         }
 
         @Override
