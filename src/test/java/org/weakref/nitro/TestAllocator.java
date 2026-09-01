@@ -146,7 +146,7 @@ class TestAllocator
     }
 
     @Test
-    void testCopyMaskPreservesCompactDictionaryDomainAcrossPoolReuse()
+    void testCopyMaskPreservesCompactDictionaryDomainAcrossCopies()
     {
         try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
             Allocator.Context context = new Allocator.Context("dictionary-copy");
@@ -160,9 +160,26 @@ class TestAllocator
             assertThat(first).containsExactly(0, 1, 4, 6);
             allocator.release(context, first);
 
-            Mask reused = allocator.copyMask(context, selected);
-            assertThat(reused.dictionaryDomainSelection(dictionary)).isNotNull();
-            assertThat(reused).containsExactly(0, 1, 4, 6);
+            Mask second = allocator.copyMask(context, selected);
+            assertThat(second.dictionaryDomainSelection(dictionary)).isNotNull();
+            assertThat(second).containsExactly(0, 1, 4, 6);
+            assertThat(second).isNotSameAs(first);
+        }
+    }
+
+    @Test
+    void testCopyMaskDoesNotReuseReleasedMaskWrapper()
+    {
+        try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
+            Allocator.Context context = new Allocator.Context("independent-mask-copy");
+            Mask selected = Mask.sparse(new int[] {1, 3, 7}, 10);
+
+            Mask first = allocator.copyMask(context, selected);
+            allocator.release(context, first);
+            Mask second = allocator.copyMask(context, selected);
+
+            assertThat(second).isNotSameAs(first);
+            assertThat(second).containsExactly(1, 3, 7);
         }
     }
 

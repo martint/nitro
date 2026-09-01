@@ -638,15 +638,10 @@ public class Allocator
     public Mask copyMask(Context context, Mask source)
     {
         ContextState state = state(context);
-        Mask result = state.borrowMask(source.selectedCount());
-        boolean reused = result != null;
-        if (!reused) {
-            result = source.copy(policy.maskFiltering());
-        }
-        else {
-            copyMask(result, source);
-        }
-        state.trackMask(result, reused);
+        // A copied mask can outlive the evaluator scope that created its source. Reusing a pooled
+        // wrapper here can therefore let a later borrower mutate control state that is still live.
+        Mask result = source.copy(policy.maskFiltering());
+        state.trackMask(result, false);
         return result;
     }
 
@@ -861,6 +856,7 @@ public class Allocator
 
     public Mask intersectMask(Context context, Mask left, Mask right)
     {
+        checkArgument(left.size() == right.size(), "mask sizes differ: %s != %s", left.size(), right.size());
         ContextState state = state(context);
         Mask result = state.borrowMask(Math.min(left.selectedCount(), right.selectedCount()));
         boolean reused = result != null;
@@ -909,6 +905,7 @@ public class Allocator
 
     public Mask differenceMask(Context context, Mask left, Mask right)
     {
+        checkArgument(left.size() == right.size(), "mask sizes differ: %s != %s", left.size(), right.size());
         ContextState state = state(context);
         int requiredCapacity = policy.complementDifferenceMasks() && left.all() && !right.all() ? right.selectedCount() : left.selectedCount();
         Mask result = state.borrowMask(requiredCapacity);
@@ -1008,6 +1005,7 @@ public class Allocator
 
     public Mask unionMask(Context context, Mask left, Mask right)
     {
+        checkArgument(left.size() == right.size(), "mask sizes differ: %s != %s", left.size(), right.size());
         ContextState state = state(context);
         Mask result = state.borrowMask(Math.min(left.size(), left.selectedCount() + right.selectedCount()));
         boolean reused = result != null;
@@ -2468,6 +2466,9 @@ public class Allocator
             Mask mask = entry.getValue().removeFirst();
             if (entry.getValue().isEmpty()) {
                 source.maskPool.remove(entry.getKey());
+            }
+            if (mask.trackedInUse()) {
+                throw new IllegalStateException("Mask pool returned an in-use mask");
             }
             return mask;
         }
