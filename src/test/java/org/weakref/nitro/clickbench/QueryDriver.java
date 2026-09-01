@@ -41,15 +41,26 @@ public final class QueryDriver
         int warmup = args.length > 1 ? Integer.parseInt(args[1]) : 2;
         int measured = args.length > 2 ? Integer.parseInt(args[2]) : 1;
         Path hits = ClickBenchHitsSupport.requiredActualHitsDirectory();
+        try (EngineResources resources = EngineResources.createDefault()) {
+            run(query, warmup, measured, hits, resources);
+        }
+    }
+
+    private static void run(String query, int warmup, int measured, Path hits, EngineResources resources)
+    {
         long sink = 0;
         for (int iteration = 0; iteration < warmup; iteration++) {
-            sink += consume(query(query, new Allocator(EngineResources.createDefault()), hits, null));
+            try (Allocator allocator = new Allocator(resources)) {
+                sink += consume(query(query, allocator, hits, null));
+            }
         }
 
         if (!Boolean.getBoolean("nitro.operatorCpuProfile")) {
             long start = System.nanoTime();
             for (int iteration = 0; iteration < measured; iteration++) {
-                sink += consume(query(query, new Allocator(EngineResources.createDefault()), hits, null));
+                try (Allocator allocator = new Allocator(resources)) {
+                    sink += consume(query(query, allocator, hits, null));
+                }
             }
             long nanos = System.nanoTime() - start;
             System.out.printf("%s: %d iters, %.1f ms/iter, sink=%d%n", query, measured, nanos / 1e6 / measured, sink);
@@ -59,7 +70,9 @@ public final class QueryDriver
         OperatorCpuProfile profile = new OperatorCpuProfile();
         long start = System.nanoTime();
         for (int iteration = 0; iteration < measured; iteration++) {
-            sink += consume(query(query, new Allocator(EngineResources.createDefault()), hits, profile));
+            try (Allocator allocator = new Allocator(resources)) {
+                sink += consume(query(query, allocator, hits, profile));
+            }
         }
         long nanos = System.nanoTime() - start;
         System.out.printf("%s: %d iters, %.1f ms/iter, sink=%d%n", query, measured, nanos / 1e6 / measured, sink);
