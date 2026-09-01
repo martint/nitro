@@ -34,6 +34,7 @@ public final class OperatorResources
     private final FullJoinOperatorPolicy fullJoinPolicy;
     private final GroupIdOperatorPolicy groupIdPolicy;
     private final ProjectOperatorResources project;
+    private final PatternEvaluationResources patternEvaluation;
     private final AggregationOperatorResources aggregation;
     private final BufferedJoinInputPolicy bufferedJoinInputPolicy;
     private final JoinBufferPolicy joinBufferPolicy;
@@ -78,6 +79,10 @@ public final class OperatorResources
         this.flatKeyTablePolicy = requireNonNull(flatKeyTablePolicy, "flatKeyTablePolicy is null");
         this.distinctKeySetPolicy = requireNonNull(distinctKeySetPolicy, "distinctKeySetPolicy is null");
         this.project = requireNonNull(project, "project is null");
+        this.patternEvaluation = new PatternEvaluationResources(
+                codeGeneration.projectionMask(),
+                project.evaluationPolicy(),
+                project.evaluatorBufferPoolGroup());
         this.filter = new FilterOperatorResources(
                 codeGeneration.projectionMask(),
                 project.evaluationPolicy(),
@@ -192,6 +197,12 @@ public final class OperatorResources
     {
         checkOpen();
         return project;
+    }
+
+    public PatternEvaluationResources patternEvaluation()
+    {
+        checkOpen();
+        return patternEvaluation;
     }
 
     public FilterOperatorResources filter()
