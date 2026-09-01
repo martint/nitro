@@ -1103,8 +1103,14 @@ public class GroupedAggregationOperator
                 !VectorAccess.isAllFalseNulls(keyNulls)) {
             return false;
         }
-        if (!generatedUpdates && !groupedDomainInput &&
-                (!(encodedGroupedInput || filteredEncodedGroupedInput) || dictionary.values().length() > Long.SIZE)) {
+        if (!generatedUpdates && !groupedDomainInput && !encodedGroupedInput && !filteredEncodedGroupedInput) {
+            return false;
+        }
+        boolean encodedGroupsRequired = (!generatedUpdates && !groupedDomainInput && encodedGroupedInput) ||
+                filteredEncodedGroupedInput;
+        if (encodedGroupsRequired &&
+                !(mask.all() && dictionary.hasDomainFrequencies()) &&
+                dictionary.values().length() > Long.SIZE) {
             return false;
         }
 
@@ -1137,7 +1143,7 @@ public class GroupedAggregationOperator
         try {
             int domainSize = dictionary.values().length();
             DictionaryVector encodedGroups = null;
-            if (groupedDomainInput || encodedGroupedInput || filteredEncodedGroupedInput) {
+            if ((!generatedUpdates && (groupedDomainInput || encodedGroupedInput)) || filteredEncodedGroupedInput) {
                 reusableDictionaryDomainGroups = allocator.reallocateIfNecessary(
                         allocationContext,
                         reusableDictionaryDomainGroups,
@@ -1148,7 +1154,7 @@ public class GroupedAggregationOperator
                 for (int domain = 0; domain < domainSize; domain++) {
                     groupValues[domain] = dictionaryDomainGroups[domain];
                 }
-                if (encodedGroupedInput || filteredEncodedGroupedInput) {
+                if (encodedGroupsRequired) {
                     long domainPresence = domainPresence(dictionaryDomainCounts, domainSize);
                     // An all-row mapping with exact source frequencies remains exact after replacing only its
                     // physical values with resolved group ids. Selected filters retain their own exact compact
@@ -2479,7 +2485,7 @@ public class GroupedAggregationOperator
         if (streams != null && batchState.mask.equals(batchState.materializedMask[output])) {
             return streams;
         }
-        if (batchState.mask.none() && groupByColumns != null && !inlineGroupingState.isInitialized()) {
+        if (batchState.mask.none() && groupByColumns != null) {
             streams = emptyGroupedKeyOutput(output);
             groupedResults[output] = streams;
             batchState.materializedMask[output] = batchState.mask;

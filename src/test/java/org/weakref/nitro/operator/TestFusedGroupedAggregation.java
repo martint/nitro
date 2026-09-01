@@ -468,6 +468,36 @@ class TestFusedGroupedAggregation
     }
 
     @Test
+    void generatedDictionaryDomainCountSupportsLargeSparseDomain()
+    {
+        int size = 16_384;
+        int domainSize = 128;
+        int[] ids = new int[size];
+        int[] selected = new int[size / 2];
+        long[] domain = new long[domainSize];
+        Map<Long, long[]> reference = new HashMap<>();
+        for (int index = 0; index < domainSize; index++) {
+            domain[index] = index * 17L + 11;
+        }
+        int selectedCount = 0;
+        for (int position = 0; position < size; position++) {
+            int id = (position * 37 + 5) & (domainSize - 1);
+            ids[position] = id;
+            if ((position & 1) == 0) {
+                selected[selectedCount++] = position;
+                reference.computeIfAbsent(domain[id], ignored -> new long[2])[0]++;
+            }
+        }
+
+        List<TableOperator.Page> pages = List.of(TableOperator.Page.values(
+                size,
+                new Vector[] {DictionaryVector.ofTrustedIds(ids, new I64Vector(domain))},
+                Mask.sparse(selected, size)));
+
+        assertGroupedSumAndCount(pages, List.of(new CountAll()), reference, false);
+    }
+
+    @Test
     void dictionaryDomainScratchGrowsAcrossAdmissionBoundary()
     {
         long[] domain = {11, 22, 33, 44};

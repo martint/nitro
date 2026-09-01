@@ -687,6 +687,16 @@ final class GroupingState
             }
             initializeIfNecessary(values, nulls, mask, true);
             decideDictionaryFlatSingleIdentity(values, nulls, mask);
+            if (structuralGrouping != null) {
+                nextGroupId = structuralGrouping.assignGroupsWithAuthoritativeHashes(
+                        values,
+                        nulls,
+                        mask,
+                        result,
+                        hashes,
+                        nextGroupId);
+                return true;
+            }
             if (useLongGrouping) {
                 if (!useAuthoritativeLongHashes) {
                     return false;
@@ -3810,6 +3820,9 @@ final class GroupingState
             Allocator allocator,
             Allocator.Context allocationContext)
     {
+        if (structuralGrouping != null) {
+            return structuralGrouping.groupedHashRange(sourceStart, size, output, allocator, allocationContext);
+        }
         if (useAuthoritativeLongHashes) {
             if (sourceStart < 0 || size < 0 || sourceStart + size > nextGroupId) {
                 throw new IndexOutOfBoundsException("Invalid grouped hash range: start=%s, size=%s, groups=%s"
@@ -4204,6 +4217,7 @@ final class GroupingState
         private final ArrayList<StructuralGroupingKey> representatives = new ArrayList<>();
         private final StructuralGroupingKey reusableProbe;
         private final int[] singlePosition = new int[1];
+        private I64Vector authoritativeHashesByGroup;
 
         private StructuralGroupingIndex(
                 Allocator allocator,
@@ -4275,6 +4289,43 @@ final class GroupingState
                 setRepresentative(groupId, key);
             }
             return nextGroupId + newGroupCount;
+        }
+
+        private long assignGroupsWithAuthoritativeHashes(
+                Vector[] values,
+                Vector[] nulls,
+                Mask mask,
+                I64Vector result,
+                Vector hashes,
+                long nextGroupId)
+        {
+            long previousGroupCount = nextGroupId;
+            long updatedGroupCount = assignGroups(values, nulls, mask, result, nextGroupId);
+            if (updatedGroupCount == previousGroupCount) {
+                return updatedGroupCount;
+            }
+
+            VectorAccess.LongValues authoritativeHashes = VectorAccess.longValues(hashes);
+            authoritativeHashesByGroup = allocator.reallocateIfNecessary(
+                    allocationContext,
+                    authoritativeHashesByGroup,
+                    I64Vector.class,
+                    toIntExact(updatedGroupCount),
+                    I64Vector::new);
+            long nextUnrecordedGroup = previousGroupCount;
+            for (int position : mask) {
+                long groupId = result.values()[position];
+                if (groupId == nextUnrecordedGroup) {
+                    long authoritativeHash = authoritativeHashes.value(position);
+                    int groupIndex = toIntExact(groupId);
+                    authoritativeHashesByGroup.values()[groupIndex] = authoritativeHash;
+                    nextUnrecordedGroup++;
+                }
+            }
+            if (nextUnrecordedGroup != updatedGroupCount) {
+                throw new IllegalStateException("Structural groups were not assigned in first-seen order");
+            }
+            return updatedGroupCount;
         }
 
         private boolean admitsRunReuse(
@@ -4464,6 +4515,30 @@ final class GroupingState
             return allocator.reuseValuesAndNulls(output, outputValues, outputNulls);
         }
 
+        private I64Vector groupedHashRange(
+                int sourceStart,
+                int size,
+                I64Vector output,
+                Allocator allocator,
+                Allocator.Context allocationContext)
+        {
+            if (authoritativeHashesByGroup == null) {
+                return null;
+            }
+            if (sourceStart < 0 || size < 0 || sourceStart + size > representatives.size()) {
+                throw new IndexOutOfBoundsException("Invalid structural grouped hash range: start=%s, size=%s, groups=%s"
+                        .formatted(sourceStart, size, representatives.size()));
+            }
+            I64Vector result = allocator.allocateOrGrow(
+                    allocationContext,
+                    output,
+                    I64Vector.class,
+                    size,
+                    I64Vector::new);
+            System.arraycopy(authoritativeHashesByGroup.values(), sourceStart, result.values(), 0, size);
+            return result;
+        }
+
         private Streams copyGroupedValuePosition(
                 int groupedColumnIndex,
                 Streams output,
@@ -4537,6 +4612,10 @@ final class GroupingState
         {
             groups.clear();
             representatives.clear();
+            if (authoritativeHashesByGroup != null) {
+                allocator.release(allocationContext, authoritativeHashesByGroup);
+            }
+            authoritativeHashesByGroup = null;
         }
     }
 

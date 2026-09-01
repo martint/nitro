@@ -1374,6 +1374,97 @@ class TestGroupedAggregationSession
     }
 
     @Test
+    void testStructuralGroupingConsumesPlannerSuppliedAuthoritativeHashes()
+            throws ReflectiveOperationException
+    {
+        var lookup = java.lang.invoke.MethodHandles.lookup();
+        TypeBinding parityType = new TypeBinding()
+        {
+            private final TypeOperators typeOperators = new TypeOperators(
+                    Optional.empty(),
+                    Optional.empty(),
+                    Optional.empty(),
+                    Optional.empty(),
+                    Optional.empty(),
+                    Optional.empty(),
+                    Optional.of(lookup.findStatic(
+                            TestGroupedAggregationSession.class,
+                            "sameParity",
+                            java.lang.invoke.MethodType.methodType(
+                                    boolean.class,
+                                    Vector.class,
+                                    int.class,
+                                    Vector.class,
+                                    int.class))),
+                    Optional.of(lookup.findStatic(
+                            TestGroupedAggregationSession.class,
+                            "parityHash",
+                            java.lang.invoke.MethodType.methodType(long.class, Vector.class, int.class))),
+                    Optional.empty());
+
+            @Override
+            public TypeIdentity identity()
+            {
+                return new TypeIdentity("testing:parity");
+            }
+
+            @Override
+            public Class<?> carrierType()
+            {
+                return long.class;
+            }
+
+            @Override
+            public TypeOperators operators()
+            {
+                return typeOperators;
+            }
+
+            @Override
+            public boolean supportsAuthoritativeGroupingHash()
+            {
+                return true;
+            }
+
+            @Override
+            public Set<Class<? extends Vector>> supportedVectorTypes()
+            {
+                return Set.of(I64Vector.class);
+            }
+        };
+        Schema schema = new Schema(List.of(
+                new Field(parityType, false),
+                Schema.unspecified(1).field(0)));
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                GroupedAggregationSession session = new GroupedAggregationSession(
+                        allocator,
+                        schema,
+                        List.of(0),
+                        List.of(0),
+                        PhysicalAggregationProgram.independent(List.of(new CountAll())),
+                        resources.operatorResources(),
+                        resources.operatorResources().grouping(),
+                        null,
+                        10,
+                        new AuthoritativeHashChannel("test-structural-v1", 1, true))) {
+            allocator.beginExecution();
+            try (Batch input = new Batch(
+                    Mask.all(4),
+                    Output.of(Streams.ofValues(new I64Vector(new long[] {1, 3, 2, 4}))),
+                    Output.of(Streams.ofValues(new I64Vector(new long[] {1, 1, 0, 0}))))) {
+                session.addInput(input);
+            }
+
+            try (Batch output = session.finish()) {
+                assertThat(selectedLongValues(output, 0)).containsExactly(1, 2);
+                assertThat(selectedLongValues(output, 1)).containsExactly(2, 2);
+                assertThat(selectedLongValues(output, 2)).containsExactly(1, 0);
+            }
+        }
+    }
+
+    @Test
     void testComputesAndCarriesGroupingHashes()
     {
         PhysicalAggregationProgram program = PhysicalAggregationProgram.independent(List.of(new CountAll()))
@@ -1607,6 +1698,35 @@ class TestGroupedAggregationSession
         }
     }
 
+    @Test
+    void testEmptySelectedBatchUsesGroupedKeyTypeVectorFactory()
+    {
+        TypeBinding binaryType = binaryType();
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                GroupedAggregationSession session = new GroupedAggregationSession(
+                        allocator,
+                        new Schema(List.of(new Field(binaryType, false))),
+                        List.of(0),
+                        List.of(0),
+                        PhysicalAggregationProgram.independent(List.of(new CountAll())),
+                        resources.operatorResources())) {
+            allocator.beginExecution();
+            BinaryVector keys = new BinaryVector(2, 16);
+            keys.setBytes(0, "first".getBytes(UTF_8));
+            keys.setBytes(1, "second".getBytes(UTF_8));
+            try (Batch input = new Batch(
+                    Mask.sparse(new int[0], 2),
+                    Output.of(Streams.ofValues(keys)))) {
+                session.addInput(input);
+            }
+            try (Batch result = session.finish()) {
+                assertThat(result.borrowMask().none()).isTrue();
+                assertThat(result.output(0).borrow(Stream.VALUES)).isInstanceOf(BinaryVector.class);
+            }
+        }
+    }
+
     private static Batch batch(long... values)
     {
         return new Batch(
@@ -1777,6 +1897,17 @@ class TestGroupedAggregationSession
                         (vector instanceof DictionaryVector dictionary && dictionary.values() instanceof BinaryVector);
             }
         };
+    }
+
+    private static boolean sameParity(Vector left, int leftPosition, Vector right, int rightPosition)
+    {
+        return (((I64Vector) left).values()[leftPosition] & 1) ==
+                (((I64Vector) right).values()[rightPosition] & 1);
+    }
+
+    private static long parityHash(Vector values, int position)
+    {
+        return ((I64Vector) values).values()[position] & 1;
     }
 
     private record TestingStructType(List<TypeBinding> nestedValueTypes)
