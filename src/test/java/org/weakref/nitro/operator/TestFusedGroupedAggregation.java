@@ -966,15 +966,22 @@ class TestFusedGroupedAggregation
     void filteredRegisteredAggregationPreservesSharedCompositeEncodedGroups()
     {
         int size = 16_384;
+        int domainSize = 128;
         int[] ids = new int[size];
-        int[] frequencies = new int[4];
-        long[] firstKeys = {0, 0, 1, 1};
-        long[] secondKeys = {10, 20, 10, 20};
-        long[] values = {3, 5, 7, 11};
-        boolean[] selectedDomain = {false, true, false, true};
+        int[] frequencies = new int[domainSize];
+        long[] firstKeys = new long[domainSize];
+        long[] secondKeys = new long[domainSize];
+        long[] values = new long[domainSize];
+        boolean[] selectedDomain = new boolean[domainSize];
+        for (int domain = 0; domain < domainSize; domain++) {
+            firstKeys[domain] = domain / 16;
+            secondKeys[domain] = domain % 16;
+            values[domain] = domain + 1;
+            selectedDomain[domain] = (domain & 1) != 0;
+        }
         Map<String, Long> expected = new HashMap<>();
         for (int position = 0; position < size; position++) {
-            int id = (position * 3 + 1) & 3;
+            int id = (position * 37 + 5) & (domainSize - 1);
             ids[position] = id;
             frequencies[id]++;
             String key = firstKeys[id] + ":" + secondKeys[id];

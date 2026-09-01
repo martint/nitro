@@ -1155,13 +1155,14 @@ public class GroupedAggregationOperator
                     groupValues[domain] = dictionaryDomainGroups[domain];
                 }
                 if (encodedGroupsRequired) {
-                    long domainPresence = domainPresence(dictionaryDomainCounts, domainSize);
                     // An all-row mapping with exact source frequencies remains exact after replacing only its
                     // physical values with resolved group ids. Selected filters retain their own exact compact
                     // domain on the same mapping.
                     encodedGroups = mask.all() && dictionary.hasDomainFrequencies()
                             ? dictionary.sharedMappingWithValues(reusableDictionaryDomainGroups)
-                            : dictionary.sharedMappingWithValuesAndDomainPresence(reusableDictionaryDomainGroups, domainPresence);
+                            : dictionary.sharedMappingWithValuesAndDomainPresence(
+                                    reusableDictionaryDomainGroups,
+                                    domainPresence(dictionaryDomainCounts, domainSize));
                 }
             }
             if (generatedUpdates) {
