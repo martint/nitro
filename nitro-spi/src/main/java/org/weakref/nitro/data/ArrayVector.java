@@ -215,6 +215,47 @@ public final class ArrayVector
     @Override
     public Vector materializeRows(Allocator allocator, Allocator.Context allocationContext, Vector[] rows)
     {
+        boolean directArrays = true;
+        for (Vector row : rows) {
+            if (!(row instanceof ArrayVector)) {
+                directArrays = false;
+                break;
+            }
+        }
+        if (directArrays) {
+            return materializeArrayRows(allocator, allocationContext, rows);
+        }
+
+        Vector[] normalizedRows = new Vector[rows.length];
+        int normalizedCount = 0;
+        boolean normalizedArrays = true;
+        try {
+            for (int index = 0; index < rows.length; index++) {
+                Vector row = rows[index];
+                if (row instanceof ArrayVector) {
+                    normalizedRows[index] = row;
+                    continue;
+                }
+                Vector normalized = row.copy(allocator, allocationContext, VectorSupport.densePositions(row.length()));
+                normalizedRows[index] = normalized;
+                normalizedCount = index + 1;
+                if (!(normalized instanceof ArrayVector)) {
+                    normalizedArrays = false;
+                    break;
+                }
+            }
+            if (normalizedArrays) {
+                return materializeArrayRows(allocator, allocationContext, normalizedRows);
+            }
+        }
+        finally {
+            for (int index = 0; index < normalizedCount; index++) {
+                if (normalizedRows[index] != rows[index]) {
+                    allocator.release(allocationContext, normalizedRows[index]);
+                }
+            }
+        }
+
         ArrayVector result = allocator.allocateArray(allocationContext, VectorSupport.totalLength(rows));
         int outputStart = 0;
         for (Vector row : rows) {
@@ -227,6 +268,47 @@ public final class ArrayVector
             }
             outputStart += rowLength;
         }
+        return result;
+    }
+
+    private static ArrayVector materializeArrayRows(
+            Allocator allocator,
+            Allocator.Context allocationContext,
+            Vector[] rows)
+    {
+        int totalRows = VectorSupport.totalLength(rows);
+        ArrayVector result = allocator.allocateArray(allocationContext, totalRows);
+        int outputPosition = 0;
+        int elementPosition = 0;
+        result.offsets()[0] = 0;
+        for (Vector row : rows) {
+            ArrayVector arrays = (ArrayVector) row;
+            arrays.finishSparseOffsets();
+            for (int position = 0; position < arrays.length(); position++) {
+                elementPosition = Math.addExact(elementPosition, arrays.length(position));
+                result.offsets()[++outputPosition] = elementPosition;
+            }
+        }
+        result.initializedOffsetCount = totalRows + 1;
+
+        if (rows.length == 0) {
+            result.setElements(Streams.empty());
+            return result;
+        }
+        Streams firstElements = ((ArrayVector) rows[0]).elements();
+        Streams.Builder elements = Streams.builder();
+        for (var entry : firstElements.asMap().entrySet()) {
+            Vector[] segments = new Vector[rows.length];
+            for (int index = 0; index < rows.length; index++) {
+                Vector segment = ((ArrayVector) rows[index]).elements().getOrNull(entry.getKey());
+                if (segment == null) {
+                    throw new IllegalArgumentException("Array segments have different stream shapes");
+                }
+                segments[index] = segment;
+            }
+            elements.put(entry.getKey(), segments[0].materializeRows(allocator, allocationContext, segments));
+        }
+        result.setElements(elements.build());
         return result;
     }
 
