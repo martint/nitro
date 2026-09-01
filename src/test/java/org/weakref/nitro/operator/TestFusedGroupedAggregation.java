@@ -933,6 +933,66 @@ class TestFusedGroupedAggregation
     }
 
     @Test
+    void filteredRegisteredAggregationPreservesSharedCompositeEncodedGroups()
+    {
+        int size = 16_384;
+        int[] ids = new int[size];
+        int[] frequencies = new int[4];
+        long[] firstKeys = {0, 0, 1, 1};
+        long[] secondKeys = {10, 20, 10, 20};
+        long[] values = {3, 5, 7, 11};
+        boolean[] selectedDomain = {false, true, false, true};
+        Map<String, Long> expected = new HashMap<>();
+        for (int position = 0; position < size; position++) {
+            int id = (position * 3 + 1) & 3;
+            ids[position] = id;
+            frequencies[id]++;
+            String key = firstKeys[id] + ":" + secondKeys[id];
+            expected.putIfAbsent(key, 0L);
+            if (selectedDomain[id]) {
+                expected.merge(key, values[id], Long::sum);
+            }
+        }
+
+        DictionaryVector firstDictionary = DictionaryVector.ofTrustedIdsWithDomainFrequencies(
+                ids,
+                size,
+                new I64Vector(firstKeys),
+                frequencies);
+        EncodedGeneratedSum implementation = new EncodedGeneratedSum();
+        PhysicalAggregationProgram program = PhysicalAggregationProgram.singleUnit(
+                new RegisteredAggregationUnit(implementation, RAW, FINAL, new int[] {2}, 3));
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                Operator operator = new GroupedAggregationOperator(
+                        allocator,
+                        List.of(0, 1),
+                        program,
+                        new TableOperator(4, List.of(TableOperator.Page.values(
+                                size,
+                                new Vector[] {
+                                        firstDictionary,
+                                        firstDictionary.sharedMappingWithValues(new I64Vector(secondKeys)),
+                                        firstDictionary.sharedMappingWithValues(new I64Vector(values)),
+                                        firstDictionary.sharedMappingWithValues(new BooleanVector(selectedDomain))},
+                                Mask.all(size)))))) {
+            Map<String, Long> actual = new HashMap<>();
+            while (operator.hasNext()) {
+                try (Batch result = operator.next()) {
+                    VectorAccess.LongValues first = VectorAccess.longValues(result.output(0).borrow(Stream.VALUES));
+                    VectorAccess.LongValues second = VectorAccess.longValues(result.output(1).borrow(Stream.VALUES));
+                    VectorAccess.LongValues sums = VectorAccess.longValues(result.output(2).borrow(Stream.VALUES));
+                    for (int position : result.borrowMask()) {
+                        actual.put(first.value(position) + ":" + second.value(position), sums.value(position));
+                    }
+                }
+            }
+            assertThat(actual).isEqualTo(expected);
+        }
+        assertThat(implementation.encodedGroupsObserved).isTrue();
+    }
+
+    @Test
     void allNullAggregationInputPreservesCompactDictionarySelection()
     {
         int size = 16_384;

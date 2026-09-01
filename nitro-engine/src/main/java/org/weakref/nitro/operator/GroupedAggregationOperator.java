@@ -1062,10 +1062,13 @@ public class GroupedAggregationOperator
             return false;
         }
         if (groupByColumns.length != 1) {
-            if (filteredAggregationIndexes.length != 0) {
-                return false;
-            }
-            return trySharedDictionaryKeyDomainAggregation(batch, mask, streams, groupedDomainInput, encodedGroupedInput);
+            return trySharedDictionaryKeyDomainAggregation(
+                    batch,
+                    mask,
+                    streams,
+                    groupedDomainInput,
+                    encodedGroupedInput,
+                    filteredEncodedGroupedInput);
         }
         Output keyOutput = batch.output(groupByColumns[0]);
         Vector keyVector = keyOutput.borrow(Stream.VALUES);
@@ -1228,9 +1231,11 @@ public class GroupedAggregationOperator
             Mask mask,
             org.weakref.nitro.operator.aggregation.StreamAccessor streams,
             boolean groupedDomainInput,
-            boolean encodedGroupedInput)
+            boolean encodedGroupedInput,
+            boolean filteredEncodedGroupedInput)
     {
-        if (groupByColumns.length < 2 || (!groupedDomainInput && !encodedGroupedInput)) {
+        if (groupByColumns.length < 2 ||
+                (!groupedDomainInput && !encodedGroupedInput && !filteredEncodedGroupedInput)) {
             return false;
         }
         if (dictionaryDomainKeyValues.length != groupByColumns.length) {
@@ -1242,7 +1247,9 @@ public class GroupedAggregationOperator
                     batch,
                     mask,
                     streams,
-                    groupedDomainInput);
+                    groupedDomainInput,
+                    encodedGroupedInput,
+                    filteredEncodedGroupedInput);
         }
         finally {
             Arrays.fill(dictionaryDomainKeyValues, null);
@@ -1254,7 +1261,9 @@ public class GroupedAggregationOperator
             Batch batch,
             Mask mask,
             org.weakref.nitro.operator.aggregation.StreamAccessor streams,
-            boolean groupedDomainInput)
+            boolean groupedDomainInput,
+            boolean encodedGroupedInput,
+            boolean filteredEncodedGroupedInput)
     {
         DictionaryVector first = null;
         int[] ids = null;
@@ -1304,7 +1313,9 @@ public class GroupedAggregationOperator
         if ((long) domainSize * dictionaryDomainAggregationMinReduction > mask.count()) {
             return false;
         }
-        if (!groupedDomainInput && !(mask.all() && first.hasDomainFrequencies()) && domainSize > Long.SIZE) {
+        if ((encodedGroupedInput || filteredEncodedGroupedInput) &&
+                !(mask.all() && first.hasDomainFrequencies()) &&
+                domainSize > Long.SIZE) {
             return false;
         }
 
@@ -1385,6 +1396,14 @@ public class GroupedAggregationOperator
 
         start = System.nanoTime();
         try {
+            DictionaryVector encodedGroups = null;
+            if (encodedGroupedInput || filteredEncodedGroupedInput) {
+                encodedGroups = mask.all() && first.hasDomainFrequencies()
+                        ? first.sharedMappingWithValues(reusableDictionaryDomainGroups)
+                        : first.sharedMappingWithValuesAndDomainPresence(
+                                reusableDictionaryDomainGroups,
+                                domainPresence(dictionaryDomainCounts, domainSize));
+            }
             if (groupedDomainInput) {
                 GroupedAggregationDomain domain = new GroupedAggregationDomain(
                         reusableDictionaryDomainGroups,
@@ -1394,14 +1413,22 @@ public class GroupedAggregationOperator
                     aggregations[aggregationIndex].accumulateGroupedDomain(states[aggregationIndex], domain, streams);
                 }
             }
-            else {
-                DictionaryVector encodedGroups = mask.all() && first.hasDomainFrequencies()
-                        ? first.sharedMappingWithValues(reusableDictionaryDomainGroups)
-                        : first.sharedMappingWithValuesAndDomainPresence(
-                                reusableDictionaryDomainGroups,
-                                domainPresence(dictionaryDomainCounts, domainSize));
+            else if (encodedGroupedInput) {
                 for (int aggregationIndex : plainAggregationIndexes) {
                     aggregations[aggregationIndex].accumulate(states[aggregationIndex], encodedGroups, mask, streams);
+                }
+            }
+            if (filteredEncodedGroupedInput) {
+                for (int aggregationIndex : filteredAggregationIndexes) {
+                    Mask filteredMask = filterMask(batch, aggregations[aggregationIndex].filterInputColumn(), mask);
+                    try {
+                        aggregations[aggregationIndex].accumulate(states[aggregationIndex], encodedGroups, filteredMask, streams);
+                    }
+                    finally {
+                        if (filteredMask != mask) {
+                            allocator.release(allocationContext, filteredMask);
+                        }
+                    }
                 }
             }
         }
