@@ -6505,6 +6505,19 @@ public class TestOperators
     }
 
     @Test
+    void testLeftNestedLoopEmptyBuild()
+    {
+        assertThat(operator(
+                new NestedLoopJoinOperator(
+                        EngineResources.from(allocator).operatorResources(),
+                        allocator,
+                        new ConstantTableOperator(allocator, 1, List.of(row(1L), row(2L))),
+                        new ConstantTableOperator(allocator, 1, List.of()),
+                        true)))
+                .matchesExactly(List.of(row(1L, null), row(2L, null)));
+    }
+
+    @Test
     void testNestedLoopEmptyProbe()
     {
         assertThat(operator(
@@ -6589,6 +6602,33 @@ public class TestOperators
                         row(1L, 3L),
                         row(2L, 3L),
                         row(1L, 3L)));
+    }
+
+    @Test
+    void testLeftNestedLoopJoinFiltersDictionaryDomainBeforeEmission()
+    {
+        assertThat(operator(
+                new NestedLoopJoinOperator(
+                        EngineResources.from(allocator).operatorResources(),
+                        allocator,
+                        new TableOperator(
+                                1,
+                                List.of(TableOperator.Page.values(
+                                        4,
+                                        new Vector[] {DictionaryVector.wrap(
+                                                new int[] {0, 1, 0, 2},
+                                                new I64Vector(new long[] {1, 2, 4}))},
+                                        Mask.all(4)))),
+                        new ConstantTableOperator(allocator, 1, List.of(row(2L), row(3L))),
+                        true,
+                        longLessThan(0, 0))))
+                .matchesExactly(List.of(
+                        row(1L, 2L),
+                        row(1L, 2L),
+                        row(1L, 3L),
+                        row(2L, 3L),
+                        row(1L, 3L),
+                        row(4L, null)));
     }
 
     @Test

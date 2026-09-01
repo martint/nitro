@@ -174,6 +174,24 @@ final class JoinOutputBuffer
         }
     }
 
+    public void joinWithNullInner(Batch outerBatch, Mask outerMask, BufferedJoinInput bufferedInner)
+    {
+        for (int i = 0; i < outerColumnCount; i++) {
+            result[i] = buffers.borrowStreams(outerBatch.output(i));
+        }
+        int length = outerMask.maxPosition() + 1;
+        for (int i = 0; i < innerColumnCount; i++) {
+            if (innerBuffer[i] != null) {
+                for (int index = 0; index < innerBuffer[i].vectorCount(); index++) {
+                    buffers.release(innerBuffer[i].vectorAt(index));
+                }
+            }
+            Streams schema = innerSchema[i] != null ? innerSchema[i] : bufferedInner.outputSchema(i);
+            innerBuffer[i] = buffers.allNullLike(schema, length);
+            result[outerColumnCount + i] = innerBuffer[i];
+        }
+    }
+
     public Output resultOutputForHashJoin(int outputIndex, Allocator allocator, Allocator.Context allocationContext)
     {
         Streams streams = result[outputIndex];

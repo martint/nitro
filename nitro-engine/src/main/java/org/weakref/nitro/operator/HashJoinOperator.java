@@ -4366,41 +4366,6 @@ public class HashJoinOperator
         return schema.with(Stream.NULLS, new BooleanVector(0));
     }
 
-    private Vector nullValuesLike(Vector sample, int size)
-    {
-        return switch (sample) {
-            case org.weakref.nitro.data.I64Vector _ -> allocator.allocate(allocationContext, org.weakref.nitro.data.I64Vector.class, size, org.weakref.nitro.data.I64Vector::new);
-            case org.weakref.nitro.data.I32Vector _ -> allocator.allocate(allocationContext, org.weakref.nitro.data.I32Vector.class, size, org.weakref.nitro.data.I32Vector::new);
-            case org.weakref.nitro.data.F64Vector _ -> allocator.allocate(allocationContext, org.weakref.nitro.data.F64Vector.class, size, org.weakref.nitro.data.F64Vector::new);
-            case BooleanVector _ -> allocator.allocate(allocationContext, BooleanVector.class, size, BooleanVector::new);
-            case org.weakref.nitro.data.BinaryVector binary -> {
-                org.weakref.nitro.data.BinaryVector values = org.weakref.nitro.data.BinaryVector.allocate(allocator, allocationContext, size, 0);
-                values.addTraits(binary.traits());
-                yield values;
-            }
-            case org.weakref.nitro.data.DictionaryVector dictionary -> nullValuesLike(dictionary.values(), size);
-            case org.weakref.nitro.data.RleVector rle -> nullValuesLike(rle.values(), size);
-            case org.weakref.nitro.data.ArrayVector array -> {
-                org.weakref.nitro.data.ArrayVector values = allocator.allocateArray(allocationContext, size);
-                values.setElements(buffers.emptyLike(array.elements()));
-                yield values;
-            }
-            case org.weakref.nitro.data.MapVector map -> {
-                org.weakref.nitro.data.MapVector values = allocator.allocateMap(allocationContext, size);
-                values.setEntries(buffers.emptyLike(map.keys()), buffers.emptyLike(map.values()));
-                yield values;
-            }
-            case org.weakref.nitro.data.StructVector struct -> {
-                org.weakref.nitro.data.StructVector values = allocator.allocate(allocationContext, org.weakref.nitro.data.StructVector.class, size, org.weakref.nitro.data.StructVector::new);
-                for (Map.Entry<String, Streams> field : struct.fields().entrySet()) {
-                    values.setField(field.getKey(), buffers.emptyLike(field.getValue()));
-                }
-                yield values;
-            }
-            default -> throw new IllegalArgumentException("Unsupported null materialization type: " + sample.getClass().getSimpleName());
-        };
-    }
-
     private Vector nullValuesForInnerOutput(int innerOutputIndex, Vector sample, int size)
     {
         TypeBinding type = fullOutputSchema.field(outerOutputCount + innerOutputIndex).type();
@@ -4416,7 +4381,7 @@ public class HashJoinOperator
             }
             return values;
         }
-        return nullValuesLike(sample, size);
+        return buffers.nullValuesLike(sample, size);
     }
 
     private static boolean isSingleLongJoinCandidate(Vector values)

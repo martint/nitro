@@ -76,6 +76,11 @@ final class JoinBufferSupport
         return streams.build();
     }
 
+    public void release(Vector vector)
+    {
+        allocator.release(allocationContext, vector);
+    }
+
     Set<Vector> identities(Streams[] columns)
     {
         Set<Vector> identities = Collections.newSetFromMap(new IdentityHashMap<>());
@@ -663,6 +668,71 @@ final class JoinBufferSupport
             empty.put(Stream.ERRORS, emptyVector(schema.get(Stream.ERRORS)));
         }
         return empty.build();
+    }
+
+    public Streams copyNullPosition(Streams existing, Streams schema, int size, int outputPosition)
+    {
+        Streams.Builder result = Streams.builder();
+        result.put(Stream.VALUES, existing == null ? nullValuesLike(schema.values(), size) : existing.values());
+        BooleanVector nulls = ensureBooleanCapacity(existing == null ? null : (BooleanVector) existing.getOrNull(Stream.NULLS), size);
+        nulls.values()[outputPosition] = true;
+        result.put(Stream.NULLS, nulls);
+        if (schema.hasErrors()) {
+            BooleanVector errors = ensureBooleanCapacity(existing == null ? null : (BooleanVector) existing.getOrNull(Stream.ERRORS), size);
+            errors.values()[outputPosition] = false;
+            result.put(Stream.ERRORS, errors);
+        }
+        return result.build();
+    }
+
+    public Streams allNullLike(Streams schema, int size)
+    {
+        Streams.Builder result = Streams.builder();
+        Vector nullValue = nullValuesLike(schema.values(), 1);
+        result.put(Stream.VALUES, allocator.allocateSingleRunRle(allocationContext, size, nullValue));
+        BooleanVector nullValueMarker = allocator.allocate(allocationContext, BooleanVector.class, 1, BooleanVector::new);
+        nullValueMarker.values()[0] = true;
+        result.put(Stream.NULLS, allocator.allocateSingleRunRle(allocationContext, size, nullValueMarker));
+        if (schema.hasErrors()) {
+            result.put(Stream.ERRORS, allocator.borrowAllFalseBoolean(allocationContext, size));
+        }
+        return result.build();
+    }
+
+    Vector nullValuesLike(Vector sample, int size)
+    {
+        return switch (sample) {
+            case I64Vector _ -> allocator.allocate(allocationContext, I64Vector.class, size, I64Vector::new);
+            case I32Vector _ -> allocator.allocate(allocationContext, I32Vector.class, size, I32Vector::new);
+            case F64Vector _ -> allocator.allocate(allocationContext, F64Vector.class, size, F64Vector::new);
+            case BooleanVector _ -> allocator.allocate(allocationContext, BooleanVector.class, size, BooleanVector::new);
+            case BinaryVector binary -> {
+                BinaryVector values = BinaryVector.allocate(allocator, allocationContext, size, 0);
+                values.addTraits(binary.traits());
+                yield values;
+            }
+            case DictionaryVector dictionary -> nullValuesLike(dictionary.values(), size);
+            case RleVector rle -> nullValuesLike(rle.values(), size);
+            case RegionVector region -> nullValuesLike(region.values(), size);
+            case ArrayVector array -> {
+                ArrayVector values = allocator.allocateArray(allocationContext, size);
+                values.setElements(emptyLike(array.elements()));
+                yield values;
+            }
+            case MapVector map -> {
+                MapVector values = allocator.allocateMap(allocationContext, size);
+                values.setEntries(emptyLike(map.keys()), emptyLike(map.values()));
+                yield values;
+            }
+            case StructVector struct -> {
+                StructVector values = allocator.allocate(allocationContext, StructVector.class, size, StructVector::new);
+                for (Map.Entry<String, Streams> field : struct.fields().entrySet()) {
+                    values.setField(field.getKey(), emptyLike(field.getValue()));
+                }
+                yield values;
+            }
+            default -> throw new IllegalArgumentException("Unsupported null materialization type: " + sample.getClass().getSimpleName());
+        };
     }
 
     public Vector copyStreamVector(Streams streams, Stream stream)

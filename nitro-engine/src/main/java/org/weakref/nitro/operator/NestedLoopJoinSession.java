@@ -54,13 +54,24 @@ public final class NestedLoopJoinSession
             Operator inner,
             JoinFilter... filters)
     {
+        this(operatorResources, allocator, outerSchema, inner, false, filters);
+    }
+
+    public NestedLoopJoinSession(
+            OperatorResources operatorResources,
+            Allocator allocator,
+            Schema outerSchema,
+            Operator inner,
+            boolean probeOuterJoin,
+            JoinFilter... filters)
+    {
         outer = new ExternallyScheduledBatchFeed(requireNonNull(outerSchema, "outerSchema is null"));
         OperatorResources resources = requireNonNull(operatorResources, "operatorResources is null");
         Allocator requiredAllocator = requireNonNull(allocator, "allocator is null");
         Operator requiredInner = requireNonNull(inner, "inner is null");
         join = filters.length == 0
-                ? new NestedLoopJoinOperator(resources, requiredAllocator, outer, requiredInner)
-                : new NestedLoopJoinOperator(resources, requiredAllocator, outer, requiredInner, filters);
+                ? new NestedLoopJoinOperator(resources, requiredAllocator, outer, requiredInner, probeOuterJoin)
+                : new NestedLoopJoinOperator(resources, requiredAllocator, outer, requiredInner, probeOuterJoin, filters);
         outputRoot = join;
     }
 

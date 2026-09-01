@@ -36,6 +36,8 @@ import static java.util.Objects.requireNonNull;
 public class NestedLoopJoinOperator
         implements Operator
 {
+    private static final long NO_MATCH_ROW_REFERENCE = -1L;
+
     private final Allocator.Context allocationContext = new Allocator.Context("NestedLoopJoinOperator", NestedLoopJoinOperator.class);
 
     private final NestedLoopJoinPolicy policy;
@@ -43,6 +45,7 @@ public class NestedLoopJoinOperator
     private final Operator outer;
     private final Operator inner;
     private final JoinMatcher matcher;
+    private final boolean probeOuterJoin;
     private final JoinBufferSupport buffers;
     private final BufferedJoinInput bufferedInner;
     private final JoinOutputBuffer outputBuffer;
@@ -67,6 +70,9 @@ public class NestedLoopJoinOperator
     private Iterator<Integer> outerPositionIterator;
     private int currentOuterPosition;
     private boolean currentOuterPositionReady;
+    private boolean currentOuterPositionMatched;
+    private Mask matchedOuterMask;
+    private boolean emitUnmatchedOuter;
     private int currentOutputCount;
     private Mask currentOutputMask;
     private boolean currentOutputUsesCrossProductLayout;
@@ -86,9 +92,19 @@ public class NestedLoopJoinOperator
         this(resources, allocator, outer, inner, new CrossJoinMatcher());
     }
 
+    public NestedLoopJoinOperator(OperatorResources resources, Allocator allocator, Operator outer, Operator inner, boolean probeOuterJoin)
+    {
+        this(resources, allocator, outer, inner, new CrossJoinMatcher(), probeOuterJoin);
+    }
+
     public NestedLoopJoinOperator(OperatorResources resources, Allocator allocator, Operator outer, Operator inner, JoinFilter... filters)
     {
-        this(resources, allocator, outer, inner, new FilteredJoinMatcher(filters));
+        this(resources, allocator, outer, inner, false, filters);
+    }
+
+    public NestedLoopJoinOperator(OperatorResources resources, Allocator allocator, Operator outer, Operator inner, boolean probeOuterJoin, JoinFilter... filters)
+    {
+        this(resources, allocator, outer, inner, new FilteredJoinMatcher(filters), probeOuterJoin);
     }
 
     public NestedLoopJoinOperator(Allocator allocator, Operator outer, int outerJoinColumn, Operator inner, int innerJoinColumn)
@@ -145,6 +161,11 @@ public class NestedLoopJoinOperator
 
     private NestedLoopJoinOperator(OperatorResources resources, Allocator allocator, Operator outer, Operator inner, JoinMatcher matcher)
     {
+        this(resources, allocator, outer, inner, matcher, false);
+    }
+
+    private NestedLoopJoinOperator(OperatorResources resources, Allocator allocator, Operator outer, Operator inner, JoinMatcher matcher, boolean probeOuterJoin)
+    {
         this(
                 requireNonNull(resources, "resources is null").nestedLoopJoinPolicy(),
                 resources.bufferedJoinInputPolicy(),
@@ -152,7 +173,8 @@ public class NestedLoopJoinOperator
                 allocator,
                 outer,
                 inner,
-                matcher);
+                matcher,
+                probeOuterJoin);
     }
 
     private NestedLoopJoinOperator(Allocator allocator, Operator outer, Operator inner, JoinMatcher matcher)
@@ -164,7 +186,8 @@ public class NestedLoopJoinOperator
                 allocator,
                 outer,
                 inner,
-                matcher);
+                matcher,
+                false);
     }
 
     private NestedLoopJoinOperator(
@@ -174,13 +197,15 @@ public class NestedLoopJoinOperator
             Allocator allocator,
             Operator outer,
             Operator inner,
-            JoinMatcher matcher)
+            JoinMatcher matcher,
+            boolean probeOuterJoin)
     {
         this.policy = requireNonNull(policy, "policy is null");
         this.allocator = requireNonNull(allocator, "allocator is null");
         this.outer = requireNonNull(outer, "outer is null");
         this.inner = requireNonNull(inner, "inner is null");
         this.matcher = requireNonNull(matcher, "matcher is null");
+        this.probeOuterJoin = probeOuterJoin;
         int maxBatchRows = policy.maxBatchRows();
         this.outputOuterPositions = new int[maxBatchRows];
         this.outputInnerRows = new long[maxBatchRows];
@@ -261,9 +286,22 @@ public class NestedLoopJoinOperator
 
     private Mask produceBatch()
     {
+        loadInnerIfNecessary();
+        if (bufferedInner.rowCount() == 0 && probeOuterJoin) {
+            if (outerRemaining == 0 && !loadNextOuterBatch()) {
+                captureOuterSchemaIfAvailable();
+                markDoneOrWaitingForOuterInput();
+                currentOutputCount = 0;
+                currentOutputUsesCrossProductLayout = true;
+                return allocator.allocateAllMask(allocationContext, 0);
+            }
+            currentOutputUsesCrossProductLayout = true;
+            outputBuffer.joinWithNullInner(currentOuterBatch, currentOuterMask, bufferedInner);
+            outerRemaining = 0;
+            return allocator.copyMask(allocationContext, currentOuterMask);
+        }
         if (!matcher.producesFullCrossProduct()) {
-            loadInnerIfNecessary();
-            if (bufferedInner.rowCount() == 0) {
+            if (bufferedInner.rowCount() == 0 && !probeOuterJoin) {
                 captureOuterSchemaIfAvailable();
                 done = true;
                 currentOutputCount = 0;
@@ -276,6 +314,10 @@ public class NestedLoopJoinOperator
                 currentOutputUsesCrossProductLayout = false;
                 return allocator.allocateAllMask(allocationContext, 0);
             }
+            if (emitUnmatchedOuter) {
+                currentOutputUsesCrossProductLayout = true;
+                return produceUnmatchedOuterBatch();
+            }
             if (matcher.supportsOuterMaskPruning(currentOuterBatch, bufferedInner.batches().get(currentInnerBatch))) {
                 currentOutputUsesCrossProductLayout = true;
                 return produceOuterMaskPrunedBatch();
@@ -286,7 +328,6 @@ public class NestedLoopJoinOperator
 
         currentOutputUsesCrossProductLayout = true;
 
-        loadInnerIfNecessary();
         if (bufferedInner.rowCount() == 0) {
             captureOuterSchemaIfAvailable();
             done = true;
@@ -351,6 +392,15 @@ public class NestedLoopJoinOperator
         joinWithInnerRow();
         Mask mask = allocator.copyMask(allocationContext, currentOuterMask);
         matcher.pruneOuterMask(currentOuterBatch, mask, innerBatch, currentInnerPosition);
+        if (probeOuterJoin) {
+            Mask union = matchedOuterMask == null
+                    ? allocator.copyMask(allocationContext, mask)
+                    : allocator.unionMask(allocationContext, matchedOuterMask, mask);
+            if (matchedOuterMask != null) {
+                allocator.release(allocationContext, matchedOuterMask);
+            }
+            matchedOuterMask = union;
+        }
 
         currentInnerPosition++;
         if (currentInnerPosition == innerBatch.length()) {
@@ -359,9 +409,29 @@ public class NestedLoopJoinOperator
         }
         if (currentInnerBatch == bufferedInner.batches().size()) {
             currentInnerBatch = 0;
-            outerRemaining = 0;
+            if (probeOuterJoin) {
+                emitUnmatchedOuter = true;
+            }
+            else {
+                outerRemaining = 0;
+            }
         }
         return mask;
+    }
+
+    private Mask produceUnmatchedOuterBatch()
+    {
+        Mask unmatched = matchedOuterMask == null
+                ? allocator.copyMask(allocationContext, currentOuterMask)
+                : allocator.differenceMask(allocationContext, currentOuterMask, matchedOuterMask);
+        if (matchedOuterMask != null) {
+            allocator.release(allocationContext, matchedOuterMask);
+            matchedOuterMask = null;
+        }
+        emitUnmatchedOuter = false;
+        outerRemaining = 0;
+        outputBuffer.joinWithNullInner(currentOuterBatch, currentOuterMask, bufferedInner);
+        return unmatched;
     }
 
     private Mask produceEquiJoinBatch()
@@ -388,6 +458,7 @@ public class NestedLoopJoinOperator
                 }
                 currentOuterPosition = outerPositionIterator.next();
                 currentOuterPositionReady = true;
+                currentOuterPositionMatched = false;
                 currentInnerBatch = 0;
                 currentInnerPosition = 0;
             }
@@ -399,6 +470,7 @@ public class NestedLoopJoinOperator
                         outputOuterPositions[outputPosition] = currentOuterPosition;
                         outputInnerRows[outputPosition] = packRowReference(currentInnerBatch, currentInnerPosition);
                         outputPosition++;
+                        currentOuterPositionMatched = true;
                     }
                     currentInnerPosition++;
                 }
@@ -409,6 +481,11 @@ public class NestedLoopJoinOperator
             }
 
             if (currentInnerBatch == bufferedInner.batches().size()) {
+                if (probeOuterJoin && !currentOuterPositionMatched && outputPosition < policy.maxBatchRows()) {
+                    outputOuterPositions[outputPosition] = currentOuterPosition;
+                    outputInnerRows[outputPosition] = NO_MATCH_ROW_REFERENCE;
+                    outputPosition++;
+                }
                 currentInnerBatch = 0;
                 currentInnerPosition = 0;
                 outerRemaining--;
@@ -541,6 +618,10 @@ public class NestedLoopJoinOperator
         inner.close();
         retainedInnerConstraintMasks.values().forEach(mask -> allocator.release(allocationContext, mask));
         retainedInnerConstraintMasks.clear();
+        if (matchedOuterMask != null) {
+            allocator.release(allocationContext, matchedOuterMask);
+            matchedOuterMask = null;
+        }
         bufferedInner.releaseBuffers();
         allocator.release(allocationContext);
     }
@@ -561,6 +642,10 @@ public class NestedLoopJoinOperator
         Set<Stream> streams = outputIndex < outer.outputCount()
                 ? currentOuterBatch.output(outputIndex).streams()
                 : bufferedInner.outputStreams(outputIndex - outer.outputCount());
+        if (probeOuterJoin && outputIndex >= outer.outputCount()) {
+            streams = new java.util.HashSet<>(streams);
+            streams.add(Stream.NULLS);
+        }
         return new Output(
                 streams,
                 stream -> materializeOutput(outputIndex).get(stream),
@@ -623,6 +708,21 @@ public class NestedLoopJoinOperator
 
     private Streams materializeInnerOutput(int innerOutputIndex)
     {
+        if (probeOuterJoin) {
+            Streams result = null;
+            Streams schema = outputSchema(innerOutputIndex + outer.outputCount());
+            for (int index = 0; index < currentOutputMask.count(); index++) {
+                int outputPosition = currentOutputMask.position(index);
+                long rowReference = outputInnerRows[outputPosition];
+                if (rowReference == NO_MATCH_ROW_REFERENCE) {
+                    result = buffers.copyNullPosition(result, schema, currentOutputCount, outputPosition);
+                    continue;
+                }
+                BufferedJoinInput.InnerBatch innerBatch = bufferedInner.batches().get(batchIndex(rowReference));
+                result = copyInnerSinglePosition(result, innerBatch, innerOutputIndex, currentOutputCount, outputPosition, rowPosition(rowReference));
+            }
+            return result == null ? buffers.emptyLike(schema) : result;
+        }
         if (currentOutputMask.all()) {
             Streams result = null;
             int outputStart = 0;
