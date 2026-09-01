@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.data;
 
+import java.util.Map;
 import java.util.function.Consumer;
 
 import static com.google.common.base.Preconditions.checkArgument;
@@ -228,6 +229,17 @@ public final class MapVector
     @Override
     public Vector materializeRows(Allocator allocator, Allocator.Context allocationContext, Vector[] rows)
     {
+        Vector[] normalizedRows = VectorSupport.normalizeRows(
+                allocator, allocationContext, rows, MapVector.class);
+        if (normalizedRows != null) {
+            try {
+                return materializeMapRows(allocator, allocationContext, normalizedRows);
+            }
+            finally {
+                VectorSupport.releaseNormalizedRows(allocator, allocationContext, rows, normalizedRows);
+            }
+        }
+
         MapVector result = allocator.allocateMap(allocationContext, VectorSupport.totalLength(rows));
         int outputStart = 0;
         for (Vector row : rows) {
@@ -241,6 +253,60 @@ public final class MapVector
             outputStart += rowLength;
         }
         return result;
+    }
+
+    private static MapVector materializeMapRows(
+            Allocator allocator,
+            Allocator.Context allocationContext,
+            Vector[] rows)
+    {
+        int totalRows = VectorSupport.totalLength(rows);
+        MapVector result = allocator.allocateMap(allocationContext, totalRows);
+        int outputPosition = 0;
+        int entryPosition = 0;
+        result.offsets()[0] = 0;
+        for (Vector row : rows) {
+            MapVector maps = (MapVector) row;
+            maps.finishSparseOffsets();
+            for (int position = 0; position < maps.length(); position++) {
+                entryPosition = Math.addExact(entryPosition, maps.length(position));
+                result.offsets()[++outputPosition] = entryPosition;
+            }
+        }
+        result.initializedOffsetCount = totalRows + 1;
+
+        if (rows.length == 0) {
+            result.setEntries(Streams.empty(), Streams.empty());
+            return result;
+        }
+        result.setEntries(
+                materializeEntryStreams(allocator, allocationContext, rows, true),
+                materializeEntryStreams(allocator, allocationContext, rows, false));
+        return result;
+    }
+
+    private static Streams materializeEntryStreams(
+            Allocator allocator,
+            Allocator.Context allocationContext,
+            Vector[] rows,
+            boolean keys)
+    {
+        Streams first = keys ? ((MapVector) rows[0]).keys() : ((MapVector) rows[0]).values();
+        Streams.Builder result = Streams.builder();
+        for (Map.Entry<Stream, Vector> entry : first.asMap().entrySet()) {
+            Vector[] segments = new Vector[rows.length];
+            for (int index = 0; index < rows.length; index++) {
+                MapVector map = (MapVector) rows[index];
+                Streams streams = keys ? map.keys() : map.values();
+                Vector segment = streams.getOrNull(entry.getKey());
+                if (segment == null) {
+                    throw new IllegalArgumentException("Map segments have different stream shapes");
+                }
+                segments[index] = segment;
+            }
+            result.put(entry.getKey(), segments[0].materializeRows(allocator, allocationContext, segments));
+        }
+        return result.build();
     }
 
     @Override

@@ -44,4 +44,47 @@ final class VectorSupport
         }
         return positions;
     }
+
+    public static Vector[] normalizeRows(
+            Allocator allocator,
+            Allocator.Context allocationContext,
+            Vector[] rows,
+            Class<? extends Vector> expectedType)
+    {
+        Vector[] normalized = new Vector[rows.length];
+        try {
+            for (int index = 0; index < rows.length; index++) {
+                Vector row = rows[index];
+                if (expectedType.isInstance(row)) {
+                    normalized[index] = row;
+                    continue;
+                }
+                Vector copy = row.copy(allocator, allocationContext, densePositions(row.length()));
+                normalized[index] = copy;
+                if (!expectedType.isInstance(copy)) {
+                    releaseNormalizedRows(allocator, allocationContext, rows, normalized);
+                    return null;
+                }
+            }
+            return normalized;
+        }
+        catch (RuntimeException | Error failure) {
+            releaseNormalizedRows(allocator, allocationContext, rows, normalized);
+            throw failure;
+        }
+    }
+
+    public static void releaseNormalizedRows(
+            Allocator allocator,
+            Allocator.Context allocationContext,
+            Vector[] rows,
+            Vector[] normalized)
+    {
+        for (int index = 0; index < normalized.length; index++) {
+            Vector vector = normalized[index];
+            if (vector != null && vector != rows[index]) {
+                allocator.release(allocationContext, vector);
+            }
+        }
+    }
 }

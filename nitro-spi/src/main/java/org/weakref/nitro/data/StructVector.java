@@ -214,6 +214,17 @@ public final class StructVector
     @Override
     public Vector materializeRows(Allocator allocator, Allocator.Context allocationContext, Vector[] rows)
     {
+        Vector[] normalizedRows = VectorSupport.normalizeRows(
+                allocator, allocationContext, rows, StructVector.class);
+        if (normalizedRows != null) {
+            try {
+                return materializeStructRows(allocator, allocationContext, normalizedRows);
+            }
+            finally {
+                VectorSupport.releaseNormalizedRows(allocator, allocationContext, rows, normalizedRows);
+            }
+        }
+
         StructVector result = allocator.allocate(allocationContext, StructVector.class, VectorSupport.totalLength(rows), StructVector::new);
         int outputStart = 0;
         for (Vector row : rows) {
@@ -225,6 +236,46 @@ public final class StructVector
                 result = (StructVector) row.copyPositionsInto(allocator, allocationContext, result, VectorSupport.densePositions(rowLength), rowLength, outputStart, result.length());
             }
             outputStart += rowLength;
+        }
+        return result;
+    }
+
+    private static StructVector materializeStructRows(
+            Allocator allocator,
+            Allocator.Context allocationContext,
+            Vector[] rows)
+    {
+        StructVector result = allocator.allocate(
+                allocationContext,
+                StructVector.class,
+                VectorSupport.totalLength(rows),
+                StructVector::new);
+        if (rows.length == 0) {
+            return result;
+        }
+
+        StructVector first = (StructVector) rows[0];
+        for (Map.Entry<String, Streams> field : first.fields().entrySet()) {
+            Streams.Builder fieldStreams = Streams.builder();
+            for (Map.Entry<Stream, Vector> stream : field.getValue().asMap().entrySet()) {
+                Vector[] segments = new Vector[rows.length];
+                for (int index = 0; index < rows.length; index++) {
+                    StructVector struct = (StructVector) rows[index];
+                    if (struct.fields().size() != first.fields().size()) {
+                        throw new IllegalArgumentException("Struct segments have different field layouts");
+                    }
+                    Streams streams = struct.fields().get(field.getKey());
+                    Vector segment = streams == null ? null : streams.getOrNull(stream.getKey());
+                    if (segment == null) {
+                        throw new IllegalArgumentException("Struct segments have different stream shapes");
+                    }
+                    segments[index] = segment;
+                }
+                fieldStreams.put(
+                        stream.getKey(),
+                        segments[0].materializeRows(allocator, allocationContext, segments));
+            }
+            result.setField(field.getKey(), fieldStreams.build());
         }
         return result;
     }

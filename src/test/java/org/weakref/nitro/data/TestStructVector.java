@@ -54,4 +54,35 @@ class TestStructVector
         assertThatThrownBy(() -> vector.fields().remove("sum"))
                 .isInstanceOf(UnsupportedOperationException.class);
     }
+
+    @Test
+    void testMaterializesMixedEncodedSegmentsInOnePass()
+    {
+        StructVector first = new StructVector(2);
+        first.setField("value", Streams.ofValuesAndNulls(
+                new I64Vector(new long[] {1, 2}),
+                new BooleanVector(2)));
+        StructVector second = new StructVector(1);
+        second.setField("value", Streams.ofValuesAndNulls(
+                new I64Vector(new long[] {3}),
+                new BooleanVector(1)));
+
+        EngineResources resources = EngineResources.createDefault();
+        Allocator allocator = new Allocator(resources);
+        Allocator.Context context = new Allocator.Context("mixed-struct-materialize");
+        try {
+            Vector encodedFirst = DictionaryVector.wrap(new int[] {1, 0}, first);
+            StructVector result = (StructVector) encodedFirst.materializeRows(
+                    allocator,
+                    context,
+                    new Vector[] {encodedFirst, second});
+            assertThat(((I64Vector) result.fieldValues("value")).values()).containsExactly(2, 1, 3);
+            assertThat(((BooleanVector) result.field("value").get(Stream.NULLS)).values())
+                    .containsExactly(false, false, false);
+        }
+        finally {
+            allocator.release(context);
+            resources.close();
+        }
+    }
 }

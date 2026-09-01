@@ -215,44 +215,14 @@ public final class ArrayVector
     @Override
     public Vector materializeRows(Allocator allocator, Allocator.Context allocationContext, Vector[] rows)
     {
-        boolean directArrays = true;
-        for (Vector row : rows) {
-            if (!(row instanceof ArrayVector)) {
-                directArrays = false;
-                break;
-            }
-        }
-        if (directArrays) {
-            return materializeArrayRows(allocator, allocationContext, rows);
-        }
-
-        Vector[] normalizedRows = new Vector[rows.length];
-        int normalizedCount = 0;
-        boolean normalizedArrays = true;
-        try {
-            for (int index = 0; index < rows.length; index++) {
-                Vector row = rows[index];
-                if (row instanceof ArrayVector) {
-                    normalizedRows[index] = row;
-                    continue;
-                }
-                Vector normalized = row.copy(allocator, allocationContext, VectorSupport.densePositions(row.length()));
-                normalizedRows[index] = normalized;
-                normalizedCount = index + 1;
-                if (!(normalized instanceof ArrayVector)) {
-                    normalizedArrays = false;
-                    break;
-                }
-            }
-            if (normalizedArrays) {
+        Vector[] normalizedRows = VectorSupport.normalizeRows(
+                allocator, allocationContext, rows, ArrayVector.class);
+        if (normalizedRows != null) {
+            try {
                 return materializeArrayRows(allocator, allocationContext, normalizedRows);
             }
-        }
-        finally {
-            for (int index = 0; index < normalizedCount; index++) {
-                if (normalizedRows[index] != rows[index]) {
-                    allocator.release(allocationContext, normalizedRows[index]);
-                }
+            finally {
+                VectorSupport.releaseNormalizedRows(allocator, allocationContext, rows, normalizedRows);
             }
         }
 
