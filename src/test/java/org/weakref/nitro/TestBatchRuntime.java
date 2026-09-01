@@ -137,6 +137,49 @@ public class TestBatchRuntime
     }
 
     @Test
+    void testStreamPositionCopiesPreserveEarlierOptionalStreams()
+    {
+        ErrorValue failure = new ErrorValue("test", 17, "FAILURE", "USER_ERROR", "failure");
+        ErrorVector errors = new ErrorVector(1);
+        errors.setError(0, failure);
+        Streams withSideStreams = Streams.ofValuesAndNulls(
+                new I64Vector(new long[] {11}),
+                new BooleanVector(new boolean[] {true}))
+                .with(Stream.ERRORS, errors);
+        Streams valuesOnly = Streams.ofValues(new I64Vector(new long[] {22}));
+
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            Allocator.Context context = new Allocator.Context("OptionalStreamPositionCopy");
+            Streams output = allocator.copySinglePositionInto(context, withSideStreams, null, 0, 0, 2);
+            Streams reused = allocator.copySinglePositionInto(context, valuesOnly, output, 0, 1, 2);
+
+            assertThat(reused).isSameAs(output);
+            assertThat(((I64Vector) reused.values()).values()).containsExactly(11, 22);
+            assertThat(((BooleanVector) reused.get(Stream.NULLS)).values()).containsExactly(true, false);
+            assertThat(((ErrorVector) reused.get(Stream.ERRORS)).error(0)).isEqualTo(failure);
+            assertThat(((ErrorVector) reused.get(Stream.ERRORS)).error(1)).isNull();
+            assertThat(((ErrorVector) reused.get(Stream.ERRORS)).values()).containsExactly(true, false);
+        }
+    }
+
+    @Test
+    void testNullPositionCopyUsesSourceOnlyForPhysicalShape()
+    {
+        Streams source = Streams.ofValues(new I64Vector(new long[] {11, 22}));
+
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            Allocator.Context context = new Allocator.Context("NullPositionCopy");
+            Streams output = allocator.copySinglePositionInto(context, source, null, 0, 0, 2);
+            Streams reused = allocator.copyNullPositionInto(context, source, output, 1, 1, 2);
+
+            assertThat(((I64Vector) reused.values()).values()).containsExactly(11, 22);
+            assertThat(((BooleanVector) reused.get(Stream.NULLS)).values()).containsExactly(false, true);
+        }
+    }
+
+    @Test
     void testSimpleOutputAllowsRepeatedBorrowButInvalidatesAfterTake()
     {
         I64Vector values = new I64Vector(new long[] {11, 12, 13});

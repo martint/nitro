@@ -326,6 +326,43 @@ public class Allocator
         return reuseOrCreateStreams(existing, values, nulls, errors);
     }
 
+    /**
+     * Writes a null value using one source position only as the physical value shape and placeholder.
+     *
+     * <p>The value at a null position is intentionally unspecified. Copying it from a real row keeps this operation
+     * independent of logical and physical types while the explicit NULLS stream supplies the SQL semantics.
+     */
+    public Streams copyNullPositionInto(
+            Context context,
+            Streams source,
+            Streams existing,
+            int sourcePosition,
+            int outputPosition,
+            int size)
+    {
+        requireNonNull(source, "source is null");
+        Vector values = source.values().copySinglePositionInto(
+                this,
+                context,
+                existing == null ? null : existing.getOrNull(Stream.VALUES),
+                sourcePosition,
+                outputPosition,
+                size);
+        BooleanVector nulls = VectorAccess.writableBooleanVector(
+                this,
+                context,
+                existing == null ? null : existing.getOrNull(Stream.NULLS),
+                size);
+        nulls.invalidateContentSummary();
+        nulls.values()[outputPosition] = true;
+        Vector errors = clearOptionalPosition(
+                context,
+                existing == null ? null : existing.getOrNull(Stream.ERRORS),
+                outputPosition,
+                size);
+        return reuseOrCreateStreams(existing, values, nulls, errors);
+    }
+
     /** Copies one source position across an output range while preserving transport-tuple reuse. */
     public Streams copySinglePositionRangeInto(
             Context context,
@@ -354,10 +391,33 @@ public class Allocator
     {
         Vector sourceVector = source.getOrNull(stream);
         if (sourceVector == null) {
-            return null;
+            if (stream == Stream.VALUES) {
+                throw new IllegalArgumentException("source has no values stream");
+            }
+            return clearOptionalPosition(
+                    context,
+                    existing == null ? null : existing.getOrNull(stream),
+                    outputPosition,
+                    size);
         }
         Vector existingVector = existing == null ? null : existing.getOrNull(stream);
         return sourceVector.copySinglePositionInto(this, context, existingVector, sourcePosition, outputPosition, size);
+    }
+
+    private Vector clearOptionalPosition(Context context, Vector existing, int position, int size)
+    {
+        if (existing == null) {
+            return null;
+        }
+        if (existing instanceof ErrorVector errors) {
+            ErrorVector writable = allocateOrGrow(context, errors, ErrorVector.class, size, ErrorVector::new);
+            writable.clearError(position);
+            return writable;
+        }
+        BooleanVector writable = VectorAccess.writableBooleanVector(this, context, existing, size);
+        writable.invalidateContentSummary();
+        writable.values()[position] = false;
+        return writable;
     }
 
     private Vector copySinglePositionRangeStream(
