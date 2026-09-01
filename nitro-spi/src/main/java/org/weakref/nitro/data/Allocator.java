@@ -60,6 +60,7 @@ public class Allocator
     private ContextState lastContextState;
     private CompletableFuture<Void> memoryBlocked = CompletableFuture.completedFuture(null);
     private long residentBytes;
+    private long peakResidentBytes;
     private boolean closed;
 
     public Allocator(AllocationResourcesOwner resourcesOwner)
@@ -1241,6 +1242,12 @@ public class Allocator
         return residentBytes;
     }
 
+    /** Returns the allocator-wide high-water mark of concurrently resident storage. */
+    public long peakResidentBytes()
+    {
+        return peakResidentBytes;
+    }
+
     /**
      * Releases all idle vectors and masks retained in this allocator's local reuse pools.
      *
@@ -2011,6 +2018,7 @@ public class Allocator
             }
         }
         residentBytes += bytes;
+        peakResidentBytes = Math.max(peakResidentBytes, residentBytes);
     }
 
     private void releaseResident(long bytes)

@@ -325,6 +325,7 @@ class TestAllocator
             long bytes = vector.retainedBytes();
 
             assertThat(allocator.residentBytes()).isEqualTo(bytes);
+            assertThat(allocator.peakResidentBytes()).isEqualTo(bytes);
             assertThat(memory.reservedBytes()).isEqualTo(bytes);
 
             allocator.release(context, vector);
@@ -337,6 +338,7 @@ class TestAllocator
 
             allocator.discard(context, reused);
             assertThat(allocator.residentBytes()).isZero();
+            assertThat(allocator.peakResidentBytes()).isEqualTo(bytes);
             assertThat(memory.reservedBytes()).isZero();
         }
     }
