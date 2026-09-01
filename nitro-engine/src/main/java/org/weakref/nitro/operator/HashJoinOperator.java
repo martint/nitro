@@ -6985,6 +6985,16 @@ public class HashJoinOperator
                 return;
             }
             closed = true;
+            for (int outputIndex = 0; outputIndex < currentOutputs.length; outputIndex++) {
+                Streams output = currentOutputs[outputIndex];
+                if (output == null) {
+                    continue;
+                }
+                for (Stream stream : output.streams()) {
+                    allocator.release(allocationContext, output.get(stream));
+                }
+                currentOutputs[outputIndex] = null;
+            }
             for (int index = 0; index < mappingCount; index++) {
                 allocator.release(allocationContext, mappings[index]);
                 mappings[index] = null;

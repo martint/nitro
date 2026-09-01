@@ -3550,6 +3550,48 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testHashJoinReleasesUnborrowedMaterializedStreamsAfterEveryBatch()
+    {
+        int rowsPerBatch = 4_096;
+        List<TableOperator.Page> probePages = new ArrayList<>();
+        for (int batch = 0; batch < 8; batch++) {
+            long[] keys = new long[rowsPerBatch];
+            Arrays.setAll(keys, position -> position & 1);
+            probePages.add(TableOperator.Page.values(
+                    rowsPerBatch,
+                    new Vector[] {new I64Vector(keys)},
+                    Mask.all(rowsPerBatch)));
+        }
+        Streams buildKey = Streams.of(
+                new I64Vector(new long[] {0}),
+                null,
+                new BooleanVector(new boolean[] {false}));
+
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        Allocator.Context joinContext = new Allocator.Context("HashJoinOperator");
+        try (Operator operator = new HashJoinOperator(
+                allocator,
+                new TableOperator(1, probePages),
+                0,
+                new TableOperator(1, List.of(new TableOperator.Page(1, new Streams[] {buildKey}, Mask.all(1)))),
+                0,
+                true)) {
+            long firstBatchBytes = -1;
+            while (operator.hasNext()) {
+                try (Batch batch = operator.next()) {
+                    batch.output(1).borrow(Stream.VALUES);
+                }
+                if (firstBatchBytes < 0) {
+                    firstBatchBytes = allocator.currentBytes(joinContext);
+                }
+                else {
+                    assertThat(allocator.currentBytes(joinContext)).isEqualTo(firstBatchBytes);
+                }
+            }
+        }
+    }
+
+    @Test
     void testHashJoinOperatorDoesNotPushBuildFilterIntoPreservedProbe()
     {
         AtomicBoolean filterPushed = new AtomicBoolean();
