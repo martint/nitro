@@ -14,6 +14,7 @@
 package org.weakref.nitro.operator;
 
 import org.junit.jupiter.api.Test;
+import org.weakref.nitro.core.type.Field;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
@@ -23,6 +24,7 @@ import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.execution.EngineResources;
+import org.weakref.nitro.operator.aggregation.PhysicalAggregationProgram;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -32,6 +34,42 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class TestKeyOnlyGroupingSession
 {
+    @Test
+    void testComputesGroupingHashesForDistinctOutputRows()
+    {
+        PhysicalAggregationProgram program = new PhysicalAggregationProgram(List.of(), List.of())
+                .withGroupingHashOutput(new GroupingHashOutput(
+                        "test-key-only-v1",
+                        new Field(Schema.unspecified(1).field(0).type(), false)));
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                KeyOnlyGroupingSession session = new KeyOnlyGroupingSession(
+                        allocator,
+                        Schema.unspecified(2),
+                        List.of(0, 1),
+                        List.of(0, 1),
+                        program,
+                        resources.operatorResources(),
+                        null)) {
+            allocator.beginExecution();
+            try (Batch input = new Batch(
+                    Mask.all(3),
+                    Output.of(Streams.ofValues(new I64Vector(new long[] {1, 1, 2}))),
+                    Output.of(Streams.ofValues(new I64Vector(new long[] {10, 10, 20}))))) {
+                session.addInput(input);
+            }
+
+            try (Batch output = session.getOutput()) {
+                assertThat(output.outputCount()).isEqualTo(3);
+                assertThat(selectedLongValues(output, 0)).containsExactly(1L, 2L);
+                assertThat(selectedLongValues(output, 1)).containsExactly(10L, 20L);
+                assertThat(selectedLongValues(output, 2)).containsExactly(
+                        31L * Long.hashCode(1) + Long.hashCode(10),
+                        31L * Long.hashCode(2) + Long.hashCode(20));
+            }
+        }
+    }
+
     @Test
     void testStreamsDistinctKeysAcrossInputBatchesAndRetainsNull()
     {
@@ -394,7 +432,12 @@ class TestKeyOnlyGroupingSession
 
     private static List<Long> selectedValues(Batch batch)
     {
-        long[] values = ((I64Vector) batch.output(0).borrow(Stream.VALUES)).values();
+        return selectedLongValues(batch, 0);
+    }
+
+    private static List<Long> selectedLongValues(Batch batch, int channel)
+    {
+        long[] values = ((I64Vector) batch.output(channel).borrow(Stream.VALUES)).values();
         List<Long> selected = new ArrayList<>();
         for (int position : batch.borrowMask()) {
             selected.add(values[position]);

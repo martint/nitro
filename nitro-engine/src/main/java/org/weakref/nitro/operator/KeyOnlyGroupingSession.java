@@ -84,8 +84,31 @@ public final class KeyOnlyGroupingSession
             OperatorResources operatorResources,
             PartialAggregationControl partialAggregationControl)
     {
+        this(
+                allocator,
+                inputSchema,
+                groupByColumns,
+                groupedColumns,
+                new PhysicalAggregationProgram(List.of(), List.of()),
+                operatorResources,
+                partialAggregationControl);
+    }
+
+    public KeyOnlyGroupingSession(
+            Allocator allocator,
+            Schema inputSchema,
+            List<Integer> groupByColumns,
+            List<Integer> groupedColumns,
+            PhysicalAggregationProgram program,
+            OperatorResources operatorResources,
+            PartialAggregationControl partialAggregationControl)
+    {
         this.allocator = requireNonNull(allocator, "allocator is null");
         requireNonNull(inputSchema, "inputSchema is null");
+        requireNonNull(program, "program is null");
+        if (!program.units().isEmpty() || !program.outputs().isEmpty()) {
+            throw new IllegalArgumentException("key-only grouping program contains aggregation state");
+        }
         this.operatorResources = requireNonNull(operatorResources, "operatorResources is null");
         this.groupByColumnList = List.copyOf(requireNonNull(groupByColumns, "groupByColumns is null"));
         this.groupByColumns = this.groupByColumnList.stream()
@@ -114,7 +137,7 @@ public final class KeyOnlyGroupingSession
                 allocator,
                 inputSchema,
                 groupedColumns,
-                new PhysicalAggregationProgram(List.of(), List.of()),
+                program,
                 operatorResources);
     }
 
