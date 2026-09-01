@@ -48,6 +48,7 @@ import org.weakref.nitro.function.scalar.builtin.ExtractHostUtf8;
 import org.weakref.nitro.function.scalar.builtin.GreaterThanF64;
 import org.weakref.nitro.function.scalar.builtin.GreaterThanOrEqualF64;
 import org.weakref.nitro.function.scalar.builtin.HashUtf8;
+import org.weakref.nitro.function.scalar.builtin.IdenticalI64;
 import org.weakref.nitro.function.scalar.builtin.IfF64;
 import org.weakref.nitro.function.scalar.builtin.IfI32;
 import org.weakref.nitro.function.scalar.builtin.IfI64;
@@ -136,6 +137,7 @@ public final class TestPrimitiveFunctions
                 IfI32.class,
                 IfI64.class,
                 IfUtf8.class,
+                IdenticalI64.class,
                 IsNullI32.class,
                 IsNullI64.class,
                 InUtf8.class,

@@ -51,6 +51,7 @@ import org.weakref.nitro.function.scalar.builtin.CoalesceI64;
 import org.weakref.nitro.function.scalar.builtin.CoalesceI64Policy;
 import org.weakref.nitro.function.scalar.builtin.DivideScaleRoundI64;
 import org.weakref.nitro.function.scalar.builtin.EqualI64;
+import org.weakref.nitro.function.scalar.builtin.IdenticalI64;
 import org.weakref.nitro.function.scalar.builtin.InUtf8;
 import org.weakref.nitro.function.scalar.builtin.InUtf8SourceMaskOptimization;
 import org.weakref.nitro.function.scalar.builtin.LessThanI64;
@@ -2136,6 +2137,29 @@ public class TestPlanEvaluator
 
         assertThat(readBooleans(result.values())).containsExactly(true, true, false, false);
         assertThat(readBooleans(result.get(Stream.NULLS))).containsExactly(false, true, false, false);
+    }
+
+    @Test
+    void testIntegralIdenticalSupportsNullableEncodedInputs()
+    {
+        PrimitiveFunction identical = new IdenticalI64();
+        Streams result = identical.apply(
+                List.of(
+                        Streams.ofValuesAndNulls(
+                                new DictionaryVector(
+                                        new int[] {0, 1, 0, 2, 1, 0},
+                                        new I64Vector(new long[] {10, 20, 30})),
+                                new BooleanVector(new boolean[] {false, true, true, false, false, false})),
+                        Streams.ofValuesAndNulls(
+                                new RleVector(new int[] {2, 2, 2}, new I64Vector(new long[] {10, 30, 20})),
+                                new BooleanVector(new boolean[] {false, true, false, false, false, false}))),
+                Mask.all(6),
+                Set.of(Stream.VALUES),
+                null,
+                new PrimitiveExecutionContext(new Allocator(EngineResources.createDefault())));
+
+        assertThat(readBooleans(result.values())).containsExactly(true, true, false, true, true, false);
+        assertThat(result.has(Stream.NULLS)).isFalse();
     }
 
     @Test
@@ -5493,6 +5517,7 @@ public class TestPlanEvaluator
         primitiveRegistry.register(scalarRegistry.register(scalarLoader.load(AddI64.class)));
         primitiveRegistry.register(scalarRegistry.register(scalarLoader.load(DivideScaleRoundI64.class)));
         primitiveRegistry.register(scalarRegistry.register(scalarLoader.load(EqualI64.class)));
+        primitiveRegistry.register(scalarRegistry.register(scalarLoader.load(IdenticalI64.class)));
         primitiveRegistry.register(scalarRegistry.register(scalarLoader.load(InUtf8.class)));
         primitiveRegistry.register(scalarRegistry.register(scalarLoader.load(LessThanI64.class)));
         primitiveRegistry.register(scalarRegistry.register(scalarLoader.load(LessThanOrEqualI64.class)));
