@@ -55,6 +55,36 @@ final class TestRegisteredPatternAggregationFunction
         }
     }
 
+    @Test
+    void testInputLifecycle()
+    {
+        PatternEvaluationContext context = context();
+        LifecycleInput input = new LifecycleInput();
+        RegisteredPatternAggregationFunction function = new RegisteredPatternAggregationFunction(new SumImplementation(true), input);
+
+        try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
+            Allocator.Context allocationContext = new Allocator.Context("registered-pattern-aggregation-lifecycle");
+            PatternAggregationRows rows = new PatternAggregationRows();
+            rows.reset(context, new PatternAggregationSet(new int[0], FINAL));
+            function.evaluate(
+                    context,
+                    rows,
+                    allocator,
+                    allocationContext,
+                    Streams.empty(),
+                    0,
+                    1);
+
+            assertThat(input.allocator).isSameAs(allocator);
+            assertThat(input.allocationContext).isSameAs(allocationContext);
+            assertThat(input.initializeCount).isEqualTo(1);
+
+            function.close();
+            function.close();
+            assertThat(input.closeCount).isEqualTo(1);
+        }
+    }
+
     private static PatternEvaluationContext context()
     {
         PatternEvaluationContext context = new PatternEvaluationContext(new LongRows());
@@ -81,7 +111,7 @@ final class TestRegisteredPatternAggregationFunction
         };
     }
 
-    private static final class LongInput
+    private static class LongInput
             implements PatternAggregationInput
     {
         private final Schema schema = Schema.unspecified(1);
@@ -116,6 +146,29 @@ final class TestRegisteredPatternAggregationFunction
         public Vector stream(int input, Stream stream)
         {
             return values.getOrNull(stream);
+        }
+    }
+
+    private static final class LifecycleInput
+            extends LongInput
+    {
+        private Allocator allocator;
+        private Allocator.Context allocationContext;
+        private int initializeCount;
+        private int closeCount;
+
+        @Override
+        public void initialize(Allocator allocator, Allocator.Context allocationContext)
+        {
+            this.allocator = allocator;
+            this.allocationContext = allocationContext;
+            initializeCount++;
+        }
+
+        @Override
+        public void close()
+        {
+            closeCount++;
         }
     }
 

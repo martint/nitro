@@ -34,6 +34,7 @@ public final class RegisteredPatternAggregationFunction
     private Allocator.Context allocationContext;
     private Object state;
     private Mask selectedMask;
+    private boolean closed;
 
     public RegisteredPatternAggregationFunction(AggregationImplementation implementation, PatternAggregationInput input)
     {
@@ -51,6 +52,9 @@ public final class RegisteredPatternAggregationFunction
             int outputPosition,
             int outputSize)
     {
+        if (closed) {
+            throw new IllegalStateException("pattern aggregation is closed");
+        }
         requireNonNull(context, "context is null");
         requireNonNull(rows, "rows is null");
         requireNonNull(output, "output is null");
@@ -107,6 +111,7 @@ public final class RegisteredPatternAggregationFunction
         if (state == null) {
             this.allocator = allocator;
             this.allocationContext = allocationContext;
+            input.initialize(allocator, allocationContext);
             state = implementation.allocate(new AggregationExecution(allocator, allocationContext, input.schema()), 1);
             return;
         }
@@ -125,5 +130,19 @@ public final class RegisteredPatternAggregationFunction
             allocator.overwriteSparseMask(allocationContext, selectedMask, selectedPosition, 1, input.physicalSize());
         }
         implementation.addRawInput(state, 0, selectedMask, input);
+    }
+
+    @Override
+    public void close()
+    {
+        if (closed) {
+            return;
+        }
+        closed = true;
+        if (selectedMask != null) {
+            allocator.release(allocationContext, selectedMask);
+            selectedMask = null;
+        }
+        input.close();
     }
 }

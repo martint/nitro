@@ -15,16 +15,23 @@ package org.weakref.nitro.operator.pattern;
 
 import org.weakref.nitro.core.function.aggregation.AggregationInput;
 import org.weakref.nitro.core.type.Schema;
+import org.weakref.nitro.data.Allocator;
 
 /// Resettable argument view for one selected row of a match-local aggregate.
 public interface PatternAggregationInput
-        extends AggregationInput
+        extends AggregationInput, AutoCloseable
 {
     Schema schema();
+
+    /// Binds execution-owned allocation resources before the first row is positioned.
+    default void initialize(Allocator allocator, Allocator.Context allocationContext) {}
 
     void reset(PatternEvaluationContext context, int position, int labelOrdinal);
 
     int physicalPosition();
 
     int physicalSize();
+
+    @Override
+    default void close() {}
 }
