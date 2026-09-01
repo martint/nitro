@@ -18,6 +18,7 @@ import org.weakref.nitro.core.function.aggregation.AggregationImplementation;
 import org.weakref.nitro.core.function.aggregation.AggregationInput;
 import org.weakref.nitro.core.function.aggregation.GroupedAggregationDomain;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.ValueDemand;
@@ -198,9 +199,27 @@ public class RegisteredAggregationUnit
     }
 
     @Override
+    public boolean supportsGroupedDomainInput(GroupedAggregationDomain domain, StreamAccessor streams)
+    {
+        return inputMode == InputMode.RAW && implementation.supportsRawGroupedDomainInput(domain, input(streams));
+    }
+
+    @Override
+    public boolean supportsGroupedDomainInput(DictionaryVector rowMapping, StreamAccessor streams)
+    {
+        return inputMode == InputMode.RAW && implementation.supportsRawGroupedDomainInput(rowMapping, input(streams));
+    }
+
+    @Override
+    public boolean requiresGroupedDomainRepresentatives(DictionaryVector rowMapping, StreamAccessor streams)
+    {
+        return inputMode == InputMode.RAW && implementation.requiresRawGroupedDomainRepresentatives(rowMapping, input(streams));
+    }
+
+    @Override
     public void accumulateGroupedDomain(Object state, GroupedAggregationDomain domain, StreamAccessor streams)
     {
-        if (!supportsGroupedDomainInput(streams)) {
+        if (!supportsGroupedDomainInput(domain, streams)) {
             throw new UnsupportedOperationException("grouped domain input is not supported");
         }
         implementation.addRawGroupedDomainInput(state, domain, input(streams));

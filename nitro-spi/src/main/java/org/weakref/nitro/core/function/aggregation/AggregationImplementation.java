@@ -14,6 +14,7 @@
 package org.weakref.nitro.core.function.aggregation;
 
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.ValueDemand;
@@ -96,6 +97,35 @@ public interface AggregationImplementation
     default boolean supportsRawGroupedDomainInput(AggregationInput input)
     {
         return false;
+    }
+
+    /**
+     * Whether the raw input can consume a domain formed from this row mapping. This check runs before grouping
+     * mutates engine state, allowing the engine to retain its ordinary logical-row path when mappings differ.
+     */
+    default boolean supportsRawGroupedDomainInput(DictionaryVector rowMapping, AggregationInput input)
+    {
+        return supportsRawGroupedDomainInput(input);
+    }
+
+    /**
+     * Whether this input needs one selected logical representative for each used physical-domain entry.
+     */
+    default boolean requiresRawGroupedDomainRepresentatives(DictionaryVector rowMapping, AggregationInput input)
+    {
+        return false;
+    }
+
+    /**
+     * Whether raw grouped input can consume the particular domain selected by the engine.
+     *
+     * <p>The ordinary capability check runs before the grouping domain exists. Value-bearing implementations must
+     * additionally prove here that their encoded inputs share the domain's row mapping. The default preserves the
+     * behavior of implementations whose result depends only on weights, such as {@code count(*)}.
+     */
+    default boolean supportsRawGroupedDomainInput(GroupedAggregationDomain domain, AggregationInput input)
+    {
+        return supportsRawGroupedDomainInput(domain.rowMapping(), input);
     }
 
     /**

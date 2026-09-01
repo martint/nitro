@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.core.function.aggregation;
 
+import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.Vector;
 
 import static com.google.common.base.Preconditions.checkArgument;
@@ -29,14 +30,25 @@ public final class GroupedAggregationDomain
     private final Vector groups;
     private final int[] frequencies;
     private final int size;
+    private final DictionaryVector rowMapping;
+    private final int[] representatives;
 
-    public GroupedAggregationDomain(Vector groups, int[] frequencies, int size)
+    public GroupedAggregationDomain(
+            Vector groups,
+            int[] frequencies,
+            int size,
+            DictionaryVector rowMapping,
+            int[] representatives)
     {
         this.groups = requireNonNull(groups, "groups is null");
         this.frequencies = requireNonNull(frequencies, "frequencies is null");
+        this.rowMapping = requireNonNull(rowMapping, "rowMapping is null");
+        this.representatives = representatives;
         checkArgument(size >= 0, "size is negative");
         checkArgument(size <= groups.length(), "size exceeds group domain length");
         checkArgument(size <= frequencies.length, "size exceeds frequency capacity");
+        checkArgument(size == rowMapping.values().length(), "size differs from row-mapping domain length");
+        checkArgument(representatives == null || size <= representatives.length, "size exceeds representative capacity");
         this.size = size;
     }
 
@@ -56,5 +68,40 @@ public final class GroupedAggregationDomain
             throw new IndexOutOfBoundsException("Domain position " + domain + " is out of bounds for size " + size);
         }
         return frequencies[domain];
+    }
+
+    /**
+     * Returns whether an encoded input has the exact logical-row-to-domain mapping from which this domain was
+     * formed. Matching only domain width is insufficient: independently encoded columns may assign different
+     * physical positions to the same logical rows.
+     */
+    public boolean hasSameRowMapping(DictionaryVector input)
+    {
+        return rowMapping.hasSameRowMapping(input);
+    }
+
+    public DictionaryVector rowMapping()
+    {
+        return rowMapping;
+    }
+
+    /**
+     * Returns one selected logical position represented by a used physical-domain entry. Providers request this
+     * optional view when one argument is aligned with the physical domain but another payload must be read in the
+     * original logical position space.
+     */
+    public int representative(int domain)
+    {
+        if (representatives == null) {
+            throw new IllegalStateException("Grouped domain does not carry logical representatives");
+        }
+        if (domain < 0 || domain >= size) {
+            throw new IndexOutOfBoundsException("Domain position " + domain + " is out of bounds for size " + size);
+        }
+        int representative = representatives[domain];
+        if (representative < 0) {
+            throw new IllegalArgumentException("Unused domain position does not have a logical representative");
+        }
+        return representative;
     }
 }

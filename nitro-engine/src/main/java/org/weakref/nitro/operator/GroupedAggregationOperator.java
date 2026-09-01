@@ -1075,6 +1075,7 @@ public class GroupedAggregationOperator
         if (!(keyVector instanceof DictionaryVector dictionary)) {
             return false;
         }
+        groupedDomainInput &= supportsGroupedDomainInput(dictionary, streams);
         Vector keyNulls = keyOutput.borrowOrNull(Stream.NULLS);
         DictionaryVector authoritativeHashes = null;
         if (authoritativeHashChannel != null) {
@@ -1139,9 +1140,14 @@ public class GroupedAggregationOperator
             phaseMetrics.recordGrouping(System.nanoTime() - start);
         }
         prepareAggregationStateForCurrentGroups(previousMaxGroup);
+        int domainSize = dictionary.values().length();
+        boolean groupedDomainRepresentatives = groupedDomainInput &&
+                requiresGroupedDomainRepresentatives(dictionary, streams);
+        if (groupedDomainRepresentatives) {
+            populateDictionaryDomainRepresentatives(dictionary, mask, dictionaryDomainCounts, domainSize);
+        }
         start = System.nanoTime();
         try {
-            int domainSize = dictionary.values().length();
             DictionaryVector encodedGroups = null;
             if ((!generatedUpdates && (groupedDomainInput || encodedGroupedInput)) || filteredEncodedGroupedInput) {
                 reusableDictionaryDomainGroups = allocator.reallocateIfNecessary(
@@ -1197,9 +1203,18 @@ public class GroupedAggregationOperator
                 GroupedAggregationDomain domain = new GroupedAggregationDomain(
                         reusableDictionaryDomainGroups,
                         dictionaryDomainCounts,
-                        domainSize);
-                for (int aggregationIndex : plainAggregationIndexes) {
-                    aggregations[aggregationIndex].accumulateGroupedDomain(states[aggregationIndex], domain, streams);
+                        domainSize,
+                        dictionary,
+                        groupedDomainRepresentatives ? dictionaryDomainRepresentatives : null);
+                if (supportsGroupedDomainInput(domain, streams)) {
+                    for (int aggregationIndex : plainAggregationIndexes) {
+                        aggregations[aggregationIndex].accumulateGroupedDomain(states[aggregationIndex], domain, streams);
+                    }
+                }
+                else {
+                    for (int aggregationIndex : plainAggregationIndexes) {
+                        aggregations[aggregationIndex].accumulate(states[aggregationIndex], encodedGroups, mask, streams);
+                    }
                 }
             }
             else if (encodedGroupedInput) {
@@ -1320,6 +1335,10 @@ public class GroupedAggregationOperator
         if ((long) domainSize * dictionaryDomainAggregationMinReduction > mask.count()) {
             return false;
         }
+        groupedDomainInput &= supportsGroupedDomainInput(first, streams);
+        if (!groupedDomainInput && !encodedGroupedInput && !filteredEncodedGroupedInput) {
+            return false;
+        }
         if ((encodedGroupedInput || filteredEncodedGroupedInput) &&
                 !(mask.all() && first.hasDomainFrequencies()) &&
                 domainSize > Long.SIZE) {
@@ -1400,6 +1419,11 @@ public class GroupedAggregationOperator
             phaseMetrics.recordGrouping(System.nanoTime() - start);
         }
         prepareAggregationStateForCurrentGroups(previousMaxGroup);
+        boolean groupedDomainRepresentatives = groupedDomainInput &&
+                requiresGroupedDomainRepresentatives(first, streams);
+        if (groupedDomainRepresentatives) {
+            populateDictionaryDomainRepresentatives(first, mask, dictionaryDomainCounts, domainSize);
+        }
 
         start = System.nanoTime();
         try {
@@ -1415,9 +1439,18 @@ public class GroupedAggregationOperator
                 GroupedAggregationDomain domain = new GroupedAggregationDomain(
                         reusableDictionaryDomainGroups,
                         dictionaryDomainCounts,
-                        domainSize);
-                for (int aggregationIndex : plainAggregationIndexes) {
-                    aggregations[aggregationIndex].accumulateGroupedDomain(states[aggregationIndex], domain, streams);
+                        domainSize,
+                        first,
+                        groupedDomainRepresentatives ? dictionaryDomainRepresentatives : null);
+                if (supportsGroupedDomainInput(domain, streams)) {
+                    for (int aggregationIndex : plainAggregationIndexes) {
+                        aggregations[aggregationIndex].accumulateGroupedDomain(states[aggregationIndex], domain, streams);
+                    }
+                }
+                else {
+                    for (int aggregationIndex : plainAggregationIndexes) {
+                        aggregations[aggregationIndex].accumulate(states[aggregationIndex], encodedGroups, mask, streams);
+                    }
                 }
             }
             else if (encodedGroupedInput) {
@@ -1519,6 +1552,71 @@ public class GroupedAggregationOperator
             }
         }
         return true;
+    }
+
+    private boolean supportsGroupedDomainInput(
+            GroupedAggregationDomain domain,
+            org.weakref.nitro.operator.aggregation.StreamAccessor streams)
+    {
+        for (int aggregationIndex : plainAggregationIndexes) {
+            if (!aggregations[aggregationIndex].supportsGroupedDomainInput(domain, streams)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean supportsGroupedDomainInput(
+            DictionaryVector rowMapping,
+            org.weakref.nitro.operator.aggregation.StreamAccessor streams)
+    {
+        for (int aggregationIndex : plainAggregationIndexes) {
+            if (!aggregations[aggregationIndex].supportsGroupedDomainInput(rowMapping, streams)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean requiresGroupedDomainRepresentatives(
+            DictionaryVector rowMapping,
+            org.weakref.nitro.operator.aggregation.StreamAccessor streams)
+    {
+        for (int aggregationIndex : plainAggregationIndexes) {
+            if (aggregations[aggregationIndex].requiresGroupedDomainRepresentatives(rowMapping, streams)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void populateDictionaryDomainRepresentatives(
+            DictionaryVector rowMapping,
+            Mask mask,
+            int[] frequencies,
+            int domainSize)
+    {
+        // Group assignment no longer needs this scratch after it has copied the used-domain selection into its
+        // allocator-owned mask, so reuse it for logical representatives instead of retaining another domain-sized
+        // heap buffer.
+        Arrays.fill(dictionaryDomainRepresentatives, 0, domainSize, -1);
+        int remaining = 0;
+        for (int domain = 0; domain < domainSize; domain++) {
+            remaining += frequencies[domain] == 0 ? 0 : 1;
+        }
+        int[] ids = rowMapping.ids();
+        for (int position : mask) {
+            int domain = ids[position];
+            if (frequencies[domain] != 0 && dictionaryDomainRepresentatives[domain] < 0) {
+                dictionaryDomainRepresentatives[domain] = position;
+                if (--remaining == 0) {
+                    return;
+                }
+            }
+        }
+        if (remaining != 0) {
+            throw new IllegalStateException("Grouped domain frequencies do not have logical representatives");
+        }
     }
 
     /**

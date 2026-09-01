@@ -15,6 +15,7 @@ package org.weakref.nitro.operator.aggregation;
 
 import org.weakref.nitro.core.function.aggregation.GroupedAggregationDomain;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.ValueDemand;
@@ -83,6 +84,21 @@ public interface PhysicalAggregationUnit
     }
 
     default boolean supportsGroupedDomainInput(StreamAccessor streams)
+    {
+        return false;
+    }
+
+    default boolean supportsGroupedDomainInput(GroupedAggregationDomain domain, StreamAccessor streams)
+    {
+        return supportsGroupedDomainInput(streams);
+    }
+
+    default boolean supportsGroupedDomainInput(DictionaryVector rowMapping, StreamAccessor streams)
+    {
+        return supportsGroupedDomainInput(streams);
+    }
+
+    default boolean requiresGroupedDomainRepresentatives(DictionaryVector rowMapping, StreamAccessor streams)
     {
         return false;
     }

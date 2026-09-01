@@ -572,6 +572,77 @@ class TestFusedGroupedAggregation
     }
 
     @Test
+    void valueBearingGroupedDomainRequiresExactRowMapping()
+    {
+        int size = 16_384;
+        int[] ids = new int[size];
+        for (int position = 0; position < size; position++) {
+            ids[position] = position & 3;
+        }
+        DictionaryVector keys = DictionaryVector.ofTrustedIds(ids, new I64Vector(new long[] {11, 22, 33, 44}));
+        DictionaryVector independentlyEncodedValues = DictionaryVector.ofTrustedIds(ids, new I64Vector(new long[] {1, 2, 3, 4}));
+        WeightedDomainCount implementation = new WeightedDomainCount(true);
+        PhysicalAggregationProgram program = PhysicalAggregationProgram.singleUnit(
+                new RegisteredAggregationUnit(implementation, RAW, FINAL, new int[] {1}));
+
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                Operator operator = new GroupedAggregationOperator(
+                        allocator,
+                        List.of(0),
+                        program,
+                        new TableOperator(2, List.of(TableOperator.Page.values(
+                                size,
+                                new Vector[] {keys, independentlyEncodedValues},
+                                Mask.all(size)))))) {
+            while (operator.hasNext()) {
+                operator.next().close();
+            }
+        }
+
+        assertThat(implementation.groupedDomainObserved).isFalse();
+        assertThat(implementation.logicalRowsObserved).isTrue();
+    }
+
+    @Test
+    void groupedDomainCanExposeSelectedLogicalRepresentatives()
+    {
+        int size = 16_384;
+        int[] ids = new int[size];
+        for (int position = 0; position < size; position++) {
+            ids[position] = position & 3;
+        }
+        DictionaryVector keys = DictionaryVector.ofTrustedIds(ids, new I64Vector(new long[] {11, 22, 33, 44}));
+        DictionaryVector values = keys.sharedMappingWithValues(new I64Vector(new long[] {1, 2, 3, 4}));
+        int[] selected = new int[size - 100];
+        for (int index = 0; index < selected.length; index++) {
+            selected[index] = index + 100;
+        }
+        WeightedDomainCount implementation = new WeightedDomainCount(true, true, 100);
+        PhysicalAggregationProgram program = PhysicalAggregationProgram.singleUnit(
+                new RegisteredAggregationUnit(implementation, RAW, FINAL, new int[] {1}));
+
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                Operator operator = new GroupedAggregationOperator(
+                        allocator,
+                        List.of(0),
+                        program,
+                        new TableOperator(2, List.of(TableOperator.Page.values(
+                                size,
+                                new Vector[] {keys, values},
+                                Mask.sparse(selected, size)))))) {
+            while (operator.hasNext()) {
+                operator.next().close();
+            }
+        }
+
+        assertThat(implementation.groupedDomainObserved).isTrue();
+        assertThat(implementation.representativesObserved).isTrue();
+        assertThat(implementation.logicalRowsObserved).isFalse();
+    }
+
+    @Test
     void groupingHashProducerPreservesBinaryDictionaryDomainAggregation()
     {
         int size = 16_384;
@@ -1572,8 +1643,29 @@ class TestFusedGroupedAggregation
     private static final class WeightedDomainCount
             implements AggregationImplementation
     {
+        private final boolean requireInputMapping;
+        private final boolean requireRepresentatives;
+        private final int minimumRepresentative;
         private boolean groupedDomainObserved;
         private boolean logicalRowsObserved;
+        private boolean representativesObserved;
+
+        private WeightedDomainCount()
+        {
+            this(false);
+        }
+
+        private WeightedDomainCount(boolean requireInputMapping)
+        {
+            this(requireInputMapping, false, 0);
+        }
+
+        private WeightedDomainCount(boolean requireInputMapping, boolean requireRepresentatives, int minimumRepresentative)
+        {
+            this.requireInputMapping = requireInputMapping;
+            this.requireRepresentatives = requireRepresentatives;
+            this.minimumRepresentative = minimumRepresentative;
+        }
 
         @Override
         public Object allocate(AggregationExecution execution, int groups)
@@ -1617,11 +1709,37 @@ class TestFusedGroupedAggregation
         }
 
         @Override
+        public boolean supportsRawGroupedDomainInput(DictionaryVector rowMapping, AggregationInput input)
+        {
+            return !requireInputMapping ||
+                    (input.stream(0, Stream.VALUES) instanceof DictionaryVector dictionary &&
+                            rowMapping.hasSameRowMapping(dictionary));
+        }
+
+        @Override
+        public boolean supportsEncodedGroupedInput()
+        {
+            return requireInputMapping;
+        }
+
+        @Override
+        public boolean requiresRawGroupedDomainRepresentatives(DictionaryVector rowMapping, AggregationInput input)
+        {
+            return requireRepresentatives;
+        }
+
+        @Override
         public void addRawGroupedDomainInput(Object state, GroupedAggregationDomain domain, AggregationInput input)
         {
             groupedDomainObserved = true;
             VectorAccess.LongValues groupIds = VectorAccess.longValues(domain.groups());
             for (int physical = 0; physical < domain.size(); physical++) {
+                if (requireRepresentatives && domain.frequency(physical) != 0) {
+                    int representative = domain.representative(physical);
+                    assertThat(representative).isGreaterThanOrEqualTo(minimumRepresentative);
+                    assertThat(domain.rowMapping().ids()[representative]).isEqualTo(physical);
+                    representativesObserved = true;
+                }
                 ((long[]) state)[(int) groupIds.value(physical)] += domain.frequency(physical);
             }
         }
