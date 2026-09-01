@@ -46,7 +46,9 @@ final class TestPatternSearch
                         .start(0, rows.size(), 0, false, 1)) {
             assertThat(search.run(new TestingExecutionContext())).isTrue();
             assertThat(search.patternStart()).isEqualTo(2);
-            assertThat(search.match().labelCount()).isOne();
+            PatternLabelEvaluator.LabelHistory labels = search.match();
+            assertThat(labels.size()).isOne();
+            assertThat(labels.labelAt(0)).isZero();
         }
     }
 

@@ -47,7 +47,7 @@ public final class PatternMatcher
     }
 
     public final class Session
-            implements AutoCloseable
+            implements PatternLabelEvaluator.LabelHistory, AutoCloseable
     {
         private final int inputLength;
         private final boolean matchingAtPartitionStart;
@@ -173,6 +173,13 @@ public final class PatternMatcher
             return labels.length(threads.labelHead(resultThread));
         }
 
+        @Override
+        public int size()
+        {
+            return labelCount();
+        }
+
+        @Override
         public int labelAt(int position)
         {
             checkMatched();
