@@ -151,4 +151,10 @@ public final class RegionVector
     {
         return values.emptyLike(allocator, allocationContext);
     }
+
+    @Override
+    public Vector materializeRows(Allocator allocator, Allocator.Context allocationContext, Vector[] rows)
+    {
+        return values.materializeRows(allocator, allocationContext, rows);
+    }
 }

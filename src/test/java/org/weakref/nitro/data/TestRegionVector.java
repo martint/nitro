@@ -67,4 +67,23 @@ class TestRegionVector
             allocator.release(context);
         }
     }
+
+    @Test
+    void testMaterializesRowsThroughComposedRleRegions()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        Allocator.Context context = new Allocator.Context("region-materialize");
+        I64Vector values = new I64Vector(new long[] {10, 20, 30, 40});
+        Vector[] rows = {
+                new RleVector(new int[] {2}, new RegionVector(values, 1, 1)),
+                new RleVector(new int[] {1}, new RegionVector(values, 3, 1)),
+        };
+        try {
+            I64Vector materialized = (I64Vector) rows[0].materializeRows(allocator, context, rows);
+            assertThat(materialized.values()).containsExactly(20, 20, 40);
+        }
+        finally {
+            allocator.release(context);
+        }
+    }
 }
