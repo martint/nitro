@@ -124,14 +124,67 @@ class TestNestedStructReader
     }
 
     @Test
-    void testDoesNotCoalesceDifferentDictionaryMappings()
+    void testCoalescesCorrelatedDictionaryMappings()
+    {
+        try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
+            Allocator.Context context = new Allocator.Context("test");
+            I64Vector firstDomain = allocator.allocate(context, I64Vector.class, 2, I64Vector::new);
+            I64Vector secondDomain = allocator.allocate(context, I64Vector.class, 2, I64Vector::new);
+            firstDomain.values()[0] = 10;
+            firstDomain.values()[1] = 20;
+            secondDomain.values()[0] = 100;
+            secondDomain.values()[1] = 200;
+            DictionaryVector first = allocator.allocateDictionary(context, new int[] {0, 1, 0, 1}, firstDomain);
+            DictionaryVector second = allocator.allocateDictionary(context, new int[] {1, 0, 1, 0}, secondDomain);
+
+            DictionaryVector rows = NestedStructReader.coalesceDictionaryStruct(
+                    allocator,
+                    context,
+                    4,
+                    List.of(requiredLong("first", 0), requiredLong("second", 1)),
+                    new Streams[] {Streams.ofValues(first), Streams.ofValues(second)});
+
+            assertThat(rows).isNotNull();
+            StructVector domain = (StructVector) rows.values();
+            DictionaryVector correlated = (DictionaryVector) domain.fieldValues("second");
+            assertThat(correlated.ids()).containsExactly(1, 0);
+        }
+    }
+
+    @Test
+    void testChoosesDiscriminatingMappingIndependentlyOfFieldOrder()
+    {
+        try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
+            Allocator.Context context = new Allocator.Context("test");
+            I64Vector firstDomain = allocator.allocate(context, I64Vector.class, 2, I64Vector::new);
+            I64Vector secondDomain = allocator.allocate(context, I64Vector.class, 4, I64Vector::new);
+            DictionaryVector first = allocator.allocateDictionary(context, new int[] {0, 0, 1, 1}, firstDomain);
+            DictionaryVector second = allocator.allocateDictionary(context, new int[] {0, 1, 2, 3}, secondDomain);
+
+            DictionaryVector rows = NestedStructReader.coalesceDictionaryStruct(
+                    allocator,
+                    context,
+                    4,
+                    List.of(requiredLong("first", 0), requiredLong("second", 1)),
+                    new Streams[] {Streams.ofValues(first), Streams.ofValues(second)});
+
+            assertThat(rows).isNotNull();
+            assertThat(rows.ids()).containsExactly(0, 1, 2, 3);
+            StructVector domain = (StructVector) rows.values();
+            DictionaryVector correlated = (DictionaryVector) domain.fieldValues("first");
+            assertThat(correlated.ids()).containsExactly(0, 0, 1, 1);
+        }
+    }
+
+    @Test
+    void testDoesNotCoalesceNonFunctionalDictionaryMappings()
     {
         try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
             Allocator.Context context = new Allocator.Context("test");
             I64Vector firstDomain = allocator.allocate(context, I64Vector.class, 2, I64Vector::new);
             I64Vector secondDomain = allocator.allocate(context, I64Vector.class, 2, I64Vector::new);
             DictionaryVector first = allocator.allocateDictionary(context, new int[] {0, 1, 0, 1}, firstDomain);
-            DictionaryVector second = allocator.allocateDictionary(context, new int[] {1, 0, 1, 0}, secondDomain);
+            DictionaryVector second = allocator.allocateDictionary(context, new int[] {1, 0, 0, 1}, secondDomain);
 
             assertThat(NestedStructReader.coalesceDictionaryStruct(
                     allocator,
@@ -207,11 +260,14 @@ class TestNestedStructReader
     }
 
     private static final class TestingCursor
-            implements NestedLeafCursor
+            implements NestedLeafEventSource
     {
         private final PhysicalValueDecoder decoder;
         private final int[] definitions;
         private final int[] ordinals;
+        private final int[] repetitions;
+        private final NestedEventWindow window = new NestedEventWindow();
+        private int position;
         private int event = -1;
 
         private TestingCursor(PhysicalValueDecoder decoder, int[] definitions, int[] ordinals)
@@ -219,12 +275,18 @@ class TestNestedStructReader
             this.decoder = decoder;
             this.definitions = definitions;
             this.ordinals = ordinals;
+            this.repetitions = new int[definitions.length];
         }
 
         @Override
         public boolean next()
         {
-            return ++event < definitions.length;
+            if (position >= definitions.length) {
+                event = -1;
+                return false;
+            }
+            event = position++;
+            return true;
         }
 
         @Override
@@ -261,6 +323,24 @@ class TestNestedStructReader
         public int dictionaryId()
         {
             return -1;
+        }
+
+        @Override
+        public NestedEventWindow eventWindow()
+        {
+            if (position >= definitions.length) {
+                return null;
+            }
+            window.reset(decoder, repetitions, definitions, ordinals, null, position, definitions.length - position);
+            event = -1;
+            return window;
+        }
+
+        @Override
+        public void advanceEvents(int count)
+        {
+            position += count;
+            event = -1;
         }
 
         @Override

@@ -4300,6 +4300,60 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testDictionaryPeelingUsesRowAlignedStructFieldMapping()
+    {
+        AtomicInteger evaluatedPositions = new AtomicInteger();
+        PrimitiveRegistry registry = new PrimitiveRegistry();
+        registry.register("struct_domain", new PrimitiveFunction()
+        {
+            @Override
+            public Streams apply(List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
+            {
+                evaluatedPositions.set(mask.count());
+                StructVector rows = (StructVector) inputs.getFirst().values();
+                VectorAccess.LongValues ids = VectorAccess.longValues(rows.field("id").values());
+                BooleanVector result = new BooleanVector(mask.size());
+                for (int position : mask) {
+                    result.values()[position] = ids.value(position) == 10;
+                }
+                return Streams.ofValues(result);
+            }
+
+            @Override
+            public Set<Stream> requiredInputStreams(int inputIndex, Set<Stream> requestedOutputStreams)
+            {
+                return VALUES_AND_NULLS_INPUT_STREAMS;
+            }
+        });
+
+        int[] ids = {0, 1, 0, 1, 0, 1};
+        StructVector rows = new StructVector(ids.length);
+        rows.setField("id", Streams.ofValues(DictionaryVector.wrap(ids, new I64Vector(new long[] {10, 20}))));
+        rows.setField("value", Streams.ofValues(DictionaryVector.wrap(ids, new I64Vector(new long[] {100, 200}))));
+        Reference input = new Reference(new Input(0), Stream.VALUES);
+        Reference inputNulls = new Reference(new Input(0), Stream.NULLS);
+        Variable result = new Variable(0);
+        Reference output = new Reference(result, Stream.VALUES);
+        PlanEvaluator evaluator = planEvaluator(
+                new EvaluationPlan(
+                        List.of(new Assignment(result, new Call("struct_domain", List.of(input)), AllMask.ALL)),
+                        List.of(output)),
+                registry,
+                inputResolver(Map.of(
+                        input, rows,
+                        inputNulls, new BooleanVector(new boolean[] {false, true, false, true, false, true}))),
+                new Allocator(EngineResources.createDefault()));
+
+        Vector resultVector = evaluator.evaluate(output, Mask.all(ids.length)).values();
+
+        assertThat(evaluatedPositions).hasValue(2);
+        assertThat(resultVector).isInstanceOf(DictionaryVector.class);
+        DictionaryVector dictionary = (DictionaryVector) resultVector;
+        assertThat(dictionary.ids()).isSameAs(ids);
+        assertThat(((BooleanVector) dictionary.values()).values()).containsExactly(true, false);
+    }
+
+    @Test
     void testDictionaryPeelingUsesCachedBooleanStreamClassification()
     {
         AtomicInteger allFalseClassifications = new AtomicInteger();

@@ -38,6 +38,7 @@ final class NestedStructReader
     private final List<ParquetSchema.Primitive> fields;
     private final NestedLeafCursor[] readers;
     private final NestedValueAccumulator[] values;
+    private final NestedEventWindow[] eventWindows;
     private boolean exhausted;
 
     NestedStructReader(ParquetSchema.Group struct, RleReaderPolicy rlePolicy, PrimitiveArrayPool arrayPool)
@@ -121,6 +122,7 @@ final class NestedStructReader
                 : NestedLogicalBindings.require(struct.name(), outputType, logicalBinding, fields.size());
         this.readers = new NestedLeafCursor[fields.size()];
         this.values = new NestedValueAccumulator[fields.size()];
+        this.eventWindows = new NestedEventWindow[fields.size()];
         for (int field = 0; field < fields.size(); field++) {
             ParquetSchema.Primitive leaf = fields.get(field);
             readers[field] = cursors == null
@@ -164,6 +166,11 @@ final class NestedStructReader
                 ? allocator.allocate(context, BooleanVector.class, rowCount, BooleanVector::new)
                 : null;
 
+        if (mask.all() && hasWindowedReaders()) {
+            readDense(rowCount, structNulls);
+            return materialize(allocator, context, rowCount, structNulls);
+        }
+
         int selectedIndex = 0;
         int nextSelected = mask.all() ? 0 : (mask.count() == 0 ? rowCount : mask.position(0));
         for (int row = 0; row < rowCount; row++) {
@@ -193,6 +200,61 @@ final class NestedStructReader
                 nextSelected = selectedIndex < mask.count() ? mask.position(selectedIndex) : rowCount;
             }
         }
+        return materialize(allocator, context, rowCount, structNulls);
+    }
+
+    private boolean hasWindowedReaders()
+    {
+        for (NestedLeafCursor reader : readers) {
+            if (!(reader instanceof NestedLeafEventSource)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private void readDense(int rowCount, BooleanVector structNulls)
+    {
+        int outputPosition = 0;
+        while (outputPosition < rowCount) {
+            int count = rowCount - outputPosition;
+            for (int field = 0; field < readers.length; field++) {
+                NestedEventWindow window = ((NestedLeafEventSource) readers[field]).eventWindow();
+                if (window == null) {
+                    throw new IllegalArgumentException("Nested primitive event stream ended before requested rows");
+                }
+                eventWindows[field] = window;
+                count = Math.min(count, window.length());
+            }
+
+            boolean allStructsPresent = true;
+            for (NestedEventWindow window : eventWindows) {
+                allStructsPresent &= window.allDefinitionLevelsAtLeast(count, struct.maximumDefinitionLevel());
+            }
+            if (!allStructsPresent) {
+                for (int index = 0; index < count; index++) {
+                    boolean structIsNull = eventWindows[0].definitionLevel(index) < struct.maximumDefinitionLevel();
+                    if (structNulls != null) {
+                        structNulls.values()[outputPosition + index] = structIsNull;
+                    }
+                    for (int field = 1; field < eventWindows.length; field++) {
+                        if ((eventWindows[field].definitionLevel(index) < struct.maximumDefinitionLevel()) != structIsNull) {
+                            throw new IllegalArgumentException("Nested struct leaves disagree about struct presence");
+                        }
+                    }
+                }
+            }
+
+            for (int field = 0; field < eventWindows.length; field++) {
+                eventWindows[field].appendTo(values[field], 0, count);
+                ((NestedLeafEventSource) readers[field]).advanceEvents(count);
+            }
+            outputPosition += count;
+        }
+    }
+
+    private Streams materialize(Allocator allocator, Allocator.Context context, int rowCount, BooleanVector structNulls)
+    {
         Streams[] fieldStreams = new Streams[fields.size()];
         for (int field = 0; field < fieldStreams.length; field++) {
             fieldStreams[field] = values[field].materialize(allocator, context);
@@ -209,10 +271,11 @@ final class NestedStructReader
     }
 
     /**
-     * Promotes independently decoded field dictionaries to one dictionary-encoded struct when they describe the
-     * same logical-row mapping. Parquet encodes primitive leaves independently, so the physical dictionaries are
-     * separate even when a low-cardinality row repeats as a unit. Keeping that relationship visible lets structural
-     * consumers hash and compare the small physical domain instead of every logical row.
+     * Promotes independently decoded field dictionaries to one dictionary-encoded struct when every field mapping
+     * is a function of the anchor field mapping. Parquet encodes primitive leaves independently, so fields can use
+     * different dictionary ids even when a low-cardinality row repeats as a unit. The domain fields retain those
+     * differences through small nested remaps. Keeping the row relationship visible lets structural consumers hash
+     * and compare the small physical domain instead of every logical row.
      */
     static DictionaryVector coalesceDictionaryStruct(
             Allocator allocator,
@@ -224,33 +287,30 @@ final class NestedStructReader
         if (fieldStreams.length == 0 || fieldStreams.length != fields.size()) {
             return null;
         }
-        if (!(fieldStreams[0].values() instanceof DictionaryVector mapping) || mapping.length() != rowCount) {
+        CoalescedDomain coalesced = findCoalescedDomain(allocator, rowCount, fieldStreams);
+        if (coalesced == null) {
             return null;
         }
+        DictionaryVector mapping = coalesced.mapping();
         int domainSize = mapping.values().length();
-        for (int field = 0; field < fieldStreams.length; field++) {
-            Streams streams = fieldStreams[field];
-            if (!(streams.values() instanceof DictionaryVector dictionary) ||
-                    dictionary.length() != rowCount ||
-                    dictionary.values().length() != domainSize ||
-                    !sameIds(mapping, dictionary, rowCount)) {
-                return null;
-            }
-            if (!compatibleSideStream(mapping, streams.getOrNull(Stream.NULLS), rowCount, domainSize) ||
-                    !compatibleSideStream(mapping, streams.getOrNull(Stream.ERRORS), rowCount, domainSize)) {
-                return null;
-            }
-        }
+        int[][] domainRemaps = coalesced.domainRemaps();
+        int[] representativePositions = coalesced.representativePositions();
 
         StructVector domain = allocator.allocate(context, StructVector.class, domainSize, StructVector::new);
         for (int field = 0; field < fieldStreams.length; field++) {
             Streams streams = fieldStreams[field];
             DictionaryVector dictionary = (DictionaryVector) streams.values();
-            Streams.Builder domainField = Streams.builder().put(Stream.VALUES, dictionary.values());
-            addDomainSideStream(allocator, context, streams.getOrNull(Stream.NULLS), domainSize, Stream.NULLS, domainField);
-            addDomainSideStream(allocator, context, streams.getOrNull(Stream.ERRORS), domainSize, Stream.ERRORS, domainField);
+            int[] remap = domainRemaps[field];
+            Vector domainValues = dictionary.values().length() == domainSize && identityRemap(remap)
+                    ? dictionary.values()
+                    : allocator.allocateDictionary(context, remap, domainSize, dictionary.values());
+            Streams.Builder domainField = Streams.builder().put(Stream.VALUES, domainValues);
+            addDomainSideStream(allocator, context, remap, representativePositions, streams.getOrNull(Stream.NULLS), domainSize, Stream.NULLS, domainField);
+            addDomainSideStream(allocator, context, remap, representativePositions, streams.getOrNull(Stream.ERRORS), domainSize, Stream.ERRORS, domainField);
             domain.setField(fields.get(field).name(), domainField.build());
         }
+        releaseRemaps(allocator, domainRemaps);
+        allocator.primitiveArrays().release(representativePositions);
         // Nested accumulators use allocator-owned id/frequency vectors. Reparent those buffers under the enclosing
         // dictionary instead of copying one logical-row id per field or per output batch. The raw-array fallback is
         // retained for injected/custom accumulators whose mapping has no transferable allocator owner.
@@ -260,49 +320,152 @@ final class NestedStructReader
         return allocator.allocateDictionary(context, mapping.ids(), rowCount, domain);
     }
 
+    private static CoalescedDomain findCoalescedDomain(Allocator allocator, int rowCount, Streams[] fieldStreams)
+    {
+        for (Streams fieldStream : fieldStreams) {
+            if (!(fieldStream.values() instanceof DictionaryVector dictionary) || dictionary.length() != rowCount) {
+                return null;
+            }
+        }
+
+        // Field order is a logical schema property, not a physical-domain policy. Try every field mapping because a
+        // low-cardinality leading field may not distinguish row values that a later field can represent exactly.
+        for (Streams candidate : fieldStreams) {
+            DictionaryVector mapping = (DictionaryVector) candidate.values();
+            int domainSize = mapping.values().length();
+            int[] representativePositions = allocator.primitiveArrays().borrowInts(domainSize);
+            java.util.Arrays.fill(representativePositions, -1);
+            int[] mappingIds = mapping.ids();
+            for (int position = 0; position < rowCount; position++) {
+                representativePositions[mappingIds[position]] = position;
+            }
+            int[][] domainRemaps = new int[fieldStreams.length][];
+            boolean compatible = true;
+            for (int field = 0; field < fieldStreams.length; field++) {
+                Streams streams = fieldStreams[field];
+                DictionaryVector dictionary = (DictionaryVector) streams.values();
+                int[] remap = allocator.primitiveArrays().borrowInts(domainSize);
+                if (!domainRemap(mapping, dictionary, rowCount, remap) ||
+                        !compatibleSideStream(mapping, dictionary, representativePositions, streams.getOrNull(Stream.NULLS), rowCount) ||
+                        !compatibleSideStream(mapping, dictionary, representativePositions, streams.getOrNull(Stream.ERRORS), rowCount)) {
+                    allocator.primitiveArrays().release(remap);
+                    compatible = false;
+                    break;
+                }
+                domainRemaps[field] = remap;
+            }
+            if (compatible) {
+                return new CoalescedDomain(mapping, domainRemaps, representativePositions);
+            }
+            releaseRemaps(allocator, domainRemaps);
+            allocator.primitiveArrays().release(representativePositions);
+        }
+        return null;
+    }
+
     private static boolean sameIds(DictionaryVector left, DictionaryVector right, int length)
     {
         return DictionaryDomainCoalescer.sameIds(left, right, length);
     }
 
-    private static boolean compatibleSideStream(DictionaryVector mapping, Vector side, int rowCount, int domainSize)
+    private static boolean domainRemap(
+            DictionaryVector anchor,
+            DictionaryVector sibling,
+            int rowCount,
+            int[] remap)
     {
-        return side == null ||
-                (side instanceof DictionaryVector dictionary &&
-                        dictionary.values().length() == domainSize &&
-                        sameIds(mapping, dictionary, rowCount)) ||
-                (side instanceof BooleanVector booleans && allFalse(booleans, rowCount));
+        java.util.Arrays.fill(remap, -1);
+        int[] anchorIds = anchor.ids();
+        int[] siblingIds = sibling.ids();
+        for (int position = 0; position < rowCount; position++) {
+            int anchorId = anchorIds[position];
+            int siblingId = siblingIds[position];
+            if (remap[anchorId] < 0) {
+                remap[anchorId] = siblingId;
+            }
+            else if (remap[anchorId] != siblingId) {
+                return false;
+            }
+        }
+        for (int id = 0; id < remap.length; id++) {
+            if (remap[id] < 0) {
+                remap[id] = 0;
+            }
+        }
+        return true;
+    }
+
+    private static boolean compatibleSideStream(
+            DictionaryVector anchor,
+            DictionaryVector values,
+            int[] representativePositions,
+            Vector side,
+            int rowCount)
+    {
+        if (side == null) {
+            return true;
+        }
+        if (side instanceof DictionaryVector dictionary) {
+            return dictionary.length() == rowCount && sameIds(values, dictionary, rowCount);
+        }
+        if (!(side instanceof BooleanVector booleans) || booleans.length() != rowCount) {
+            return false;
+        }
+        int[] anchorIds = anchor.ids();
+        for (int position = 0; position < rowCount; position++) {
+            int id = anchorIds[position];
+            if (booleans.values()[representativePositions[id]] != booleans.values()[position]) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static void addDomainSideStream(
             Allocator allocator,
             Allocator.Context context,
+            int[] remap,
+            int[] representativePositions,
             Vector side,
             int domainSize,
             Stream stream,
             Streams.Builder output)
     {
         if (side instanceof DictionaryVector dictionary) {
-            output.put(stream, dictionary.values());
+            output.put(stream, dictionary.values().length() == domainSize && identityRemap(remap)
+                    ? dictionary.values()
+                    : allocator.allocateDictionary(context, remap, domainSize, dictionary.values()));
         }
-        else if (side != null) {
-            output.put(stream, allocator.allocate(context, BooleanVector.class, domainSize, BooleanVector::new));
+        else if (side instanceof BooleanVector booleans) {
+            BooleanVector domain = allocator.allocate(context, BooleanVector.class, domainSize, BooleanVector::new);
+            for (int id = 0; id < domainSize; id++) {
+                int position = representativePositions[id];
+                if (position >= 0) {
+                    domain.values()[id] = booleans.values()[position];
+                }
+            }
+            output.put(stream, domain);
         }
     }
 
-    private static boolean allFalse(BooleanVector vector, int length)
+    private static void releaseRemaps(Allocator allocator, int[][] remaps)
     {
-        if (vector.length() != length) {
-            return false;
+        for (int[] remap : remaps) {
+            allocator.primitiveArrays().release(remap);
         }
-        boolean[] values = vector.values();
-        for (int position = 0; position < length; position++) {
-            if (values[position]) {
+    }
+
+    private static boolean identityRemap(int[] remap)
+    {
+        for (int index = 0; index < remap.length; index++) {
+            if (remap[index] != index) {
                 return false;
             }
         }
         return true;
     }
+
+    private record CoalescedDomain(DictionaryVector mapping, int[][] domainRemaps, int[] representativePositions) {}
 
     void skip(long rowCount)
     {

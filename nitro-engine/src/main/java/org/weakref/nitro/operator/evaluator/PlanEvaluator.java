@@ -742,7 +742,8 @@ public final class PlanEvaluator
     private static boolean hasDictionaryValues(List<Streams> inputs)
     {
         for (Streams input : inputs) {
-            if (input.getOrNull(Stream.VALUES) instanceof DictionaryVector) {
+            Vector values = input.getOrNull(Stream.VALUES);
+            if (values != null && rowDictionaryMapping(values, values.length()) != null) {
                 return true;
             }
         }
@@ -1155,7 +1156,8 @@ public final class PlanEvaluator
         DictionaryVector mapping = null;
         for (Streams inputStreams : inputs) {
             Vector values = inputStreams.getOrNull(Stream.VALUES);
-            if (values instanceof DictionaryVector dictionary) {
+            DictionaryVector dictionary = rowDictionaryMapping(values, values == null ? -1 : values.length());
+            if (dictionary != null) {
                 if (sharedIds == null) {
                     sharedIds = dictionary.ids();
                     rowCount = dictionary.length();
@@ -1186,6 +1188,30 @@ public final class PlanEvaluator
             peeledInputs.add(peeled);
         }
         return new DictionaryPeeling(mapping, rowCount, baseMask, List.copyOf(peeledInputs));
+    }
+
+    /**
+     * Finds a logical-row dictionary mapping carried by a value or by a row-aligned field inside a struct. Repeated
+     * children of arrays and maps live in a different position space and are deliberately not traversed.
+     */
+    private static DictionaryVector rowDictionaryMapping(Vector vector, int rowCount)
+    {
+        if (vector == null || vector.length() != rowCount) {
+            return null;
+        }
+        if (vector instanceof DictionaryVector dictionary) {
+            return dictionary;
+        }
+        if (!(vector instanceof StructVector struct)) {
+            return null;
+        }
+        for (Streams field : struct.fields().values()) {
+            DictionaryVector mapping = rowDictionaryMapping(field.getOrNull(Stream.VALUES), rowCount);
+            if (mapping != null) {
+                return mapping;
+            }
+        }
+        return null;
     }
 
     /**
@@ -1287,13 +1313,52 @@ public final class PlanEvaluator
             if (booleans.isAllTrue()) {
                 return fillBoolean(true, baseLength);
             }
-            return null;
+            return peelRowAlignedBooleans(booleans, sharedIds, rowCount, baseLength);
+        }
+        if (vector instanceof StructVector struct && struct.length() == rowCount) {
+            StructVector peeled = new StructVector(baseLength);
+            for (Map.Entry<String, Streams> field : struct.fields().entrySet()) {
+                Streams fieldStreams = peelDictionaryCompatibleStreams(field.getValue(), sharedIds, rowCount, baseLength);
+                if (fieldStreams == null) {
+                    return null;
+                }
+                peeled.setField(field.getKey(), fieldStreams);
+            }
+            return peeled;
         }
         return switch (vector) {
             case DictionaryVector dictionary when dictionary.length() == rowCount && dictionary.values().length() >= baseLength && sameDictionaryIds(sharedIds, dictionary.ids(), rowCount) -> dictionary.values();
             case RleVector rle when rle.counts().length == 1 -> executionContext.allocator().allocateSingleRunRle(allocationContext, baseLength, rle.values());
             default -> null;
         };
+    }
+
+    private Vector peelRowAlignedBooleans(BooleanVector logical, int[] sharedIds, int rowCount, int baseLength)
+    {
+        if (dictionaryDomainSelectionScratch.length < baseLength) {
+            allocator.primitiveArrays().release(dictionaryDomainSelectionScratch);
+            dictionaryDomainSelectionScratch = allocator.primitiveArrays().borrowBooleans(baseLength);
+        }
+        boolean[] seen = dictionaryDomainSelectionScratch;
+        Arrays.fill(seen, 0, baseLength, false);
+        BooleanVector physical = allocator.allocate(allocationContext, BooleanVector.class, baseLength, BooleanVector::new);
+        boolean[] logicalValues = logical.values();
+        boolean[] physicalValues = physical.values();
+        for (int position = 0; position < rowCount; position++) {
+            int id = sharedIds[position];
+            boolean value = logicalValues[position];
+            if (!seen[id]) {
+                seen[id] = true;
+                physicalValues[id] = value;
+            }
+            else if (physicalValues[id] != value) {
+                Arrays.fill(seen, 0, baseLength, false);
+                allocator.release(allocationContext, physical);
+                return null;
+            }
+        }
+        Arrays.fill(seen, 0, baseLength, false);
+        return physical;
     }
 
     private int dictionaryBaseLength(int[] ids, int length)
