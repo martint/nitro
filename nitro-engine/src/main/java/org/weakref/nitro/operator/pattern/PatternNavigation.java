@@ -13,9 +13,9 @@
  */
 package org.weakref.nitro.operator.pattern;
 
-import java.util.Arrays;
-
 import static java.util.Objects.requireNonNull;
+import static org.weakref.nitro.operator.pattern.PatternLabels.contains;
+import static org.weakref.nitro.operator.pattern.PatternLabels.normalized;
 
 /// Engine-neutral navigation within a row-pattern match.
 ///
@@ -39,7 +39,7 @@ public final class PatternNavigation
         }
         this.logicalOffset = logicalOffset;
         this.physicalOffset = physicalOffset;
-        this.labelOrdinals = normalizedOrdinals(labelOrdinals);
+        this.labelOrdinals = normalized(labelOrdinals);
     }
 
     public int[] labelOrdinals()
@@ -126,23 +126,7 @@ public final class PatternNavigation
 
     private boolean includes(int labelOrdinal)
     {
-        return labelOrdinals.length == 0 || Arrays.binarySearch(labelOrdinals, labelOrdinal) >= 0;
-    }
-
-    private static int[] normalizedOrdinals(int[] ordinals)
-    {
-        int[] normalized = ordinals.clone();
-        Arrays.sort(normalized);
-        int unique = 0;
-        for (int ordinal : normalized) {
-            if (ordinal < 0) {
-                throw new IllegalArgumentException("label ordinal is negative");
-            }
-            if (unique == 0 || normalized[unique - 1] != ordinal) {
-                normalized[unique++] = ordinal;
-            }
-        }
-        return Arrays.copyOf(normalized, unique);
+        return contains(labelOrdinals, labelOrdinal);
     }
 
     public enum Origin
