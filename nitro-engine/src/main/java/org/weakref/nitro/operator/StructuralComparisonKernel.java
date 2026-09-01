@@ -13,10 +13,11 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.core.type.BoundTypeComparison;
 import org.weakref.nitro.data.Vector;
 
 interface StructuralComparisonKernel
-        extends StructuralIdentityKernel
+        extends StructuralIdentityKernel, BoundTypeComparison
 {
     default PositionEquality bindPartitionEquality(
             Vector leftValues,
