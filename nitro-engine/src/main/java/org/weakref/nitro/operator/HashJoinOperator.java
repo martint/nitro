@@ -4016,6 +4016,16 @@ public class HashJoinOperator
 
     private Streams copyNullInnerPosition(int innerOutputIndex, Streams existing, Streams schema, int size, int outputPosition)
     {
+        if (existing != null &&
+                writableBooleanStream(existing.getOrNull(Stream.NULLS), size) &&
+                (!schema.has(Stream.ERRORS) || writableBooleanStream(existing.getOrNull(Stream.ERRORS), size))) {
+            ((BooleanVector) existing.get(Stream.NULLS)).values()[outputPosition] = true;
+            if (schema.has(Stream.ERRORS)) {
+                ((BooleanVector) existing.get(Stream.ERRORS)).values()[outputPosition] = false;
+            }
+            return existing;
+        }
+
         Streams.Builder builder = Streams.builder();
         builder.put(Stream.VALUES, existing == null ? nullValuesForInnerOutput(innerOutputIndex, schema.values(), size) : existing.values());
         builder.put(Stream.NULLS, setBooleanPosition(existing == null ? null : existing.getOrNull(Stream.NULLS), size, outputPosition, true));
@@ -4023,6 +4033,13 @@ public class HashJoinOperator
             builder.put(Stream.ERRORS, setBooleanPosition(existing == null ? null : existing.getOrNull(Stream.ERRORS), size, outputPosition, false));
         }
         return builder.build();
+    }
+
+    private boolean writableBooleanStream(Vector vector, int size)
+    {
+        return vector instanceof BooleanVector booleanVector &&
+                booleanVector.length() >= size &&
+                !allocator.isSharedAllFalseBoolean(booleanVector);
     }
 
     private void constrainRetainedInnerBatch(int innerBatchIndex, BufferedJoinInput.InnerBatch innerBatch, int[] logicalPositions, int positionCount)

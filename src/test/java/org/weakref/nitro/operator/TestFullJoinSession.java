@@ -62,6 +62,36 @@ class TestFullJoinSession
     }
 
     @Test
+    void testEmitsMultipleUnmatchedProbeRowsInOneBatch()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            ConstantTableOperator outer = new ConstantTableOperator(allocator, 1, List.of(row(1L), row(4L), row(5L)));
+            FullJoinSession session = new FullJoinSession(
+                    resources.operatorResources(),
+                    allocator,
+                    outer.outputSchema(),
+                    new int[] {0},
+                    new ConstantTableOperator(allocator, 1, List.of(row(2L), row(3L))),
+                    new int[] {0});
+            session.addInput(outer.next());
+            outer.close();
+            session.finish();
+
+            assertThat(session.hasOutput()).isTrue();
+            try (Batch output = session.getOutput()) {
+                assertThat(output.borrowMask().selectedCount()).isEqualTo(5);
+                assertThat(((I64Vector) output.output(0).borrow(Stream.VALUES)).values()).containsExactly(1, 4, 5, 0, 0);
+                assertThat(((BooleanVector) output.output(0).borrow(Stream.NULLS)).values()).containsExactly(false, false, false, true, true);
+                assertThat(((I64Vector) output.output(1).borrow(Stream.VALUES)).values()).containsExactly(0, 0, 0, 2, 3);
+                assertThat(((BooleanVector) output.output(1).borrow(Stream.NULLS)).values()).containsExactly(true, true, true, false, false);
+            }
+            assertThat(session.isFinished()).isTrue();
+            session.close();
+        }
+    }
+
+    @Test
     void testUsesExplicitOrderedInputContract()
     {
         try (EngineResources resources = EngineResources.createDefault();
