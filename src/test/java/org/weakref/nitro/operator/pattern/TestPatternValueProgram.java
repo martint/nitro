@@ -22,8 +22,10 @@ import org.weakref.nitro.execution.EngineResources;
 import org.weakref.nitro.operator.RowPositionIndex;
 
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 final class TestPatternValueProgram
 {
@@ -46,6 +48,48 @@ final class TestPatternValueProgram
             assertThat(((I64Vector) output[0].values()).values()).containsExactly(0, 7, 7);
             assertThat(((I64Vector) output[1].values()).values()).containsExactly(0, 3, 3);
         }
+    }
+
+    @Test
+    void testClosesEveryValueEvaluator()
+    {
+        AtomicInteger closes = new AtomicInteger();
+        PatternValueProgram program = new PatternValueProgram(List.of(
+                closingEvaluator(closes, false),
+                closingEvaluator(closes, true),
+                closingEvaluator(closes, false)));
+
+        assertThatThrownBy(program::close)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("close failure");
+        assertThat(closes).hasValue(3);
+    }
+
+    private static PatternValueEvaluator closingEvaluator(AtomicInteger closes, boolean fail)
+    {
+        return new PatternValueEvaluator()
+        {
+            @Override
+            public Streams append(
+                    PatternEvaluationContext context,
+                    Allocator allocator,
+                    Allocator.Context allocationContext,
+                    Streams output,
+                    int outputPosition,
+                    int outputSize)
+            {
+                throw new UnsupportedOperationException();
+            }
+
+            @Override
+            public void close()
+            {
+                closes.incrementAndGet();
+                if (fail) {
+                    throw new IllegalStateException("close failure");
+                }
+            }
+        };
     }
 
     private static Streams append(Streams output, int position, int size, long value)

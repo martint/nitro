@@ -19,6 +19,7 @@ import org.weakref.nitro.data.Streams;
 /// Registry-bound producer for one definition input or measure value.
 @FunctionalInterface
 public interface PatternValueEvaluator
+        extends AutoCloseable
 {
     /// Appends one value to caller-owned output, reusing or replacing its vectors as needed.
     Streams append(
@@ -28,4 +29,7 @@ public interface PatternValueEvaluator
             Streams output,
             int outputPosition,
             int outputSize);
+
+    @Override
+    default void close() {}
 }

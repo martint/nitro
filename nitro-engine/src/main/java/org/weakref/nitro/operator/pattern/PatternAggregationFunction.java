@@ -19,6 +19,7 @@ import org.weakref.nitro.data.Streams;
 /// Registry-bound implementation of one match-local aggregate.
 @FunctionalInterface
 public interface PatternAggregationFunction
+        extends AutoCloseable
 {
     /// Produces one aggregate result from the positioned match-row cursor into caller-owned output.
     Streams evaluate(
@@ -29,4 +30,7 @@ public interface PatternAggregationFunction
             Streams output,
             int outputPosition,
             int outputSize);
+
+    @Override
+    default void close() {}
 }

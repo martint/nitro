@@ -22,6 +22,7 @@ import static java.util.Objects.requireNonNull;
 
 /// Ordered set of registry-bound pattern values appended into caller-owned reusable columns.
 public final class PatternValueProgram
+        implements AutoCloseable
 {
     private final List<PatternValueEvaluator> evaluators;
 
@@ -70,5 +71,27 @@ public final class PatternValueProgram
             output[index] = column;
         }
         return output;
+    }
+
+    @Override
+    public void close()
+    {
+        RuntimeException failure = null;
+        for (PatternValueEvaluator evaluator : evaluators) {
+            try {
+                evaluator.close();
+            }
+            catch (RuntimeException closeFailure) {
+                if (failure == null) {
+                    failure = closeFailure;
+                }
+                else {
+                    failure.addSuppressed(closeFailure);
+                }
+            }
+        }
+        if (failure != null) {
+            throw failure;
+        }
     }
 }

@@ -55,4 +55,10 @@ public final class PatternAggregationValueEvaluator
                 outputPosition,
                 outputSize), "pattern aggregation returned null");
     }
+
+    @Override
+    public void close()
+    {
+        function.close();
+    }
 }
