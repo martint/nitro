@@ -17,6 +17,7 @@ import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.ValueDemand;
 import org.weakref.nitro.operator.AuthoritativeHashChannel;
 import org.weakref.nitro.operator.GroupingHashOutput;
+import org.weakref.nitro.operator.PhysicalOrdering;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -38,16 +39,27 @@ public record PhysicalAggregationProgram(
         List<Output> outputs,
         Schema outputSchema,
         Optional<AuthoritativeHashChannel> authoritativeHashChannel,
-        Optional<GroupingHashOutput> groupingHashOutput)
+        Optional<GroupingHashOutput> groupingHashOutput,
+        Optional<PhysicalOrdering> inputOrdering)
 {
     public PhysicalAggregationProgram(List<PhysicalAggregationUnit> units, List<Output> outputs)
     {
-        this(units, outputs, Schema.unspecified(outputs.size()), Optional.empty(), Optional.empty());
+        this(units, outputs, Schema.unspecified(outputs.size()), Optional.empty(), Optional.empty(), Optional.empty());
     }
 
     public PhysicalAggregationProgram(List<PhysicalAggregationUnit> units, List<Output> outputs, Schema outputSchema)
     {
-        this(units, outputs, outputSchema, Optional.empty(), Optional.empty());
+        this(units, outputs, outputSchema, Optional.empty(), Optional.empty(), Optional.empty());
+    }
+
+    public PhysicalAggregationProgram(
+            List<PhysicalAggregationUnit> units,
+            List<Output> outputs,
+            Schema outputSchema,
+            Optional<AuthoritativeHashChannel> authoritativeHashChannel,
+            Optional<GroupingHashOutput> groupingHashOutput)
+    {
+        this(units, outputs, outputSchema, authoritativeHashChannel, groupingHashOutput, Optional.empty());
     }
 
     public PhysicalAggregationProgram
@@ -57,6 +69,7 @@ public record PhysicalAggregationProgram(
         outputSchema = requireNonNull(outputSchema, "outputSchema is null");
         authoritativeHashChannel = requireNonNull(authoritativeHashChannel, "authoritativeHashChannel is null");
         groupingHashOutput = requireNonNull(groupingHashOutput, "groupingHashOutput is null");
+        inputOrdering = requireNonNull(inputOrdering, "inputOrdering is null");
         if (authoritativeHashChannel.isPresent() && groupingHashOutput.isPresent()) {
             throw new IllegalArgumentException("Aggregation cannot consume and compute a grouping hash in the same program");
         }
@@ -121,7 +134,8 @@ public record PhysicalAggregationProgram(
                 outputs,
                 outputSchema,
                 authoritativeHashChannel,
-                groupingHashOutput);
+                groupingHashOutput,
+                inputOrdering);
     }
 
     public PhysicalAggregationProgram withAuthoritativeHashChannel(AuthoritativeHashChannel authoritativeHashChannel)
@@ -131,7 +145,8 @@ public record PhysicalAggregationProgram(
                 outputs,
                 outputSchema,
                 Optional.of(requireNonNull(authoritativeHashChannel, "authoritativeHashChannel is null")),
-                Optional.empty());
+                Optional.empty(),
+                inputOrdering);
     }
 
     public PhysicalAggregationProgram withGroupingHashOutput(GroupingHashOutput groupingHashOutput)
@@ -141,7 +156,19 @@ public record PhysicalAggregationProgram(
                 outputs,
                 outputSchema,
                 Optional.empty(),
-                Optional.of(requireNonNull(groupingHashOutput, "groupingHashOutput is null")));
+                Optional.of(requireNonNull(groupingHashOutput, "groupingHashOutput is null")),
+                inputOrdering);
+    }
+
+    public PhysicalAggregationProgram withInputOrdering(PhysicalOrdering inputOrdering)
+    {
+        return new PhysicalAggregationProgram(
+                units,
+                outputs,
+                outputSchema,
+                authoritativeHashChannel,
+                groupingHashOutput,
+                Optional.of(requireNonNull(inputOrdering, "inputOrdering is null")));
     }
 
     /**
@@ -166,6 +193,7 @@ public record PhysicalAggregationProgram(
         for (PhysicalAggregationUnit unit : units) {
             unit.inputValueDemands().forEach((input, demand) -> demands.merge(input, demand, ValueDemand::merge));
         }
+        inputOrdering.ifPresent(ordering -> ordering.keys().forEach(key -> demands.merge(key.column(), ValueDemand.FULL, ValueDemand::merge)));
         return Map.copyOf(demands);
     }
 

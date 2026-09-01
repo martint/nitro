@@ -31,6 +31,7 @@ import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.StructVector;
+import org.weakref.nitro.data.ValueDemand;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.data.VectorAllocator;
@@ -91,6 +92,20 @@ class TestGroupedAggregationSession
         assertThat(original.groupingHashOutput()).isEmpty();
         assertThat(planned.groupingHashOutput()).contains(contract);
         assertThat(planned.physicalIntermediateOutput().groupingHashOutput()).contains(contract);
+    }
+
+    @Test
+    void testAggregationProgramCarriesPlannerAuthoredInputOrdering()
+    {
+        PhysicalAggregationProgram original = PhysicalAggregationProgram.independent(List.of(new CountAll()));
+        PhysicalOrdering ordering = new PhysicalOrdering(List.of(new PhysicalOrdering.Key(2, true, false)));
+
+        PhysicalAggregationProgram planned = original.withInputOrdering(ordering);
+
+        assertThat(original.inputOrdering()).isEmpty();
+        assertThat(planned.inputOrdering()).contains(ordering);
+        assertThat(planned.inputValueDemands()).containsEntry(2, ValueDemand.FULL);
+        assertThat(planned.physicalIntermediateOutput().inputOrdering()).contains(ordering);
     }
 
     @Test

@@ -109,6 +109,16 @@ public final class SortSession
         return outputSchema;
     }
 
+    /// Bytes held by this active sort, excluding reusable allocator pools.
+    public long retainedBytes()
+    {
+        return allocator.scopeCurrentBytes(allocationContext) +
+                (long) orderedSlots.length * Integer.BYTES +
+                (long) sortScratch.length * Integer.BYTES +
+                (long) sortKeys.length * Long.BYTES +
+                (long) radixCounts.length * Integer.BYTES;
+    }
+
     /**
      * Copies every selected row before returning; the caller may close the batch immediately.
      */
