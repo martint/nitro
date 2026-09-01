@@ -21,6 +21,7 @@ import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.function.scalar.PrimitiveExecutionContext;
+import org.weakref.nitro.function.scalar.PrimitiveFunction;
 
 import java.util.EnumSet;
 import java.util.List;
@@ -47,7 +48,24 @@ final class TestIntegralExtremaFunctions
                 .containsExactly(false, true, false, false);
     }
 
-    private static Streams evaluate(GreatestI64 function, List<Streams> inputs, Mask mask)
+    @Test
+    void testVariadicLeastHonorsMaskAndNulls()
+    {
+        Streams result = evaluate(
+                new LeastI64(),
+                List.of(
+                        Streams.ofValues(new I64Vector(new long[] {1, 7, 4, 9})),
+                        Streams.ofValues(new I64Vector(new long[] {2, 3, 8, 10}))
+                                .with(Stream.NULLS, new BooleanVector(new boolean[] {false, true, false, false})),
+                        Streams.ofValues(new I64Vector(new long[] {-1, 6, 5, 11}))),
+                Mask.sparse(new int[] {0, 1, 2}, 4));
+
+        assertThat(((I64Vector) result.values()).values()).containsExactly(-1, 3, 4, 0);
+        assertThat(((BooleanVector) result.get(Stream.NULLS)).values())
+                .containsExactly(false, true, false, false);
+    }
+
+    private static Streams evaluate(PrimitiveFunction function, List<Streams> inputs, Mask mask)
     {
         try (Allocator allocator = new Allocator(createDefault())) {
             return function.apply(

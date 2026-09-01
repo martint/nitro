@@ -170,6 +170,28 @@ public final class CountStateVector
                 : wide[chunkOffset];
     }
 
+    public void clear(int offset, int count)
+    {
+        if (offset < 0 || offset > length || count < 0 || count > length - offset) {
+            throw new IndexOutOfBoundsException("invalid count-state clear range");
+        }
+        int cleared = 0;
+        while (cleared < count) {
+            int position = offset + cleared;
+            int chunkIndex = position >> CHUNK_SHIFT;
+            int chunkOffset = position & CHUNK_MASK;
+            int clearLength = Math.min(count - cleared, CHUNK_SIZE - chunkOffset);
+            long[] wide = wideChunks[chunkIndex];
+            if (wide != null) {
+                java.util.Arrays.fill(wide, chunkOffset, chunkOffset + clearLength, 0);
+            }
+            else {
+                java.util.Arrays.fill(compactChunks[chunkIndex], chunkOffset, chunkOffset + clearLength, (byte) 0);
+            }
+            cleared += clearLength;
+        }
+    }
+
     public void copyTo(I64Vector output)
     {
         copyRangeTo(output, 0, 0, length);
