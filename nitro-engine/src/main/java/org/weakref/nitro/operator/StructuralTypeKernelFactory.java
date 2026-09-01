@@ -71,8 +71,17 @@ public final class StructuralTypeKernelFactory
         boolean hasValueRead = operators.valueRead().isPresent();
         boolean hasIdentical = operators.identical().isPresent();
         if (!hasValueRead && !hasIdentical) {
-            if (isRecursiveStructuralShape(type)) {
-                return key(type);
+            if (type.supportedVectorTypes().contains(StructVector.class)) {
+                return new StructStructuralIdentityKernel(type.nestedValueTypes().stream()
+                        .map(this::identity)
+                        .toArray(StructuralIdentityKernel[]::new));
+            }
+            if (type.supportedVectorTypes().contains(ArrayVector.class)) {
+                return new ArrayStructuralIdentityKernel(identity(requireChildBindings(type, 1)[0]));
+            }
+            if (type.supportedVectorTypes().contains(MapVector.class)) {
+                TypeBinding[] children = requireChildBindings(type, 2);
+                return new MapStructuralIdentityKernel(identity(children[0]), identity(children[1]));
             }
             return LegacyStructuralIdentityKernel.INSTANCE;
         }
@@ -151,13 +160,6 @@ public final class StructuralTypeKernelFactory
         }
     }
 
-    private static boolean isRecursiveStructuralShape(TypeBinding type)
-    {
-        return type.supportedVectorTypes().contains(StructVector.class) ||
-                type.supportedVectorTypes().contains(ArrayVector.class) ||
-                type.supportedVectorTypes().contains(MapVector.class);
-    }
-
     StructuralKeyKernel key(TypeBinding type)
     {
         requireNonNull(type, "type is null");
@@ -185,11 +187,11 @@ public final class StructuralTypeKernelFactory
                         .toArray(StructuralKeyKernel[]::new));
             }
             if (type.supportedVectorTypes().contains(ArrayVector.class)) {
-                return new ArrayStructuralKeyKernel(requireChildBindings(type, 1)[0]);
+                return new ArrayStructuralKeyKernel(key(requireChildBindings(type, 1)[0]));
             }
             if (type.supportedVectorTypes().contains(MapVector.class)) {
-                StructuralKeyKernel[] children = requireChildBindings(type, 2);
-                return new MapStructuralKeyKernel(children[0], children[1]);
+                TypeBinding[] children = requireChildBindings(type, 2);
+                return new MapStructuralKeyKernel(key(children[0]), key(children[1]));
             }
             return LegacyStructuralKeyKernel.INSTANCE;
         }
@@ -204,15 +206,191 @@ public final class StructuralTypeKernelFactory
                 operators.identical().orElseThrow());
     }
 
-    private StructuralKeyKernel[] requireChildBindings(TypeBinding type, int expected)
+    private TypeBinding[] requireChildBindings(TypeBinding type, int expected)
     {
         if (type.nestedValueTypes().size() != expected) {
             throw new IllegalArgumentException("Type %s has %s child bindings; expected %s"
                     .formatted(type.identity(), type.nestedValueTypes().size(), expected));
         }
-        return type.nestedValueTypes().stream()
-                .map(this::key)
-                .toArray(StructuralKeyKernel[]::new);
+        return type.nestedValueTypes().toArray(TypeBinding[]::new);
+    }
+
+    private static final class ArrayStructuralIdentityKernel
+            implements StructuralIdentityKernel
+    {
+        private final StructuralIdentityKernel elements;
+
+        private ArrayStructuralIdentityKernel(StructuralIdentityKernel elements)
+        {
+            this.elements = requireNonNull(elements, "elements is null");
+        }
+
+        @Override
+        public boolean identical(
+                Vector leftValues,
+                Vector leftNulls,
+                int leftPosition,
+                Vector rightValues,
+                Vector rightNulls,
+                int rightPosition)
+        {
+            ArrayStructuralKeyKernel.ArrayPosition left = ArrayStructuralKeyKernel.arrayPosition(leftValues, leftPosition);
+            ArrayStructuralKeyKernel.ArrayPosition right = ArrayStructuralKeyKernel.arrayPosition(rightValues, rightPosition);
+            int length = left.values().length(left.position());
+            if (length != right.values().length(right.position())) {
+                return false;
+            }
+
+            Streams leftElements = left.values().elements();
+            Streams rightElements = right.values().elements();
+            Vector leftElementNulls = leftElements.getOrNull(Stream.NULLS);
+            Vector rightElementNulls = rightElements.getOrNull(Stream.NULLS);
+            int leftOffset = left.values().startOffset(left.position());
+            int rightOffset = right.values().startOffset(right.position());
+            for (int index = 0; index < length; index++) {
+                int leftElement = leftOffset + index;
+                int rightElement = rightOffset + index;
+                boolean leftNull = OperatorVectorSupport.isNull(leftElementNulls, leftElement);
+                boolean rightNull = OperatorVectorSupport.isNull(rightElementNulls, rightElement);
+                if (leftNull || rightNull) {
+                    if (leftNull != rightNull) {
+                        return false;
+                    }
+                    continue;
+                }
+                if (!elements.identical(
+                        leftElements.values(), leftElementNulls, leftElement,
+                        rightElements.values(), rightElementNulls, rightElement)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+    }
+
+    private static final class MapStructuralIdentityKernel
+            implements StructuralIdentityKernel
+    {
+        private final StructuralIdentityKernel keys;
+        private final StructuralIdentityKernel values;
+
+        private MapStructuralIdentityKernel(StructuralIdentityKernel keys, StructuralIdentityKernel values)
+        {
+            this.keys = requireNonNull(keys, "keys is null");
+            this.values = requireNonNull(values, "values is null");
+        }
+
+        @Override
+        public boolean identical(
+                Vector leftValues,
+                Vector leftNulls,
+                int leftPosition,
+                Vector rightValues,
+                Vector rightNulls,
+                int rightPosition)
+        {
+            MapStructuralKeyKernel.MapPosition left = MapStructuralKeyKernel.mapPosition(leftValues, leftPosition);
+            MapStructuralKeyKernel.MapPosition right = MapStructuralKeyKernel.mapPosition(rightValues, rightPosition);
+            int length = left.values().length(left.position());
+            if (length != right.values().length(right.position())) {
+                return false;
+            }
+
+            Streams leftKeys = left.values().keys();
+            Streams rightKeys = right.values().keys();
+            Streams leftMapValues = left.values().values();
+            Streams rightMapValues = right.values().values();
+            Vector leftKeyNulls = leftKeys.getOrNull(Stream.NULLS);
+            Vector rightKeyNulls = rightKeys.getOrNull(Stream.NULLS);
+            Vector leftValueNulls = leftMapValues.getOrNull(Stream.NULLS);
+            Vector rightValueNulls = rightMapValues.getOrNull(Stream.NULLS);
+            int rightStart = right.values().startOffset(right.position());
+            int rightEnd = right.values().endOffset(right.position());
+            for (int leftEntry = left.values().startOffset(left.position());
+                    leftEntry < left.values().endOffset(left.position());
+                    leftEntry++) {
+                boolean found = false;
+                for (int rightEntry = rightStart; rightEntry < rightEnd; rightEntry++) {
+                    if (!identicalValue(keys, leftKeys, leftKeyNulls, leftEntry, rightKeys, rightKeyNulls, rightEntry)) {
+                        continue;
+                    }
+                    if (!identicalValue(values, leftMapValues, leftValueNulls, leftEntry, rightMapValues, rightValueNulls, rightEntry)) {
+                        return false;
+                    }
+                    found = true;
+                    break;
+                }
+                if (!found) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private static boolean identicalValue(
+                StructuralIdentityKernel kernel,
+                Streams left,
+                Vector leftNulls,
+                int leftPosition,
+                Streams right,
+                Vector rightNulls,
+                int rightPosition)
+        {
+            boolean leftNull = OperatorVectorSupport.isNull(leftNulls, leftPosition);
+            boolean rightNull = OperatorVectorSupport.isNull(rightNulls, rightPosition);
+            if (leftNull || rightNull) {
+                return leftNull == rightNull;
+            }
+            return kernel.identical(
+                    left.values(), leftNulls, leftPosition,
+                    right.values(), rightNulls, rightPosition);
+        }
+    }
+
+    private static final class StructStructuralIdentityKernel
+            implements StructuralIdentityKernel
+    {
+        private final StructuralIdentityKernel[] fields;
+
+        private StructStructuralIdentityKernel(StructuralIdentityKernel[] fields)
+        {
+            this.fields = fields.clone();
+        }
+
+        @Override
+        public boolean identical(
+                Vector leftValues,
+                Vector leftNulls,
+                int leftPosition,
+                Vector rightValues,
+                Vector rightNulls,
+                int rightPosition)
+        {
+            StructStructuralKeyKernel.StructPosition left = StructStructuralKeyKernel.structPosition(leftValues, leftPosition);
+            StructStructuralKeyKernel.StructPosition right = StructStructuralKeyKernel.structPosition(rightValues, rightPosition);
+            StructStructuralKeyKernel.requireFieldCount(left.values(), fields.length);
+            StructStructuralKeyKernel.requireFieldCount(right.values(), fields.length);
+            for (int field = 0; field < fields.length; field++) {
+                Streams leftField = left.values().field(field);
+                Streams rightField = right.values().field(field);
+                Vector leftFieldNulls = leftField.getOrNull(Stream.NULLS);
+                Vector rightFieldNulls = rightField.getOrNull(Stream.NULLS);
+                boolean leftNull = OperatorVectorSupport.isNull(leftFieldNulls, left.position());
+                boolean rightNull = OperatorVectorSupport.isNull(rightFieldNulls, right.position());
+                if (leftNull || rightNull) {
+                    if (leftNull != rightNull) {
+                        return false;
+                    }
+                    continue;
+                }
+                if (!fields[field].identical(
+                        leftField.values(), leftFieldNulls, left.position(),
+                        rightField.values(), rightFieldNulls, right.position())) {
+                    return false;
+                }
+            }
+            return true;
+        }
     }
 
     /**

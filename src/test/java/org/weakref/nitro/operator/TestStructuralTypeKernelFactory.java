@@ -35,12 +35,46 @@ import org.weakref.nitro.function.scalar.PrimitiveExecutionContext;
 import org.weakref.nitro.function.scalar.PrimitiveFunction;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 
+import static java.lang.invoke.MethodHandles.lookup;
+import static java.lang.invoke.MethodType.methodType;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class TestStructuralTypeKernelFactory
 {
+    @Test
+    void testStructuralIdentityUsesChildIdentityWithoutRequiringHash()
+            throws ReflectiveOperationException
+    {
+        AtomicInteger invocations = new AtomicInteger();
+        var vectorIdentical = lookup().findStatic(
+                        TestStructuralTypeKernelFactory.class,
+                        "sameParity",
+                        methodType(boolean.class, AtomicInteger.class, Vector.class, int.class, Vector.class, int.class))
+                .bindTo(invocations);
+        TypeBinding scalar = new TestingIdentityType(new TypeOperators(
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.of(vectorIdentical),
+                Optional.empty(),
+                Optional.empty()));
+        TypeBinding rowType = new TestingStructType(List.of(scalar));
+        StructVector rows = new StructVector(2);
+        rows.setField("value", Streams.ofValues(new I64Vector(new long[] {1, 3})));
+
+        assertThat(new StructuralTypeKernelFactory().identity(rowType)
+                .identical(rows, null, 0, rows, null, 1))
+                .isTrue();
+        assertThat(invocations).hasValue(1);
+    }
+
     @Test
     void testDerivesStructKeySemanticsFromLogicalChildren()
     {
@@ -233,5 +267,39 @@ class TestStructuralTypeKernelFactory
         {
             return Set.of(physicalType, DictionaryVector.class, RleVector.class);
         }
+    }
+
+    private record TestingIdentityType(TypeOperators operators)
+            implements TypeBinding
+    {
+        @Override
+        public TypeIdentity identity()
+        {
+            return new TypeIdentity("testing:identity");
+        }
+
+        @Override
+        public Class<?> carrierType()
+        {
+            return long.class;
+        }
+
+        @Override
+        public Set<Class<? extends Vector>> supportedVectorTypes()
+        {
+            return Set.of(I64Vector.class);
+        }
+    }
+
+    private static boolean sameParity(
+            AtomicInteger invocations,
+            Vector left,
+            int leftPosition,
+            Vector right,
+            int rightPosition)
+    {
+        invocations.incrementAndGet();
+        return (((I64Vector) left).values()[leftPosition] & 1) ==
+                (((I64Vector) right).values()[rightPosition] & 1);
     }
 }
