@@ -24,6 +24,7 @@ import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.StructVector;
+import org.weakref.nitro.data.Vector;
 
 import java.util.Arrays;
 import java.util.List;
@@ -834,15 +835,23 @@ final class NestedArrayReader
         @Override
         public Streams materialize(Allocator allocator, Allocator.Context context)
         {
-            StructVector structs = allocator.allocate(context, StructVector.class, size(), StructVector::new);
-            for (int field = 0; field < fields.size(); field++) {
-                structs.setField(fields.get(field).name(), values[field].materialize(allocator, context));
+            Streams[] fieldStreams = new Streams[fields.size()];
+            for (int field = 0; field < fieldStreams.length; field++) {
+                fieldStreams[field] = values[field].materialize(allocator, context);
+            }
+            Vector result = NestedStructReader.coalesceDictionaryStruct(allocator, context, size(), fields, fieldStreams);
+            if (result == null) {
+                StructVector structs = allocator.allocate(context, StructVector.class, size(), StructVector::new);
+                for (int field = 0; field < fieldStreams.length; field++) {
+                    structs.setField(fields.get(field).name(), fieldStreams[field]);
+                }
+                result = structs;
             }
             if (element.repetition() == FieldRepetitionType.REQUIRED) {
-                return Streams.ofValues(structs);
+                return Streams.ofValues(result);
             }
             return Streams.builder()
-                    .put(Stream.VALUES, structs)
+                    .put(Stream.VALUES, result)
                     .put(Stream.NULLS, nulls.materialize(allocator, context))
                     .build();
         }
