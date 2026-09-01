@@ -84,6 +84,14 @@ public final class JoinFilterFunctions
                 });
     }
 
+    public static JoinFilter longGreaterThan(int outerColumn, int innerColumn)
+    {
+        return new JoinFilter(
+                outerColumn,
+                innerColumn,
+                (LongJoinFilterFunction) (outerValue, innerValue) -> outerValue > innerValue);
+    }
+
     public static JoinFilter longBitwiseOverlap(int outerColumn, int innerColumn)
     {
         return new JoinFilter(outerColumn, innerColumn, new LongJoinFilterFunction()
