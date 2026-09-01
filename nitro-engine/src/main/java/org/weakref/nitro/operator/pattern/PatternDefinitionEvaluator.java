@@ -41,6 +41,20 @@ public final class PatternDefinitionEvaluator
         initialized = true;
     }
 
+    /// Positions the shared context for evaluating measures over an accepted match.
+    public PatternEvaluationContext positionMatch(
+            int partitionStart,
+            int partitionEnd,
+            int patternStart,
+            long matchNumber,
+            int currentRow,
+            PatternLabelEvaluator.LabelHistory labels)
+    {
+        reset(partitionStart, partitionEnd, patternStart, matchNumber);
+        context.resetRow(currentRow, requireNonNull(labels, "labels is null"));
+        return context;
+    }
+
     @Override
     public boolean evaluate(int labelOrdinal, int inputPosition, LabelHistory history)
     {

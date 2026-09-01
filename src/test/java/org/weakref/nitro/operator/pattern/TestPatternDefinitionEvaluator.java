@@ -59,6 +59,21 @@ final class TestPatternDefinitionEvaluator
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
+    @Test
+    void testPositionsAcceptedMatchForMeasureEvaluation()
+    {
+        PatternDefinitionEvaluator evaluator = new PatternDefinitionEvaluator(new LongRows(3, 7, 8), List.of(_ -> true));
+
+        PatternEvaluationContext context = evaluator.positionMatch(0, 3, 1, 4, 2, labels(0, 1));
+
+        assertThat(context.partitionStart()).isZero();
+        assertThat(context.partitionEnd()).isEqualTo(3);
+        assertThat(context.patternStart()).isEqualTo(1);
+        assertThat(context.matchNumber()).isEqualTo(4);
+        assertThat(context.currentRow()).isEqualTo(2);
+        assertThat(context.labels().labelAt(1)).isEqualTo(1);
+    }
+
     private static PatternLabelEvaluator.LabelHistory labels(int... labels)
     {
         return new PatternLabelEvaluator.LabelHistory()
