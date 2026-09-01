@@ -52,6 +52,16 @@ public interface TypeBinding
         return Optional.empty();
     }
 
+    /// Whether grouping implementations for this binding can consume a provider-compatible,
+    /// position-aligned authoritative hash instead of recomputing the logical key hash.
+    ///
+    /// This is an explicit physical capability. Embeddings must not infer it from a logical
+    /// type identity, carrier class, or vector class.
+    default boolean supportsAuthoritativeGroupingHash()
+    {
+        return false;
+    }
+
     /// Provider-owned construction for typed constants and null placeholders.
     ///
     /// Empty is retained for compatibility bindings and types that cannot be materialized as
