@@ -1578,13 +1578,12 @@ public final class NitroParquetBatchSource
                     yield reader.readNumeric(allocator, allocationContext, nulls, count, false);
                 }
                 case BINARY -> {
-                    Vector vector = reader.readBinary(allocator, allocationContext, nulls, count);
-                    if (nullVector != null && reader.lastReadNullsProvenAbsent()) {
-                        nullVector.declareAllFalse();
-                    }
-                    yield vector;
+                    yield reader.readBinary(allocator, allocationContext, nulls, count);
                 }
             };
+            if (nullVector != null && reader.lastReadNullsProvenAbsent()) {
+                nullVector.declareAllFalse();
+            }
             recordFullDecode(c, count);
             recordPublished(c, count);
             currentValues[c] = valueVector;
@@ -1834,7 +1833,7 @@ public final class NitroParquetBatchSource
         // a binary column is therefore always read before constrain or never (filter columns are numeric).
         if (!skip) {
             currentValues[column] = decodeFullColumn(column, reader, nulls, count);
-            if (nullVector != null && reader.kind() == ColumnReader.Kind.BINARY && reader.lastReadNullsProvenAbsent()) {
+            if (nullVector != null && reader.lastReadNullsProvenAbsent()) {
                 nullVector.declareAllFalse();
             }
             currentNulls[column] = nullVector;
@@ -1876,6 +1875,9 @@ public final class NitroParquetBatchSource
                 for (int j = 0; j < survivorCount; j++) {
                     nulls[survivors[j]] = lazyScratchNull[j];
                 }
+                if (reader.lastReadNullsProvenAbsent()) {
+                    nullVector.declareAllFalse();
+                }
             }
             currentValues[column] = vector;
         }
@@ -1893,6 +1895,9 @@ public final class NitroParquetBatchSource
                     for (int j = 0; j < survivorCount; j++) {
                         nulls[survivors[j]] = lazyScratchNull[j];
                     }
+                    if (reader.lastReadNullsProvenAbsent()) {
+                        nullVector.declareAllFalse();
+                    }
                 }
                 currentValues[column] = vector;
                 currentNulls[column] = nullVector;
@@ -1908,6 +1913,9 @@ public final class NitroParquetBatchSource
             if (nulls != null) {
                 for (int j = 0; j < survivorCount; j++) {
                     nulls[survivors[j]] = lazyScratchNull[j];
+                }
+                if (reader.lastReadNullsProvenAbsent()) {
+                    nullVector.declareAllFalse();
                 }
             }
             currentValues[column] = vector;

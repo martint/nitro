@@ -169,6 +169,9 @@ final class NestedNitroParquetBatchSource
                 case LONG -> readLong(allocator, context, nullValues, rowCount);
                 case BINARY -> reader.readBinary(allocator, context, nullValues, rowCount);
             };
+            if (nulls != null && reader.lastReadNullsProvenAbsent()) {
+                nulls.declareAllFalse();
+            }
             if (logicalValueBinding != null) {
                 values = logicalValueBinding.convert(allocator, context, values);
             }

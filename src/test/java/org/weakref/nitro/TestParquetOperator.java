@@ -959,6 +959,8 @@ public class TestParquetOperator
                     .sum()).isEqualTo(optional.length());
             long[] requiredValues = ((I64Vector) required.values()).values();
             long[] optionalValues = ((I64Vector) optional.values()).values();
+            BooleanVector optionalNulls = (BooleanVector) batch.column(1).borrow(Stream.NULLS);
+            assertThat(optionalNulls.isAllFalse()).isTrue();
             for (int position = 0; position < required.length(); position++) {
                 assertThat(requiredValues[required.ids()[position]]).isEqualTo((position % 3) * 10L);
                 assertThat(optionalValues[optional.ids()[position]]).isEqualTo((position % 5) * 100L);
@@ -2925,6 +2927,7 @@ public class TestParquetOperator
                     boolean[] optionalNulls = new boolean[batchSize];
                     required.readLongs(requiredValues, null, batchSize);
                     optional.readLongs(optionalValues, optionalNulls, batchSize);
+                    assertThat(optional.lastReadNullsProvenAbsent()).isFalse();
 
                     for (int index = 0; index < batchSize; index++) {
                         int position = consumed + index;
@@ -2945,7 +2948,7 @@ public class TestParquetOperator
     {
         List<ParquetRow> rows = new ArrayList<>();
         for (int position = 0; position < 257; position++) {
-            rows.add(new ParquetRow(10_000 + (position % 17), true, null));
+            rows.add(new ParquetRow(position, true, 10_000L + (position % 17)));
         }
 
         for (boolean directDecode : new boolean[] {false, true}) {
@@ -2959,13 +2962,14 @@ public class TestParquetOperator
                     assertDictionaryEncoding(file, "x");
                 }
                 try (ParquetFile parquetFile = ParquetFile.open(file);
-                        ColumnReader reader = columnReader(List.of(parquetFile), "x")) {
+                        ColumnReader reader = columnReader(List.of(parquetFile), "maybe")) {
                     if (directDecode) {
                         reader.enableDirectNumericBatchDecode();
                     }
 
                     long[] prefix = new long[31];
                     reader.readLongs(prefix, null, prefix.length);
+                    assertThat(reader.lastReadNullsProvenAbsent()).isTrue();
                     for (int index = 0; index < prefix.length; index++) {
                         assertThat(prefix[index]).isEqualTo(10_000L + (index % 17));
                     }
@@ -2974,6 +2978,7 @@ public class TestParquetOperator
                     long[] values = new long[survivors.length];
                     boolean[] nulls = new boolean[survivors.length];
                     reader.readSelectedLongs(survivors, survivors.length, rows.size() - prefix.length, values, nulls);
+                    assertThat(reader.lastReadNullsProvenAbsent()).isTrue();
 
                     for (int index = 0; index < survivors.length; index++) {
                         assertThat(values[index]).isEqualTo(10_000L + ((prefix.length + survivors[index]) % 17));
@@ -3017,6 +3022,7 @@ public class TestParquetOperator
                 long[] values = new long[survivors.length];
                 boolean[] nulls = new boolean[survivors.length];
                 reader.readSelectedLongs(survivors, survivors.length, rows.size(), values, nulls);
+                assertThat(reader.lastReadNullsProvenAbsent()).isFalse();
 
                 for (int index = 0; index < survivors.length; index++) {
                     int position = survivors[index];

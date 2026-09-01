@@ -409,6 +409,7 @@ public final class ColumnReader
     // uses pageDictIds because it needs random positions within a page.
     private boolean pageBinaryDictionaryStreaming;
     private boolean pageBinaryDictionaryNullFree;
+    private boolean pageNullsProvenAbsent;
     private boolean lastReadNullsProvenAbsent;
     // The chunk dictionary materialized as a BinaryVector, cached by generation so a DictionaryVector can wrap a
     // stable instance across batches and a flat fallback can expand ids of an earlier generation after a chunk change.
@@ -1001,6 +1002,7 @@ public final class ColumnReader
     /** Fill {@code count} INT values into {@code out}; nulls (if any) into {@code nullsOut} (may be null when none). */
     public void readInts(int[] out, boolean[] nullsOut, int count)
     {
+        boolean nullsProvenAbsent = true;
         int produced = 0;
         while (produced < count) {
             if (pageCursor >= pageValueCount) {
@@ -1017,6 +1019,7 @@ public final class ColumnReader
                 }
             }
             int n = Math.min(pageValueCount - pageCursor, count - produced);
+            nullsProvenAbsent &= pageNullsProvenAbsent;
             if (pageDefStreaming) {
                 readStreamingNullableDictionaryInts(out, produced, n, nullsOut);
             }
@@ -1041,11 +1044,13 @@ public final class ColumnReader
             pageCursor += n;
             produced += n;
         }
+        lastReadNullsProvenAbsent = nullsProvenAbsent;
     }
 
     /** Fill {@code count} LONG values into {@code out}; nulls (if any) into {@code nullsOut} (may be null when none). */
     public void readLongs(long[] out, boolean[] nullsOut, int count)
     {
+        boolean nullsProvenAbsent = true;
         int produced = 0;
         while (produced < count) {
             if (pageCursor >= pageValueCount) {
@@ -1062,6 +1067,7 @@ public final class ColumnReader
                 }
             }
             int n = Math.min(pageValueCount - pageCursor, count - produced);
+            nullsProvenAbsent &= pageNullsProvenAbsent;
             if (pageDefStreaming) {
                 readStreamingNullableDictionaryLongs(out, produced, n, nullsOut);
             }
@@ -1086,6 +1092,7 @@ public final class ColumnReader
             pageCursor += n;
             produced += n;
         }
+        lastReadNullsProvenAbsent = nullsProvenAbsent;
     }
 
     /**
@@ -1106,6 +1113,7 @@ public final class ColumnReader
         int[] batchIds = ownedIds.values();
         Vector flat = null;
         int batchGeneration = -1;
+        boolean nullsProvenAbsent = true;
         int produced = 0;
         while (produced < count) {
             if (pageCursor >= pageValueCount) {
@@ -1122,6 +1130,7 @@ public final class ColumnReader
                 }
             }
             int n = Math.min(pageValueCount - pageCursor, count - produced);
+            nullsProvenAbsent &= pageNullsProvenAbsent;
             boolean compatibleDictionary = pageDirectDictionary &&
                     (batchGeneration == -1 || batchGeneration == dictionaryGeneration);
             if (flat == null && compatibleDictionary) {
@@ -1146,8 +1155,10 @@ public final class ColumnReader
 
         if (flat != null) {
             allocator.release(allocationContext, ownedIds);
+            lastReadNullsProvenAbsent = nullsProvenAbsent;
             return flat;
         }
+        lastReadNullsProvenAbsent = nullsProvenAbsent;
         return wrapOwnedDictionary(
                 allocator,
                 allocationContext,
@@ -3064,6 +3075,7 @@ public final class ColumnReader
     /** Skip-decode: fill {@code count} survivor positions (batch-relative, sorted, within the next {@code batchRows}) into {@code out}. */
     public void readSelectedLongs(int[] survivors, int count, int batchRows, long[] out, boolean[] nullsOut)
     {
+        boolean nullsProvenAbsent = true;
         int produced = 0;
         int sel = 0;
         int batchCursor = 0;
@@ -3077,6 +3089,9 @@ public final class ColumnReader
             }
             int pageRows = Math.min(pageValueCount - pageCursor, batchRows - batchCursor);
             int pageEnd = batchCursor + pageRows;
+            if (sel < count && survivors[sel] < pageEnd) {
+                nullsProvenAbsent &= pageNullsProvenAbsent;
+            }
             if (pageNumericDictionaryIdsDecoded) {
                 while (sel < count && survivors[sel] < pageEnd) {
                     int pagePosition = pageCursor + survivors[sel] - batchCursor;
@@ -3233,6 +3248,7 @@ public final class ColumnReader
             pageCursor += pageRows;
             batchCursor = pageEnd;
         }
+        lastReadNullsProvenAbsent = nullsProvenAbsent;
     }
 
     /** Materialize a streaming-def run that contains nulls: ids were read densely (one per non-null in run order). */
@@ -3331,6 +3347,7 @@ public final class ColumnReader
     /** Skip-decode for INT columns; see {@link #readSelectedLongs}. */
     public void readSelectedInts(int[] survivors, int count, int batchRows, int[] out, boolean[] nullsOut)
     {
+        boolean nullsProvenAbsent = true;
         int produced = 0;
         int sel = 0;
         int batchCursor = 0;
@@ -3344,6 +3361,9 @@ public final class ColumnReader
             }
             int pageRows = Math.min(pageValueCount - pageCursor, batchRows - batchCursor);
             int pageEnd = batchCursor + pageRows;
+            if (sel < count && survivors[sel] < pageEnd) {
+                nullsProvenAbsent &= pageNullsProvenAbsent;
+            }
             if (pageNumericDictionaryIdsDecoded) {
                 while (sel < count && survivors[sel] < pageEnd) {
                     int pagePosition = pageCursor + survivors[sel] - batchCursor;
@@ -3482,6 +3502,7 @@ public final class ColumnReader
             pageCursor += pageRows;
             batchCursor = pageEnd;
         }
+        lastReadNullsProvenAbsent = nullsProvenAbsent;
     }
 
     /** Materialize a streaming-plain INT run that contains nulls: only non-null positions consume a plain value. */
@@ -3985,6 +4006,7 @@ public final class ColumnReader
             offset += defLength;
         }
         boolean nullFree = !streaming && nonNullCount == valueCount;
+        pageNullsProvenAbsent = !optional || nullFree;
         pageDefStreaming = false;
         pagePlainStreaming = false;
         skipBody = null;
@@ -4883,6 +4905,9 @@ public final class ColumnReader
             }
             offset += defLength;
         }
+
+        pageNullsProvenAbsent = !optional ||
+                (!streamNullableNumeric && !streamNullableFilter && !streamBinaryDictionary && nonNullCount == valueCount);
 
         pageFilterDict = false;
         pageFilterNullable = false;
