@@ -13,45 +13,15 @@
  */
 package org.weakref.nitro.operator;
 
-import org.weakref.nitro.data.Stream;
-import org.weakref.nitro.data.Streams;
-
 /**
  * Provides random access to one physically ordered window partition without flattening its retained vector pages.
  */
 public interface WindowPositionIndex
+        extends RowPositionIndex
 {
-    int size();
-
-    Streams column(int column, int position);
-
-    int sourcePosition(int position);
-
-    /**
-     * Returns whether two partition positions are backed by the same physical source vectors. Consumers may use
-     * this to retain vector-bound accessors until a frame crosses a retained-page boundary.
-     */
-    boolean sharesSource(int leftPosition, int rightPosition);
-
     /** Returns the inclusive start of the peer group containing {@code position}. */
     int peerStart(int position);
 
     /** Returns the exclusive end of the peer group containing {@code position}. */
     int peerEnd(int position);
-
-    /** Compares two non-null logical values through their registered type semantics. */
-    default int compareNonNull(int leftColumn, int leftPosition, int rightColumn, int rightPosition)
-    {
-        throw new UnsupportedOperationException("Logical comparison is not available");
-    }
-
-    default boolean isNull(int column, int position)
-    {
-        return OperatorVectorSupport.isNull(column(column, position).getOrNull(Stream.NULLS), sourcePosition(position));
-    }
-
-    default long longValue(int column, int position)
-    {
-        return OperatorVectorSupport.longValue(column(column, position).values(), sourcePosition(position));
-    }
 }
