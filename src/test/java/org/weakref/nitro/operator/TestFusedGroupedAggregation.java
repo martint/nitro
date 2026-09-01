@@ -820,6 +820,119 @@ class TestFusedGroupedAggregation
     }
 
     @Test
+    void filteredRegisteredAggregationPreservesEncodedGroups()
+    {
+        int size = 16_384;
+        int[] ids = new int[size];
+        int[] frequencies = new int[4];
+        long[] keys = {0, 1, 0, 1};
+        long[] values = {10, 20, 30, 40};
+        boolean[] selectedDomain = {false, true, false, true};
+        Map<Long, Long> expected = new HashMap<>();
+        for (int position = 0; position < size; position++) {
+            int id = (position * 3 + 1) & 3;
+            ids[position] = id;
+            frequencies[id]++;
+            if (selectedDomain[id]) {
+                expected.merge(keys[id], values[id], Long::sum);
+            }
+            else {
+                expected.putIfAbsent(keys[id], 0L);
+            }
+        }
+
+        DictionaryVector keyDictionary = DictionaryVector.ofTrustedIdsWithDomainFrequencies(
+                ids,
+                size,
+                new I64Vector(keys),
+                frequencies);
+        EncodedGeneratedSum implementation = new EncodedGeneratedSum();
+        PhysicalAggregationProgram program = PhysicalAggregationProgram.singleUnit(
+                new RegisteredAggregationUnit(implementation, RAW, FINAL, new int[] {1}, 2));
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                Operator operator = new GroupedAggregationOperator(
+                        allocator,
+                        List.of(0),
+                        program,
+                        new TableOperator(3, List.of(TableOperator.Page.values(
+                                size,
+                                new Vector[] {
+                                        keyDictionary,
+                                        keyDictionary.sharedMappingWithValues(new I64Vector(values)),
+                                        keyDictionary.sharedMappingWithValues(new BooleanVector(selectedDomain))},
+                                Mask.all(size)))))) {
+            Map<Long, Long> actual = new HashMap<>();
+            while (operator.hasNext()) {
+                try (Batch result = operator.next()) {
+                    VectorAccess.LongValues resultKeys = VectorAccess.longValues(result.output(0).borrow(Stream.VALUES));
+                    VectorAccess.LongValues resultSums = VectorAccess.longValues(result.output(1).borrow(Stream.VALUES));
+                    for (int position : result.borrowMask()) {
+                        actual.put(resultKeys.value(position), resultSums.value(position));
+                    }
+                }
+            }
+            assertThat(actual).isEqualTo(expected);
+        }
+        assertThat(implementation.encodedGroupsObserved).isTrue();
+    }
+
+    @Test
+    void filteredRegisteredAggregationFallsBackWhenEncodedGroupsAreUnsupported()
+    {
+        int size = 16_384;
+        int[] ids = new int[size];
+        int[] frequencies = new int[4];
+        long[] keys = {0, 1, 0, 1};
+        boolean[] selectedDomain = {false, true, false, true};
+        Map<Long, Long> expected = new HashMap<>();
+        for (int position = 0; position < size; position++) {
+            int id = (position * 3 + 1) & 3;
+            ids[position] = id;
+            frequencies[id]++;
+            expected.putIfAbsent(keys[id], 0L);
+            if (selectedDomain[id]) {
+                expected.merge(keys[id], 1L, Long::sum);
+            }
+        }
+
+        DictionaryVector keyDictionary = DictionaryVector.ofTrustedIdsWithDomainFrequencies(
+                ids,
+                size,
+                new I64Vector(keys),
+                frequencies);
+        WeightedDomainCount implementation = new WeightedDomainCount();
+        PhysicalAggregationProgram program = PhysicalAggregationProgram.singleUnit(
+                new RegisteredAggregationUnit(implementation, RAW, FINAL, new int[0], 1));
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                Operator operator = new GroupedAggregationOperator(
+                        allocator,
+                        List.of(0),
+                        program,
+                        new TableOperator(2, List.of(TableOperator.Page.values(
+                                size,
+                                new Vector[] {
+                                        keyDictionary,
+                                        keyDictionary.sharedMappingWithValues(new BooleanVector(selectedDomain))},
+                                Mask.all(size)))))) {
+            Map<Long, Long> actual = new HashMap<>();
+            while (operator.hasNext()) {
+                try (Batch result = operator.next()) {
+                    VectorAccess.LongValues resultKeys = VectorAccess.longValues(result.output(0).borrow(Stream.VALUES));
+                    VectorAccess.LongValues resultCounts = VectorAccess.longValues(result.output(1).borrow(Stream.VALUES));
+                    for (int position : result.borrowMask()) {
+                        actual.put(resultKeys.value(position), resultCounts.value(position));
+                    }
+                }
+            }
+            assertThat(actual).isEqualTo(expected);
+        }
+        assertThat(implementation.logicalRowsObserved).isTrue();
+        assertThat(implementation.groupedDomainObserved).isFalse();
+    }
+
+    @Test
     void allNullAggregationInputPreservesCompactDictionarySelection()
     {
         int size = 16_384;

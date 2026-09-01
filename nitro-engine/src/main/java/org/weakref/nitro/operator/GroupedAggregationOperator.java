@@ -1054,11 +1054,17 @@ public class GroupedAggregationOperator
         boolean encodedGroupedInput = supportsEncodedGroupedInput();
         org.weakref.nitro.operator.aggregation.StreamAccessor streams = StreamAccessors.forBatch(batch);
         boolean groupedDomainInput = supportsGroupedDomainInput(streams);
-        if (!dictionaryDomainAggregation || (!generatedUpdates && !groupedDomainInput && !encodedGroupedInput) ||
-                filteredAggregationIndexes.length != 0 || distinctAggregationGroups.length != 0) {
+        boolean filteredEncodedGroupedInput = supportsFilteredEncodedGroupedInput();
+        if (!dictionaryDomainAggregation ||
+                (!generatedUpdates && !groupedDomainInput && !encodedGroupedInput && !filteredEncodedGroupedInput) ||
+                (filteredAggregationIndexes.length != 0 && !filteredEncodedGroupedInput) ||
+                distinctAggregationGroups.length != 0) {
             return false;
         }
         if (groupByColumns.length != 1) {
+            if (filteredAggregationIndexes.length != 0) {
+                return false;
+            }
             return trySharedDictionaryKeyDomainAggregation(batch, mask, streams, groupedDomainInput, encodedGroupedInput);
         }
         Output keyOutput = batch.output(groupByColumns[0]);
@@ -1090,10 +1096,12 @@ public class GroupedAggregationOperator
         if (generatedUpdates && !bindDictionaryDomainInputs(batch, dictionary, keyNulls, mask, slots)) {
             generatedUpdates = false;
         }
-        if ((groupedDomainInput || encodedGroupedInput) && !VectorAccess.isAllFalseNulls(keyNulls)) {
+        if ((groupedDomainInput || encodedGroupedInput || filteredEncodedGroupedInput) &&
+                !VectorAccess.isAllFalseNulls(keyNulls)) {
             return false;
         }
-        if (!generatedUpdates && !groupedDomainInput && (!encodedGroupedInput || dictionary.values().length() > Long.SIZE)) {
+        if (!generatedUpdates && !groupedDomainInput &&
+                (!(encodedGroupedInput || filteredEncodedGroupedInput) || dictionary.values().length() > Long.SIZE)) {
             return false;
         }
 
@@ -1124,6 +1132,29 @@ public class GroupedAggregationOperator
         prepareAggregationStateForCurrentGroups(previousMaxGroup);
         start = System.nanoTime();
         try {
+            int domainSize = dictionary.values().length();
+            DictionaryVector encodedGroups = null;
+            if (groupedDomainInput || encodedGroupedInput || filteredEncodedGroupedInput) {
+                reusableDictionaryDomainGroups = allocator.reallocateIfNecessary(
+                        allocationContext,
+                        reusableDictionaryDomainGroups,
+                        I64Vector.class,
+                        domainSize,
+                        I64Vector::new);
+                long[] groupValues = reusableDictionaryDomainGroups.values();
+                for (int domain = 0; domain < domainSize; domain++) {
+                    groupValues[domain] = dictionaryDomainGroups[domain];
+                }
+                if (encodedGroupedInput || filteredEncodedGroupedInput) {
+                    long domainPresence = domainPresence(dictionaryDomainCounts, domainSize);
+                    // An all-row mapping with exact source frequencies remains exact after replacing only its
+                    // physical values with resolved group ids. Selected filters retain their own exact compact
+                    // domain on the same mapping.
+                    encodedGroups = mask.all() && dictionary.hasDomainFrequencies()
+                            ? dictionary.sharedMappingWithValues(reusableDictionaryDomainGroups)
+                            : dictionary.sharedMappingWithValuesAndDomainPresence(reusableDictionaryDomainGroups, domainPresence);
+                }
+            }
             if (generatedUpdates) {
                 if (!fusedStateVectorsBound) {
                     refreshFusedStateVectors();
@@ -1153,17 +1184,6 @@ public class GroupedAggregationOperator
                 }
             }
             else if (groupedDomainInput) {
-                int domainSize = dictionary.values().length();
-                reusableDictionaryDomainGroups = allocator.reallocateIfNecessary(
-                        allocationContext,
-                        reusableDictionaryDomainGroups,
-                        I64Vector.class,
-                        domainSize,
-                        I64Vector::new);
-                long[] groupValues = reusableDictionaryDomainGroups.values();
-                for (int domain = 0; domain < domainSize; domain++) {
-                    groupValues[domain] = dictionaryDomainGroups[domain];
-                }
                 GroupedAggregationDomain domain = new GroupedAggregationDomain(
                         reusableDictionaryDomainGroups,
                         dictionaryDomainCounts,
@@ -1172,32 +1192,22 @@ public class GroupedAggregationOperator
                     aggregations[aggregationIndex].accumulateGroupedDomain(states[aggregationIndex], domain, streams);
                 }
             }
-            else {
-                int domainSize = dictionary.values().length();
-                reusableDictionaryDomainGroups = allocator.reallocateIfNecessary(
-                        allocationContext,
-                        reusableDictionaryDomainGroups,
-                        I64Vector.class,
-                        domainSize,
-                        I64Vector::new);
-                long[] groupValues = reusableDictionaryDomainGroups.values();
-                for (int domain = 0; domain < domainSize; domain++) {
-                    groupValues[domain] = dictionaryDomainGroups[domain];
-                }
-                long domainPresence = 0;
-                for (int domain = 0; domain < domainSize; domain++) {
-                    if (dictionaryDomainCounts[domain] != 0) {
-                        domainPresence |= 1L << domain;
-                    }
-                }
-                // An all-row mapping with exact source frequencies remains exact after replacing only its physical
-                // values with resolved group ids. Preserve that stronger metadata so registry aggregations can
-                // update once per physical key. A selected subset has only the presence proof computed above.
-                DictionaryVector encodedGroups = mask.all() && dictionary.hasDomainFrequencies()
-                        ? dictionary.sharedMappingWithValues(reusableDictionaryDomainGroups)
-                        : dictionary.sharedMappingWithValuesAndDomainPresence(reusableDictionaryDomainGroups, domainPresence);
+            else if (encodedGroupedInput) {
                 for (int aggregationIndex : plainAggregationIndexes) {
                     aggregations[aggregationIndex].accumulate(states[aggregationIndex], encodedGroups, mask, streams);
+                }
+            }
+            if (filteredEncodedGroupedInput) {
+                for (int aggregationIndex : filteredAggregationIndexes) {
+                    Mask filteredMask = filterMask(batch, aggregations[aggregationIndex].filterInputColumn(), mask);
+                    try {
+                        aggregations[aggregationIndex].accumulate(states[aggregationIndex], encodedGroups, filteredMask, streams);
+                    }
+                    finally {
+                        if (filteredMask != mask) {
+                            allocator.release(allocationContext, filteredMask);
+                        }
+                    }
                 }
             }
         }
@@ -1444,6 +1454,19 @@ public class GroupedAggregationOperator
             return false;
         }
         for (int aggregationIndex : plainAggregationIndexes) {
+            if (!aggregations[aggregationIndex].supportsEncodedGroupedInput()) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean supportsFilteredEncodedGroupedInput()
+    {
+        if (filteredAggregationIndexes.length == 0) {
+            return false;
+        }
+        for (int aggregationIndex : filteredAggregationIndexes) {
             if (!aggregations[aggregationIndex].supportsEncodedGroupedInput()) {
                 return false;
             }
