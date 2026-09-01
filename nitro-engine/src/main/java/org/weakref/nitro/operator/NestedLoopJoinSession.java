@@ -15,6 +15,7 @@ package org.weakref.nitro.operator;
 
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.operator.HashJoinOperator.JoinFilter;
 
 import java.util.function.UnaryOperator;
 
@@ -43,12 +44,23 @@ public final class NestedLoopJoinSession
             Schema outerSchema,
             Operator inner)
     {
+        this(operatorResources, allocator, outerSchema, inner, new JoinFilter[0]);
+    }
+
+    public NestedLoopJoinSession(
+            OperatorResources operatorResources,
+            Allocator allocator,
+            Schema outerSchema,
+            Operator inner,
+            JoinFilter... filters)
+    {
         outer = new ExternallyScheduledBatchFeed(requireNonNull(outerSchema, "outerSchema is null"));
-        join = new NestedLoopJoinOperator(
-                requireNonNull(operatorResources, "operatorResources is null"),
-                requireNonNull(allocator, "allocator is null"),
-                outer,
-                requireNonNull(inner, "inner is null"));
+        OperatorResources resources = requireNonNull(operatorResources, "operatorResources is null");
+        Allocator requiredAllocator = requireNonNull(allocator, "allocator is null");
+        Operator requiredInner = requireNonNull(inner, "inner is null");
+        join = filters.length == 0
+                ? new NestedLoopJoinOperator(resources, requiredAllocator, outer, requiredInner)
+                : new NestedLoopJoinOperator(resources, requiredAllocator, outer, requiredInner, filters);
         outputRoot = join;
     }
 

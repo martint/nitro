@@ -162,13 +162,14 @@ final class JoinOutputBuffer
             result[i] = buffers.borrowStreams(outerBatch.output(i));
         }
         for (int i = 0; i < innerColumnCount; i++) {
-            innerBuffer[i] = buffers.replicate(
+            Streams inner = innerBatch.retained()
+                    ? buffers.borrowStreams(innerBatch.retainedBatch().output(i))
+                    : innerBatch.columns()[i];
+            innerBuffer[i] = buffers.repeatSinglePosition(
                     innerBuffer[i],
-                    innerBatch.columns()[i],
+                    inner,
                     outerMask.maxPosition() + 1,
-                    0,
-                    outerMask.maxPosition() + 1,
-                    innerPosition);
+                    innerBatch.sourcePosition(innerPosition));
             result[outerColumnCount + i] = innerBuffer[i];
         }
     }

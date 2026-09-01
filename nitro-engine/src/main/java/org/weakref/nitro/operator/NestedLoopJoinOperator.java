@@ -20,6 +20,7 @@ import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.execution.EngineResources;
+import org.weakref.nitro.operator.HashJoinOperator.JoinFilter;
 import org.weakref.nitro.operator.source.ExternallyScheduledSource;
 
 import java.util.ArrayList;
@@ -68,6 +69,7 @@ public class NestedLoopJoinOperator
     private boolean currentOuterPositionReady;
     private int currentOutputCount;
     private Mask currentOutputMask;
+    private boolean currentOutputUsesCrossProductLayout;
     private boolean outerConstrained;
 
     private boolean done;
@@ -82,6 +84,11 @@ public class NestedLoopJoinOperator
     public NestedLoopJoinOperator(OperatorResources resources, Allocator allocator, Operator outer, Operator inner)
     {
         this(resources, allocator, outer, inner, new CrossJoinMatcher());
+    }
+
+    public NestedLoopJoinOperator(OperatorResources resources, Allocator allocator, Operator outer, Operator inner, JoinFilter... filters)
+    {
+        this(resources, allocator, outer, inner, new FilteredJoinMatcher(filters));
     }
 
     public NestedLoopJoinOperator(Allocator allocator, Operator outer, int outerJoinColumn, Operator inner, int innerJoinColumn)
@@ -255,8 +262,29 @@ public class NestedLoopJoinOperator
     private Mask produceBatch()
     {
         if (!matcher.producesFullCrossProduct()) {
+            loadInnerIfNecessary();
+            if (bufferedInner.rowCount() == 0) {
+                captureOuterSchemaIfAvailable();
+                done = true;
+                currentOutputCount = 0;
+                currentOutputUsesCrossProductLayout = false;
+                return allocator.allocateAllMask(allocationContext, 0);
+            }
+            if (outerRemaining == 0 && !loadNextOuterBatch()) {
+                markDoneOrWaitingForOuterInput();
+                currentOutputCount = 0;
+                currentOutputUsesCrossProductLayout = false;
+                return allocator.allocateAllMask(allocationContext, 0);
+            }
+            if (matcher.supportsOuterMaskPruning(currentOuterBatch, bufferedInner.batches().get(currentInnerBatch))) {
+                currentOutputUsesCrossProductLayout = true;
+                return produceOuterMaskPrunedBatch();
+            }
+            currentOutputUsesCrossProductLayout = false;
             return produceEquiJoinBatch();
         }
+
+        currentOutputUsesCrossProductLayout = true;
 
         loadInnerIfNecessary();
         if (bufferedInner.rowCount() == 0) {
@@ -314,6 +342,25 @@ public class NestedLoopJoinOperator
             outerRemaining -= outerProcessed;
         }
 
+        return mask;
+    }
+
+    private Mask produceOuterMaskPrunedBatch()
+    {
+        BufferedJoinInput.InnerBatch innerBatch = bufferedInner.batches().get(currentInnerBatch);
+        joinWithInnerRow();
+        Mask mask = allocator.copyMask(allocationContext, currentOuterMask);
+        matcher.pruneOuterMask(currentOuterBatch, mask, innerBatch, currentInnerPosition);
+
+        currentInnerPosition++;
+        if (currentInnerPosition == innerBatch.length()) {
+            currentInnerBatch++;
+            currentInnerPosition = 0;
+        }
+        if (currentInnerBatch == bufferedInner.batches().size()) {
+            currentInnerBatch = 0;
+            outerRemaining = 0;
+        }
         return mask;
     }
 
@@ -416,7 +463,7 @@ public class NestedLoopJoinOperator
         Output[] outputs = new Output[outputCount()];
         for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
             int physicalOutput = outputChannels[outputIndex];
-            outputs[outputIndex] = matcher.producesFullCrossProduct()
+            outputs[outputIndex] = currentOutputUsesCrossProductLayout
                     ? outputBuffer.resultOutputForNestedLoop(physicalOutput, currentOuterBatch, allocator, allocationContext)
                     : resultOutput(physicalOutput);
         }
@@ -434,7 +481,11 @@ public class NestedLoopJoinOperator
                 batchMask,
                 _ -> {},
                 takenMask -> outerBatch != null && takenMask == outerMask ? outerBatch.takeMask() : allocator.transfer(allocationContext, takenMask),
-                _ -> {},
+                releasedMask -> {
+                    if (outerBatch == null || releasedMask != outerMask) {
+                        allocator.release(allocationContext, releasedMask);
+                    }
+                },
                 () -> {
                     if (outerLease != null) {
                         outerLease.release();
@@ -473,7 +524,7 @@ public class NestedLoopJoinOperator
     @Override
     public void constrain(Mask mask)
     {
-        if (matcher.supportsPerPositionEmission()) {
+        if (matcher.supportsPerPositionEmission() && !currentOutputUsesCrossProductLayout) {
             currentOutputMask = mask;
         }
     }

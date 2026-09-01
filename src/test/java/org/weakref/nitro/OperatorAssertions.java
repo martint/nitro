@@ -25,6 +25,7 @@ import org.weakref.nitro.data.F64Vector;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.MapVector;
+import org.weakref.nitro.data.RegionVector;
 import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Row;
 import org.weakref.nitro.data.Stream;
@@ -136,6 +137,7 @@ public class OperatorAssertions
                 case ConcatenatedBooleanVector vector -> vector.value(position);
                 case DictionaryVector vector -> isNullAt(vector.values(), vector.ids()[position]);
                 case RleVector vector -> isNullAtInRle(vector, position);
+                case RegionVector vector -> isNullAt(vector.values(), vector.offset() + position);
                 default -> throw new UnsupportedOperationException("nulls vector type: " + nulls.getClass().getSimpleName());
             };
         }
@@ -165,6 +167,7 @@ public class OperatorAssertions
                 case StructVector vector -> decodeStruct(vector, position);
                 case DictionaryVector vector -> decodeNonNullValue(vector.values(), vector.ids()[position]);
                 case RleVector vector -> decodeRleValue(vector, position);
+                case RegionVector vector -> decodeNonNullValue(vector.values(), vector.offset() + position);
                 default -> throw new UnsupportedOperationException(values.getClass().getSimpleName());
             };
         }

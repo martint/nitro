@@ -13,6 +13,8 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.data.Mask;
+
 interface JoinMatcher
 {
     /**
@@ -29,6 +31,16 @@ interface JoinMatcher
      * either capability.
      */
     boolean supportsPerPositionEmission();
+
+    default boolean supportsOuterMaskPruning(Batch outerBatch, BufferedJoinInput.InnerBatch innerBatch)
+    {
+        return false;
+    }
+
+    default void pruneOuterMask(Batch outerBatch, Mask mask, BufferedJoinInput.InnerBatch innerBatch, int innerPosition)
+    {
+        throw new UnsupportedOperationException("matcher does not support outer-mask pruning");
+    }
 
     boolean matches(Batch outerBatch, int outerPosition, BufferedJoinInput.InnerBatch innerBatch, int innerPosition);
 }

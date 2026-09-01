@@ -24,6 +24,7 @@ import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.MapVector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.PrimitiveArrayPool;
+import org.weakref.nitro.data.RegionVector;
 import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.SelectedPositions;
 import org.weakref.nitro.data.Stream;
@@ -131,6 +132,39 @@ final class JoinBufferSupport
             return copySinglePosition(existing, input, size, start, position);
         }
         return copyStreamsPositions(existing, input, repeatedPositions(position, length), start, size);
+    }
+
+    public Streams repeatSinglePosition(Streams existing, Streams input, int length, int position)
+    {
+        if (existing != null) {
+            for (int index = 0; index < existing.vectorCount(); index++) {
+                allocator.release(allocationContext, existing.vectorAt(index));
+            }
+        }
+        Vector values = repeatSinglePosition(input.get(Stream.VALUES), length, position);
+        Vector nulls = input.getOrNull(Stream.NULLS);
+        Vector errors = input.getOrNull(Stream.ERRORS);
+        return allocator.reuseOrCreateStreams(
+                existing,
+                values,
+                repeatOptionalBoolean(nulls, length, position),
+                repeatOptionalBoolean(errors, length, position));
+    }
+
+    private Vector repeatOptionalBoolean(Vector input, int length, int position)
+    {
+        if (input == null) {
+            return null;
+        }
+        if (VectorAccess.isAllFalseNulls(input)) {
+            return allocator.borrowAllFalseBoolean(allocationContext, length);
+        }
+        return repeatSinglePosition(input, length, position);
+    }
+
+    private Vector repeatSinglePosition(Vector input, int length, int position)
+    {
+        return allocator.allocateSingleRunRle(allocationContext, length, new RegionVector(input, position, 1));
     }
 
     public Streams copyAndCompact(Output input, Mask mask, int maskStart, Streams existing, int outputStart, int copied, int size)

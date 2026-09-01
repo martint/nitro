@@ -159,6 +159,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.weakref.nitro.OperatorAssertions.operator;
 import static org.weakref.nitro.data.Row.row;
 import static org.weakref.nitro.function.scalar.builtin.JoinFilterFunctions.longBitwiseOverlap;
+import static org.weakref.nitro.function.scalar.builtin.JoinFilterFunctions.longLessThan;
 import static org.weakref.nitro.function.scalar.builtin.JoinFilterFunctions.longNotEqual;
 
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
@@ -6541,6 +6542,53 @@ public class TestOperators
                 .matchesExactly(List.of(
                         row(2L, 20L, 2L, 200L),
                         row(3L, 40L, 3L, 400L)));
+    }
+
+    @Test
+    void testNestedLoopJoinFiltersCandidatesBeforeEmission()
+    {
+        assertThat(operator(
+                new NestedLoopJoinOperator(
+                        EngineResources.from(allocator).operatorResources(),
+                        allocator,
+                        new ConstantTableOperator(
+                                allocator,
+                                1,
+                                List.of(row(1L), row(2L), row((Object) null))),
+                        new ConstantTableOperator(
+                                allocator,
+                                1,
+                                List.of(row(2L), row(3L), row((Object) null))),
+                        longLessThan(0, 0))))
+                .matchesExactly(List.of(
+                        row(1L, 2L),
+                        row(1L, 3L),
+                        row(2L, 3L)));
+    }
+
+    @Test
+    void testNestedLoopJoinFiltersDictionaryDomainBeforeEmission()
+    {
+        assertThat(operator(
+                new NestedLoopJoinOperator(
+                        EngineResources.from(allocator).operatorResources(),
+                        allocator,
+                        new TableOperator(
+                                1,
+                                List.of(TableOperator.Page.values(
+                                        4,
+                                        new Vector[] {DictionaryVector.wrap(
+                                                new int[] {0, 1, 0, 2},
+                                                new I64Vector(new long[] {1, 2, 4}))},
+                                        Mask.all(4)))),
+                        new ConstantTableOperator(allocator, 1, List.of(row(2L), row(3L))),
+                        longLessThan(0, 0))))
+                .matchesExactly(List.of(
+                        row(1L, 2L),
+                        row(1L, 2L),
+                        row(1L, 3L),
+                        row(2L, 3L),
+                        row(1L, 3L)));
     }
 
     @Test

@@ -5026,9 +5026,10 @@ public class TestOperatorBatches
                 new ConstantTableOperator(allocator, 1, List.of(row(10L), row(20L))));
 
         Batch batch = operator.next();
-        int rowCount = batch.borrowMask().count();
-        assertThat(Arrays.copyOf(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values(), rowCount)).containsExactly(1L, 2L);
-        assertThat(Arrays.copyOf(((I64Vector) batch.output(1).borrow(Stream.VALUES)).values(), rowCount)).containsExactly(10L, 10L);
+        VectorAccess.LongValues outer = VectorAccess.longValues(batch.output(0).borrow(Stream.VALUES));
+        VectorAccess.LongValues inner = VectorAccess.longValues(batch.output(1).borrow(Stream.VALUES));
+        assertThat(List.of(outer.value(0), outer.value(1))).containsExactly(1L, 2L);
+        assertThat(List.of(inner.value(0), inner.value(1))).containsExactly(10L, 10L);
     }
 
     @Test
@@ -5075,13 +5076,13 @@ public class TestOperatorBatches
                                 org.weakref.nitro.data.Mask.all(2)))));
 
         Batch batch = operator.next();
-        int rowCount = batch.borrowMask().count();
-        I64Vector ids = (I64Vector) batch.output(0).borrow(Stream.VALUES);
-        BinaryVector payload = (BinaryVector) batch.output(1).borrow(Stream.VALUES);
+        VectorAccess.LongValues ids = VectorAccess.longValues(batch.output(0).borrow(Stream.VALUES));
+        Vector payload = batch.output(1).borrow(Stream.VALUES);
+        BinaryVector payloadDomain = binaryDomain(payload);
 
-        assertThat(Arrays.copyOf(ids.values(), rowCount)).containsExactly(1L, 2L);
-        assertThat(payload.hasTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID)).isTrue();
-        assertThat(payload.hasTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY)).isTrue();
+        assertThat(List.of(ids.value(0), ids.value(1))).containsExactly(1L, 2L);
+        assertThat(payloadDomain.hasTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID)).isTrue();
+        assertThat(payloadDomain.hasTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY)).isTrue();
         assertThat(utf8(payload, 0)).isEqualTo("red");
         assertThat(utf8(payload, 1)).isEqualTo("red");
     }
@@ -5662,8 +5663,20 @@ public class TestOperatorBatches
         return switch (vector) {
             case BinaryVector binary -> new String(binary.copyBytes(position), UTF_8);
             case DictionaryVector dictionary -> utf8(dictionary.values(), dictionary.ids()[position]);
+            case org.weakref.nitro.data.RegionVector region -> utf8(region.values(), region.offset() + position);
             case org.weakref.nitro.data.RleVector rle -> utf8(rle.values(), 0);
             default -> throw new IllegalArgumentException("Unsupported utf8 vector: " + vector.getClass().getSimpleName());
+        };
+    }
+
+    private static BinaryVector binaryDomain(Vector vector)
+    {
+        return switch (vector) {
+            case BinaryVector binary -> binary;
+            case DictionaryVector dictionary -> binaryDomain(dictionary.values());
+            case org.weakref.nitro.data.RegionVector region -> binaryDomain(region.values());
+            case org.weakref.nitro.data.RleVector rle -> binaryDomain(rle.values());
+            default -> throw new IllegalArgumentException("Unsupported binary vector: " + vector.getClass().getSimpleName());
         };
     }
 

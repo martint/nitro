@@ -29,6 +29,7 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
+import static org.weakref.nitro.function.scalar.builtin.JoinFilterFunctions.longLessThan;
 
 class TestNestedLoopJoinSession
 {
@@ -109,6 +110,29 @@ class TestNestedLoopJoinSession
             assertThat(outerValues).containsExactly(1L, 2L);
             assertThat(innerValues).containsExactly(10L, 10L);
             assertThat(session.isFinished()).isTrue();
+        }
+    }
+
+    @Test
+    void testFiltersCandidatesBeforeProducingScheduledOutput()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                NestedLoopJoinSession session = new NestedLoopJoinSession(
+                        resources.operatorResources(),
+                        allocator,
+                        Schema.unspecified(1),
+                        table(2, 3),
+                        longLessThan(0, 0))) {
+            allocator.beginExecution();
+
+            List<Long> outerValues = new ArrayList<>();
+            List<Long> innerValues = new ArrayList<>();
+            session.addInput(batch(1, 2));
+            drain(session, outerValues, innerValues);
+
+            assertThat(outerValues).containsExactly(1L, 1L, 2L);
+            assertThat(innerValues).containsExactly(2L, 3L, 3L);
         }
     }
 

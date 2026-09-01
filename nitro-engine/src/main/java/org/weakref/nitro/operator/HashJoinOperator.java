@@ -56,6 +56,16 @@ public class HashJoinOperator
     public interface JoinFilterFunction
     {
         boolean test(Vector outer, int outerPosition, Vector inner, int innerPosition);
+
+        default boolean supportsOuterMaskPruning(Vector outer)
+        {
+            return false;
+        }
+
+        default boolean pruneOuterMask(Vector outer, Mask mask, Vector inner, int innerPosition, boolean[] dictionaryScratch)
+        {
+            return false;
+        }
     }
 
     public interface LongJoinFilterFunction
