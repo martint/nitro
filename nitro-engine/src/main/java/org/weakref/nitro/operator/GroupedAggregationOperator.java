@@ -26,7 +26,6 @@ import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.GeneratedLongGroupingBindings;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
-import org.weakref.nitro.data.RegionVector;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
@@ -108,7 +107,6 @@ public class GroupedAggregationOperator
     private boolean groupIdsDiscarded;
     private GroupedKeySource groupedKeySource;
     private I64Vector reusableGroups;
-    private I64Vector reusableGroupingHashes;
     // Fused single-long-key path: assign the group and accumulate every aggregation in one inlined pass, no
     // group-id vector and no per-row accumulator dispatch. The per-shape kernel is generated as bytecode.
     // Eligibility is decided once the grouping mode is known; falls back to the staged path per batch when a
@@ -904,7 +902,7 @@ public class GroupedAggregationOperator
         // Fuse only while the group table + state stay cache-resident. Beyond that the staged two-pass
         // wins on memory-level parallelism (each pass streams one random-access array the OOO window
         // overlaps), whereas fusion serializes probe-miss -> state-miss per row.
-        if (authoritativeHashChannel == null && groupingHashOutput == null && fusedEligible && inlineGroupingState.groupCount() < fuseLocalGroupLimit) {
+        if (authoritativeHashChannel == null && fusedEligible && inlineGroupingState.groupCount() < fuseLocalGroupLimit) {
             long start = System.nanoTime();
             boolean fused;
             try {
@@ -931,7 +929,7 @@ public class GroupedAggregationOperator
         }
 
         long previousMaxGroup = maxObservedGroup;
-        if (aggregations.length == 0 && authoritativeHashChannel == null && groupingHashOutput == null) {
+        if (aggregations.length == 0 && authoritativeHashChannel == null) {
             long start = System.nanoTime();
             boolean discarded;
             try {
@@ -1083,12 +1081,6 @@ public class GroupedAggregationOperator
             }
             authoritativeHashes = hashDictionary;
         }
-        else if (groupingHashOutput != null) {
-            if (!VectorAccess.isAllFalseNulls(keyNulls)) {
-                return false;
-            }
-            authoritativeHashes = computeDictionaryDomainGroupingHashes(dictionary, mask);
-        }
         int slots = dictionary.values().length() + 1;
         if ((long) slots * dictionaryDomainAggregationMinReduction > mask.count()) {
             return false;
@@ -1214,30 +1206,8 @@ public class GroupedAggregationOperator
         finally {
             phaseMetrics.recordAccumulation(System.nanoTime() - start);
         }
-        phaseMetrics.recordEncodedKeyDomain(authoritativeHashChannel != null, groupingHashOutput != null);
+        phaseMetrics.recordEncodedKeyDomain(authoritativeHashChannel != null, false);
         return true;
-    }
-
-    private DictionaryVector computeDictionaryDomainGroupingHashes(DictionaryVector dictionary, Mask mask)
-    {
-        int domainSize = dictionary.values().length();
-        reusableGroupingHashes = allocator.reallocateIfNecessary(
-                allocationContext,
-                reusableGroupingHashes,
-                I64Vector.class,
-                domainSize,
-                I64Vector::new);
-        Vector domain = dictionary.values();
-        long[] hashes = reusableGroupingHashes.values();
-        if (!dictionary.visitSelectedDomain(mask, position -> {
-            hashes[position] = groupingHashKernels[0].hash(domain, null, position);
-            return true;
-        })) {
-            for (int position = 0; position < domainSize; position++) {
-                hashes[position] = groupingHashKernels[0].hash(domain, null, position);
-            }
-        }
-        return dictionary.sharedMappingWithValues(new RegionVector(reusableGroupingHashes, 0, domainSize));
     }
 
     /**
@@ -1380,7 +1350,7 @@ public class GroupedAggregationOperator
         long previousMaxGroup = maxObservedGroup;
         long start = System.nanoTime();
         try {
-            if (groupingHashOutput == null && authoritativeDomainHashes == null) {
+            if (authoritativeDomainHashes == null) {
                 inlineGroupingState.assignGroups(
                         dictionaryDomainKeyValues,
                         dictionaryDomainKeyNulls,
@@ -1389,20 +1359,6 @@ public class GroupedAggregationOperator
             }
             else {
                 Vector groupingHashes = authoritativeDomainHashes;
-                if (groupingHashOutput != null) {
-                    reusableGroupingHashes = allocator.reallocateIfNecessary(
-                            allocationContext,
-                            reusableGroupingHashes,
-                            I64Vector.class,
-                            domainSize,
-                            I64Vector::new);
-                    computeGroupingHashes(
-                            dictionaryDomainKeyValues,
-                            dictionaryDomainKeyNulls,
-                            reusableDictionaryDomainMask,
-                            reusableGroupingHashes);
-                    groupingHashes = reusableGroupingHashes;
-                }
                 if (!inlineGroupingState.assignGroupsWithAuthoritativeHashes(
                         dictionaryDomainKeyValues,
                         dictionaryDomainKeyNulls,
@@ -1444,7 +1400,7 @@ public class GroupedAggregationOperator
         finally {
             phaseMetrics.recordAccumulation(System.nanoTime() - start);
         }
-        phaseMetrics.recordEncodedKeyDomain(authoritativeHashChannel != null, groupingHashOutput != null);
+        phaseMetrics.recordEncodedKeyDomain(authoritativeHashChannel != null, false);
         return true;
     }
 
@@ -1971,7 +1927,7 @@ public class GroupedAggregationOperator
                     return;
                 }
             }
-            if (authoritativeHashChannel == null && groupingHashOutput == null) {
+            if (authoritativeHashChannel == null) {
                 inlineGroupingState.initializeSchema(inlineGroupValues, inlineGroupNulls, mask);
             }
             else {
@@ -1988,10 +1944,6 @@ public class GroupedAggregationOperator
     {
         if (authoritativeHashChannel != null) {
             assignInlineGroupsWithAuthoritativeHashes(batch, mask, groups);
-            return;
-        }
-        if (groupingHashOutput != null) {
-            assignInlineGroupsWithComputedHashes(batch, mask, groups);
             return;
         }
         if (groupByColumns.length == 1) {
@@ -2011,38 +1963,6 @@ public class GroupedAggregationOperator
                 inlineGroupNulls[index] = output.borrowOrNull(Stream.NULLS);
             }
             inlineGroupingState.assignGroupsForBlockingAggregation(inlineGroupValues, inlineGroupNulls, mask, groups);
-        }
-        finally {
-            Arrays.fill(inlineGroupValues, null);
-            Arrays.fill(inlineGroupNulls, null);
-        }
-    }
-
-    private void assignInlineGroupsWithComputedHashes(Batch batch, Mask mask, I64Vector groups)
-    {
-        reusableGroupingHashes = allocator.reallocateIfNecessary(
-                allocationContext,
-                reusableGroupingHashes,
-                I64Vector.class,
-                mask.maxPosition() + 1,
-                I64Vector::new);
-        try {
-            for (int index = 0; index < groupByColumns.length; index++) {
-                Output output = batch.output(groupByColumns[index]);
-                inlineGroupValues[index] = output.borrow(Stream.VALUES);
-                inlineGroupNulls[index] = output.borrowOrNull(Stream.NULLS);
-            }
-            computeGroupingHashes(inlineGroupValues, inlineGroupNulls, mask, reusableGroupingHashes);
-            if (!inlineGroupingState.assignGroupsWithAuthoritativeHashes(
-                    inlineGroupValues,
-                    inlineGroupNulls,
-                    mask,
-                    groups,
-                    reusableGroupingHashes)) {
-                throw new IllegalStateException("Grouping representation cannot produce grouping hash contract '%s'"
-                        .formatted(groupingHashOutput.contractIdentifier()));
-            }
-            phaseMetrics.recordComputedHashRowBatch();
         }
         finally {
             Arrays.fill(inlineGroupValues, null);
@@ -2401,11 +2321,36 @@ public class GroupedAggregationOperator
                 allocator,
                 allocationContext);
         if (hashes == null) {
-            throw new IllegalStateException("Grouping representation cannot carry authoritative hashes for contract: " +
-                    groupingHashContractIdentifier());
+            hashes = computeGroupedOutputHashes(batchState);
         }
         batchState.authoritativeHash = Streams.ofValues(hashes);
         return batchState.authoritativeHash;
+    }
+
+    private I64Vector computeGroupedOutputHashes(BatchState batchState)
+    {
+        Vector[] values = new Vector[groupByColumns.length];
+        Vector[] nulls = new Vector[groupByColumns.length];
+        for (int key = 0; key < groupByColumns.length; key++) {
+            Streams grouped = groupedKeyOutput(groupedOutputForKey(key), batchState);
+            values[key] = grouped.values();
+            nulls[key] = grouped.getOrNull(Stream.NULLS);
+        }
+        I64Vector hashes = allocator.allocate(allocationContext, I64Vector.class, maxGroup + 1, I64Vector::new);
+        computeGroupingHashes(values, nulls, batchState.mask, hashes);
+        phaseMetrics.recordComputedHashOutputBatch();
+        return hashes;
+    }
+
+    private int groupedOutputForKey(int key)
+    {
+        for (int output = 0; output < groupedKeyIndexes.length; output++) {
+            if (groupedKeyIndexes[output] == key) {
+                return output;
+            }
+        }
+        throw new IllegalStateException("Grouping hash output requires grouped key %s in the aggregation output"
+                .formatted(key));
     }
 
     private Streams aggregationOutput(int output, BatchState batchState)
@@ -2581,8 +2526,16 @@ public class GroupedAggregationOperator
                         allocator,
                         allocationContext);
                 if (hashes == null) {
-                    throw new IllegalStateException("Grouping representation cannot carry authoritative hashes for contract: " +
-                            groupingHashContractIdentifier());
+                    Vector[] values = new Vector[groupByColumns.length];
+                    Vector[] nulls = new Vector[groupByColumns.length];
+                    for (int key = 0; key < groupByColumns.length; key++) {
+                        Streams grouped = output(groupedOutputForKey(key));
+                        values[key] = grouped.values();
+                        nulls[key] = grouped.getOrNull(Stream.NULLS);
+                    }
+                    hashes = allocator.allocate(allocationContext, I64Vector.class, size, I64Vector::new);
+                    computeGroupingHashes(values, nulls, mask, hashes);
+                    phaseMetrics.recordComputedHashOutputBatch();
                 }
                 streams = Streams.ofValues(hashes);
                 materialized[output] = streams;

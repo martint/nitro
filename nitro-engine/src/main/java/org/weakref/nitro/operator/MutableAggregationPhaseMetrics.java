@@ -28,6 +28,7 @@ final class MutableAggregationPhaseMetrics
     private long computedHashDomainBatches;
     private long authoritativeHashRowBatches;
     private long computedHashRowBatches;
+    private long computedHashOutputBatches;
 
     public void recordFused(long nanos)
     {
@@ -86,6 +87,11 @@ final class MutableAggregationPhaseMetrics
         computedHashRowBatches++;
     }
 
+    public void recordComputedHashOutputBatch()
+    {
+        computedHashOutputBatches++;
+    }
+
     public AggregationPhaseMetrics snapshot()
     {
         return new AggregationPhaseMetrics(
@@ -101,6 +107,7 @@ final class MutableAggregationPhaseMetrics
                 authoritativeHashDomainBatches,
                 computedHashDomainBatches,
                 authoritativeHashRowBatches,
-                computedHashRowBatches);
+                computedHashRowBatches,
+                computedHashOutputBatches);
     }
 }

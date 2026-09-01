@@ -27,7 +27,8 @@ public record AggregationPhaseMetrics(
         long authoritativeHashDomainBatches,
         long computedHashDomainBatches,
         long authoritativeHashRowBatches,
-        long computedHashRowBatches)
+        long computedHashRowBatches,
+        long computedHashOutputBatches)
 {
-    public static final AggregationPhaseMetrics EMPTY = new AggregationPhaseMetrics(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+    public static final AggregationPhaseMetrics EMPTY = new AggregationPhaseMetrics(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 }

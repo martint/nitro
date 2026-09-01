@@ -765,9 +765,10 @@ class TestFusedGroupedAggregation
         AggregationPhaseMetrics metrics = phaseMetrics.snapshot();
         assertThat(metrics.encodedKeyDomainBatches()).isOne();
         assertThat(metrics.authoritativeHashDomainBatches()).isEqualTo(producer ? 0 : 1);
-        assertThat(metrics.computedHashDomainBatches()).isEqualTo(producer ? 1 : 0);
+        assertThat(metrics.computedHashDomainBatches()).isZero();
         assertThat(metrics.authoritativeHashRowBatches()).isZero();
         assertThat(metrics.computedHashRowBatches()).isZero();
+        assertThat(metrics.computedHashOutputBatches()).isEqualTo(producer ? 1 : 0);
     }
 
     @Test

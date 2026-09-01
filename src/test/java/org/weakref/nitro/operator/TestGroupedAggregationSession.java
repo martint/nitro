@@ -1444,6 +1444,46 @@ class TestGroupedAggregationSession
     }
 
     @Test
+    void testStreamsComputedCompositeGroupingHashes()
+    {
+        PhysicalAggregationProgram program = PhysicalAggregationProgram.independent(List.of(new CountAll()))
+                .withGroupingHashOutput(new GroupingHashOutput(
+                        "test-streamed-composite-v1",
+                        new Field(Schema.unspecified(1).field(0).type(), false)));
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                GroupedAggregationSession session = new GroupedAggregationSession(
+                        allocator,
+                        Schema.unspecified(2),
+                        List.of(0, 1),
+                        List.of(0, 1),
+                        program,
+                        resources.operatorResources(),
+                        null,
+                        2)) {
+            allocator.beginExecution();
+            try (Batch input = new Batch(
+                    Mask.all(3),
+                    Output.of(Streams.ofValues(new I64Vector(new long[] {1, 2, 3}))),
+                    Output.of(Streams.ofValues(new I64Vector(new long[] {10, 20, 30}))))) {
+                session.addInput(input);
+            }
+
+            try (Batch first = session.finish()) {
+                assertThat(first.output(3).borrowOrNull(Stream.NULLS)).isNull();
+                assertThat(selectedLongValues(first, 3)).containsExactly(
+                        31L * Long.hashCode(1) + Long.hashCode(10),
+                        31L * Long.hashCode(2) + Long.hashCode(20));
+            }
+            try (Batch second = session.getOutput()) {
+                assertThat(second.output(3).borrowOrNull(Stream.NULLS)).isNull();
+                assertThat(selectedLongValues(second, 3)).containsExactly(
+                        31L * Long.hashCode(3) + Long.hashCode(30));
+            }
+        }
+    }
+
+    @Test
     void testCarriesAuthoritativeHashesThroughInitialAggregationRows()
     {
         try (EngineResources resources = EngineResources.createDefault();
