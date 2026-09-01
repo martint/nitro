@@ -359,6 +359,9 @@ public final class VectorAccess
             case RleVector values -> mapStreams(
                     structField(values.values(), field),
                     child -> new RleVector(values.counts(), child));
+            case RegionVector values -> mapStreams(
+                    structField(values.values(), field),
+                    child -> new RegionVector(child, values.offset(), values.length()));
             default -> throw new IllegalArgumentException("Expected structural vector but found " + vector.getClass().getSimpleName());
         };
     }
@@ -373,6 +376,9 @@ public final class VectorAccess
             case RleVector values -> mapStreams(
                     structField(values.values(), field),
                     child -> new RleVector(values.counts(), child));
+            case RegionVector values -> mapStreams(
+                    structField(values.values(), field),
+                    child -> new RegionVector(child, values.offset(), values.length()));
             default -> throw new IllegalArgumentException("Expected structural vector but found " + vector.getClass().getSimpleName());
         };
     }
@@ -383,6 +389,7 @@ public final class VectorAccess
             case StructVector values -> values.fields().size();
             case DictionaryVector values -> structFieldCount(values.values());
             case RleVector values -> structFieldCount(values.values());
+            case RegionVector values -> structFieldCount(values.values());
             default -> throw new IllegalArgumentException("Expected structural vector but found " + vector.getClass().getSimpleName());
         };
     }

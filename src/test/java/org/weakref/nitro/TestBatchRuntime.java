@@ -28,6 +28,7 @@ import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.MinUtf8StateVector;
 import org.weakref.nitro.data.NullableLongTripleStateVector;
+import org.weakref.nitro.data.RegionVector;
 import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
@@ -663,6 +664,7 @@ public class TestBatchRuntime
 
         Vector dictionary = new DictionaryVector(new int[] {1, 0, 1}, values);
         Vector rle = new RleVector(new int[] {2, 1}, values);
+        Vector region = new RegionVector(values, 1, 1);
 
         VectorAccess.LongValues dictionaryHigh = VectorAccess.longValues(VectorAccess.structFieldValues(dictionary, "high"));
         VectorAccess.LongValues dictionaryLow = VectorAccess.longValues(VectorAccess.structFieldValues(dictionary, "low"));
@@ -689,6 +691,12 @@ public class TestBatchRuntime
                 rleLow.value(1),
                 rleLow.value(2)})
                 .containsExactly(100, 100, 200);
+
+        VectorAccess.LongValues regionHigh = VectorAccess.longValues(VectorAccess.structFieldValues(region, "high"));
+        VectorAccess.LongValues regionLow = VectorAccess.longValues(VectorAccess.structFieldValues(region, "low"));
+        assertThat(regionHigh.value(0)).isEqualTo(20);
+        assertThat(regionLow.value(0)).isEqualTo(200);
+        assertThat(VectorAccess.structFieldCount(region)).isEqualTo(2);
     }
 
     @Test
