@@ -293,6 +293,49 @@ public class TestOperators
     }
 
     @Test
+    void testProjectOperatorExposesComputedDictionaryMask()
+    {
+        int[] ids = {0, 1, 2, 0};
+        DictionaryVector dictionary = DictionaryVector.wrapWithDomainFrequencies(
+                ids,
+                ids.length,
+                new I64Vector(new long[] {2, 8, 4}),
+                new int[] {2, 1, 1});
+        Variable threshold = new Variable(0);
+        Variable predicate = new Variable(1);
+        EvaluationPlan plan = plan(
+                List.of(
+                        literal(threshold, 5),
+                        call(predicate, "lt", values(new Input(0)), values(threshold))),
+                values(predicate));
+        Allocator.Context resultContext = new Allocator.Context("project-mask-test");
+
+        try (ProjectOperator operator = new ProjectOperator(
+                allocator,
+                plan,
+                primitiveRegistry(),
+                new TableOperator(1, List.of(TableOperator.Page.values(
+                        ids.length,
+                        new Vector[] {dictionary},
+                        Mask.all(ids.length)))));
+                Batch batch = operator.next()) {
+            Mask result = batch.output(0).tryBorrowMask(
+                    Stream.VALUES,
+                    batch.borrowMask(),
+                    true,
+                    allocator,
+                    resultContext);
+
+            assertThat(result).isNotNull();
+            assertThat(result.dictionaryDomainSelection(dictionary)).isNotNull();
+            assertThat(result).containsExactly(0, 2, 3);
+        }
+        finally {
+            allocator.release(resultContext);
+        }
+    }
+
+    @Test
     void testProjectOperatorUsesOutputTypeForEmptyComputedValues()
     {
         TypeBinding binaryType = new TypeBinding()

@@ -401,6 +401,16 @@ public class Mask
             clear(size);
             return;
         }
+        if (allSelected && other.dictionaryDomainSelection != null) {
+            copyComplementFrom(other);
+            return;
+        }
+        if (hasSameDictionaryDomain(other)) {
+            long selectedDomainBits = dictionaryDomainSelection.selectedDomainBits() &
+                    ~other.dictionaryDomainSelection.selectedDomainBits();
+            selectDictionaryDomain(selectedDomainBits);
+            return;
+        }
         materializeSelectedPositions();
         other.materializeSelectedPositions();
         if (excludedPositions || other.excludedPositions) {
@@ -1101,14 +1111,25 @@ public class Mask
     /** Retains a predicate from exact dictionary frequencies when the complete logical domain is still selected. */
     public void retainDictionaryComparison(DictionaryVector dictionary, boolean[] keep)
     {
+        retainDictionaryComparison(dictionary, keep, true);
+    }
+
+    /** Retains either outcome of a dictionary predicate, using exact frequencies when the full domain is selected. */
+    public void retainDictionaryComparison(DictionaryVector dictionary, boolean[] keep, boolean wanted)
+    {
         checkArgument(dictionary != null, "dictionary is null");
         checkArgument(dictionary.length() == size, "Dictionary length does not match mask size");
         if (!none() && allSelected && dictionary.hasDomainFrequencies() && keep.length <= Long.SIZE) {
             checkArgument(dictionary.values().length() == keep.length, "Predicate domain does not match dictionary values");
-            retainDictionaryDomain(dictionary, dictionaryKeepBits(keep), keep.length);
+            long selectedBits = dictionaryKeepBits(keep);
+            if (!wanted) {
+                long domainBits = keep.length == Long.SIZE ? -1L : (1L << keep.length) - 1;
+                selectedBits = ~selectedBits & domainBits;
+            }
+            retainDictionaryDomain(dictionary, selectedBits, keep.length);
             return;
         }
-        retainDictionaryComparison(dictionary.ids(), keep);
+        retainDictionaryComparison(dictionary.ids(), keep, null, wanted);
     }
 
     /**
@@ -1308,7 +1329,10 @@ public class Mask
         return Arrays.copyOf(positions, selection.domainSize());
     }
 
-    int dictionaryDomainFrequency(DictionaryDomainSelection selection, int dictionaryId)
+    /**
+     * Returns the exact selected logical-row frequency for one entry in the current compact dictionary domain.
+     */
+    public int dictionaryDomainFrequency(DictionaryDomainSelection selection, int dictionaryId)
     {
         checkArgument(selection != null && selection == dictionaryDomainSelection, "Dictionary selection is not current");
         checkArgument(dictionaryId >= 0 && dictionaryId < selection.domainSize(), "Dictionary id is out of bounds");
@@ -1572,6 +1596,13 @@ public class Mask
         if (none()) {
             return other.copy(filteringPolicy);
         }
+        if (hasSameDictionaryDomain(other)) {
+            long selectedDomainBits = dictionaryDomainSelection.selectedDomainBits() |
+                    other.dictionaryDomainSelection.selectedDomainBits();
+            Mask result = none(size, filteringPolicy);
+            result.copyDictionaryDomainFrom(this, selectedDomainBits, dictionaryDomainCount(selectedDomainBits));
+            return result;
+        }
         materializeSelectedPositions();
         other.materializeSelectedPositions();
         if (excludedPositions || other.excludedPositions) {
@@ -1606,6 +1637,39 @@ public class Mask
             result[outputIndex++] = other.positions[rightIndex++];
         }
         return create(size, result, outputIndex);
+    }
+
+    private boolean hasSameDictionaryDomain(Mask other)
+    {
+        return dictionaryDomainSelection != null &&
+                other.dictionaryDomainSelection != null &&
+                dictionaryDomainSelection.ids() == other.dictionaryDomainSelection.ids() &&
+                dictionaryDomainSelection.length() == other.dictionaryDomainSelection.length() &&
+                dictionaryDomainSelection.domainSize() == other.dictionaryDomainSelection.domainSize();
+    }
+
+    private int dictionaryDomainCount(long selectedDomainBits)
+    {
+        int count = 0;
+        for (int dictionaryId = 0; dictionaryId < dictionaryDomainSelection.domainSize(); dictionaryId++) {
+            if (((selectedDomainBits >>> dictionaryId) & 1L) != 0) {
+                count += positions[dictionaryId];
+            }
+        }
+        return count;
+    }
+
+    private void selectDictionaryDomain(long selectedDomainBits)
+    {
+        selectedCount = dictionaryDomainCount(selectedDomainBits);
+        allSelected = selectedCount == size;
+        positionCount = 0;
+        excludedPositions = false;
+        dictionaryDomainSelection = new DictionaryDomainSelection(
+                dictionaryDomainSelection.ids(),
+                dictionaryDomainSelection.length(),
+                dictionaryDomainSelection.domainSize(),
+                selectedDomainBits);
     }
 
     public boolean contains(int position)

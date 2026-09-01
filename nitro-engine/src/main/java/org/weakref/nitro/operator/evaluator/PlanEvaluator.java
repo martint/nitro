@@ -2842,7 +2842,7 @@ public final class PlanEvaluator
                 VectorAccess.isAllFalseNulls(errors)) {
             boolean[] dictionaryMatches = evaluateLongDictionaryDomain(dictionary.values(), domain);
             if (dictionaryMatches != null) {
-                mask.retainDictionaryComparison(dictionary.ids(), dictionaryMatches);
+                mask.retainDictionaryComparison(dictionary, dictionaryMatches);
                 return true;
             }
         }
@@ -4458,13 +4458,7 @@ public final class PlanEvaluator
                 yield mask;
             }
             case AndMask(List<MaskExpression> terms) -> evaluateAdaptiveAndTrueMaskInPlace(terms, mask);
-            case OrMask(List<MaskExpression> terms) -> {
-                Mask result = evaluateAdaptiveOrTrueMask(terms, mask);
-                if (result != mask) {
-                    mask.copyFrom(result);
-                }
-                yield mask;
-            }
+            case OrMask(List<MaskExpression> terms) -> evaluateAdaptiveOrTrueMaskInPlace(terms, mask);
         };
     }
 
@@ -4540,6 +4534,34 @@ public final class PlanEvaluator
                 }
                 evaluateMeasuredTrueMaskInPlace(term, mask, BooleanOperator.AND);
             }
+            return mask;
+        }
+        finally {
+            releaseOrderedTerms();
+        }
+    }
+
+    private Mask evaluateAdaptiveOrTrueMaskInPlace(List<MaskExpression> terms, Mask mask)
+    {
+        terms = orderTerms(terms, BooleanOperator.OR);
+        try {
+            Mask accepted = emptyMask(mask.size());
+            Mask remaining = allocator.copyMask(allocationContext, mask);
+            for (MaskExpression term : terms) {
+                if (remaining.none()) {
+                    break;
+                }
+                Mask termMask = allocator.copyMask(allocationContext, policy.orShortCircuitRemaining() ? remaining : mask);
+                evaluateMeasuredTrueMaskInPlace(term, termMask, BooleanOperator.OR);
+                accepted = unionMasks(accepted, termMask, mask.size());
+                if (accepted.all()) {
+                    break;
+                }
+                if (policy.orShortCircuitRemaining()) {
+                    remaining.differenceInPlace(termMask);
+                }
+            }
+            mask.copyFrom(accepted);
             return mask;
         }
         finally {

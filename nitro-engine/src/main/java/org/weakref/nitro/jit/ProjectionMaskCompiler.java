@@ -187,6 +187,9 @@ public final class ProjectionMaskCompiler
         return switch (operation) {
             case EQUAL -> Optional.of(longComparison((first, second) -> first == second, Mask.ComparisonOperator.EQUAL));
             case LESS_THAN -> Optional.of(longComparison((first, second) -> first < second, Mask.ComparisonOperator.LESS_THAN));
+            case LESS_THAN_OR_EQUAL -> Optional.of(longComparison((first, second) -> first <= second, Mask.ComparisonOperator.LESS_THAN_OR_EQUAL));
+            case GREATER_THAN -> Optional.of(longComparison((first, second) -> first > second, Mask.ComparisonOperator.GREATER_THAN));
+            case GREATER_THAN_OR_EQUAL -> Optional.of(longComparison((first, second) -> first >= second, Mask.ComparisonOperator.GREATER_THAN_OR_EQUAL));
             default -> Optional.empty();
         };
     }

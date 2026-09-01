@@ -39,6 +39,7 @@ import org.weakref.nitro.operator.evaluator.ir.Input;
 import org.weakref.nitro.operator.evaluator.ir.InputDependencies;
 import org.weakref.nitro.operator.evaluator.ir.Producer;
 import org.weakref.nitro.operator.evaluator.ir.Reference;
+import org.weakref.nitro.operator.evaluator.ir.ReferenceMask;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -256,12 +257,35 @@ public class ProjectOperator
                         ? new Output(
                                 exposedStreams(sourceBatch, outputReference),
                                 stream -> evaluateOutput(batchState, outputReference, outputField, stream),
+                                null,
+                                (stream, mask, selectTrue, resultAllocator, resultAllocationContext) -> evaluateOutputMask(
+                                        batchState,
+                                        outputReference,
+                                        stream,
+                                        mask,
+                                        selectTrue,
+                                        resultAllocator,
+                                        resultAllocationContext),
                                 (stream, vector) -> allocator.transfer(allocationContext, batchState.prepareResultForTransfer(vector)),
-                                (stream, vector) -> batchState.releaseOutput(vector))
+                                (stream, vector) -> batchState.releaseOutput(vector),
+                                null,
+                                null)
                         : new Output(
                                 exposedStreams(sourceBatch, outputReference),
                                 stream -> evaluateOutput(batchState, outputReference, outputField, stream),
-                                (stream, vector) -> allocator.transfer(allocationContext, vector));
+                                null,
+                                (stream, mask, selectTrue, resultAllocator, resultAllocationContext) -> evaluateOutputMask(
+                                        batchState,
+                                        outputReference,
+                                        stream,
+                                        mask,
+                                        selectTrue,
+                                        resultAllocator,
+                                        resultAllocationContext),
+                                (stream, vector) -> allocator.transfer(allocationContext, vector),
+                                (_, _) -> {},
+                                null,
+                                null);
             }
             // Both computed outputs and forwarding wrappers cache their resolved vector. A later constrain must
             // re-resolve the wrapper: computed values use the new mask, while pass-through values re-borrow from the
@@ -413,6 +437,29 @@ public class ProjectOperator
             return allocator.borrowAllFalseBoolean(allocationContext, values != null ? values.length() : 0);
         }
         return bundle.get(stream);
+    }
+
+    private static Mask evaluateOutputMask(
+            BatchState batchState,
+            Reference outputReference,
+            Stream stream,
+            Mask mask,
+            boolean selectTrue,
+            Allocator resultAllocator,
+            Allocator.Context resultAllocationContext)
+    {
+        if (stream != Stream.VALUES || !selectTrue) {
+            return null;
+        }
+        Mask result = resultAllocator.copyMask(resultAllocationContext, mask);
+        try {
+            batchState.planEvaluator().evaluateInPlace(new ReferenceMask(outputReference), result);
+            return result;
+        }
+        catch (RuntimeException | Error failure) {
+            resultAllocator.release(resultAllocationContext, result);
+            throw failure;
+        }
     }
 
     private Vector resolveEvaluatorInput(Reference reference, Mask mask)

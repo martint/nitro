@@ -18,6 +18,7 @@ import org.weakref.nitro.core.function.projection.ProjectionArgument;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Utf8Traits;
@@ -29,6 +30,7 @@ import org.weakref.nitro.function.scalar.builtin.GreaterThanOrEqualF64Optimizati
 import org.weakref.nitro.function.scalar.builtin.LessThanF64Optimization;
 import org.weakref.nitro.function.scalar.builtin.LessThanI64RangeOptimization;
 import org.weakref.nitro.function.scalar.builtin.LessThanOrEqualF64Optimization;
+import org.weakref.nitro.function.scalar.builtin.LessThanOrEqualI64RangeOptimization;
 
 import java.lang.reflect.Proxy;
 import java.util.List;
@@ -71,6 +73,34 @@ class TestProjectionMaskCompiler
     {
         assertThat(compiler.tryCompile(new EqualI64Optimization(), I64_ARGUMENTS)).isPresent();
         assertThat(compiler.tryCompile(new LessThanI64RangeOptimization(), I64_ARGUMENTS)).isPresent();
+        assertThat(compiler.tryCompile(new LessThanOrEqualI64RangeOptimization(), I64_ARGUMENTS)).isPresent();
+    }
+
+    @Test
+    void testCompiledLiteralLeftLongComparison()
+    {
+        ProjectionMaskCompiler.CompiledMask compiled = compiler.tryCompile(
+                new LessThanOrEqualI64RangeOptimization(),
+                List.of(ProjectionArgument.literal(8L), ProjectionArgument.input()))
+                .orElseThrow();
+
+        Mask trueMask = Mask.all(4);
+        assertThat(compiled.evaluate(
+                List.of(
+                        Streams.ofValues(new I64Vector(new long[] {8, 8, 8, 8})),
+                        Streams.ofValues(new I64Vector(new long[] {0, 8, 9, 16}))),
+                trueMask,
+                true)).isTrue();
+        assertThat(trueMask).containsExactly(1, 2, 3);
+
+        Mask falseMask = Mask.all(4);
+        assertThat(compiled.evaluate(
+                List.of(
+                        Streams.ofValues(new I64Vector(new long[] {8, 8, 8, 8})),
+                        Streams.ofValues(new I64Vector(new long[] {0, 8, 9, 16}))),
+                falseMask,
+                false)).isTrue();
+        assertThat(falseMask).containsExactly(0);
     }
 
     @Test

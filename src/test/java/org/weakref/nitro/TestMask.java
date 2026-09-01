@@ -196,6 +196,27 @@ class TestMask
     }
 
     @Test
+    void compactDictionaryComplementConsumesExactDomainFrequencies()
+    {
+        int[] ids = {3, 1, 2, 0, 3, 2, 1};
+        DictionaryVector dictionary = DictionaryVector.wrapWithDomainFrequencies(
+                ids,
+                ids.length,
+                new I64Vector(new long[] {10, 20, 30, 40}),
+                new int[] {1, 2, 2, 2});
+        Mask mask = Mask.all(ids.length);
+
+        mask.retainDictionaryComparison(dictionary, new boolean[] {false, true, false, true}, false);
+
+        Mask.DictionaryDomainSelection selection = mask.dictionaryDomainSelection(dictionary);
+        assertThat(selection).isNotNull();
+        assertThat(selection.selectedDomainBits()).isEqualTo(0b0101);
+        assertThat(mask.count()).isEqualTo(3);
+        assertThat(mask.copyDictionaryDomainFrequencies(selection)).containsExactly(1, 2, 2, 2);
+        assertThat(mask).containsExactly(2, 3, 5);
+    }
+
+    @Test
     void visitsSelectedDictionaryDomainWithoutLogicalExpansion()
     {
         int[] ids = {3, 1, 2, 0, 3, 2, 1};
@@ -303,6 +324,50 @@ class TestMask
         assertThat(complement.dictionaryDomainSelection(dictionary)).isNotNull();
         assertThat(complement.dictionaryDomainSelection(dictionary).selectedDomainBits()).isEqualTo(0b0101);
         assertThat(complement).containsExactly(2, 3, 5);
+    }
+
+    @Test
+    void unionPreservesAlignedDictionaryDomain()
+    {
+        int[] ids = {3, 1, 2, 0, 3, 2, 1};
+        DictionaryVector dictionary = DictionaryVector.wrapWithDomainFrequencies(
+                ids,
+                ids.length,
+                new I64Vector(new long[] {10, 20, 30, 40}),
+                new int[] {1, 2, 2, 2});
+        Mask left = Mask.all(ids.length);
+        left.retainDictionaryComparison(dictionary, new boolean[] {false, true, false, false});
+        Mask right = Mask.all(ids.length);
+        right.retainDictionaryComparison(dictionary, new boolean[] {false, false, false, true});
+
+        Mask union = left.union(right);
+
+        Mask.DictionaryDomainSelection selection = union.dictionaryDomainSelection(dictionary);
+        assertThat(selection).isNotNull();
+        assertThat(selection.selectedDomainBits()).isEqualTo(0b1010);
+        assertThat(union.copyDictionaryDomainFrequencies(selection)).containsExactly(1, 2, 2, 2);
+        assertThat(union).containsExactly(0, 1, 4, 6);
+    }
+
+    @Test
+    void differenceInPlacePreservesAlignedDictionaryDomain()
+    {
+        int[] ids = {3, 1, 2, 0, 3, 2, 1};
+        DictionaryVector dictionary = DictionaryVector.wrapWithDomainFrequencies(
+                ids,
+                ids.length,
+                new I64Vector(new long[] {10, 20, 30, 40}),
+                new int[] {1, 2, 2, 2});
+        Mask selected = Mask.all(ids.length);
+        selected.retainDictionaryComparison(dictionary, new boolean[] {false, true, false, true});
+        Mask remaining = Mask.all(ids.length);
+
+        remaining.differenceInPlace(selected);
+
+        Mask.DictionaryDomainSelection selection = remaining.dictionaryDomainSelection(dictionary);
+        assertThat(selection).isNotNull();
+        assertThat(selection.selectedDomainBits()).isEqualTo(0b0101);
+        assertThat(remaining).containsExactly(2, 3, 5);
     }
 
     private static void assertPrimitivePositions(Mask mask, int... expected)

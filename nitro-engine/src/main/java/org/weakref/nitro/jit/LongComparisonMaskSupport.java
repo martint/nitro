@@ -44,7 +44,13 @@ final class LongComparisonMaskSupport
      * single {@code result[ids[position]]} array read — turning a per-row long compare over millions of rows into one
      * compare per distinct value. (Per-row null/error are still applied separately by each caller.)
      */
-    private record DictionaryComparison(boolean[] result, int[] ids) {}
+    private record DictionaryComparison(boolean[] result, DictionaryVector dictionary)
+    {
+        private int[] ids()
+        {
+            return dictionary.ids();
+        }
+    }
 
     /**
      * Detect the dictionary-vs-literal shape (either argument order) and precompute the per-entry comparison, or return
@@ -83,7 +89,7 @@ final class LongComparisonMaskSupport
             long value = entryValues.value(entry);
             result[entry] = dictionaryOnLeft ? kernel.test(value, literal) : kernel.test(literal, value);
         }
-        return new DictionaryComparison(result, dictionary.ids());
+        return new DictionaryComparison(result, dictionary);
     }
 
     /** The single repeated value of a one-run RLE over longs, or null if the vector is not that shape. */
@@ -299,7 +305,7 @@ final class LongComparisonMaskSupport
         if (comparison != null) {
             boolean[] result = comparison.result();
             int[] ids = comparison.ids();
-            if (tryApplyDictionaryMonomorphic(inputs, mask, result, ids, true)) {
+            if (tryApplyDictionaryMonomorphic(inputs, mask, result, comparison.dictionary(), true)) {
                 return true;
             }
             mask.retainIf(position -> !isError(leftErrors, position) && !isError(rightErrors, position)
@@ -337,7 +343,7 @@ final class LongComparisonMaskSupport
         if (comparison != null) {
             boolean[] result = comparison.result();
             int[] ids = comparison.ids();
-            if (tryApplyDictionaryMonomorphic(inputs, mask, result, ids, false)) {
+            if (tryApplyDictionaryMonomorphic(inputs, mask, result, comparison.dictionary(), false)) {
                 return true;
             }
             mask.retainIf(position -> !isError(leftErrors, position) && !isError(rightErrors, position)
@@ -480,7 +486,7 @@ final class LongComparisonMaskSupport
      * selects the true ({@code true}) or false ({@code false}) mask. Returns {@code false} to fall back when an input
      * carries errors or a non-flat null stream.
      */
-    private static boolean tryApplyDictionaryMonomorphic(List<Streams> inputs, Mask mask, boolean[] keep, int[] ids, boolean wanted)
+    private static boolean tryApplyDictionaryMonomorphic(List<Streams> inputs, Mask mask, boolean[] keep, DictionaryVector dictionary, boolean wanted)
     {
         if (!isErrorFree(inputs.get(0)) || !isErrorFree(inputs.get(1))) {
             return false;
@@ -499,7 +505,12 @@ final class LongComparisonMaskSupport
                 return false;
             }
         }
-        mask.retainDictionaryComparison(ids, keep, nulls, wanted);
+        if (nulls == null) {
+            mask.retainDictionaryComparison(dictionary, keep, wanted);
+        }
+        else {
+            mask.retainDictionaryComparison(dictionary.ids(), keep, nulls, wanted);
+        }
         return true;
     }
 
