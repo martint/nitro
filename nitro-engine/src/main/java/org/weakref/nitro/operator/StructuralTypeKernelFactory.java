@@ -17,17 +17,27 @@ import org.weakref.nitro.core.type.BoundTypeKey;
 import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.core.type.TypeKeyBinder;
 import org.weakref.nitro.core.type.TypeOperators;
+import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.ArrayVector;
+import org.weakref.nitro.data.BinaryDispatchSupport;
+import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.MapVector;
+import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.StructVector;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.data.VectorAccess;
+import org.weakref.nitro.function.scalar.PrimitiveExecutionContext;
+import org.weakref.nitro.function.scalar.PrimitiveFunction;
+import org.weakref.nitro.function.scalar.ScalarFunction;
 
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodType;
+import java.util.List;
+import java.util.Set;
 
 import static java.lang.invoke.MethodHandles.collectArguments;
 import static java.util.Objects.requireNonNull;
@@ -40,6 +50,17 @@ import static java.util.Objects.requireNonNull;
  */
 public final class StructuralTypeKernelFactory
 {
+    /**
+     * Builds the general null-safe equality function for a registry-bound logical type.
+     *
+     * <p>The returned function knows no concrete logical type. Its leaf semantics and recursive shape come entirely
+     * from the supplied binding, while this factory supplies the common mask, null, and output-vector protocol.
+     */
+    public PrimitiveFunction identicalFunction(TypeBinding type)
+    {
+        return new StructuralIdenticalFunction(identity(requireNonNull(type, "type is null")));
+    }
+
     StructuralIdentityKernel identity(TypeBinding type)
     {
         requireNonNull(type, "type is null");
@@ -63,6 +84,71 @@ public final class StructuralTypeKernelFactory
                 type,
                 operators.valueRead().orElseThrow(),
                 operators.identical().orElseThrow());
+    }
+
+    @ScalarFunction(name = "structural_identical")
+    private static final class StructuralIdenticalFunction
+            implements PrimitiveFunction
+    {
+        private static final String ALLOCATION_CONTEXT = "StructuralIdentical";
+
+        private final StructuralIdentityKernel identity;
+        private final Allocator.Context allocationContext = new Allocator.Context(ALLOCATION_CONTEXT);
+
+        private StructuralIdenticalFunction(StructuralIdentityKernel identity)
+        {
+            this.identity = requireNonNull(identity, "identity is null");
+        }
+
+        @Override
+        public Set<Allocator.Context> allocationContexts()
+        {
+            return Set.of(allocationContext);
+        }
+
+        @Override
+        public Set<Stream> requiredInputStreams(int inputIndex, Set<Stream> requestedOutputStreams)
+        {
+            return PrimitiveFunction.valuesAndNullsWhenRequested(requestedOutputStreams);
+        }
+
+        @Override
+        public Streams apply(
+                List<Streams> inputs,
+                Mask mask,
+                Set<Stream> requestedStreams,
+                Streams output,
+                PrimitiveExecutionContext context)
+        {
+            if (inputs.size() != 2) {
+                throw new IllegalArgumentException("Null-safe equality requires two arguments");
+            }
+            if (!requestedStreams.contains(Stream.VALUES)) {
+                return Streams.empty();
+            }
+
+            Streams left = inputs.get(0);
+            Streams right = inputs.get(1);
+            Vector leftValues = left.values();
+            Vector rightValues = right.values();
+            Vector leftNulls = left.getOrNull(Stream.NULLS);
+            Vector rightNulls = right.getOrNull(Stream.NULLS);
+            BooleanVector values = VectorAccess.writableBooleanVector(
+                    context.allocator(),
+                    context.allocationContext(ALLOCATION_CONTEXT),
+                    output != null ? output.getOrNull(Stream.VALUES) : null,
+                    BinaryDispatchSupport.requiredLength(mask, Math.max(leftValues.length(), rightValues.length())));
+            boolean[] result = values.values();
+            for (int position : mask) {
+                boolean leftNull = OperatorVectorSupport.isNull(leftNulls, position);
+                boolean rightNull = OperatorVectorSupport.isNull(rightNulls, position);
+                result[position] = leftNull == rightNull &&
+                        (leftNull || identity.identical(
+                                leftValues, leftNulls, position,
+                                rightValues, rightNulls, position));
+            }
+            return Streams.ofValues(values);
+        }
     }
 
     private static boolean isRecursiveStructuralShape(TypeBinding type)

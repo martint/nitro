@@ -18,15 +18,21 @@ import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.core.type.TypeIdentity;
 import org.weakref.nitro.core.type.TypeOperators;
+import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.ArrayVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.MapVector;
+import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.RleVector;
+import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.StructVector;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.execution.EngineResources;
+import org.weakref.nitro.function.scalar.PrimitiveExecutionContext;
+import org.weakref.nitro.function.scalar.PrimitiveFunction;
 
 import java.util.List;
 import java.util.Set;
@@ -100,6 +106,39 @@ class TestStructuralTypeKernelFactory
         assertThat(nullsLast.compare(arrays, null, 2, arrays, null, 0)).isPositive();
         assertThat(nullsFirst.compare(arrays, null, 2, arrays, null, 0)).isNegative();
         assertThat(factory.identity(arrayType).identical(rle, null, 1, arrays, null, 2)).isTrue();
+    }
+
+    @Test
+    void testBuildsMaskedNullSafeStructuralFunction()
+    {
+        TypeBinding scalar = Schema.unspecified(1).field(0).type();
+        TypeBinding arrayType = new TestingNestedType("array", ArrayVector.class, List.of(scalar));
+        ArrayVector left = new ArrayVector(4);
+        System.arraycopy(new int[] {0, 2, 4, 6, 8}, 0, left.offsets(), 0, 5);
+        left.setElements(Streams.ofValuesAndNulls(
+                new I64Vector(new long[] {11, 22, 11, 22, 11, 7, 99, 100}),
+                new BooleanVector(new boolean[] {false, true, false, true, false, false, false, false})));
+        ArrayVector rightBase = new ArrayVector(3);
+        System.arraycopy(new int[] {0, 2, 4, 6}, 0, rightBase.offsets(), 0, 4);
+        rightBase.setElements(Streams.ofValuesAndNulls(
+                new I64Vector(new long[] {11, 22, 11, 8, 99, 100}),
+                new BooleanVector(new boolean[] {false, true, false, false, false, false})));
+        Vector right = DictionaryVector.wrap(new int[] {0, 0, 1, 2}, rightBase);
+
+        PrimitiveFunction function = new StructuralTypeKernelFactory().identicalFunction(arrayType);
+        try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
+            Streams result = function.apply(
+                    List.of(
+                            Streams.ofValuesAndNulls(left, new BooleanVector(new boolean[] {true, false, false, false})),
+                            Streams.ofValuesAndNulls(right, new BooleanVector(new boolean[] {true, false, true, false}))),
+                    Mask.sparse(new int[] {0, 1, 3}, 4),
+                    Set.of(Stream.VALUES),
+                    Streams.ofValues(new BooleanVector(new boolean[] {false, false, true, false})),
+                    new PrimitiveExecutionContext(allocator));
+
+            assertThat(((BooleanVector) result.values()).values())
+                    .containsExactly(true, true, true, true);
+        }
     }
 
     @Test
