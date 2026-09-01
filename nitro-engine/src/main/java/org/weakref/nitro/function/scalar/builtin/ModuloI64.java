@@ -21,6 +21,7 @@ import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
+import org.weakref.nitro.data.ValueDemand;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.function.scalar.PrimitiveExecutionContext;
@@ -43,6 +44,12 @@ public final class ModuloI64
     public Set<Allocator.Context> allocationContexts()
     {
         return Set.of(allocationContext, errorsContext);
+    }
+
+    @Override
+    public ValueDemand requiredInputValueDemand(int inputIndex, ValueDemand requestedOutputDemand)
+    {
+        return requestedOutputDemand;
     }
 
     @Override

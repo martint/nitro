@@ -4966,6 +4966,84 @@ public class TestOperators
         }
     }
 
+    @Test
+    void testProjectionPropagatesFunctionDictionaryDomainCountDemand()
+    {
+        PrimitiveRegistry primitiveRegistry = primitiveRegistry();
+        Variable divisor = new Variable(0);
+        Variable remainder = new Variable(1);
+        EvaluationPlan projectionPlan = new EvaluationPlan(
+                List.of(
+                        new Assignment(divisor, new Literal(7L), AllMask.ALL),
+                        new Assignment(
+                                remainder,
+                                new Call("modulo", List.of(
+                                        new Reference(new Input(0), Stream.VALUES),
+                                        new Reference(divisor, Stream.VALUES))),
+                                AllMask.ALL)),
+                List.of(new Reference(remainder, Stream.VALUES)));
+        ConstantTableOperator source = new ConstantTableOperator(allocator, 1, List.of())
+        {
+            @Override
+            public Optional<Map<Integer, ValueDemand>> sourceOutputDemand(Map<Integer, ValueDemand> demandedOutputs)
+            {
+                return Optional.of(Map.copyOf(demandedOutputs));
+            }
+        };
+
+        try (ProjectOperator project = new ProjectOperator(allocator, projectionPlan, primitiveRegistry, source)) {
+            assertThat(project.sourceOutputDemand(Map.of(0, ValueDemand.FULL_WITH_DOMAIN_COUNTS)).orElseThrow())
+                    .containsExactlyEntriesOf(Map.of(0, ValueDemand.FULL_WITH_DOMAIN_COUNTS));
+            assertThat(project.sourceOutputDemand(Map.of(0, ValueDemand.FULL)).orElseThrow())
+                    .containsExactlyEntriesOf(Map.of(0, ValueDemand.FULL));
+        }
+    }
+
+    @Test
+    void testModuloPreservesDictionaryDomainFrequencies()
+    {
+        PrimitiveRegistry primitiveRegistry = primitiveRegistry();
+        Variable divisor = new Variable(0);
+        Variable remainder = new Variable(1);
+        EvaluationPlan projectionPlan = new EvaluationPlan(
+                List.of(
+                        new Assignment(divisor, new Literal(7L), AllMask.ALL),
+                        new Assignment(
+                                remainder,
+                                new Call("modulo", List.of(
+                                        new Reference(new Input(0), Stream.VALUES),
+                                        new Reference(divisor, Stream.VALUES))),
+                                AllMask.ALL)),
+                List.of(new Reference(remainder, Stream.VALUES)));
+        DictionaryVector values = DictionaryVector.wrapWithDomainFrequencies(
+                new int[] {0, 1, 0, 2},
+                4,
+                new I64Vector(new long[] {8, 9, 10}),
+                new int[] {2, 1, 1});
+
+        try (ProjectOperator project = new ProjectOperator(
+                allocator,
+                projectionPlan,
+                primitiveRegistry,
+                new TableOperator(
+                        1,
+                        List.of(new TableOperator.Page(
+                                4,
+                                new Streams[] {Streams.ofValues(values)},
+                                Mask.all(4)))));
+                Batch batch = project.next()) {
+            assertThat(batch.output(0).borrow(Stream.VALUES))
+                    .isInstanceOfSatisfying(DictionaryVector.class, dictionary -> {
+                        assertThat(dictionary.ids()).isSameAs(values.ids());
+                        assertThat(dictionary.hasDomainFrequencies()).isTrue();
+                        assertThat(dictionary.domainFrequency(0)).isEqualTo(2);
+                        assertThat(dictionary.domainFrequency(1)).isEqualTo(1);
+                        assertThat(dictionary.domainFrequency(2)).isEqualTo(1);
+                        assertThat(((I64Vector) dictionary.values()).values()).containsExactly(1, 2, 3);
+                    });
+        }
+    }
+
     private Set<Integer> filterProjectSourceDemand(boolean enforceFilter)
     {
         PrimitiveRegistry primitiveRegistry = primitiveRegistry();
