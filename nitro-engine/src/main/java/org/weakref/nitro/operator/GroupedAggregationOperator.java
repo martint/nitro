@@ -85,7 +85,7 @@ public class GroupedAggregationOperator
     private final int[] groupedKeyIndexes;
     private final AuthoritativeHashChannel authoritativeHashChannel;
     private final GroupingHashOutput groupingHashOutput;
-    private final StructuralKeyKernel[] groupingHashKernels;
+    private final GroupingHashKernel groupingHashKernel;
     private final TypeBinding[] inlineGroupedOutputTypes;
     private final PhysicalAggregationProgram program;
     private final Schema outputSchema;
@@ -486,11 +486,9 @@ public class GroupedAggregationOperator
         }
         this.authoritativeHashChannel = authoritativeHashChannel == null ? plannedHashChannel : authoritativeHashChannel;
         this.groupingHashOutput = program.groupingHashOutput().orElse(null);
-        this.groupingHashKernels = groupingHashOutput == null
+        this.groupingHashKernel = groupingHashOutput == null
                 ? null
-                : inlineGroupingTypes.stream()
-                        .map(operatorResources.codeGeneration().structuralTypes()::key)
-                        .toArray(StructuralKeyKernel[]::new);
+                : new GroupingHashKernel(operatorResources.codeGeneration().structuralTypes(), inlineGroupingTypes);
         if (this.authoritativeHashChannel != null && groupingHashOutput != null) {
             throw new IllegalArgumentException("Aggregation cannot consume and compute a grouping hash in the same operator");
         }
@@ -1973,14 +1971,7 @@ public class GroupedAggregationOperator
     private void computeGroupingHashes(Vector[] values, Vector[] nulls, Mask mask, I64Vector result)
     {
         for (int position : mask) {
-            long hash = 0;
-            for (int key = 0; key < groupingHashKernels.length; key++) {
-                long fieldHash = OperatorVectorSupport.isNull(nulls[key], position)
-                        ? 0
-                        : groupingHashKernels[key].hash(values[key], nulls[key], position);
-                hash = 31 * hash + fieldHash;
-            }
-            result.values()[position] = hash;
+            result.values()[position] = groupingHashKernel.hash(values, nulls, position);
         }
     }
 

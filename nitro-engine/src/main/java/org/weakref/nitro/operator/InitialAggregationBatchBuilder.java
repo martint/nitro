@@ -51,7 +51,7 @@ final class InitialAggregationBatchBuilder
     private final MutableAggregationPhaseMetrics phaseMetrics;
     private final AuthoritativeHashChannel authoritativeHashChannel;
     private final GroupingHashOutput groupingHashOutput;
-    private final StructuralKeyKernel[] groupingHashKernels;
+    private final GroupingHashKernel groupingHashKernel;
     private final Schema outputSchema;
 
     InitialAggregationBatchBuilder(
@@ -101,11 +101,13 @@ final class InitialAggregationBatchBuilder
         if (this.authoritativeHashChannel != null && groupingHashOutput != null) {
             throw new IllegalArgumentException("Aggregation cannot consume and compute a grouping hash in the same initial batch");
         }
-        groupingHashKernels = groupingHashOutput == null
+        groupingHashKernel = groupingHashOutput == null
                 ? null
-                : java.util.Arrays.stream(this.groupedColumns)
-                        .mapToObj(column -> operatorResources.codeGeneration().structuralTypes().key(inputSchema.field(column).type()))
-                        .toArray(StructuralKeyKernel[]::new);
+                : new GroupingHashKernel(
+                        operatorResources.codeGeneration().structuralTypes(),
+                        java.util.Arrays.stream(this.groupedColumns)
+                                .mapToObj(column -> inputSchema.field(column).type())
+                                .toList());
         if (this.authoritativeHashChannel != null && this.authoritativeHashChannel.inputChannel() >= inputSchema.size()) {
             throw new IllegalArgumentException("Authoritative hash input channel is outside the input schema: " +
                     this.authoritativeHashChannel.inputChannel());
@@ -441,14 +443,7 @@ final class InitialAggregationBatchBuilder
         }
         int compactPosition = 0;
         for (int position : inputMask) {
-            long hash = 0;
-            for (int key = 0; key < groupingHashKernels.length; key++) {
-                long fieldHash = OperatorVectorSupport.isNull(nulls[key], position)
-                        ? 0
-                        : groupingHashKernels[key].hash(values[key], nulls[key], position);
-                hash = 31 * hash + fieldHash;
-            }
-            hashes.values()[preservePositions ? position : compactPosition++] = hash;
+            hashes.values()[preservePositions ? position : compactPosition++] = groupingHashKernel.hash(values, nulls, position);
         }
         return ownedOutput(Streams.ofValues(hashes), context);
     }
