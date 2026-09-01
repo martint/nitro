@@ -364,6 +364,22 @@ public class SemiJoinOperator
                     (stream, mask) -> batchState.borrowMatchVector(this, stream, mask),
                     (stream, mask, selectTrue, resultAllocator, resultAllocationContext) -> {
                         if (stream == Stream.VALUES) {
+                            // The VALUES stream alone cannot generally distinguish SQL false from unknown. A true
+                            // marker is always non-null. An empty build makes every marker false, while a build-side
+                            // null makes every non-match unknown and therefore leaves no false rows. Otherwise, use
+                            // direct negative selection only when the probe key is known null-free; the generic
+                            // nullable-Boolean classifier handles the remaining case.
+                            if (matchOutputSemantics == MatchOutputSemantics.SQL_IN && !selectTrue) {
+                                if (!buildNonEmpty) {
+                                    return mask;
+                                }
+                                if (buildContainsNull) {
+                                    return Mask.none(mask.size());
+                                }
+                                if (!sourceBatch.output(outerJoinColumn).isKnownAllFalse(Stream.NULLS)) {
+                                    return null;
+                                }
+                            }
                             return selectRows(sourceBatch, mask, selectTrue, resultAllocator, resultAllocationContext);
                         }
                         BooleanVector values = (BooleanVector) batchState.borrowMatchVector(this, stream, mask);

@@ -93,7 +93,9 @@ import org.weakref.nitro.operator.evaluator.ir.Call;
 import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
 import org.weakref.nitro.operator.evaluator.ir.Input;
 import org.weakref.nitro.operator.evaluator.ir.Literal;
+import org.weakref.nitro.operator.evaluator.ir.NotMask;
 import org.weakref.nitro.operator.evaluator.ir.Reference;
+import org.weakref.nitro.operator.evaluator.ir.ReferenceMask;
 import org.weakref.nitro.operator.evaluator.ir.Variable;
 import org.weakref.nitro.operator.generator.SequenceGenerator;
 
@@ -3298,6 +3300,39 @@ public class TestOperatorBatches
             assertThat(booleanValues(batch.output(1).borrow(Stream.NULLS), 2))
                     .containsExactly(false, false);
             batch.close();
+        }
+    }
+
+    @Test
+    void testFilterNotSqlInExcludesUnknownRows()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        Field matchField = new Field(Schema.unspecified(1).field(0).type(), true);
+        Operator semiJoin = new SemiJoinOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 1, List.of(
+                        row(0L),
+                        row(1L),
+                        row(2L),
+                        row((Object) null))),
+                0,
+                new ConstantTableOperator(allocator, 1, List.of(
+                        row(1L),
+                        row((Object) null))),
+                0,
+                true,
+                matchField,
+                SemiJoinOperator.MatchOutputSemantics.SQL_IN,
+                EngineResources.from(allocator).operatorResources());
+        Reference marker = new Reference(new Input(1), Stream.VALUES);
+        try (Operator operator = new FilterOperator(
+                semiJoin,
+                new EvaluationPlan(List.of(), List.of()),
+                TestPrimitiveFunctions.primitiveRegistry(),
+                new NotMask(new ReferenceMask(marker)),
+                allocator,
+                EngineResources.from(allocator).operatorResources().filter())) {
+            assertThat(OperatorAssertions.OperatorAssert.toRows(operator)).isEmpty();
         }
     }
 
