@@ -137,6 +137,7 @@ import static org.weakref.nitro.parquet.NativeParquetTestFileWriter.write;
 import static org.weakref.nitro.parquet.NativeParquetTestFileWriter.writeOptionalLongUtf8Struct;
 import static org.weakref.nitro.parquet.NativeParquetTestFileWriter.writeOptionalUtf8LongMap;
 import static org.weakref.nitro.parquet.NativeParquetTestFileWriter.writeRepeatedOptionalInt64;
+import static org.weakref.nitro.parquet.NativeParquetTestFileWriter.writeRequiredLongAndOptionalUtf8LongMap;
 
 public class TestParquetOperator
 {
@@ -655,6 +656,86 @@ public class TestParquetOperator
             }
             assertThat(source.poll()).isSameAs(SourcePoll.Finished.FINISHED);
         }
+    }
+
+    @Test
+    void testNativeNestedSourcePrunesByPrimitiveSibling()
+            throws IOException
+    {
+        java.nio.file.Path matching = tempDirectory.resolve("nested-filter-matching.parquet");
+        java.nio.file.Path rejected = tempDirectory.resolve("nested-filter-rejected.parquet");
+        writeRequiredLongAndOptionalUtf8LongMap(
+                matching,
+                "nested_filter_test",
+                "code",
+                List.of(2L, 2L),
+                "items",
+                List.of(Map.of("first", 1L), Map.of("second", 2L)));
+        writeRequiredLongAndOptionalUtf8LongMap(
+                rejected,
+                "nested_filter_test",
+                "code",
+                List.of(8L, 8L),
+                "items",
+                List.of(Map.of("unused", 8L), Map.of("unused", 9L)));
+        Schema schema = new Schema(List.of(
+                new Field("code", STRUCT_BIGINT, false),
+                new Field("items", VARCHAR_BIGINT_MAP, true)));
+
+        try (NitroParquetScanResources resources = executableRuntimeFilterResources();
+                AllocationResources allocationResources = AllocationResources.createDefault();
+                Allocator allocator = new Allocator(allocationResources);
+                BatchSource source = NitroParquetBatchSource.forInputs(
+                        resources,
+                        allocator,
+                        List.of(inputSplit("rejected", rejected), inputSplit("matching", matching)),
+                        schema)) {
+            assertThat(source.supportsRuntimeFilter(source.column(0))).isTrue();
+            assertThat(source.addRuntimeFilter(new RuntimeFilter(
+                    source.column(0),
+                    new TestingTypedLongDomain(source.column(0).type(), DynamicFilter.fromRange(0, 2, 2)),
+                    false)))
+                    .isEqualTo(RuntimeFilterAcceptance.ACCEPTED_WITH_RESIDUAL);
+
+            try (var batch = ((SourcePoll.Ready) source.poll()).batch()) {
+                assertThat(VectorAccess.longValues(batch.column(0).borrow(Stream.VALUES)).value(0)).isEqualTo(2);
+                MapVector maps = (MapVector) batch.column(1).borrow(Stream.VALUES);
+                assertThat(maps.offsets()).containsExactly(0, 1, 2);
+            }
+            assertThat(source.poll()).isSameAs(SourcePoll.Finished.FINISHED);
+            assertThat(source.protocol(SourceMetricsProtocol.METRICS).orElseThrow().completedPositions())
+                    .hasValue(2);
+        }
+    }
+
+    private static NitroParquetBatchSource.InputSplit inputSplit(String id, java.nio.file.Path path)
+            throws IOException
+    {
+        byte[] bytes = Files.readAllBytes(path);
+        ParquetInput input = new ParquetInput()
+        {
+            @Override
+            public String id()
+            {
+                return id;
+            }
+
+            @Override
+            public long size()
+            {
+                return bytes.length;
+            }
+
+            @Override
+            public ParquetInputRange readRange(long offset, int length)
+            {
+                return ParquetInputRange.retained(MemorySegment.ofArray(bytes).asSlice(offset, length));
+            }
+
+            @Override
+            public void close() {}
+        };
+        return new NitroParquetBatchSource.InputSplit(input, 0, bytes.length);
     }
 
     private static long columnChunkStart(ColumnMetaData metadata)

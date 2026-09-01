@@ -15,7 +15,11 @@ package org.weakref.nitro.parquet;
 
 import org.apache.parquet.format.RowGroup;
 import org.weakref.nitro.core.source.BatchSource;
+import org.weakref.nitro.core.source.LongDomain;
+import org.weakref.nitro.core.source.LongDomainCapability;
 import org.weakref.nitro.core.source.OrdinalSourceColumnHandle;
+import org.weakref.nitro.core.source.RuntimeFilter;
+import org.weakref.nitro.core.source.RuntimeFilterAcceptance;
 import org.weakref.nitro.core.source.SourceCapability;
 import org.weakref.nitro.core.source.SourceColumnHandle;
 import org.weakref.nitro.core.source.SourceMetrics;
@@ -44,6 +48,7 @@ import org.weakref.nitro.data.VectorBatchScope;
 import org.weakref.nitro.data.VectorColumnGeneration;
 import org.weakref.nitro.data.VectorSourceBatch;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -71,6 +76,21 @@ final class NestedNitroParquetBatchSource
             requireNonNull(demand, "demand is null");
             // ValueDemand is an optimization request. Readers which cannot expose the requested physical
             // representation conservatively retain their ordinary full-value output.
+        }
+
+        default boolean supportsLongDomain()
+        {
+            return false;
+        }
+
+        default boolean chunkMayMatch(int index, LongDomain domain)
+        {
+            return true;
+        }
+
+        default boolean dictionaryMayMatch(int index, LongDomain domain, int maxDictionaryValues)
+        {
+            return true;
         }
 
         default boolean supportsIndependentNulls()
@@ -155,6 +175,26 @@ final class NestedNitroParquetBatchSource
         public void setValueDemand(ValueDemand demand)
         {
             reader.setDictionaryDomainMetadataDemand(requireNonNull(demand, "demand is null"));
+        }
+
+        @Override
+        public boolean supportsLongDomain()
+        {
+            return (logicalValueBinding == null || logicalValueBinding.preservesLongDomain()) &&
+                    reader.kind() != ColumnReader.Kind.BINARY &&
+                    !reader.isDouble();
+        }
+
+        @Override
+        public boolean chunkMayMatch(int index, LongDomain domain)
+        {
+            return reader.chunkMayMatch(index, domain);
+        }
+
+        @Override
+        public boolean dictionaryMayMatch(int index, LongDomain domain, int maxDictionaryValues)
+        {
+            return reader.dictionaryMayMatch(index, domain, maxDictionaryValues);
         }
 
         @Override
@@ -716,6 +756,8 @@ final class NestedNitroParquetBatchSource
     private final ProjectedReader[] readers;
     private final SourceColumnHandle[] sourceColumns;
     private final ValueDemand[] outputDemands;
+    private final LongDomain[] rowGroupFilters;
+    private final long[] rowGroupRows;
     private final long[] pendingRows;
     private final long[] pendingNullRows;
     private final VectorBatchScope batchScope;
@@ -724,6 +766,11 @@ final class NestedNitroParquetBatchSource
     private final long totalRows;
 
     private long nextRow;
+    private long prunedRows;
+    private int rowGroupIndex;
+    private long rowGroupRemaining;
+    private boolean rowGroupTracking;
+    private boolean hasRowGroupFilters;
     private BatchState currentBatch;
     private boolean closed;
 
@@ -813,6 +860,7 @@ final class NestedNitroParquetBatchSource
         this.sourceColumns = new SourceColumnHandle[schema.size()];
         this.outputDemands = new ValueDemand[schema.size()];
         java.util.Arrays.fill(outputDemands, ValueDemand.FULL);
+        this.rowGroupFilters = new LongDomain[schema.size()];
         this.pendingRows = new long[schema.size()];
         this.pendingNullRows = new long[schema.size()];
         for (int column = 0; column < schema.size(); column++) {
@@ -828,18 +876,21 @@ final class NestedNitroParquetBatchSource
         }
 
         long rows = 0;
+        List<Long> rowCounts = new ArrayList<>();
         for (int fileIndex = 0; fileIndex < files.length; fileIndex++) {
             ParquetFile file = files[fileIndex];
             NitroParquetBatchSource.InputSplit split = splits.get(fileIndex);
             List<RowGroup> rowGroups = file.rowGroups(split.start(), split.length());
             for (RowGroup rowGroup : rowGroups) {
                 rows = addExact(rows, rowGroup.num_rows);
+                rowCounts.add(rowGroup.num_rows);
                 for (ProjectedReader reader : readers) {
                     reader.addRowGroup(file, rowGroup);
                 }
             }
         }
         this.totalRows = rows;
+        this.rowGroupRows = rowCounts.stream().mapToLong(Long::longValue).toArray();
         this.batchRows = resources.batchPolicy().initialRows();
         this.batchScope = new VectorBatchScope(allocator, "NestedNitroParquetBatchSource", resources.batchBufferPool());
         this.allocationContext = batchScope.context();
@@ -1038,7 +1089,7 @@ final class NestedNitroParquetBatchSource
     @Override
     public Set<SourceCapability> capabilities()
     {
-        return Set.of(SourceCapability.LAZY_COLUMNS, SourceCapability.SELECTION_PUSHDOWN);
+        return Set.of(SourceCapability.LAZY_COLUMNS, SourceCapability.SELECTION_PUSHDOWN, SourceCapability.RUNTIME_FILTER);
     }
 
     @Override
@@ -1066,7 +1117,7 @@ final class NestedNitroParquetBatchSource
                 @Override
                 public OptionalLong completedPositions()
                 {
-                    return OptionalLong.of(nextRow);
+                    return OptionalLong.of(nextRow - prunedRows);
                 }
 
                 @Override
@@ -1078,6 +1129,34 @@ final class NestedNitroParquetBatchSource
             return Optional.of(protocol.valueType().cast(metrics));
         }
         return Optional.empty();
+    }
+
+    @Override
+    public RuntimeFilterAcceptance addRuntimeFilter(RuntimeFilter filter)
+    {
+        checkOpen();
+        requireNonNull(filter, "filter is null");
+        int column = columnIndex(filter.column());
+        if (column < 0 || !readers[column].supportsLongDomain()) {
+            return RuntimeFilterAcceptance.REJECTED;
+        }
+        LongDomain domain = filter.domain().capability(LongDomainCapability.LONG_DOMAIN).orElse(null);
+        if (domain == null || filter.domain().includesNull()) {
+            return RuntimeFilterAcceptance.REJECTED;
+        }
+        LongDomain existing = rowGroupFilters[column];
+        if (existing == null || domain.size() < existing.size()) {
+            rowGroupFilters[column] = domain;
+            hasRowGroupFilters = true;
+        }
+        return RuntimeFilterAcceptance.ACCEPTED_WITH_RESIDUAL;
+    }
+
+    @Override
+    public boolean supportsRuntimeFilter(SourceColumnHandle column)
+    {
+        int index = columnIndex(requireNonNull(column, "column is null"));
+        return index >= 0 && readers[index].supportsLongDomain();
     }
 
     private void retainOutputs(Map<SourceColumnHandle, ValueDemand> outputs)
@@ -1130,13 +1209,80 @@ final class NestedNitroParquetBatchSource
         if (currentBatch != null) {
             currentBatch.close();
         }
+        advancePastRejectedRowGroups();
         if (nextRow == totalRows) {
             return SourcePoll.Finished.FINISHED;
         }
         int count = toIntExact(Math.min(batchRows, totalRows - nextRow));
+        if (rowGroupTracking) {
+            count = toIntExact(Math.min(count, rowGroupRemaining));
+            consumeRowGroupRows(count);
+        }
         nextRow += count;
         currentBatch = new BatchState(count);
         return new SourcePoll.Ready(currentBatch.batch());
+    }
+
+    private void advancePastRejectedRowGroups()
+    {
+        if (!hasRowGroupFilters || nextRow >= totalRows) {
+            return;
+        }
+        initializeRowGroupTracking();
+        while (rowGroupIndex < rowGroupRows.length && rowGroupRemaining == rowGroupRows[rowGroupIndex]) {
+            if (rowGroupMayMatch(rowGroupIndex)) {
+                return;
+            }
+            long rows = rowGroupRemaining;
+            for (int column = 0; column < readers.length; column++) {
+                pendingRows[column] = addExact(pendingRows[column], rows);
+                if (readers[column].supportsIndependentNulls()) {
+                    pendingNullRows[column] = addExact(pendingNullRows[column], rows);
+                }
+            }
+            nextRow = addExact(nextRow, rows);
+            prunedRows = addExact(prunedRows, rows);
+            rowGroupIndex++;
+            rowGroupRemaining = rowGroupIndex < rowGroupRows.length ? rowGroupRows[rowGroupIndex] : 0;
+        }
+    }
+
+    private void initializeRowGroupTracking()
+    {
+        if (rowGroupTracking) {
+            return;
+        }
+        long position = nextRow;
+        while (rowGroupIndex < rowGroupRows.length && position >= rowGroupRows[rowGroupIndex]) {
+            position -= rowGroupRows[rowGroupIndex++];
+        }
+        rowGroupRemaining = rowGroupIndex < rowGroupRows.length ? rowGroupRows[rowGroupIndex] - position : 0;
+        rowGroupTracking = true;
+    }
+
+    private boolean rowGroupMayMatch(int index)
+    {
+        for (int column = 0; column < readers.length; column++) {
+            LongDomain filter = rowGroupFilters[column];
+            if (filter != null &&
+                    (!readers[column].chunkMayMatch(index, filter) ||
+                            !readers[column].dictionaryMayMatch(
+                                    index,
+                                    filter,
+                                    resources.runtimeFilterPolicy().maxDictionaryPruningValues()))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private void consumeRowGroupRows(int rows)
+    {
+        rowGroupRemaining -= rows;
+        if (rowGroupRemaining == 0) {
+            rowGroupIndex++;
+            rowGroupRemaining = rowGroupIndex < rowGroupRows.length ? rowGroupRows[rowGroupIndex] : 0;
+        }
     }
 
     private final class BatchState

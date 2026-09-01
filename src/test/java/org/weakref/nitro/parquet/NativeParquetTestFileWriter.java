@@ -214,6 +214,66 @@ public final class NativeParquetTestFileWriter
     {
         List<Event> keyEvents = new ArrayList<>();
         List<Event> valueEvents = new ArrayList<>();
+        addMapEvents(rows, keyEvents, valueEvents);
+        List<SchemaElement> schema = List.of(
+                new SchemaElement(schemaName).setNum_children(1),
+                new SchemaElement(columnName)
+                        .setNum_children(1)
+                        .setRepetition_type(FieldRepetitionType.OPTIONAL)
+                        .setConverted_type(ConvertedType.MAP),
+                new SchemaElement("key_value").setNum_children(2).setRepetition_type(FieldRepetitionType.REPEATED),
+                new SchemaElement("key")
+                        .setType(Type.BYTE_ARRAY)
+                        .setRepetition_type(FieldRepetitionType.REQUIRED)
+                        .setConverted_type(ConvertedType.UTF8),
+                new SchemaElement("value").setType(Type.INT64).setRepetition_type(FieldRepetitionType.OPTIONAL));
+        writeNested(path, schema, rows.size(), List.of(
+                new NestedColumn(List.of(columnName, "key_value", "key"), Type.BYTE_ARRAY, 1, 2, keyEvents),
+                new NestedColumn(List.of(columnName, "key_value", "value"), Type.INT64, 1, 3, valueEvents)), true);
+    }
+
+    public static void writeRequiredLongAndOptionalUtf8LongMap(
+            Path path,
+            String schemaName,
+            String longColumnName,
+            List<Long> longValues,
+            String mapColumnName,
+            List<Map<String, Long>> mapValues)
+            throws IOException
+    {
+        if (longValues.size() != mapValues.size()) {
+            throw new IllegalArgumentException("columns have different row counts");
+        }
+        List<Event> longEvents = longValues.stream()
+                .map(value -> new Event(0, 0, requireNonNull(value, "required long value is null")))
+                .toList();
+        List<Event> keyEvents = new ArrayList<>();
+        List<Event> valueEvents = new ArrayList<>();
+        addMapEvents(mapValues, keyEvents, valueEvents);
+        List<SchemaElement> schema = List.of(
+                new SchemaElement(schemaName).setNum_children(2),
+                new SchemaElement(longColumnName).setType(Type.INT64).setRepetition_type(FieldRepetitionType.REQUIRED),
+                new SchemaElement(mapColumnName)
+                        .setNum_children(1)
+                        .setRepetition_type(FieldRepetitionType.OPTIONAL)
+                        .setConverted_type(ConvertedType.MAP),
+                new SchemaElement("key_value").setNum_children(2).setRepetition_type(FieldRepetitionType.REPEATED),
+                new SchemaElement("key")
+                        .setType(Type.BYTE_ARRAY)
+                        .setRepetition_type(FieldRepetitionType.REQUIRED)
+                        .setConverted_type(ConvertedType.UTF8),
+                new SchemaElement("value").setType(Type.INT64).setRepetition_type(FieldRepetitionType.OPTIONAL));
+        writeNested(path, schema, longValues.size(), List.of(
+                new NestedColumn(List.of(longColumnName), Type.INT64, 0, 0, longEvents),
+                new NestedColumn(List.of(mapColumnName, "key_value", "key"), Type.BYTE_ARRAY, 1, 2, keyEvents),
+                new NestedColumn(List.of(mapColumnName, "key_value", "value"), Type.INT64, 1, 3, valueEvents)), true);
+    }
+
+    private static void addMapEvents(
+            List<Map<String, Long>> rows,
+            List<Event> keyEvents,
+            List<Event> valueEvents)
+    {
         for (Map<String, Long> row : rows) {
             if (row == null) {
                 keyEvents.add(new Event(0, 0, null));
@@ -233,21 +293,6 @@ public final class NativeParquetTestFileWriter
                 valueEvents.add(new Event(repetitionLevel, value == null ? 2 : 3, value));
             }
         }
-        List<SchemaElement> schema = List.of(
-                new SchemaElement(schemaName).setNum_children(1),
-                new SchemaElement(columnName)
-                        .setNum_children(1)
-                        .setRepetition_type(FieldRepetitionType.OPTIONAL)
-                        .setConverted_type(ConvertedType.MAP),
-                new SchemaElement("key_value").setNum_children(2).setRepetition_type(FieldRepetitionType.REPEATED),
-                new SchemaElement("key")
-                        .setType(Type.BYTE_ARRAY)
-                        .setRepetition_type(FieldRepetitionType.REQUIRED)
-                        .setConverted_type(ConvertedType.UTF8),
-                new SchemaElement("value").setType(Type.INT64).setRepetition_type(FieldRepetitionType.OPTIONAL));
-        writeNested(path, schema, rows.size(), List.of(
-                new NestedColumn(List.of(columnName, "key_value", "key"), Type.BYTE_ARRAY, 1, 2, keyEvents),
-                new NestedColumn(List.of(columnName, "key_value", "value"), Type.INT64, 1, 3, valueEvents)), true);
     }
 
     public static void writeOptionalLongUtf8Struct(Path path, String schemaName, String columnName, List<LongStringStruct> rows)
@@ -369,7 +414,11 @@ public final class NativeParquetTestFileWriter
                 column.events().size(),
                 uncompressedSize,
                 compressedSize,
-                dataOffset);
+                dataOffset)
+                .setStatistics(statistics(
+                        column.type(),
+                        column.events().stream().map(Event::value).toList(),
+                        column.events().stream().filter(event -> event.value() == null).count()));
         if (dictionaryEnabled) {
             metadata.setDictionary_page_offset(dictionaryOffset);
         }
@@ -591,24 +640,29 @@ public final class NativeParquetTestFileWriter
 
     private static Statistics statistics(Column column, long nullCount)
     {
+        return statistics(column.type(), column.values(), nullCount);
+    }
+
+    private static Statistics statistics(Type type, List<?> allValues, long nullCount)
+    {
         Statistics statistics = new Statistics().setNull_count(nullCount);
-        List<?> values = column.values().stream().filter(value -> value != null).toList();
-        if (values.isEmpty() || column.type() == Type.BOOLEAN || column.type() == Type.INT96) {
+        List<?> values = allValues.stream().filter(value -> value != null).toList();
+        if (values.isEmpty() || type == Type.BOOLEAN || type == Type.INT96) {
             return statistics;
         }
         Object minimum = values.getFirst();
         Object maximum = minimum;
         for (Object value : values.subList(1, values.size())) {
-            if (compare(column.type(), value, minimum) < 0) {
+            if (compare(type, value, minimum) < 0) {
                 minimum = value;
             }
-            if (compare(column.type(), value, maximum) > 0) {
+            if (compare(type, value, maximum) > 0) {
                 maximum = value;
             }
         }
         try {
-            byte[] minimumBytes = encodePlain(column.type(), List.of(minimum));
-            byte[] maximumBytes = encodePlain(column.type(), List.of(maximum));
+            byte[] minimumBytes = encodePlain(type, List.of(minimum));
+            byte[] maximumBytes = encodePlain(type, List.of(maximum));
             return statistics
                     .setMin_value(minimumBytes)
                     .setMax_value(maximumBytes)
