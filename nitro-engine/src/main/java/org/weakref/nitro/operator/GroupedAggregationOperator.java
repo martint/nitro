@@ -2150,33 +2150,34 @@ public class GroupedAggregationOperator
     private void accumulateDistinctGroupedRows(Batch batch, I64Vector groups, Mask mask, org.weakref.nitro.operator.aggregation.StreamAccessor streamAccessor, int groupCount)
     {
         for (DistinctAggregationPlan.Group distinctAggregationGroup : distinctAggregationGroups) {
-            Mask distinctMask = distinctAggregationGroup.select(
-                    groups,
-                    mask,
-                    streamAccessor,
-                    groupCount,
-                    allocator,
-                    allocationContext,
-                    operatorResources.codeGeneration(),
-                    operatorResources.distinctKeySetPolicy(),
-                    operatorResources.adaptiveLongGroupingPolicy(),
-                    operatorResources.flatKeyTablePolicy());
+            Mask filteredMask = distinctAggregationGroup.filterInputColumn() < 0
+                    ? mask
+                    : filterMask(batch, distinctAggregationGroup.filterInputColumn(), mask);
             try {
-                for (int aggregationIndex : distinctAggregationGroup.aggregationIndexes()) {
-                    int filterColumn = aggregations[aggregationIndex].filterInputColumn();
-                    Mask aggregationMask = filterColumn < 0 ? distinctMask : filterMask(batch, filterColumn, distinctMask);
-                    try {
-                        aggregations[aggregationIndex].accumulateDistinctSelected(states[aggregationIndex], groups, aggregationMask, streamAccessor);
+                Mask distinctMask = distinctAggregationGroup.select(
+                        groups,
+                        filteredMask,
+                        streamAccessor,
+                        groupCount,
+                        allocator,
+                        allocationContext,
+                        operatorResources.codeGeneration(),
+                        operatorResources.distinctKeySetPolicy(),
+                        operatorResources.adaptiveLongGroupingPolicy(),
+                        operatorResources.flatKeyTablePolicy());
+                try {
+                    for (int aggregationIndex : distinctAggregationGroup.aggregationIndexes()) {
+                        aggregations[aggregationIndex].accumulateDistinctSelected(states[aggregationIndex], groups, distinctMask, streamAccessor);
                     }
-                    finally {
-                        if (aggregationMask != distinctMask) {
-                            allocator.release(allocationContext, aggregationMask);
-                        }
-                    }
+                }
+                finally {
+                    allocator.release(allocationContext, distinctMask);
                 }
             }
             finally {
-                allocator.release(allocationContext, distinctMask);
+                if (filteredMask != mask) {
+                    allocator.release(allocationContext, filteredMask);
+                }
             }
         }
     }
@@ -2189,8 +2190,11 @@ public class GroupedAggregationOperator
             return direct;
         }
         Mask selected = allocator.copyMask(allocationContext, mask);
-        var values = VectorAccess.booleanValues(output.borrow(Stream.VALUES));
-        selected.retainIf(position -> values.value(position));
+        Vector values = output.borrow(Stream.VALUES);
+        if (!selected.tryRetainBooleanVector(values, true)) {
+            var booleanValues = VectorAccess.booleanValues(values);
+            selected.retainIf(position -> booleanValues.value(position));
+        }
         return selected;
     }
 

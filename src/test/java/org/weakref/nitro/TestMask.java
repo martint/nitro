@@ -14,9 +14,11 @@
 package org.weakref.nitro;
 
 import org.junit.jupiter.api.Test;
+import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.RleVector;
 
 import java.util.ArrayList;
 
@@ -368,6 +370,34 @@ class TestMask
         assertThat(selection).isNotNull();
         assertThat(selection.selectedDomainBits()).isEqualTo(0b0101);
         assertThat(remaining).containsExactly(2, 3, 5);
+    }
+
+    @Test
+    void retainsDictionaryBooleanVectorWithoutFlattening()
+    {
+        int[] ids = {0, 1, 1, 0, 1, 0};
+        DictionaryVector dictionary = DictionaryVector.wrapWithDomainFrequencies(
+                ids,
+                ids.length,
+                new BooleanVector(new boolean[] {false, true}),
+                new int[] {3, 3});
+        Mask mask = Mask.all(ids.length);
+
+        assertThat(mask.tryRetainBooleanVector(dictionary, true)).isTrue();
+        assertThat(mask.dictionaryDomainSelection(dictionary)).isNotNull();
+        assertThat(mask).containsExactly(1, 2, 4);
+    }
+
+    @Test
+    void retainsRleBooleanVectorWithMonotonicRunTraversal()
+    {
+        RleVector values = new RleVector(
+                new int[] {3, 2, 4},
+                new BooleanVector(new boolean[] {false, true, false}));
+        Mask mask = Mask.sparse(new int[] {1, 3, 4, 6, 8}, values.length());
+
+        assertThat(mask.tryRetainBooleanVector(values, true)).isTrue();
+        assertThat(mask).containsExactly(3, 4);
     }
 
     private static void assertPrimitivePositions(Mask mask, int... expected)

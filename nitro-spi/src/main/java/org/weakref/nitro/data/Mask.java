@@ -535,6 +535,61 @@ public class Mask
         finishRetain(retained);
     }
 
+    /**
+     * Compacts this mask against an admitted Boolean vector without hiding its physical encoding behind a
+     * per-position accessor. Returns {@code false} when the representation is not directly supported.
+     */
+    public boolean tryRetainBooleanVector(Vector vector, boolean wanted)
+    {
+        if (vector instanceof BooleanVector values) {
+            retainBooleans(values.values(), wanted);
+            return true;
+        }
+        if (vector instanceof DictionaryVector dictionary && dictionary.values().length() <= Long.SIZE) {
+            int domainSize = dictionary.values().length();
+            VectorAccess.BooleanValues values = VectorAccess.booleanValues(dictionary.values());
+            long selectedBits = 0;
+            for (int domain = 0; domain < domainSize; domain++) {
+                if (values.value(domain) == wanted) {
+                    selectedBits |= 1L << domain;
+                }
+            }
+            if (tryRetainExistingDictionaryDomain(dictionary.ids(), selectedBits, domainSize)) {
+                return true;
+            }
+            if (allSelected) {
+                if (dictionary.hasDomainFrequencies()) {
+                    retainDictionaryDomain(dictionary, selectedBits, domainSize);
+                }
+                else {
+                    retainDictionaryDomain(dictionary.ids(), selectedBits, domainSize);
+                }
+                return true;
+            }
+        }
+        if (vector instanceof RleVector rle) {
+            if (none()) {
+                return true;
+            }
+            int rows = selectedCount;
+            int[] positions = positionsArray(allSelected ? size : rows);
+            boolean dense = allSelected;
+            int retained = 0;
+            int run = 0;
+            VectorAccess.BooleanValues runValues = VectorAccess.booleanValues(rle.values());
+            for (int index = 0; index < rows; index++) {
+                int position = dense ? index : positions[index];
+                run = rle.runIndexFromHint(position, run);
+                if (runValues.value(run) == wanted) {
+                    positions[retained++] = position;
+                }
+            }
+            finishRetain(retained);
+            return true;
+        }
+        return false;
+    }
+
     /** Comparison applied by {@link #retainConstantComparison}, in the form {@code column OPERATOR literal}. */
     public enum ComparisonOperator
     {

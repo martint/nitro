@@ -104,6 +104,17 @@ public interface TypeBinding
         return Optional.empty();
     }
 
+    /**
+     * Whether non-null values carried by an integral vector have logical DISTINCT identity exactly when their
+     * sign-extended {@code long} values are equal. This provider-owned proof permits primitive key tables without
+     * teaching an operator the logical type identity. It must be false for carriers with normalized or otherwise
+     * non-bitwise identity semantics.
+     */
+    default boolean supportsRawLongKeyIdentity()
+    {
+        return false;
+    }
+
     /// Vector representations this type provider permits at an SPI boundary.
     ///
     /// The set is descriptive metadata for connectors and integration adapters. A provider can

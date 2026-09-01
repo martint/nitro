@@ -1309,7 +1309,11 @@ final class GroupingState
             System.err.println(shape);
         }
 
-        if (!allowsLegacyKeyShortcuts) {
+        boolean rawLongKeyIdentity = values.length == 1 &&
+                keyTypes.size() == 1 &&
+                keyTypes.getFirst().supportsRawLongKeyIdentity() &&
+                isSingleLongGroupingCandidate(values[0]);
+        if (!allowsLegacyKeyShortcuts && !rawLongKeyIdentity) {
             structuralGrouping = new StructuralGroupingIndex(
                     requireNonNull(allocator, "allocator is null"),
                     requireNonNull(allocationContext, "allocationContext is null"),

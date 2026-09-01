@@ -16,12 +16,15 @@ package org.weakref.nitro.operator;
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
+import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.execution.EngineResources;
 import org.weakref.nitro.operator.aggregation.CountAll;
 import org.weakref.nitro.operator.aggregation.DistinctPhysicalAggregationUnit;
+import org.weakref.nitro.operator.aggregation.FilteredAccumulator;
 import org.weakref.nitro.operator.aggregation.PhysicalAggregationProgram;
 
 import java.util.List;
@@ -99,6 +102,38 @@ class TestAggregationSession
             try (Batch result = session.finish()) {
                 assertThat(((I64Vector) result.output(0).borrow(Stream.VALUES)).values())
                         .containsExactly(3);
+            }
+        }
+    }
+
+    @Test
+    void testDistinctAggregationsPartitionStateByFilter()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                AggregationSession session = new AggregationSession(
+                        allocator,
+                        Schema.unspecified(3),
+                        new PhysicalAggregationProgram(
+                                List.of(
+                                        new DistinctPhysicalAggregationUnit(new FilteredAccumulator(new CountAll(), 1), new int[] {0}),
+                                        new DistinctPhysicalAggregationUnit(new FilteredAccumulator(new CountAll(), 2), new int[] {0})),
+                                List.of(
+                                        new PhysicalAggregationProgram.Output(0, 0),
+                                        new PhysicalAggregationProgram.Output(1, 0))),
+                        resources.operatorResources())) {
+            allocator.beginExecution();
+            try (Batch batch = new Batch(
+                    Mask.all(4),
+                    Output.of(Streams.ofValues(new I64Vector(new long[] {11, 22, 11, 22}))),
+                    Output.of(Streams.ofValues(new BooleanVector(new boolean[] {true, true, false, false}))),
+                    Output.of(Streams.ofValues(new BooleanVector(new boolean[] {false, false, true, true}))))) {
+                session.addInput(batch);
+            }
+
+            try (Batch result = session.finish()) {
+                assertThat(((I64Vector) result.output(0).borrow(Stream.VALUES)).values()).containsExactly(2);
+                assertThat(((I64Vector) result.output(1).borrow(Stream.VALUES)).values()).containsExactly(2);
             }
         }
     }

@@ -62,13 +62,16 @@ final class DistinctAggregationPlan
                 }
                 continue;
             }
-            aggregationIndexesBySignature.computeIfAbsent(new Signature(distinctInputColumns), _ -> new ArrayList<>())
+            aggregationIndexesBySignature.computeIfAbsent(
+                            new Signature(distinctInputColumns, aggregations[aggregationIndex].filterInputColumn()),
+                            _ -> new ArrayList<>())
                     .add(aggregationIndex);
         }
 
         Group[] distinctAggregationGroups = aggregationIndexesBySignature.entrySet().stream()
                 .map(entry -> new Group(
                         entry.getKey().inputColumns(),
+                        entry.getKey().filterInputColumn(),
                         entry.getValue().stream().mapToInt(Integer::intValue).toArray(),
                         grouped,
                         groupPartitionedLongDistinct,
@@ -114,7 +117,7 @@ final class DistinctAggregationPlan
                 .toList();
     }
 
-    private record Signature(int[] inputColumns)
+    private record Signature(int[] inputColumns, int filterInputColumn)
     {
         private Signature
         {
@@ -124,13 +127,15 @@ final class DistinctAggregationPlan
         @Override
         public boolean equals(Object other)
         {
-            return other instanceof Signature signature && Arrays.equals(inputColumns, signature.inputColumns);
+            return other instanceof Signature signature &&
+                    filterInputColumn == signature.filterInputColumn &&
+                    Arrays.equals(inputColumns, signature.inputColumns);
         }
 
         @Override
         public int hashCode()
         {
-            return Arrays.hashCode(inputColumns);
+            return 31 * Arrays.hashCode(inputColumns) + filterInputColumn;
         }
     }
 
@@ -138,6 +143,7 @@ final class DistinctAggregationPlan
     {
         private static final int[] EMPTY_POSITIONS = new int[0];
         private final int[] inputColumns;
+        private final int filterInputColumn;
         private final int[] aggregationIndexes;
         private final boolean grouped;
         private final boolean groupPartitionedLongDistinct;
@@ -150,12 +156,14 @@ final class DistinctAggregationPlan
 
         private Group(
                 int[] inputColumns,
+                int filterInputColumn,
                 int[] aggregationIndexes,
                 boolean grouped,
                 boolean groupPartitionedLongDistinct,
                 List<TypeBinding> inputTypes)
         {
             this.inputColumns = inputColumns.clone();
+            this.filterInputColumn = filterInputColumn;
             this.aggregationIndexes = aggregationIndexes;
             this.grouped = grouped;
             this.groupPartitionedLongDistinct = groupPartitionedLongDistinct;
@@ -167,6 +175,11 @@ final class DistinctAggregationPlan
         int[] aggregationIndexes()
         {
             return aggregationIndexes;
+        }
+
+        int filterInputColumn()
+        {
+            return filterInputColumn;
         }
 
         Mask select(

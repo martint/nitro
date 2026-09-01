@@ -186,7 +186,8 @@ final class DistinctKeySet
         }
         validateKeyVectors(keyTypes, 1, samples);
         StructuralKeyKernel[] kernels = structuralKeyKernels(samples.length, 1, keyTypes, codeGeneration);
-        if (!allowsLegacyPhysicalShortcuts(kernels)) {
+        boolean rawLongKeyIdentity = keyTypes.size() == 1 && keyTypes.getFirst().supportsRawLongKeyIdentity();
+        if (!allowsLegacyPhysicalShortcuts(kernels) && !rawLongKeyIdentity) {
             return new DistinctKeySet(
                     new StructuralDistinctIndex(
                             requireNonNull(allocator, "allocator is null"),

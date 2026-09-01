@@ -17,6 +17,7 @@ import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Streams;
+import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.operator.aggregation.AggregationExecutionContext;
 import org.weakref.nitro.operator.aggregation.PhysicalAggregationProgram;
@@ -124,34 +125,34 @@ public final class AggregationSession
         }
         if (distinctAggregationPlan.distinctAggregationGroups().length > 0) {
             for (DistinctAggregationPlan.Group distinctGroup : distinctAggregationPlan.distinctAggregationGroups()) {
-                Mask distinctMask = distinctGroup.select(
-                        null,
-                        mask,
-                        streamAccessor,
-                        1,
-                        allocator,
-                        allocationContext,
-                        operatorResources.codeGeneration(),
-                        operatorResources.distinctKeySetPolicy(),
-                        operatorResources.adaptiveLongGroupingPolicy(),
-                        operatorResources.flatKeyTablePolicy());
+                Mask filteredMask = distinctGroup.filterInputColumn() < 0
+                        ? mask
+                        : filterMask(batch, distinctGroup.filterInputColumn(), mask);
                 try {
-                    for (int unit : distinctGroup.aggregationIndexes()) {
-                        PhysicalAggregationUnit aggregationUnit = unitArray[unit];
-                        int filterColumn = aggregationUnit.filterInputColumn();
-                        Mask aggregationMask = filterColumn < 0 ? distinctMask : filterMask(batch, filterColumn, distinctMask);
-                        try {
-                            aggregationUnit.accumulateDistinctSelected(state[unit], 0, aggregationMask, streamAccessor);
+                    Mask distinctMask = distinctGroup.select(
+                            null,
+                            filteredMask,
+                            streamAccessor,
+                            1,
+                            allocator,
+                            allocationContext,
+                            operatorResources.codeGeneration(),
+                            operatorResources.distinctKeySetPolicy(),
+                            operatorResources.adaptiveLongGroupingPolicy(),
+                            operatorResources.flatKeyTablePolicy());
+                    try {
+                        for (int unit : distinctGroup.aggregationIndexes()) {
+                            unitArray[unit].accumulateDistinctSelected(state[unit], 0, distinctMask, streamAccessor);
                         }
-                        finally {
-                            if (aggregationMask != distinctMask) {
-                                allocator.release(allocationContext, aggregationMask);
-                            }
-                        }
+                    }
+                    finally {
+                        allocator.release(allocationContext, distinctMask);
                     }
                 }
                 finally {
-                    allocator.release(allocationContext, distinctMask);
+                    if (filteredMask != mask) {
+                        allocator.release(allocationContext, filteredMask);
+                    }
                 }
             }
         }
@@ -231,8 +232,11 @@ public final class AggregationSession
             return direct;
         }
         Mask selected = allocator.copyMask(allocationContext, mask);
-        var values = VectorAccess.booleanValues(output.borrow(VALUES));
-        selected.retainIf(position -> values.value(position));
+        Vector values = output.borrow(VALUES);
+        if (!selected.tryRetainBooleanVector(values, true)) {
+            var booleanValues = VectorAccess.booleanValues(values);
+            selected.retainIf(position -> booleanValues.value(position));
+        }
         return selected;
     }
 

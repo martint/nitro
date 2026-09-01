@@ -88,6 +88,97 @@ public class TestGroupingStatePoolReuse
     }
 
     @Test
+    public void testProviderCanAdmitRawLongGrouping()
+            throws ReflectiveOperationException
+    {
+        TypeOperators operators = new TypeOperators(
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.of(MethodHandles.lookup().findStatic(
+                        TestGroupingStatePoolReuse.class,
+                        "unexpectedVectorIdentical",
+                        MethodType.methodType(boolean.class, Vector.class, int.class, Vector.class, int.class))),
+                Optional.of(MethodHandles.lookup().findStatic(
+                        TestGroupingStatePoolReuse.class,
+                        "unexpectedVectorHash",
+                        MethodType.methodType(long.class, Vector.class, int.class))),
+                Optional.empty());
+        TypeBinding type = new TypeBinding()
+        {
+            @Override
+            public TypeIdentity identity()
+            {
+                return new TypeIdentity("testing:raw-long-key");
+            }
+
+            @Override
+            public Class<?> carrierType()
+            {
+                return long.class;
+            }
+
+            @Override
+            public TypeOperators operators()
+            {
+                return operators;
+            }
+
+            @Override
+            public boolean supportsRawLongKeyIdentity()
+            {
+                return true;
+            }
+
+            @Override
+            public Set<Class<? extends Vector>> supportedVectorTypes()
+            {
+                return Set.of(I64Vector.class);
+            }
+
+            @Override
+            public boolean supportsVector(Vector vector)
+            {
+                return vector instanceof I64Vector ||
+                        (vector instanceof DictionaryVector dictionary && dictionary.values() instanceof I64Vector);
+            }
+        };
+
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            allocator.beginExecution();
+            Allocator.Context context = new Allocator.Context("rawLongKeyTest");
+            GroupingState state = new GroupingState(
+                    resources.primitiveArrays(),
+                    resources.operatorCodeGeneration(),
+                    resources.groupingState(),
+                    resources.operatorResources().adaptiveLongGroupingPolicy(),
+                    resources.operatorResources().flatKeyTablePolicy(),
+                    List.of(type),
+                    allocator,
+                    context);
+            I64Vector result = new I64Vector(5);
+            state.assignGroups(
+                    new Vector[] {new DictionaryVector(
+                            new int[] {0, 1, 0, 2, 1},
+                            new I64Vector(new long[] {11, 22, 33}))},
+                    new Vector[] {null},
+                    Mask.all(5),
+                    result);
+
+            assertThat(state.usesSingleLongGrouping()).isTrue();
+            assertThat(result.values()).containsExactly(0, 1, 0, 2, 1);
+            assertThat(state.groupCount()).isEqualTo(3);
+
+            state.releaseBuffers();
+            allocator.release(context);
+        }
+    }
+
+    @Test
     public void testStructuralRunReuseIsAdmittedOnlyForClusteredInput()
             throws ReflectiveOperationException
     {
