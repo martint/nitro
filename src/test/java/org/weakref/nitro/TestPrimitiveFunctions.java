@@ -75,7 +75,7 @@ import org.weakref.nitro.function.scalar.builtin.ModuloI64;
 import org.weakref.nitro.function.scalar.builtin.MultiplyF64Optimization;
 import org.weakref.nitro.function.scalar.builtin.MultiplyI64;
 import org.weakref.nitro.function.scalar.builtin.NarrowLongCarrierToInt32Exact;
-import org.weakref.nitro.function.scalar.builtin.NotBoolean;
+import org.weakref.nitro.function.scalar.builtin.NotBooleanOptimization;
 import org.weakref.nitro.function.scalar.builtin.NullI64;
 import org.weakref.nitro.function.scalar.builtin.OrBoolean;
 import org.weakref.nitro.function.scalar.builtin.ParseUtf8Long;
@@ -148,7 +148,6 @@ public final class TestPrimitiveFunctions
                 MapContainsKeyUtf8.class,
                 MapKeys.class,
                 MapValues.class,
-                NotBoolean.class,
                 NullI64.class,
                 AddExactI64.class,
                 SubtractI64.class,
@@ -172,8 +171,38 @@ public final class TestPrimitiveFunctions
         primitiveRegistry.register(generatedDoubleBinary("add_f64", "addDouble", new AddF64Optimization()));
         primitiveRegistry.register(generatedDoubleBinary("subtract_f64", "subtractDouble", new SubtractF64Optimization()));
         primitiveRegistry.register(generatedDoubleBinary("multiply_f64", "multiplyDouble", new MultiplyF64Optimization()));
+        primitiveRegistry.register(generatedBooleanUnary("not", "notBoolean", new NotBooleanOptimization()));
         primitiveRegistry.register(generatedYearOfDate());
         return primitiveRegistry;
+    }
+
+    private static ScalarDescriptor generatedBooleanUnary(String name, String methodName, FunctionCapability capability)
+    {
+        TypeBinding booleanType = new TestingTypeBinding(new TypeIdentity("test-boolean"), boolean.class);
+        ScalarDescriptor generated;
+        try {
+            generated = new ScalarAdapterGenerator().adapt(
+                    name,
+                    new BoundSignature(booleanType, List.of(booleanType)),
+                    new FunctionSemantics(true, List.of(RETURN_NULL_ON_NULL), false, NEVER_FAILS),
+                    new ScalarMethodTarget(MethodHandles.lookup().findStatic(
+                            TestPrimitiveFunctions.class,
+                            methodName,
+                            MethodType.methodType(boolean.class, boolean.class))));
+        }
+        catch (NoSuchMethodException | IllegalAccessException exception) {
+            throw new ExceptionInInitializerError(exception);
+        }
+        return new ScalarDescriptor(
+                generated.name(),
+                generated.deterministic(),
+                generated.implementation(),
+                Stream.concat(generated.capabilities().stream(), Stream.of(capability)).toList());
+    }
+
+    private static boolean notBoolean(boolean value)
+    {
+        return !value;
     }
 
     private static ScalarDescriptor generatedDoubleBinary(String name, String methodName, FunctionCapability capability)
