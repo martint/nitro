@@ -29,6 +29,7 @@ import org.weakref.nitro.operator.pattern.PatternAggregationInput;
 import org.weakref.nitro.operator.pattern.PatternDefinition;
 import org.weakref.nitro.operator.pattern.PatternDefinitionErrorHandler;
 import org.weakref.nitro.operator.pattern.PatternEvaluationContext;
+import org.weakref.nitro.operator.pattern.PatternValueEvaluator;
 import org.weakref.nitro.operator.pattern.PatternValueProgram;
 
 import static java.util.Objects.requireNonNull;
@@ -89,6 +90,147 @@ public final class PatternEvaluationResources
                 projectionMaskCompiler,
                 evaluationPolicy,
                 bufferPoolGroup);
+    }
+
+    /// Binds one compiled measure expression to its match-local value producers.
+    public PatternValueEvaluator value(
+            Allocator allocator,
+            EvaluationPlan plan,
+            PrimitiveRegistry primitiveRegistry,
+            PatternValueProgram inputs,
+            Reference value)
+    {
+        return new ExpressionValue(
+                allocator,
+                plan,
+                primitiveRegistry,
+                inputs,
+                value,
+                projectionMaskCompiler,
+                evaluationPolicy,
+                bufferPoolGroup);
+    }
+
+    private static final class ExpressionValue
+            implements PatternValueEvaluator
+    {
+        private final Allocator.Context allocationContext = new Allocator.Context("PatternValue", ExpressionValue.class);
+        private final Allocator allocator;
+        private final PatternValueProgram inputs;
+        private final Reference value;
+        private final Streams[] inputColumns;
+        private final Mask selected;
+        private final PlanEvaluator evaluator;
+        private boolean evaluated;
+        private boolean closed;
+
+        private ExpressionValue(
+                Allocator allocator,
+                EvaluationPlan plan,
+                PrimitiveRegistry primitiveRegistry,
+                PatternValueProgram inputs,
+                Reference value,
+                ProjectionMaskCompiler projectionMaskCompiler,
+                EvaluationOperatorPolicy evaluationPolicy,
+                Object bufferPoolGroup)
+        {
+            this.allocator = requireNonNull(allocator, "allocator is null");
+            this.inputs = requireNonNull(inputs, "inputs is null");
+            this.value = requireNonNull(value, "value is null");
+            inputColumns = new Streams[inputs.size()];
+            selected = allocator.allocateRangeMask(allocationContext, 0, 1);
+            evaluator = new PlanEvaluator(
+                    requireNonNull(plan, "plan is null"),
+                    requireNonNull(primitiveRegistry, "primitiveRegistry is null"),
+                    this::resolveInput,
+                    allocator,
+                    requireNonNull(projectionMaskCompiler, "projectionMaskCompiler is null"),
+                    requireNonNull(evaluationPolicy, "evaluationPolicy is null"),
+                    requireNonNull(bufferPoolGroup, "bufferPoolGroup is null"),
+                    true);
+        }
+
+        @Override
+        public Streams append(
+                PatternEvaluationContext context,
+                Allocator outputAllocator,
+                Allocator.Context outputContext,
+                Streams output,
+                int outputPosition,
+                int outputSize)
+        {
+            if (closed) {
+                throw new IllegalStateException("pattern value is closed");
+            }
+            if (outputAllocator != allocator) {
+                throw new IllegalArgumentException("pattern value cannot change allocator");
+            }
+            if (evaluated) {
+                evaluator.resetForReuse();
+            }
+            inputs.append(context, allocator, allocationContext, inputColumns, 0, 1);
+            Streams result = evaluator.evaluate(value, selected);
+            Streams copied = allocator.copySinglePositionInto(
+                    requireNonNull(outputContext, "outputContext is null"),
+                    result,
+                    requireNonNull(output, "output is null"),
+                    0,
+                    outputPosition,
+                    outputSize);
+            evaluated = true;
+            return copied;
+        }
+
+        private Vector resolveInput(Reference reference, Mask mask)
+        {
+            return switch (reference.producer()) {
+                case Input(int input) -> inputColumns[input].getOrNull(reference.stream());
+                default -> throw new IllegalArgumentException("Unexpected pattern-value input: " + reference);
+            };
+        }
+
+        @Override
+        public void close()
+        {
+            if (closed) {
+                return;
+            }
+            closed = true;
+            RuntimeException failure = null;
+            try {
+                if (evaluated) {
+                    evaluator.resetForReuse();
+                }
+                evaluator.close();
+            }
+            catch (RuntimeException closeFailure) {
+                failure = closeFailure;
+            }
+            try {
+                inputs.close();
+            }
+            catch (RuntimeException closeFailure) {
+                failure = appendFailure(failure, closeFailure);
+            }
+            try {
+                allocator.release(allocationContext);
+            }
+            catch (RuntimeException closeFailure) {
+                failure = appendFailure(failure, closeFailure);
+            }
+            if (failure != null) {
+                throw failure;
+            }
+        }
+    }
+
+    private static RuntimeException appendFailure(RuntimeException failure, RuntimeException closeFailure)
+    {
+        if (failure == null) {
+            return closeFailure;
+        }
+        failure.addSuppressed(closeFailure);
+        return failure;
     }
 
     private static final class ExpressionDefinition

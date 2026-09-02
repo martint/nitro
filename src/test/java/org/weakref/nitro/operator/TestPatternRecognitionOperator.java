@@ -138,6 +138,16 @@ final class TestPatternRecognitionOperator
                     inputs,
                     predicate,
                     (errors, position) -> assertThat(org.weakref.nitro.data.VectorAccess.booleanValues(errors).value(position)).isFalse());
+            PatternValueProgram measureInputs = new PatternValueProgram(List.of(new PatternScalarValueEvaluator(
+                    new PatternValuePointer.Scalar(
+                            0,
+                            new PatternNavigation(new int[0], LAST, RUNNING, 0, 0)))));
+            var measure = EngineResources.from(allocator).operatorResources().patternEvaluation().value(
+                    allocator,
+                    new EvaluationPlan(List.of(), List.of(predicate)),
+                    new PrimitiveRegistry(),
+                    measureInputs,
+                    predicate);
 
             try (Operator operator = new PatternRecognitionOperator(
                     allocator,
@@ -151,13 +161,13 @@ final class TestPatternRecognitionOperator
                     List.of(definition),
                     PAST_LAST,
                     ONE,
-                    new PatternValueProgram(List.of(new PatternMatchNumberValueEvaluator())),
+                    new PatternValueProgram(List.of(measure)),
                     true,
                     8,
                     Schema.unspecified(2),
                     EngineResources.from(allocator).operatorResources())) {
                 assertThat(OperatorAssertions.OperatorAssert.toRows(operator))
-                        .containsExactly(row(1L, 1L), row(1L, 2L));
+                        .containsExactly(row(1L, 1L), row(1L, 1L));
             }
         }
     }
