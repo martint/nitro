@@ -32,7 +32,6 @@ import org.weakref.nitro.function.scalar.builtin.CoalesceI64;
 import org.weakref.nitro.function.scalar.builtin.CoalesceI64Policy;
 import org.weakref.nitro.function.scalar.builtin.ConcatUtf8;
 import org.weakref.nitro.function.scalar.builtin.ContainsUtf8;
-import org.weakref.nitro.function.scalar.builtin.DivideF64;
 import org.weakref.nitro.function.scalar.builtin.DivideI64;
 import org.weakref.nitro.function.scalar.builtin.DivideI64ToF64;
 import org.weakref.nitro.function.scalar.builtin.DivideRoundI64;
@@ -111,7 +110,6 @@ public final class TestPrimitiveFunctions
                 CoalesceI64.class,
                 ConcatUtf8.class,
                 ContainsUtf8.class,
-                DivideF64.class,
                 ElementAtI64Utf8.class,
                 ElementAtUtf8Utf8.class,
                 EqualF64.class,
