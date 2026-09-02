@@ -34,12 +34,12 @@ import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
-@ScalarFunction(name = "modulo")
-public final class ModuloI64
+@ScalarFunction(name = "bigint_modulus")
+public final class BigintModulus
         implements PrimitiveFunction
 {
-    private final Allocator.Context allocationContext = new Allocator.Context("ModuloI64");
-    private final Allocator.Context errorsContext = new Allocator.Context("ModuloI64.errors");
+    private final Allocator.Context allocationContext = new Allocator.Context("BigintModulus");
+    private final Allocator.Context errorsContext = new Allocator.Context("BigintModulus.errors");
 
     @Override
     public Set<Allocator.Context> allocationContexts()
@@ -56,7 +56,7 @@ public final class ModuloI64
     @Override
     public Streams apply(List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
     {
-        checkArgument(inputs.size() == 2, "Unexpected argument count for modulo");
+        checkArgument(inputs.size() == 2, "Unexpected argument count for bigint_modulus");
 
         Vector left = inputs.get(0).values();
         Vector right = inputs.get(1).values();
@@ -70,16 +70,16 @@ public final class ModuloI64
                 int resultLength = RleVector.computeTargetRleLength(leftRle, rightRle);
                 I64Vector values = context.allocator().allocate(allocationContext, I64Vector.class, resultLength, I64Vector::new);
                 BooleanVector errors = context.allocator().allocate(errorsContext, BooleanVector.class, resultLength, BooleanVector::new);
-                I64BinaryDispatch.RleWithErrors result = I64BinaryDispatch.rleRleLongWithErrors(leftRle, rightRle, values, errors, ModuloI64::apply);
+                I64BinaryDispatch.RleWithErrors result = I64BinaryDispatch.rleRleLongWithErrors(leftRle, rightRle, values, errors, BigintModulus::apply);
                 return Streams.ofValues(result.values()).with(Stream.ERRORS, result.errors());
             }
             if (requestErrors) {
                 BooleanVector errors = context.allocator().allocate(errorsContext, BooleanVector.class, RleVector.computeTargetRleLength(leftRle, rightRle), BooleanVector::new);
-                return Streams.of(Stream.ERRORS, I64BinaryDispatch.rleRleErrorsOnly(leftRle, rightRle, errors, ModuloI64::apply));
+                return Streams.of(Stream.ERRORS, I64BinaryDispatch.rleRleErrorsOnly(leftRle, rightRle, errors, BigintModulus::apply));
             }
             if (requestValues) {
                 I64Vector values = context.allocator().allocate(allocationContext, I64Vector.class, RleVector.computeTargetRleLength(leftRle, rightRle), I64Vector::new);
-                return Streams.ofValues(I64BinaryDispatch.rleRleLong(leftRle, rightRle, values, ModuloI64::result));
+                return Streams.ofValues(I64BinaryDispatch.rleRleLong(leftRle, rightRle, values, BigintModulus::result));
             }
             return Streams.empty();
         }
@@ -99,7 +99,7 @@ public final class ModuloI64
                     existingErrors,
                     length);
             if (!tryApplyFlatConstant(left, right, mask, result.values(), errors.values())) {
-                I64BinaryDispatch.applyLongWithErrors(left, right, mask, result, errors, ModuloI64::apply);
+                I64BinaryDispatch.applyLongWithErrors(left, right, mask, result, errors, BigintModulus::apply);
             }
             resultStreams = Streams.ofValues(result).with(Stream.ERRORS, errors);
         }
@@ -110,7 +110,7 @@ public final class ModuloI64
                     existingErrors,
                     length);
             if (!tryApplyFlatConstant(left, right, mask, null, errors.values())) {
-                I64BinaryDispatch.applyErrorsOnly(left, right, mask, errors, ModuloI64::apply);
+                I64BinaryDispatch.applyErrorsOnly(left, right, mask, errors, BigintModulus::apply);
             }
             resultStreams = Streams.of(Stream.ERRORS, errors);
         }
@@ -122,7 +122,7 @@ public final class ModuloI64
                     length,
                     I64Vector::new);
             if (!tryApplyFlatConstant(left, right, mask, result.values(), null)) {
-                I64BinaryDispatch.applyLong(left, right, mask, result, ModuloI64::result);
+                I64BinaryDispatch.applyLong(left, right, mask, result, BigintModulus::result);
             }
             resultStreams = Streams.ofValues(result);
         }

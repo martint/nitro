@@ -7354,7 +7354,7 @@ final class TpcdsParquetSupport
                 allocator,
                 new EvaluationPlan(List.of(
                         new Assignment(divisor, new Literal(5_000L), AllMask.ALL),
-                        new Assignment(segment, new Call("divide", List.of(
+                        new Assignment(segment, new Call("bigint_divide", List.of(
                                 new Reference(new Input(1), Stream.VALUES),
                                 new Reference(divisor, Stream.VALUES))), AllMask.ALL)),
                 List.of(new Reference(segment, Stream.VALUES))),

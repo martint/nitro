@@ -2232,7 +2232,7 @@ public class TestPlanEvaluator
     {
         PrimitiveRegistry primitiveRegistry = primitiveRegistry();
 
-        Streams divide = primitiveRegistry.get("divide").apply(
+        Streams divide = primitiveRegistry.get("bigint_divide").apply(
                 List.of(
                         Streams.ofValues(new I64Vector(new long[] {20, 21, 22})),
                         Streams.ofValues(new I64Vector(new long[] {5, 0, 2}))),
@@ -2244,7 +2244,7 @@ public class TestPlanEvaluator
         assertThat(((I64Vector) divide.values()).values()).containsExactly(4L, 0L, 11L);
         assertThat(((BooleanVector) divide.get(Stream.ERRORS)).values()).containsExactly(false, true, false);
 
-        Streams modulo = primitiveRegistry.get("modulo").apply(
+        Streams modulo = primitiveRegistry.get("bigint_modulus").apply(
                 List.of(
                         Streams.ofValues(new RleVector(new int[] {2, 1}, new I64Vector(new long[] {20, 22}))),
                         Streams.ofValues(new I64Vector(new long[] {6, 0, 5}))),
@@ -2262,7 +2262,7 @@ public class TestPlanEvaluator
     {
         PrimitiveRegistry primitiveRegistry = primitiveRegistry();
 
-        Streams divide = primitiveRegistry.get("divide").apply(
+        Streams divide = primitiveRegistry.get("bigint_divide").apply(
                 List.of(
                         Streams.ofValues(new I64Vector(new long[] {20, 21, 22})),
                         Streams.ofValues(new I64Vector(new long[] {5, 0, 2}))),
@@ -2282,7 +2282,7 @@ public class TestPlanEvaluator
         PrimitiveExecutionContext context = new PrimitiveExecutionContext(new Allocator(EngineResources.createDefault()));
         Streams divisor = Streams.ofValues(new RleVector(new int[] {4}, new I64Vector(new long[] {3})));
 
-        Streams modulo = primitiveRegistry.get("modulo").apply(
+        Streams modulo = primitiveRegistry.get("bigint_modulus").apply(
                 List.of(
                         Streams.ofValues(new I64Vector(new long[] {10, 11, 12, 13})),
                         divisor),
@@ -2294,7 +2294,7 @@ public class TestPlanEvaluator
         assertThat(((I64Vector) modulo.values()).values()).containsExactly(1L, 2L, 0L, 1L);
         assertThat(((BooleanVector) modulo.get(Stream.ERRORS)).values()).containsExactly(false, false, false, false);
 
-        Streams zeroDivisor = primitiveRegistry.get("modulo").apply(
+        Streams zeroDivisor = primitiveRegistry.get("bigint_modulus").apply(
                 List.of(
                         Streams.ofValues(new I64Vector(new long[] {10, 11, 12, 13})),
                         Streams.ofValues(new RleVector(new int[] {4}, new I64Vector(new long[] {0})))),
@@ -2596,7 +2596,7 @@ public class TestPlanEvaluator
         EvaluationPlan plan = new EvaluationPlan(
                 List.of(new Assignment(
                         quotient,
-                        new Call("divide", List.of(
+                        new Call("bigint_divide", List.of(
                                 new Reference(new Input(0), Stream.VALUES),
                                 new Reference(new Input(1), Stream.VALUES))),
                         AllMask.ALL)),

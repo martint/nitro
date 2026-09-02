@@ -2072,7 +2072,7 @@ public class TestOperators
         Reference resultReference = new Reference(result, Stream.VALUES);
         EvaluationPlan plan = new EvaluationPlan(
                 List.of(
-                        new Assignment(quotient, new Call("divide", List.of(
+                        new Assignment(quotient, new Call("bigint_divide", List.of(
                                 new Reference(new Input(0), Stream.VALUES),
                                 new Reference(new Input(1), Stream.VALUES))), AllMask.ALL),
                         new Assignment(one, new Literal(1L), AllMask.ALL),
@@ -4646,7 +4646,7 @@ public class TestOperators
         EvaluationPlan evaluationPlan = new EvaluationPlan(
                 List.of(new Assignment(
                         quotient,
-                        new Call("divide", List.of(
+                        new Call("bigint_divide", List.of(
                                 new Reference(new Input(0), Stream.VALUES),
                                 new Reference(new Input(1), Stream.VALUES))),
                         AllMask.ALL)),
@@ -5118,7 +5118,7 @@ public class TestOperators
                         new Assignment(divisor, new Literal(7L), AllMask.ALL),
                         new Assignment(
                                 remainder,
-                                new Call("modulo", List.of(
+                                new Call("bigint_modulus", List.of(
                                         new Reference(new Input(0), Stream.VALUES),
                                         new Reference(divisor, Stream.VALUES))),
                                 AllMask.ALL)),
@@ -5151,7 +5151,7 @@ public class TestOperators
                         new Assignment(divisor, new Literal(7L), AllMask.ALL),
                         new Assignment(
                                 remainder,
-                                new Call("modulo", List.of(
+                                new Call("bigint_modulus", List.of(
                                         new Reference(new Input(0), Stream.VALUES),
                                         new Reference(divisor, Stream.VALUES))),
                                 AllMask.ALL)),
@@ -5462,7 +5462,7 @@ public class TestOperators
         EvaluationPlan evaluationPlan = plan(
                 List.of(
                         literal(three, 3),
-                        call(quotient, "divide", values(new Input(0)), values(three))),
+                        call(quotient, "bigint_divide", values(new Input(0)), values(three))),
                 values(quotient));
 
         assertThat(operator(
@@ -6355,7 +6355,7 @@ public class TestOperators
                 List.of(
                         literal(ten, 10),
                         literal(thirteen, 13),
-                        call(modulo, "modulo", values(new Input(0)), values(ten)),
+                        call(modulo, "bigint_modulus", values(new Input(0)), values(ten)),
                         call(groupingKey, "add", values(modulo), values(thirteen))),
                 values(groupingKey),
                 values(new Input(0)));
@@ -8726,7 +8726,7 @@ public class TestOperators
         EvaluationPlan evaluationPlan = plan(
                 List.of(
                         literal(divisorLiteral, divisor),
-                        call(remainder, "modulo", values(new Input(inputColumn)), values(divisorLiteral)),
+                        call(remainder, "bigint_modulus", values(new Input(inputColumn)), values(divisorLiteral)),
                         literal(one, 1),
                         call(predicate, "lt", values(remainder), values(one))),
                 values(predicate));

@@ -32,12 +32,12 @@ import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
-@ScalarFunction(name = "divide")
-public final class DivideI64
+@ScalarFunction(name = "bigint_divide")
+public final class BigintDivide
         implements PrimitiveFunction
 {
-    private final Allocator.Context allocationContext = new Allocator.Context("DivideI64");
-    private final Allocator.Context errorsContext = new Allocator.Context("DivideI64.errors");
+    private final Allocator.Context allocationContext = new Allocator.Context("BigintDivide");
+    private final Allocator.Context errorsContext = new Allocator.Context("BigintDivide.errors");
 
     @Override
     public Set<Allocator.Context> allocationContexts()
@@ -48,7 +48,7 @@ public final class DivideI64
     @Override
     public Streams apply(List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
     {
-        checkArgument(inputs.size() == 2, "Unexpected argument count for divide");
+        checkArgument(inputs.size() == 2, "Unexpected argument count for bigint_divide");
 
         Vector left = inputs.get(0).values();
         Vector right = inputs.get(1).values();
@@ -62,16 +62,16 @@ public final class DivideI64
                 int resultLength = RleVector.computeTargetRleLength(leftRle, rightRle);
                 I64Vector values = context.allocator().allocate(allocationContext, I64Vector.class, resultLength, I64Vector::new);
                 BooleanVector errors = context.allocator().allocate(errorsContext, BooleanVector.class, resultLength, BooleanVector::new);
-                I64BinaryDispatch.RleWithErrors result = I64BinaryDispatch.rleRleLongWithErrors(leftRle, rightRle, values, errors, DivideI64::apply);
+                I64BinaryDispatch.RleWithErrors result = I64BinaryDispatch.rleRleLongWithErrors(leftRle, rightRle, values, errors, BigintDivide::apply);
                 return Streams.ofValues(result.values()).with(Stream.ERRORS, result.errors());
             }
             if (requestErrors) {
                 BooleanVector errors = context.allocator().allocate(errorsContext, BooleanVector.class, RleVector.computeTargetRleLength(leftRle, rightRle), BooleanVector::new);
-                return Streams.of(Stream.ERRORS, I64BinaryDispatch.rleRleErrorsOnly(leftRle, rightRle, errors, DivideI64::apply));
+                return Streams.of(Stream.ERRORS, I64BinaryDispatch.rleRleErrorsOnly(leftRle, rightRle, errors, BigintDivide::apply));
             }
             if (requestValues) {
                 I64Vector values = context.allocator().allocate(allocationContext, I64Vector.class, RleVector.computeTargetRleLength(leftRle, rightRle), I64Vector::new);
-                return Streams.ofValues(I64BinaryDispatch.rleRleLong(leftRle, rightRle, values, DivideI64::result));
+                return Streams.ofValues(I64BinaryDispatch.rleRleLong(leftRle, rightRle, values, BigintDivide::result));
             }
             return Streams.empty();
         }
@@ -90,7 +90,7 @@ public final class DivideI64
                     errorsContext,
                     existingErrors,
                     length);
-            I64BinaryDispatch.applyLongWithErrors(left, right, mask, result, errors, DivideI64::apply);
+            I64BinaryDispatch.applyLongWithErrors(left, right, mask, result, errors, BigintDivide::apply);
             resultStreams = Streams.ofValues(result).with(Stream.ERRORS, errors);
         }
         else if (requestErrors) {
@@ -99,7 +99,7 @@ public final class DivideI64
                     errorsContext,
                     existingErrors,
                     length);
-            I64BinaryDispatch.applyErrorsOnly(left, right, mask, errors, DivideI64::apply);
+            I64BinaryDispatch.applyErrorsOnly(left, right, mask, errors, BigintDivide::apply);
             resultStreams = Streams.of(Stream.ERRORS, errors);
         }
         else if (requestValues) {
@@ -109,7 +109,7 @@ public final class DivideI64
                     I64Vector.class,
                     length,
                     I64Vector::new);
-            I64BinaryDispatch.applyLong(left, right, mask, result, DivideI64::result);
+            I64BinaryDispatch.applyLong(left, right, mask, result, BigintDivide::result);
             resultStreams = Streams.ofValues(result);
         }
         return resultStreams;

@@ -28,6 +28,8 @@ import org.weakref.nitro.function.scalar.builtin.AddI64;
 import org.weakref.nitro.function.scalar.builtin.AndBoolean;
 import org.weakref.nitro.function.scalar.builtin.ArrayElementI64;
 import org.weakref.nitro.function.scalar.builtin.BigintAddExact;
+import org.weakref.nitro.function.scalar.builtin.BigintDivide;
+import org.weakref.nitro.function.scalar.builtin.BigintModulus;
 import org.weakref.nitro.function.scalar.builtin.BigintRatio;
 import org.weakref.nitro.function.scalar.builtin.BigintSubtractExact;
 import org.weakref.nitro.function.scalar.builtin.BigintToIntegerExact;
@@ -36,7 +38,6 @@ import org.weakref.nitro.function.scalar.builtin.CoalesceI64;
 import org.weakref.nitro.function.scalar.builtin.CoalesceI64Policy;
 import org.weakref.nitro.function.scalar.builtin.ConcatUtf8;
 import org.weakref.nitro.function.scalar.builtin.ContainsUtf8;
-import org.weakref.nitro.function.scalar.builtin.DivideI64;
 import org.weakref.nitro.function.scalar.builtin.ElementAtI64Utf8;
 import org.weakref.nitro.function.scalar.builtin.EqualF64;
 import org.weakref.nitro.function.scalar.builtin.EqualI64;
@@ -62,7 +63,6 @@ import org.weakref.nitro.function.scalar.builtin.MapContainsKeyUtf8;
 import org.weakref.nitro.function.scalar.builtin.MapKeys;
 import org.weakref.nitro.function.scalar.builtin.MapValues;
 import org.weakref.nitro.function.scalar.builtin.MaterializeLongCarrier;
-import org.weakref.nitro.function.scalar.builtin.ModuloI64;
 import org.weakref.nitro.function.scalar.builtin.MultiplyF64Optimization;
 import org.weakref.nitro.function.scalar.builtin.MultiplyI64Optimization;
 import org.weakref.nitro.function.scalar.builtin.NotBooleanOptimization;
@@ -133,11 +133,11 @@ public final class TestPrimitiveFunctions
                 NullI64.class,
                 BigintAddExact.class,
                 BigintSubtractExact.class,
-                DivideI64.class,
+                BigintDivide.class,
                 BigintRatio.class,
                 RoundedBigintRatio.class,
                 ScaledRoundedBigintRatio.class,
-                ModuloI64.class,
+                BigintModulus.class,
                 AndBoolean.class,
                 OrBoolean.class,
                 RegexpReplaceUtf8.class,

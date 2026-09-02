@@ -1227,10 +1227,10 @@ public final class ClickBenchHitsSupport
         EvaluationPlan plan = new EvaluationPlan(
                 List.of(
                         new Assignment(sixty, new Literal(60L), AllMask.ALL),
-                        new Assignment(totalMinutes, new Call("divide", List.of(
+                        new Assignment(totalMinutes, new Call("bigint_divide", List.of(
                                 new Reference(new Input(1), Stream.VALUES),
                                 new Reference(sixty, Stream.VALUES))), AllMask.ALL),
-                        new Assignment(minute, new Call("modulo", List.of(
+                        new Assignment(minute, new Call("bigint_modulus", List.of(
                                 new Reference(totalMinutes, Stream.VALUES),
                                 new Reference(sixty, Stream.VALUES))), AllMask.ALL)),
                 List.of(
@@ -1248,7 +1248,7 @@ public final class ClickBenchHitsSupport
         EvaluationPlan plan = new EvaluationPlan(
                 List.of(
                         new Assignment(sixty, new Literal(60L), AllMask.ALL),
-                        new Assignment(totalMinutes, new Call("divide", List.of(
+                        new Assignment(totalMinutes, new Call("bigint_divide", List.of(
                                 new Reference(new Input(eventTimeInputIndex), Stream.VALUES),
                                 new Reference(sixty, Stream.VALUES))), AllMask.ALL),
                         new Assignment(minuteStart, new Call("multiply", List.of(
