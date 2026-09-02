@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.operator.source.compatibility;
 
+import org.weakref.nitro.core.batch.SourceBatch;
 import org.weakref.nitro.core.source.BatchSource;
 import org.weakref.nitro.core.source.OrdinalSourceColumnHandle;
 import org.weakref.nitro.core.source.RuntimeFilter;
@@ -22,6 +23,7 @@ import org.weakref.nitro.core.source.SourceColumnHandle;
 import org.weakref.nitro.core.source.SourcePoll;
 import org.weakref.nitro.core.source.SourceProtocol;
 import org.weakref.nitro.core.type.Schema;
+import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.Operator;
 
 import java.util.EnumSet;
@@ -71,6 +73,16 @@ public final class OperatorBatchSource
         this.capabilities = Set.copyOf(capabilities);
         capabilities.add(SourceCapability.CONSTRAINED_REBORROW);
         this.constrainedReborrowCapabilities = Set.copyOf(capabilities);
+    }
+
+    /// Exposes one already-owned native batch through the format-neutral source-batch contract.
+    public static SourceBatch batch(Schema schema, Batch batch)
+    {
+        return new NativeSourceBatch(
+                requireNonNull(schema, "schema is null"),
+                true,
+                true,
+                requireNonNull(batch, "batch is null"));
     }
 
     @Override

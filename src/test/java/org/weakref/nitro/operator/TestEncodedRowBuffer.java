@@ -20,6 +20,7 @@ import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.execution.EngineResources;
 
@@ -138,6 +139,34 @@ final class TestEncodedRowBuffer
             assertThat(rows.size()).isEqualTo(2);
             assertThat(rows.longValue(0, 0)).isEqualTo(11);
             assertThat(rows.longValue(0, 1)).isEqualTo(22);
+        }
+    }
+
+    @Test
+    void testCopiesLogicalRangeAcrossSourcePages()
+    {
+        TableOperator source = TableOperator.retained(
+                Schema.unspecified(1),
+                List.of(
+                        TableOperator.Page.values(
+                                3,
+                                new I64Vector[] {new I64Vector(new long[] {10, 20, 30})},
+                                Mask.sparse(new int[] {0, 2}, 3)),
+                        TableOperator.Page.values(
+                                3,
+                                new I64Vector[] {new I64Vector(new long[] {40, 50, 60})},
+                                Mask.all(3))));
+
+        try (Allocator allocator = new Allocator(EngineResources.createDefault());
+                EncodedRowBuffer rows = new EncodedRowBuffer(allocator, new Allocator.Context("test"), 1)) {
+            rows.load(source);
+
+            try (Batch copy = rows.copyRange(1, 3, new int[] {0})) {
+                assertThat(((I64Vector) copy.output(0).borrow(Stream.VALUES)).values())
+                        .containsExactly(30, 40, 50);
+            }
+            assertThat(rows.longValue(0, 1)).isEqualTo(30);
+            assertThat(rows.longValue(0, 3)).isEqualTo(50);
         }
     }
 

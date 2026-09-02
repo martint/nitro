@@ -45,6 +45,7 @@ public final class OperatorResources
     private final GenericJoinIndexFactory genericJoinIndexes;
     private final GroupingStateResources grouping;
     private final SortOperatorPolicy sortPolicy;
+    private final TableFunctionOperatorPolicy tableFunctionPolicy;
     private final TopNOperatorPolicy topNOperatorPolicy;
     private final TopNRankingOperatorPolicy topNRankingPolicy;
     private final UnnestOperatorPolicy unnestPolicy;
@@ -69,6 +70,7 @@ public final class OperatorResources
             HashJoinOperatorResources hashJoin,
             GroupingStateResources grouping,
             SortOperatorPolicy sortPolicy,
+            TableFunctionOperatorPolicy tableFunctionPolicy,
             TopNOperatorPolicy topNOperatorPolicy,
             TopNRankingOperatorPolicy topNRankingPolicy,
             UnnestOperatorPolicy unnestPolicy,
@@ -106,6 +108,7 @@ public final class OperatorResources
                 hashJoin.executionPolicy());
         this.grouping = requireNonNull(grouping, "grouping is null");
         this.sortPolicy = requireNonNull(sortPolicy, "sortPolicy is null");
+        this.tableFunctionPolicy = requireNonNull(tableFunctionPolicy, "tableFunctionPolicy is null");
         this.topNOperatorPolicy = requireNonNull(topNOperatorPolicy, "topNOperatorPolicy is null");
         this.topNRankingPolicy = requireNonNull(topNRankingPolicy, "topNRankingPolicy is null");
         this.unnestPolicy = requireNonNull(unnestPolicy, "unnestPolicy is null");
@@ -153,6 +156,7 @@ public final class OperatorResources
                         HashJoinExecutionPolicy.fromSystemProperties()),
                 createDefaultGroupingResources(),
                 SortOperatorPolicy.fromSystemProperties(),
+                TableFunctionOperatorPolicy.fromSystemProperties(),
                 TopNOperatorPolicy.fromSystemProperties(),
                 TopNRankingOperatorPolicy.fromSystemProperties(),
                 UnnestOperatorPolicy.fromSystemProperties(),
@@ -281,6 +285,12 @@ public final class OperatorResources
     {
         checkOpen();
         return sortPolicy;
+    }
+
+    public TableFunctionOperatorPolicy tableFunctionPolicy()
+    {
+        checkOpen();
+        return tableFunctionPolicy;
     }
 
     public TopNOperatorPolicy topNOperatorPolicy()

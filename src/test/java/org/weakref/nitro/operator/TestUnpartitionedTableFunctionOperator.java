@@ -25,17 +25,30 @@ import org.weakref.nitro.core.function.table.TableFunctionArgument;
 import org.weakref.nitro.core.function.table.TableFunctionInput;
 import org.weakref.nitro.core.function.table.TableFunctionOutputBatch;
 import org.weakref.nitro.core.function.table.TableFunctionOutputDemand;
+import org.weakref.nitro.core.function.table.TableFunctionPassThroughColumn;
 import org.weakref.nitro.core.function.table.TableFunctionProcessor;
 import org.weakref.nitro.core.function.table.TableFunctionProgress;
+import org.weakref.nitro.core.type.Field;
 import org.weakref.nitro.core.type.Schema;
+import org.weakref.nitro.core.type.TypeBinding;
+import org.weakref.nitro.core.type.TypeIdentity;
+import org.weakref.nitro.core.type.TypeOperators;
+import org.weakref.nitro.core.type.TypeVectorFactory;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.MaskSelection;
+import org.weakref.nitro.data.Stream;
+import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.data.VectorBatchScope;
+import org.weakref.nitro.data.VectorColumnGeneration;
+import org.weakref.nitro.data.VectorSourceBatch;
 import org.weakref.nitro.execution.EngineResources;
 import org.weakref.nitro.operator.source.SourceBatchOperatorIngress;
 
 import java.util.ArrayDeque;
 import java.util.List;
+import java.util.Optional;
 import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
@@ -49,6 +62,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 final class TestUnpartitionedTableFunctionOperator
 {
     private static final Schema EMPTY_SCHEMA = new Schema(List.of());
+    private static final TypeBinding BIGINT = bigintType();
+    private static final Schema BIGINT_SCHEMA = new Schema(List.of(new Field("value", BIGINT, true)));
 
     @Test
     void testConsumesSuccessiveNativeInputBatchesWithoutCopying()
@@ -164,6 +179,124 @@ final class TestUnpartitionedTableFunctionOperator
         assertThat(calls).hasValue(3);
         assertThat(source.pulls()).isEqualTo(2);
         assertThat(source.closedBatches()).isEqualTo(2);
+    }
+
+    @Test
+    void testGathersPassThroughRowsFromBufferedInput()
+    {
+        TableOperator source = TableOperator.retained(
+                BIGINT_SCHEMA,
+                List.of(
+                        TableOperator.Page.values(2, new I64Vector[] {new I64Vector(new long[] {10, 20})}, Mask.all(2)),
+                        TableOperator.Page.values(1, new I64Vector[] {new I64Vector(new long[] {30})}, Mask.all(1))));
+        AtomicInteger nextReference = new AtomicInteger(1);
+        TableFunctionProcessor processor = new TableFunctionProcessor()
+        {
+            @Override
+            public TableFunctionProgress process(
+                    TableFunctionInput input,
+                    TableFunctionOutputDemand outputDemand,
+                    Allocator allocator,
+                    Allocator.Context allocationContext,
+                    ExecutionContext executionContext)
+            {
+                assertThat(outputDemand.passThroughArguments()).containsExactly(0);
+                if (input.arguments().getFirst() instanceof TableFunctionArgument.Finished) {
+                    return TableFunctionProgress.Finished.FINISHED;
+                }
+                return new TableFunctionProgress.Produced(
+                        referenceOutput(allocator, nextReference.getAndIncrement()),
+                        Set.of(0));
+            }
+
+            @Override
+            public void close() {}
+        };
+
+        try (Allocator allocator = new Allocator(EngineResources.createDefault());
+                UnpartitionedTableFunctionOperator operator = new UnpartitionedTableFunctionOperator(
+                        BIGINT_SCHEMA,
+                        0,
+                        List.of(new TableFunctionPassThroughColumn(0, 0)),
+                        processor,
+                        source,
+                        EMPTY_SCHEMA,
+                        new int[0],
+                        allocator,
+                        new TestingIngress(),
+                        new TestingExecutionContext(),
+                        2)) {
+            assertThat(operator.hasNext()).isTrue();
+            try (Batch first = operator.next()) {
+                assertThat(((I64Vector) first.output(0).borrow(Stream.VALUES)).values()).containsExactly(20);
+            }
+            assertThat(operator.hasNext()).isTrue();
+            try (Batch second = operator.next()) {
+                assertThat(((I64Vector) second.output(0).borrow(Stream.VALUES)).values()).containsExactly(30);
+            }
+            assertThat(operator.hasNext()).isFalse();
+        }
+    }
+
+    private static TableFunctionOutputBatch referenceOutput(Allocator allocator, long reference)
+    {
+        VectorBatchScope buffers = new VectorBatchScope(allocator, "reference-output");
+        I64Vector references = allocator.allocate(buffers.context(), I64Vector.class, 1, I64Vector::new);
+        references.values()[0] = reference;
+        Mask mask = allocator.allocateRangeMask(buffers.context(), 0, 1);
+        SourceBatch delegate = new VectorSourceBatch(
+                BIGINT_SCHEMA,
+                mask,
+                new VectorColumnGeneration[] {
+                        new VectorColumnGeneration(Set.of(Stream.VALUES), _ -> references, buffers),
+                },
+                buffers,
+                _ -> {},
+                () -> {});
+        return new ReferenceOutputBatch(delegate);
+    }
+
+    private static TypeBinding bigintType()
+    {
+        return new TypeBinding()
+        {
+            @Override
+            public TypeIdentity identity()
+            {
+                return new TypeIdentity("testing:bigint");
+            }
+
+            @Override
+            public Class<?> carrierType()
+            {
+                return long.class;
+            }
+
+            @Override
+            public TypeOperators operators()
+            {
+                return TypeOperators.UNSPECIFIED;
+            }
+
+            @Override
+            public Optional<TypeVectorFactory> vectorFactory()
+            {
+                return Optional.of(new TypeVectorFactory()
+                {
+                    @Override
+                    public Vector constant(org.weakref.nitro.data.VectorAllocator allocator, Object value, int length)
+                    {
+                        throw new UnsupportedOperationException();
+                    }
+
+                    @Override
+                    public Vector nullValues(org.weakref.nitro.data.VectorAllocator allocator, int length)
+                    {
+                        return allocator.allocate(I64Vector.class, length, I64Vector::new);
+                    }
+                });
+            }
+        };
     }
 
     private static final class TestingProcessor
@@ -317,6 +450,52 @@ final class TestUnpartitionedTableFunctionOperator
 
         @Override
         public void close() {}
+    }
+
+    private record ReferenceOutputBatch(SourceBatch delegate)
+            implements TableFunctionOutputBatch
+    {
+        @Override
+        public int properOutputCount()
+        {
+            return 0;
+        }
+
+        @Override
+        public List<PassThroughReference> passThroughReferences()
+        {
+            return List.of(new PassThroughReference(0));
+        }
+
+        @Override
+        public Schema schema()
+        {
+            return delegate.schema();
+        }
+
+        @Override
+        public Selection selection()
+        {
+            return delegate.selection();
+        }
+
+        @Override
+        public ColumnView column(int index)
+        {
+            return delegate.column(index);
+        }
+
+        @Override
+        public void select(Selection selection)
+        {
+            delegate.select(selection);
+        }
+
+        @Override
+        public void close()
+        {
+            delegate.close();
+        }
     }
 
     private static final class TestingIngress

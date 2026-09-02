@@ -35,6 +35,7 @@ import org.weakref.nitro.operator.OperatorResources;
 import org.weakref.nitro.operator.ProjectOperatorResources;
 import org.weakref.nitro.operator.SemiJoinOperatorPolicy;
 import org.weakref.nitro.operator.SortOperatorPolicy;
+import org.weakref.nitro.operator.TableFunctionOperatorPolicy;
 import org.weakref.nitro.operator.TopNOperatorPolicy;
 import org.weakref.nitro.operator.TopNRankingOperatorPolicy;
 import org.weakref.nitro.operator.UnnestOperatorPolicy;
@@ -85,6 +86,7 @@ public final class EngineResources
                         hashJoinOperator,
                         groupingState,
                         SortOperatorPolicy.fromSystemProperties(),
+                        TableFunctionOperatorPolicy.fromSystemProperties(),
                         TopNOperatorPolicy.fromSystemProperties(),
                         TopNRankingOperatorPolicy.fromSystemProperties(),
                         UnnestOperatorPolicy.fromSystemProperties(),
@@ -119,6 +121,7 @@ public final class EngineResources
                         hashJoinOperator,
                         groupingState,
                         SortOperatorPolicy.fromSystemProperties(),
+                        TableFunctionOperatorPolicy.fromSystemProperties(),
                         TopNOperatorPolicy.fromSystemProperties(),
                         TopNRankingOperatorPolicy.fromSystemProperties(),
                         UnnestOperatorPolicy.fromSystemProperties(),

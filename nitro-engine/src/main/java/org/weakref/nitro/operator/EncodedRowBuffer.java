@@ -188,6 +188,57 @@ final class EncodedRowBuffer
         return pageIndex(leftPosition) == pageIndex(rightPosition);
     }
 
+    Batch copyRange(int start, int length, int[] channels)
+    {
+        checkOpen();
+        requireNonNull(channels, "channels is null");
+        if (start < 0 || length <= 0 || (long) start + length > size) {
+            throw new IndexOutOfBoundsException("range is outside row buffer");
+        }
+        for (int channel : channels) {
+            if (channel < 0 || channel >= columnCount) {
+                throw new IndexOutOfBoundsException("channel is outside row buffer");
+            }
+        }
+
+        Allocator.Context context = new Allocator.Context("EncodedRowBuffer.copyRange");
+        try {
+            Output[] outputs = new Output[channels.length];
+            for (int output = 0; output < channels.length; output++) {
+                Streams copied = Streams.empty();
+                int channel = channels[output];
+                for (int index = 0; index < length; index++) {
+                    int position = start + index;
+                    copied = allocator.copySinglePositionInto(
+                            context,
+                            column(channel, position),
+                            copied,
+                            sourcePosition(position),
+                            index,
+                            length);
+                }
+                Streams result = copied;
+                outputs[output] = new Output(
+                        result.streams(),
+                        result::get,
+                        (stream, vector) -> allocator.transfer(context, vector),
+                        (stream, vector) -> allocator.release(context, vector));
+            }
+            Mask mask = allocator.allocateRangeMask(context, 0, length);
+            return new Batch(
+                    mask,
+                    _ -> {},
+                    batchMask -> allocator.transfer(context, batchMask),
+                    batchMask -> allocator.release(context, batchMask),
+                    () -> {},
+                    outputs);
+        }
+        catch (RuntimeException | Error failure) {
+            allocator.release(context);
+            throw failure;
+        }
+    }
+
     private Page page(int position)
     {
         return pages.get(pageIndex(position));

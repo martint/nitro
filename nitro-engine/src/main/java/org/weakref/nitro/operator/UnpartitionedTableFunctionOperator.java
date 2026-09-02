@@ -21,6 +21,7 @@ import org.weakref.nitro.core.function.table.TableFunctionArgument;
 import org.weakref.nitro.core.function.table.TableFunctionInput;
 import org.weakref.nitro.core.function.table.TableFunctionOutputBatch;
 import org.weakref.nitro.core.function.table.TableFunctionOutputDemand;
+import org.weakref.nitro.core.function.table.TableFunctionPassThroughColumn;
 import org.weakref.nitro.core.function.table.TableFunctionProcessor;
 import org.weakref.nitro.core.function.table.TableFunctionProgress;
 import org.weakref.nitro.core.source.BatchSource;
@@ -34,34 +35,45 @@ import org.weakref.nitro.operator.source.compatibility.OperatorBatchSource;
 import java.util.List;
 import java.util.Set;
 
+import static java.lang.Math.min;
 import static java.util.Objects.checkIndex;
 import static java.util.Objects.requireNonNull;
 
-/// Pull operator for a single, unpartitioned table argument without pass-through output.
+/// Pull operator for a single, unpartitioned table argument.
 ///
-/// Partitioned or ordered input, multiple arguments, marker rows, and pass-through gathering are rejected by this
-/// execution shape. Input and output remain format-neutral source batches, while the adjacent operator is exposed
-/// through a zero-copy native batch-source facade.
+/// Proper-output-only execution streams through a zero-copy native batch-source facade. Pass-through execution
+/// retains the unpartitioned input so partition-relative row references can be gathered lazily and safely after the
+/// processor consumes its argument batches. Partitioned or ordered input, multiple arguments, and marker rows remain
+/// outside this execution shape.
 public final class UnpartitionedTableFunctionOperator
         implements Operator
 {
     private static final Set<Integer> ARGUMENT = Set.of(0);
 
     private final Schema outputSchema;
+    private final int properOutputCount;
+    private final List<TableFunctionPassThroughColumn> passThroughColumns;
     private final Schema inputSchema;
     private final int[] inputChannels;
     private final TableFunctionProcessor processor;
     private final TableFunctionOutputDemand outputDemand;
     private final Allocator allocator;
     private final Allocator.Context allocationContext = new Allocator.Context("UnpartitionedTableFunctionOperator");
+    private final Operator operatorSource;
     private final BatchSource source;
     private final SourceBatchOperatorIngress outputIngress;
     private final ExecutionContext executionContext;
+    private final EncodedRowBuffer bufferedRows;
+    private TableFunctionOutputAssembler outputAssembler;
+    private final int maxInputBatchRows;
 
     private SourceBatch input;
     private Batch staged;
     private Batch currentBatch;
     private boolean inputFinished;
+    private boolean buffered;
+    private int bufferedPosition;
+    private int bufferedInputLength;
     private boolean finished;
     private boolean closed;
 
@@ -75,10 +87,60 @@ public final class UnpartitionedTableFunctionOperator
             SourceBatchOperatorIngress outputIngress,
             ExecutionContext executionContext)
     {
+        this(
+                outputSchema,
+                outputSchema.size(),
+                List.of(),
+                processor,
+                source,
+                inputSchema,
+                inputChannels,
+                allocator,
+                outputIngress,
+                executionContext,
+                1);
+    }
+
+    public UnpartitionedTableFunctionOperator(
+            Schema outputSchema,
+            int properOutputCount,
+            List<TableFunctionPassThroughColumn> passThroughColumns,
+            TableFunctionProcessor processor,
+            Operator source,
+            Schema inputSchema,
+            int[] inputChannels,
+            Allocator allocator,
+            SourceBatchOperatorIngress outputIngress,
+            ExecutionContext executionContext,
+            int maxInputBatchRows)
+    {
         this.outputSchema = requireNonNull(outputSchema, "outputSchema is null");
+        if (properOutputCount < 0 || properOutputCount > outputSchema.size()) {
+            throw new IllegalArgumentException("proper output count is invalid");
+        }
+        this.properOutputCount = properOutputCount;
+        this.passThroughColumns = List.copyOf(passThroughColumns);
+        if (properOutputCount + this.passThroughColumns.size() != outputSchema.size()) {
+            throw new IllegalArgumentException("output schema does not match pass-through columns");
+        }
+        if (this.passThroughColumns.stream().anyMatch(column -> column.argument() != 0)) {
+            throw new IllegalArgumentException("unpartitioned table function has only argument zero");
+        }
         this.processor = requireNonNull(processor, "processor is null");
-        this.outputDemand = new TableFunctionOutputDemand(Operator.fullOutputDemand(outputSchema.size()), Set.of());
+        this.outputDemand = new TableFunctionOutputDemand(
+                Operator.fullOutputDemand(properOutputCount),
+                this.passThroughColumns.isEmpty() ? Set.of() : ARGUMENT);
         source = requireNonNull(source, "source is null");
+        for (int index = 0; index < this.passThroughColumns.size(); index++) {
+            int inputColumn = this.passThroughColumns.get(index).inputColumn();
+            if (inputColumn >= source.outputCount()) {
+                throw new IllegalArgumentException("pass-through input column is outside source schema");
+            }
+            if (!outputSchema.field(properOutputCount + index).type().identity()
+                    .equals(source.outputSchema().field(inputColumn).type().identity())) {
+                throw new IllegalArgumentException("pass-through output type does not match input column");
+            }
+        }
         this.inputSchema = requireNonNull(inputSchema, "inputSchema is null");
         this.inputChannels = requireNonNull(inputChannels, "inputChannels is null").clone();
         if (inputSchema.size() != inputChannels.length) {
@@ -93,10 +155,18 @@ public final class UnpartitionedTableFunctionOperator
                 throw new IllegalArgumentException("input channel type does not match input schema");
             }
         }
+        operatorSource = source;
         this.source = new OperatorBatchSource(source);
         this.allocator = requireNonNull(allocator, "allocator is null");
         this.outputIngress = requireNonNull(outputIngress, "outputIngress is null");
         this.executionContext = requireNonNull(executionContext, "executionContext is null");
+        if (maxInputBatchRows <= 0) {
+            throw new IllegalArgumentException("maxInputBatchRows is not positive");
+        }
+        this.maxInputBatchRows = maxInputBatchRows;
+        bufferedRows = this.passThroughColumns.isEmpty()
+                ? null
+                : new EncodedRowBuffer(allocator, new Allocator.Context("UnpartitionedTableFunctionOperator.buffer"), source.outputCount());
     }
 
     @Override
@@ -154,13 +224,18 @@ public final class UnpartitionedTableFunctionOperator
             switch (progress) {
                 case TableFunctionProgress.Produced produced -> {
                     validateConsumed(produced.consumedArguments());
-                    validateOutput(produced.output());
-                    try {
-                        staged = outputIngress.adapt(produced.output());
+                    if (bufferedRows == null) {
+                        validateOutput(produced.output());
+                        try {
+                            staged = outputIngress.adapt(produced.output());
+                        }
+                        catch (RuntimeException | Error failure) {
+                            produced.output().close();
+                            throw failure;
+                        }
                     }
-                    catch (RuntimeException | Error failure) {
-                        produced.output().close();
-                        throw failure;
+                    else {
+                        staged = outputAssembler.assemble(produced.output());
                     }
                     consumeInput(produced.consumedArguments());
                     executionContext.checkpoint();
@@ -185,6 +260,10 @@ public final class UnpartitionedTableFunctionOperator
         if (input != null || inputFinished) {
             return;
         }
+        if (bufferedRows != null) {
+            prepareBufferedInput();
+            return;
+        }
         while (true) {
             switch (source.poll()) {
                 case SourcePoll.Ready ready -> {
@@ -205,6 +284,31 @@ public final class UnpartitionedTableFunctionOperator
         }
     }
 
+    private void prepareBufferedInput()
+    {
+        if (!buffered) {
+            bufferedRows.load(operatorSource);
+            outputAssembler = new TableFunctionOutputAssembler(
+                    allocator,
+                    outputSchema,
+                    properOutputCount,
+                    passThroughColumns,
+                    List.of(new TableFunctionOutputAssembler.Argument(operatorSource.outputSchema(), bufferedRows)),
+                    new int[] {0},
+                    new int[] {bufferedRows.size()});
+            buffered = true;
+        }
+        if (bufferedPosition == bufferedRows.size()) {
+            inputFinished = true;
+            return;
+        }
+        bufferedInputLength = min(maxInputBatchRows, bufferedRows.size() - bufferedPosition);
+        Batch batch = bufferedRows.copyRange(bufferedPosition, bufferedInputLength, inputChannels);
+        input = OperatorBatchSource.batch(inputSchema, batch);
+        input.selection();
+        executionContext.checkpoint();
+    }
+
     private void validateConsumed(Set<Integer> consumed)
     {
         if (!consumed.isEmpty() && !consumed.equals(ARGUMENT)) {
@@ -219,6 +323,10 @@ public final class UnpartitionedTableFunctionOperator
     {
         if (!consumed.isEmpty()) {
             closeInput();
+            if (bufferedRows != null) {
+                bufferedPosition += bufferedInputLength;
+                bufferedInputLength = 0;
+            }
         }
     }
 
@@ -226,7 +334,7 @@ public final class UnpartitionedTableFunctionOperator
     {
         requireNonNull(output, "output is null");
         try {
-            if (output.properOutputCount() != outputCount()) {
+            if (output.properOutputCount() != properOutputCount) {
                 throw new IllegalStateException("table function returned an unexpected proper output count");
             }
             if (!output.passThroughReferences().isEmpty()) {
@@ -294,6 +402,14 @@ public final class UnpartitionedTableFunctionOperator
         }
         try {
             processor.close();
+        }
+        catch (RuntimeException closeFailure) {
+            failure = appendFailure(failure, closeFailure);
+        }
+        try {
+            if (bufferedRows != null) {
+                bufferedRows.close();
+            }
         }
         catch (RuntimeException closeFailure) {
             failure = appendFailure(failure, closeFailure);

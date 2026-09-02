@@ -16,6 +16,7 @@ package org.weakref.nitro.operator;
 import org.weakref.nitro.core.batch.ColumnView;
 import org.weakref.nitro.core.batch.Selection;
 import org.weakref.nitro.core.function.table.TableFunctionOutputBatch;
+import org.weakref.nitro.core.function.table.TableFunctionPassThroughColumn;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
@@ -40,19 +41,6 @@ import static java.util.Objects.requireNonNull;
  */
 final class TableFunctionOutputAssembler
 {
-    record PassThroughColumn(int argument, int inputColumn)
-    {
-        PassThroughColumn
-        {
-            if (argument < 0) {
-                throw new IllegalArgumentException("argument is negative");
-            }
-            if (inputColumn < 0) {
-                throw new IllegalArgumentException("input column is negative");
-            }
-        }
-    }
-
     record Argument(Schema schema, RowPositionIndex rows)
     {
         Argument
@@ -65,7 +53,7 @@ final class TableFunctionOutputAssembler
     private final Allocator allocator;
     private final Schema outputSchema;
     private final int properOutputCount;
-    private final List<PassThroughColumn> passThroughColumns;
+    private final List<TableFunctionPassThroughColumn> passThroughColumns;
     private final List<Argument> arguments;
     private final int[] partitionStarts;
     private final int[] partitionEnds;
@@ -74,7 +62,7 @@ final class TableFunctionOutputAssembler
             Allocator allocator,
             Schema outputSchema,
             int properOutputCount,
-            List<PassThroughColumn> passThroughColumns,
+            List<TableFunctionPassThroughColumn> passThroughColumns,
             List<Argument> arguments,
             int[] partitionStarts,
             int[] partitionEnds)
@@ -103,7 +91,7 @@ final class TableFunctionOutputAssembler
             }
         }
         for (int index = 0; index < this.passThroughColumns.size(); index++) {
-            PassThroughColumn column = this.passThroughColumns.get(index);
+            TableFunctionPassThroughColumn column = this.passThroughColumns.get(index);
             if (column.argument() >= this.arguments.size()) {
                 throw new IllegalArgumentException("pass-through argument is out of bounds");
             }
@@ -135,7 +123,7 @@ final class TableFunctionOutputAssembler
                 columns[column] = transfer(output.column(column), buffers);
             }
             for (int index = 0; index < passThroughColumns.size(); index++) {
-                PassThroughColumn passThrough = passThroughColumns.get(index);
+                TableFunctionPassThroughColumn passThrough = passThroughColumns.get(index);
                 Streams reference = references.get(passThrough.argument());
                 int outputColumn = properOutputCount + index;
                 LazyGather gather = new LazyGather(
@@ -197,7 +185,7 @@ final class TableFunctionOutputAssembler
                 throw new IllegalArgumentException("duplicate pass-through reference argument");
             }
         }
-        for (PassThroughColumn column : passThroughColumns) {
+        for (TableFunctionPassThroughColumn column : passThroughColumns) {
             if (!references.containsKey(column.argument())) {
                 throw new IllegalArgumentException("requested pass-through argument has no row reference");
             }

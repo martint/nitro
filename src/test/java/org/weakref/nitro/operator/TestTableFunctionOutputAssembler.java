@@ -19,6 +19,7 @@ import org.weakref.nitro.core.batch.ColumnView;
 import org.weakref.nitro.core.batch.Selection;
 import org.weakref.nitro.core.batch.SourceBatch;
 import org.weakref.nitro.core.function.table.TableFunctionOutputBatch;
+import org.weakref.nitro.core.function.table.TableFunctionPassThroughColumn;
 import org.weakref.nitro.core.type.Field;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.core.type.TypeBinding;
@@ -79,7 +80,7 @@ final class TestTableFunctionOutputAssembler
                     allocator,
                     FINAL_OUTPUT_SCHEMA,
                     1,
-                    List.of(new TableFunctionOutputAssembler.PassThroughColumn(0, 0)),
+                    List.of(new TableFunctionPassThroughColumn(0, 0)),
                     List.of(new TableFunctionOutputAssembler.Argument(INPUT_SCHEMA, observedRows)),
                     new int[] {1},
                     new int[] {4});
@@ -120,7 +121,7 @@ final class TestTableFunctionOutputAssembler
                     allocator,
                     FINAL_OUTPUT_SCHEMA,
                     1,
-                    List.of(new TableFunctionOutputAssembler.PassThroughColumn(0, 0)),
+                    List.of(new TableFunctionPassThroughColumn(0, 0)),
                     List.of(new TableFunctionOutputAssembler.Argument(INPUT_SCHEMA, rows)),
                     new int[] {0},
                     new int[] {3});
