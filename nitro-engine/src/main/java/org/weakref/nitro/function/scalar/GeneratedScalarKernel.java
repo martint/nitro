@@ -13,8 +13,16 @@
  */
 package org.weakref.nitro.function.scalar;
 
-interface GeneratedScalarKernel
+public interface GeneratedScalarKernel
 {
+    void applyDenseFlatNullFree(Object[] values, Object output, int count);
+
+    void applySparseFlatNullFree(Object[] values, Object output, int[] positions, int count);
+
+    void applyDenseDictionaryNullFree(Object[] values, int[][] ids, Object output, int count);
+
+    void applySparseDictionaryNullFree(Object[] values, int[][] ids, Object output, int[] positions, int count);
+
     void applyDense(Object[] values, Object[] nulls, Object output, int count);
 
     void applySparse(Object[] values, Object[] nulls, Object output, int[] positions, int count);

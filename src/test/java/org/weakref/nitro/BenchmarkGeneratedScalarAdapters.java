@@ -127,19 +127,23 @@ public class BenchmarkGeneratedScalarAdapters
                 "generated_add",
                 new BoundSignature(LONG, List.of(LONG, LONG)),
                 strictSemantics(2),
-                new ScalarMethodTarget(MethodHandles.lookup().findStatic(
-                        BenchmarkGeneratedScalarAdapters.class,
-                        "add",
-                        MethodType.methodType(long.class, long.class, long.class))))
+                ScalarMethodTarget.direct(
+                        MethodHandles.lookup(),
+                        MethodHandles.lookup().findStatic(
+                                BenchmarkGeneratedScalarAdapters.class,
+                                "add",
+                                MethodType.methodType(long.class, long.class, long.class))))
                 .implementation();
         generatedCast = generator.adapt(
                 "generated_cast",
                 new BoundSignature(DOUBLE, List.of(LONG)),
                 strictSemantics(1),
-                new ScalarMethodTarget(MethodHandles.lookup().findStatic(
-                        BenchmarkGeneratedScalarAdapters.class,
-                        "cast",
-                        MethodType.methodType(double.class, long.class))))
+                ScalarMethodTarget.direct(
+                        MethodHandles.lookup(),
+                        MethodHandles.lookup().findStatic(
+                                BenchmarkGeneratedScalarAdapters.class,
+                                "cast",
+                                MethodType.methodType(double.class, long.class))))
                 .implementation();
     }
 

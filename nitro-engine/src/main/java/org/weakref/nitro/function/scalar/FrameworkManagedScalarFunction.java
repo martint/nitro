@@ -16,6 +16,7 @@ package org.weakref.nitro.function.scalar;
 import org.weakref.nitro.core.function.BoundSignature;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.F64Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
@@ -94,16 +95,83 @@ final class FrameworkManagedScalarFunction
             return result;
         }
 
-        bindValues(inputs, state);
         Vector values = writableResult(context.allocator(), allocationContext, output, requiredLength);
         int[] positions = mask.selectedPositions();
-        if (positions == null) {
-            kernel.applyDense(state.values, state.nulls, valueArray(values), mask.count());
+        if (bindFlatValuesIfNullFree(inputs, state)) {
+            if (positions == null) {
+                kernel.applyDenseFlatNullFree(state.flatValues, valueArray(values), mask.count());
+            }
+            else {
+                kernel.applySparseFlatNullFree(state.flatValues, valueArray(values), positions, mask.count());
+            }
+        }
+        else if (bindDictionaryValuesIfNullFree(inputs, state)) {
+            if (positions == null) {
+                kernel.applyDenseDictionaryNullFree(state.flatValues, state.dictionaryIds, valueArray(values), mask.count());
+            }
+            else {
+                kernel.applySparseDictionaryNullFree(state.flatValues, state.dictionaryIds, valueArray(values), positions, mask.count());
+            }
         }
         else {
-            kernel.applySparse(state.values, state.nulls, valueArray(values), positions, mask.count());
+            bindValues(inputs, state);
+            if (positions == null) {
+                kernel.applyDense(state.values, state.nulls, valueArray(values), mask.count());
+            }
+            else {
+                kernel.applySparse(state.values, state.nulls, valueArray(values), positions, mask.count());
+            }
         }
         return result.with(Stream.VALUES, values);
+    }
+
+    private boolean bindFlatValuesIfNullFree(List<Streams> inputs, InvocationState state)
+    {
+        for (int index = 0; index < inputs.size(); index++) {
+            if (state.nulls[index] != null) {
+                return false;
+            }
+            Vector values = inputs.get(index).values();
+            Class<?> carrier = signature.argumentTypes().get(index).carrierType();
+            if (carrier == long.class && values instanceof I64Vector vector) {
+                state.flatValues[index] = vector.values();
+            }
+            else if (carrier == double.class && values instanceof F64Vector vector) {
+                state.flatValues[index] = vector.values();
+            }
+            else if (carrier == boolean.class && values instanceof BooleanVector vector) {
+                state.flatValues[index] = vector.values();
+            }
+            else {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean bindDictionaryValuesIfNullFree(List<Streams> inputs, InvocationState state)
+    {
+        for (int index = 0; index < inputs.size(); index++) {
+            if (state.nulls[index] != null || !(inputs.get(index).values() instanceof DictionaryVector dictionary)) {
+                return false;
+            }
+            Vector values = dictionary.values();
+            Class<?> carrier = signature.argumentTypes().get(index).carrierType();
+            if (carrier == long.class && values instanceof I64Vector vector) {
+                state.flatValues[index] = vector.values();
+            }
+            else if (carrier == double.class && values instanceof F64Vector vector) {
+                state.flatValues[index] = vector.values();
+            }
+            else if (carrier == boolean.class && values instanceof BooleanVector vector) {
+                state.flatValues[index] = vector.values();
+            }
+            else {
+                return false;
+            }
+            state.dictionaryIds[index] = dictionary.ids();
+        }
+        return true;
     }
 
     private void bindValues(List<Streams> inputs, InvocationState state)
@@ -189,11 +257,15 @@ final class FrameworkManagedScalarFunction
     private static final class InvocationState
     {
         private final Object[] values;
+        private final Object[] flatValues;
+        private final int[][] dictionaryIds;
         private final Object[] nulls;
 
         private InvocationState(int arity)
         {
             values = new Object[arity];
+            flatValues = new Object[arity];
+            dictionaryIds = new int[arity][];
             nulls = new Object[arity];
         }
     }

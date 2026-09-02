@@ -56,10 +56,12 @@ final class TestScalarAdapterGenerator
                 "select_arithmetic",
                 new BoundSignature(DOUBLE, List.of(LONG, DOUBLE, BOOLEAN)),
                 strictSemantics(3),
-                new ScalarMethodTarget(MethodHandles.lookup().findStatic(
-                        TestScalarAdapterGenerator.class,
-                        "selectArithmetic",
-                        MethodType.methodType(double.class, long.class, double.class, boolean.class))))
+                ScalarMethodTarget.direct(
+                        MethodHandles.lookup(),
+                        MethodHandles.lookup().findStatic(
+                                TestScalarAdapterGenerator.class,
+                                "selectArithmetic",
+                                MethodType.methodType(double.class, long.class, double.class, boolean.class))))
                 .implementation();
 
         List<Streams> inputs = List.of(
@@ -94,10 +96,12 @@ final class TestScalarAdapterGenerator
                 "half",
                 new BoundSignature(DOUBLE, List.of(LONG)),
                 strictSemantics(1),
-                new ScalarMethodTarget(MethodHandles.lookup().findStatic(
-                        TestScalarAdapterGenerator.class,
-                        "half",
-                        MethodType.methodType(double.class, long.class))))
+                ScalarMethodTarget.direct(
+                        MethodHandles.lookup(),
+                        MethodHandles.lookup().findStatic(
+                                TestScalarAdapterGenerator.class,
+                                "half",
+                                MethodType.methodType(double.class, long.class))))
                 .implementation();
 
         try (Allocator allocator = new Allocator(createDefault())) {
