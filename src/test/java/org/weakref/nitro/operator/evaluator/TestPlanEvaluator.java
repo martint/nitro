@@ -45,7 +45,6 @@ import org.weakref.nitro.function.scalar.AnnotatedScalarLoader;
 import org.weakref.nitro.function.scalar.PrimitiveExecutionContext;
 import org.weakref.nitro.function.scalar.PrimitiveFunction;
 import org.weakref.nitro.function.scalar.ScalarDescriptor;
-import org.weakref.nitro.function.scalar.ScalarRegistry;
 import org.weakref.nitro.function.scalar.builtin.AddI64;
 import org.weakref.nitro.function.scalar.builtin.CoalesceI64;
 import org.weakref.nitro.function.scalar.builtin.CoalesceI64Policy;
@@ -5514,18 +5513,17 @@ public class TestPlanEvaluator
 
     private static PrimitiveRegistry builtinPrimitiveRegistry()
     {
-        ScalarRegistry scalarRegistry = new ScalarRegistry();
         AnnotatedScalarLoader scalarLoader = new AnnotatedScalarLoader();
         PrimitiveRegistry primitiveRegistry = new PrimitiveRegistry();
-        primitiveRegistry.register(scalarRegistry.register(scalarLoader.load(AddI64.class)));
-        primitiveRegistry.register(scalarRegistry.register(scalarLoader.load(DivideScaleRoundI64.class)));
-        primitiveRegistry.register(scalarRegistry.register(scalarLoader.load(EqualI64.class)));
-        primitiveRegistry.register(scalarRegistry.register(scalarLoader.load(IdenticalI64.class)));
-        primitiveRegistry.register(scalarRegistry.register(scalarLoader.load(InUtf8.class)));
-        primitiveRegistry.register(scalarRegistry.register(scalarLoader.load(LessThanI64.class)));
-        primitiveRegistry.register(scalarRegistry.register(scalarLoader.load(LessThanOrEqualI64.class)));
-        primitiveRegistry.register(scalarRegistry.register(scalarLoader.load(LessThanUtf8.class)));
-        primitiveRegistry.register(scalarRegistry.register(scalarLoader.load(LessThanOrEqualUtf8.class)));
+        primitiveRegistry.register(scalarLoader.load(AddI64.class));
+        primitiveRegistry.register(scalarLoader.load(DivideScaleRoundI64.class));
+        primitiveRegistry.register(scalarLoader.load(EqualI64.class));
+        primitiveRegistry.register(scalarLoader.load(IdenticalI64.class));
+        primitiveRegistry.register(scalarLoader.load(InUtf8.class));
+        primitiveRegistry.register(scalarLoader.load(LessThanI64.class));
+        primitiveRegistry.register(scalarLoader.load(LessThanOrEqualI64.class));
+        primitiveRegistry.register(scalarLoader.load(LessThanUtf8.class));
+        primitiveRegistry.register(scalarLoader.load(LessThanOrEqualUtf8.class));
         return primitiveRegistry;
     }
 

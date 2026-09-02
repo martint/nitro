@@ -177,10 +177,13 @@ A working, lazy/memoized expression evaluator (not a stub):
 
 ### Functions (`org.weakref.nitro.function`)
 
-- `Function` is a `@FunctionalInterface`: `apply(Vector output, Vector[] inputs,
-  Mask mask)`, used by `ProjectOperator` for column computations.
-- `function/scalar` holds the registry (`ScalarFunction`, `ScalarDescriptor`,
-  `ScalarRegistry`); `function/scalar/builtin` holds ~57 built-ins across
+- `PrimitiveFunction` is the normalized batch invocation contract: it receives
+  input/output streams, a first-class mask, and an allocator-backed execution
+  context. Function resolution is supplied through the core `FunctionRegistry`;
+  `PrimitiveRegistry` is the evaluator's bound-call lookup for legacy named IR.
+- `function/scalar` holds annotation loading and immutable descriptors
+  (`ScalarFunction`, `ScalarDescriptor`, `AnnotatedScalarLoader`);
+  `function/scalar/builtin` holds built-ins across
   numeric, boolean, UTF-8/string, array, and map types (e.g. `AddI64`,
   `DivideScaleRoundI64`, `EqualUtf8`, `RegexpReplaceUtf8`, `ArraySumI64`,
   `MapContainsKeyUtf8`, `CastUtf8ToI64`, `If*`/`Coalesce*`).

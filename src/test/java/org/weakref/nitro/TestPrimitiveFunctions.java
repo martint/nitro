@@ -15,7 +15,6 @@ package org.weakref.nitro;
 
 import org.weakref.nitro.function.scalar.AnnotatedScalarLoader;
 import org.weakref.nitro.function.scalar.ScalarDescriptor;
-import org.weakref.nitro.function.scalar.ScalarRegistry;
 import org.weakref.nitro.function.scalar.builtin.AddExactI64;
 import org.weakref.nitro.function.scalar.builtin.AddF64;
 import org.weakref.nitro.function.scalar.builtin.AddI64;
@@ -95,7 +94,6 @@ public final class TestPrimitiveFunctions
 
     public static PrimitiveRegistry primitiveRegistry()
     {
-        ScalarRegistry scalarRegistry = new ScalarRegistry();
         AnnotatedScalarLoader scalarLoader = new AnnotatedScalarLoader();
         PrimitiveRegistry primitiveRegistry = new PrimitiveRegistry();
         Utf8BinaryDispatchPolicy utf8Policy = Utf8BinaryDispatchPolicy.fromSystemProperties();
@@ -164,7 +162,7 @@ public final class TestPrimitiveFunctions
                 SubstringUtf8.class,
                 UpperUtf8.class,
                 YearOfDate.class)) {
-            primitiveRegistry.register(scalarRegistry.register(load(scalarLoader, functionClass, utf8Policy)));
+            primitiveRegistry.register(load(scalarLoader, functionClass, utf8Policy));
         }
         return primitiveRegistry;
     }
