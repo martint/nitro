@@ -81,7 +81,6 @@ import org.weakref.nitro.function.scalar.builtin.OrBoolean;
 import org.weakref.nitro.function.scalar.builtin.ParseUtf8Long;
 import org.weakref.nitro.function.scalar.builtin.RegexpReplaceUtf8;
 import org.weakref.nitro.function.scalar.builtin.RegexpReplaceUtf8Policy;
-import org.weakref.nitro.function.scalar.builtin.RoundF64;
 import org.weakref.nitro.function.scalar.builtin.StartsWithUtf8;
 import org.weakref.nitro.function.scalar.builtin.SubstringUtf8;
 import org.weakref.nitro.function.scalar.builtin.SubtractExactI64;
@@ -162,7 +161,6 @@ public final class TestPrimitiveFunctions
                 AndBoolean.class,
                 OrBoolean.class,
                 RegexpReplaceUtf8.class,
-                RoundF64.class,
                 StartsWithUtf8.class,
                 SubstringUtf8.class,
                 UpperUtf8.class)) {
@@ -172,8 +170,32 @@ public final class TestPrimitiveFunctions
         primitiveRegistry.register(generatedDoubleBinary("subtract_f64", "subtractDouble", new SubtractF64Optimization()));
         primitiveRegistry.register(generatedDoubleBinary("multiply_f64", "multiplyDouble", new MultiplyF64Optimization()));
         primitiveRegistry.register(generatedBooleanUnary("not", "notBoolean", new NotBooleanOptimization()));
+        primitiveRegistry.register(generatedDoubleUnary("round_f64", "roundDouble"));
         primitiveRegistry.register(generatedYearOfDate());
         return primitiveRegistry;
+    }
+
+    private static ScalarDescriptor generatedDoubleUnary(String name, String methodName)
+    {
+        TypeBinding doubleType = new TestingTypeBinding(new TypeIdentity("test-double"), double.class);
+        try {
+            return new ScalarAdapterGenerator().adapt(
+                    name,
+                    new BoundSignature(doubleType, List.of(doubleType)),
+                    new FunctionSemantics(true, List.of(RETURN_NULL_ON_NULL), false, NEVER_FAILS),
+                    new ScalarMethodTarget(MethodHandles.lookup().findStatic(
+                            TestPrimitiveFunctions.class,
+                            methodName,
+                            MethodType.methodType(double.class, double.class))));
+        }
+        catch (NoSuchMethodException | IllegalAccessException exception) {
+            throw new ExceptionInInitializerError(exception);
+        }
+    }
+
+    private static double roundDouble(double value)
+    {
+        return Math.copySign(Math.floor(Math.abs(value) + 0.5), value);
     }
 
     private static ScalarDescriptor generatedBooleanUnary(String name, String methodName, FunctionCapability capability)
