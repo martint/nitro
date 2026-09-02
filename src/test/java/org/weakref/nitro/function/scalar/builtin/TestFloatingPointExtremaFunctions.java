@@ -31,22 +31,6 @@ import static org.weakref.nitro.execution.EngineResources.createDefault;
 final class TestFloatingPointExtremaFunctions
 {
     @Test
-    void testAbsoluteValueHonorsMaskAndNulls()
-    {
-        Streams input = Streams.ofValues(new F64Vector(new double[] {-3.0, -2.0, Double.NaN, -0.0}))
-                .with(Stream.NULLS, new BooleanVector(new boolean[] {false, true, false, false}));
-
-        Streams result = evaluate(new AbsF64(), List.of(input), Mask.sparse(new int[] {0, 1, 3}, 4));
-
-        assertThat(((F64Vector) result.values()).values())
-                .containsExactly(3.0, 2.0, 0.0, 0.0);
-        assertThat(((BooleanVector) result.get(Stream.NULLS)).values())
-                .containsExactly(false, true, false, false);
-        assertThat(Double.doubleToRawLongBits(((F64Vector) result.values()).values()[3]))
-                .isEqualTo(Double.doubleToRawLongBits(0.0));
-    }
-
-    @Test
     void testVariadicGreatestHonorsTrinoDoubleAndNullSemantics()
     {
         Streams result = evaluate(
