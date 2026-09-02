@@ -22,9 +22,17 @@ import org.weakref.nitro.core.execution.ExecutionSuspension;
 import org.weakref.nitro.core.execution.MemoryReservation;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.execution.EngineResources;
+import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
+import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
+import org.weakref.nitro.operator.evaluator.ir.Input;
+import org.weakref.nitro.operator.evaluator.ir.Reference;
 import org.weakref.nitro.operator.pattern.PatternExpression;
 import org.weakref.nitro.operator.pattern.PatternMatchNumberValueEvaluator;
+import org.weakref.nitro.operator.pattern.PatternNavigation;
+import org.weakref.nitro.operator.pattern.PatternScalarValueEvaluator;
+import org.weakref.nitro.operator.pattern.PatternValuePointer;
 import org.weakref.nitro.operator.pattern.PatternValueProgram;
 
 import java.util.List;
@@ -34,6 +42,8 @@ import java.util.concurrent.CompletionStage;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.weakref.nitro.data.Row.row;
+import static org.weakref.nitro.operator.pattern.PatternNavigation.Origin.LAST;
+import static org.weakref.nitro.operator.pattern.PatternNavigation.Scope.RUNNING;
 import static org.weakref.nitro.operator.pattern.PatternOutputMode.ONE;
 import static org.weakref.nitro.operator.pattern.PatternSkipPolicy.Fixed.PAST_LAST;
 
@@ -106,6 +116,48 @@ final class TestPatternRecognitionOperator
                     EngineResources.from(allocator).operatorResources())) {
                 assertThat(OperatorAssertions.OperatorAssert.toRows(operator))
                         .containsExactly(row(11L, 1L), row(21L, 1L));
+            }
+        }
+    }
+
+    @Test
+    void testEvaluatesCompiledDefinitionOverMatchLocalValues()
+    {
+        try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
+            ConstantTableOperator source = new ConstantTableOperator(allocator, 1, List.of(
+                    row(true), row(false), row(true)));
+            Reference predicate = new Reference(new Input(0), Stream.VALUES);
+            PatternValueProgram inputs = new PatternValueProgram(List.of(new PatternScalarValueEvaluator(
+                    new PatternValuePointer.Scalar(
+                            0,
+                            new PatternNavigation(new int[0], LAST, RUNNING, 0, 0)))));
+            var definition = EngineResources.from(allocator).operatorResources().patternEvaluation().definition(
+                    allocator,
+                    new EvaluationPlan(List.of(), List.of(predicate)),
+                    new PrimitiveRegistry(),
+                    inputs,
+                    predicate,
+                    (errors, position) -> assertThat(org.weakref.nitro.data.VectorAccess.booleanValues(errors).value(position)).isFalse());
+
+            try (Operator operator = new PatternRecognitionOperator(
+                    allocator,
+                    new TestingExecutionContext(),
+                    source,
+                    new int[0],
+                    new WindowInputOrder(true, 0),
+                    0,
+                    new int[] {0},
+                    new PatternExpression.Label(0),
+                    List.of(definition),
+                    PAST_LAST,
+                    ONE,
+                    new PatternValueProgram(List.of(new PatternMatchNumberValueEvaluator())),
+                    true,
+                    8,
+                    Schema.unspecified(2),
+                    EngineResources.from(allocator).operatorResources())) {
+                assertThat(OperatorAssertions.OperatorAssert.toRows(operator))
+                        .containsExactly(row(1L, 1L), row(1L, 2L));
             }
         }
     }

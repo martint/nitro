@@ -13,13 +13,11 @@
  */
 package org.weakref.nitro.operator.pattern;
 
-/// A row-pattern label definition bound by the dynamic function/evaluation registry.
-@FunctionalInterface
-public interface PatternDefinition
-        extends AutoCloseable
-{
-    boolean matches(PatternEvaluationContext context);
+import org.weakref.nitro.data.Vector;
 
-    @Override
-    default void close() {}
+/// Translates a row-local expression error at the host boundary.
+@FunctionalInterface
+public interface PatternDefinitionErrorHandler
+{
+    void check(Vector errors, int position);
 }

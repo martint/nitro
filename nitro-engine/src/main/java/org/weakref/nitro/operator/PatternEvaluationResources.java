@@ -26,7 +26,10 @@ import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
 import org.weakref.nitro.operator.evaluator.ir.Input;
 import org.weakref.nitro.operator.evaluator.ir.Reference;
 import org.weakref.nitro.operator.pattern.PatternAggregationInput;
+import org.weakref.nitro.operator.pattern.PatternDefinition;
+import org.weakref.nitro.operator.pattern.PatternDefinitionErrorHandler;
 import org.weakref.nitro.operator.pattern.PatternEvaluationContext;
+import org.weakref.nitro.operator.pattern.PatternValueProgram;
 
 import static java.util.Objects.requireNonNull;
 
@@ -62,6 +65,143 @@ public final class PatternEvaluationResources
                 projectionMaskCompiler,
                 evaluationPolicy,
                 bufferPoolGroup);
+    }
+
+    /// Binds a compiled boolean expression to match-local value producers.
+    ///
+    /// The returned definition owns reusable one-row input and expression state. Its error handler remains a host
+    /// boundary concern so the engine does not acquire knowledge of provider exception classes.
+    public PatternDefinition definition(
+            Allocator allocator,
+            EvaluationPlan plan,
+            PrimitiveRegistry primitiveRegistry,
+            PatternValueProgram inputs,
+            Reference predicate,
+            PatternDefinitionErrorHandler errorHandler)
+    {
+        return new ExpressionDefinition(
+                allocator,
+                plan,
+                primitiveRegistry,
+                inputs,
+                predicate,
+                errorHandler,
+                projectionMaskCompiler,
+                evaluationPolicy,
+                bufferPoolGroup);
+    }
+
+    private static final class ExpressionDefinition
+            implements PatternDefinition
+    {
+        private final Allocator.Context allocationContext = new Allocator.Context("PatternDefinition", ExpressionDefinition.class);
+        private final Allocator allocator;
+        private final PatternValueProgram inputs;
+        private final Reference predicate;
+        private final PatternDefinitionErrorHandler errorHandler;
+        private final Streams[] inputColumns;
+        private final Mask selected;
+        private final PlanEvaluator evaluator;
+        private boolean evaluated;
+        private boolean closed;
+
+        private ExpressionDefinition(
+                Allocator allocator,
+                EvaluationPlan plan,
+                PrimitiveRegistry primitiveRegistry,
+                PatternValueProgram inputs,
+                Reference predicate,
+                PatternDefinitionErrorHandler errorHandler,
+                ProjectionMaskCompiler projectionMaskCompiler,
+                EvaluationOperatorPolicy evaluationPolicy,
+                Object bufferPoolGroup)
+        {
+            this.allocator = requireNonNull(allocator, "allocator is null");
+            this.inputs = requireNonNull(inputs, "inputs is null");
+            this.predicate = requireNonNull(predicate, "predicate is null");
+            this.errorHandler = requireNonNull(errorHandler, "errorHandler is null");
+            inputColumns = new Streams[inputs.size()];
+            selected = allocator.allocateRangeMask(allocationContext, 0, 1);
+            evaluator = new PlanEvaluator(
+                    requireNonNull(plan, "plan is null"),
+                    requireNonNull(primitiveRegistry, "primitiveRegistry is null"),
+                    this::resolveInput,
+                    allocator,
+                    requireNonNull(projectionMaskCompiler, "projectionMaskCompiler is null"),
+                    requireNonNull(evaluationPolicy, "evaluationPolicy is null"),
+                    requireNonNull(bufferPoolGroup, "bufferPoolGroup is null"),
+                    true);
+        }
+
+        @Override
+        public boolean matches(PatternEvaluationContext context)
+        {
+            if (closed) {
+                throw new IllegalStateException("pattern definition is closed");
+            }
+            if (evaluated) {
+                evaluator.resetForReuse();
+            }
+            inputs.append(context, allocator, allocationContext, inputColumns, 0, 1);
+            Streams result = evaluator.evaluate(predicate, selected);
+            errorHandler.check(result.getOrNull(Stream.ERRORS), 0);
+            evaluated = true;
+            Vector nulls = result.getOrNull(Stream.NULLS);
+            return (nulls == null || !org.weakref.nitro.data.VectorAccess.booleanValues(nulls).value(0)) &&
+                    org.weakref.nitro.data.VectorAccess.booleanValues(result.values()).value(0);
+        }
+
+        private Vector resolveInput(Reference reference, Mask mask)
+        {
+            return switch (reference.producer()) {
+                case Input(int input) -> inputColumns[input].getOrNull(reference.stream());
+                default -> throw new IllegalArgumentException("Unexpected pattern-definition input: " + reference);
+            };
+        }
+
+        @Override
+        public void close()
+        {
+            if (closed) {
+                return;
+            }
+            closed = true;
+            RuntimeException failure = null;
+            try {
+                if (evaluated) {
+                    evaluator.resetForReuse();
+                }
+                evaluator.close();
+            }
+            catch (RuntimeException closeFailure) {
+                failure = closeFailure;
+            }
+            try {
+                inputs.close();
+            }
+            catch (RuntimeException closeFailure) {
+                if (failure == null) {
+                    failure = closeFailure;
+                }
+                else {
+                    failure.addSuppressed(closeFailure);
+                }
+            }
+            try {
+                allocator.release(allocationContext);
+            }
+            catch (RuntimeException closeFailure) {
+                if (failure == null) {
+                    failure = closeFailure;
+                }
+                else {
+                    failure.addSuppressed(closeFailure);
+                }
+            }
+            if (failure != null) {
+                throw failure;
+            }
+        }
     }
 
     private static final class ExpressionAggregationInput

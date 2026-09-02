@@ -339,6 +339,14 @@ public final class PatternRecognitionOperator
         catch (RuntimeException closeFailure) {
             failure = appendFailure(failure, closeFailure);
         }
+        for (PatternDefinition definition : definitions) {
+            try {
+                definition.close();
+            }
+            catch (RuntimeException closeFailure) {
+                failure = appendFailure(failure, closeFailure);
+            }
+        }
         try {
             rows.close();
         }
