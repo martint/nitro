@@ -582,7 +582,7 @@ public class ProjectOperator
         else if (values instanceof RleVector) {
             rleInputPositions += positions;
         }
-        else if (values instanceof I64Vector || values instanceof I32Vector || values instanceof F64Vector || values instanceof org.weakref.nitro.data.BinaryVector) {
+        else if (values instanceof I64Vector || values instanceof I32Vector || values instanceof F64Vector || values instanceof BooleanVector || values instanceof org.weakref.nitro.data.BinaryVector) {
             flatInputPositions += positions;
             if (values instanceof I32Vector &&
                     fusedProjection.inputTypes().get(inputIndex) == org.weakref.nitro.jit.FusedProjectionCompiler.InputPhysicalType.LONG) {

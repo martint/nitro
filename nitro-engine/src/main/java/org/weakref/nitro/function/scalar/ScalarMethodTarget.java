@@ -13,6 +13,8 @@
  */
 package org.weakref.nitro.function.scalar;
 
+import org.weakref.nitro.core.function.ScalarInvocationProvider;
+
 import java.lang.invoke.MethodHandle;
 
 import static java.util.Objects.requireNonNull;
@@ -22,6 +24,7 @@ import static java.util.Objects.requireNonNull;
 /// The handle type is the calling convention: its parameters and return type are JVM stack
 /// carriers. Logical types and null/failure behavior remain in the resolved call metadata.
 public final class ScalarMethodTarget
+        implements ScalarInvocationProvider
 {
     private final MethodHandle handle;
 
@@ -30,7 +33,8 @@ public final class ScalarMethodTarget
         this.handle = requireNonNull(handle, "handle is null");
     }
 
-    public MethodHandle handle()
+    @Override
+    public MethodHandle target()
     {
         return handle;
     }

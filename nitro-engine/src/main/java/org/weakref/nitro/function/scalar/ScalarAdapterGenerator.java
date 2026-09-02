@@ -82,11 +82,12 @@ public final class ScalarAdapterGenerator
         requireNonNull(signature, "signature is null");
         requireNonNull(semantics, "semantics is null");
         requireNonNull(target, "target is null");
-        validate(signature, semantics, target.handle());
+        validate(signature, semantics, target.target());
         return new ScalarDescriptor(
                 name,
                 semantics.deterministic(),
-                new FrameworkManagedScalarFunction(name, signature, generate(signature, target)));
+                new FrameworkManagedScalarFunction(name, signature, generate(signature, target)),
+                List.of(target));
     }
 
     private GeneratedScalarKernel generate(BoundSignature signature, ScalarMethodTarget target)
@@ -128,13 +129,13 @@ public final class ScalarAdapterGenerator
         try {
             MethodHandles.Lookup lookup = definitionLookup.defineHiddenClassWithClassData(
                     bytes,
-                    target.handle(),
+                    target.target(),
                     true,
                     MethodHandles.Lookup.ClassOption.NESTMATE);
             return (GeneratedScalarKernel) lookup.findConstructor(lookup.lookupClass(), MethodType.methodType(void.class)).invoke();
         }
         catch (Throwable throwable) {
-            throw new IllegalStateException("Failed to generate scalar adapter for " + target.handle().type(), throwable);
+            throw new IllegalStateException("Failed to generate scalar adapter for " + target.target().type(), throwable);
         }
     }
 

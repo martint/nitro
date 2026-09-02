@@ -89,6 +89,8 @@ public class BenchmarkGeneratedScalarAdapters
     private PrimitiveExecutionContext context;
     private Mask mask;
     private List<Streams> binaryInputs;
+    private List<Streams> compositeInputs;
+    private List<Streams> materializedAddInputs;
     private List<Streams> unaryInput;
     private Streams longOutput;
     private Streams doubleOutput;
@@ -98,6 +100,10 @@ public class BenchmarkGeneratedScalarAdapters
     private PrimitiveFunction nativeCast;
     private PrimitiveFunction generatedCast;
     private PrimitiveFunction generatedBoundCast;
+    private PrimitiveFunction generatedMultiply;
+    private PrimitiveFunction generatedDirectComposite;
+    private PrimitiveFunction generatedComposedComposite;
+    private Streams intermediateOutput;
 
     @Setup
     public void setup()
@@ -117,9 +123,17 @@ public class BenchmarkGeneratedScalarAdapters
         }
         Vector leftVector = encode(encoding, left);
         Vector rightVector = encode(encoding, right);
+        long[] offset = new long[POSITION_COUNT];
+        for (int position = 0; position < POSITION_COUNT; position++) {
+            offset[position] = random.nextLong();
+        }
+        Vector offsetVector = encode(encoding, offset);
         binaryInputs = List.of(Streams.ofValues(leftVector), Streams.ofValues(rightVector));
+        compositeInputs = List.of(Streams.ofValues(leftVector), Streams.ofValues(rightVector), Streams.ofValues(offsetVector));
         unaryInput = List.of(Streams.ofValues(leftVector));
         longOutput = Streams.ofValues(new I64Vector(POSITION_COUNT));
+        intermediateOutput = Streams.ofValues(new I64Vector(POSITION_COUNT));
+        materializedAddInputs = List.of(intermediateOutput, Streams.ofValues(offsetVector));
         doubleOutput = Streams.ofValues(new F64Vector(POSITION_COUNT));
 
         nativeAdd = new AddI64();
@@ -142,6 +156,39 @@ public class BenchmarkGeneratedScalarAdapters
                                 BenchmarkGeneratedScalarAdapters.class,
                                 "cast",
                                 MethodType.methodType(double.class, long.class))))
+                .implementation();
+        generatedMultiply = generator.adapt(
+                "generated_multiply",
+                new BoundSignature(LONG, List.of(LONG, LONG)),
+                strictSemantics(2),
+                new ScalarMethodTarget(MethodHandles.lookup().findStatic(
+                                BenchmarkGeneratedScalarAdapters.class,
+                                "multiply",
+                                MethodType.methodType(long.class, long.class, long.class))))
+                .implementation();
+        generatedDirectComposite = generator.adapt(
+                "generated_direct_composite",
+                new BoundSignature(LONG, List.of(LONG, LONG, LONG)),
+                strictSemantics(3),
+                new ScalarMethodTarget(MethodHandles.lookup().findStatic(
+                                BenchmarkGeneratedScalarAdapters.class,
+                                "multiplyAdd",
+                                MethodType.methodType(long.class, long.class, long.class, long.class))))
+                .implementation();
+        generatedComposedComposite = generator.adapt(
+                "generated_composed_composite",
+                new BoundSignature(LONG, List.of(LONG, LONG, LONG)),
+                strictSemantics(3),
+                new ScalarMethodTarget(MethodHandles.collectArguments(
+                        MethodHandles.lookup().findStatic(
+                                BenchmarkGeneratedScalarAdapters.class,
+                                "add",
+                                MethodType.methodType(long.class, long.class, long.class)),
+                        0,
+                        MethodHandles.lookup().findStatic(
+                                BenchmarkGeneratedScalarAdapters.class,
+                                "multiply",
+                                MethodType.methodType(long.class, long.class, long.class)))))
                 .implementation();
         ScalarTargets scalarTargets = new ScalarTargets();
         generatedBoundAdd = generator.adapt(
@@ -209,6 +256,25 @@ public class BenchmarkGeneratedScalarAdapters
         return generatedBoundCast.apply(unaryInput, mask, VALUES, doubleOutput, context);
     }
 
+    @Benchmark
+    public Streams generatedDirectComposite()
+    {
+        return generatedDirectComposite.apply(compositeInputs, mask, VALUES, longOutput, context);
+    }
+
+    @Benchmark
+    public Streams generatedComposedComposite()
+    {
+        return generatedComposedComposite.apply(compositeInputs, mask, VALUES, longOutput, context);
+    }
+
+    @Benchmark
+    public Streams generatedMaterializedComposite()
+    {
+        generatedMultiply.apply(binaryInputs, mask, VALUES, intermediateOutput, context);
+        return generatedAdd.apply(materializedAddInputs, mask, VALUES, longOutput, context);
+    }
+
     public static void main(String[] args)
             throws Exception
     {
@@ -256,6 +322,16 @@ public class BenchmarkGeneratedScalarAdapters
     private static long add(long left, long right)
     {
         return left + right;
+    }
+
+    private static long multiply(long left, long right)
+    {
+        return left * right;
+    }
+
+    private static long multiplyAdd(long left, long right, long offset)
+    {
+        return left * right + offset;
     }
 
     private static double cast(long value)

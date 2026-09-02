@@ -68,6 +68,7 @@ public final class FusedProjectionCompiler
 {
     private static final String PACKAGE = "org.weakref.nitro.jit.generated";
     private final ProjectionCodeGenerationPolicy policy;
+    private final GenericScalarProjectionCompiler genericScalarCompiler;
     private final AtomicInteger counter = new AtomicInteger();
     // Kernels are stateless, so identical projection shapes share one compiled class (amortizing javac cost across
     // operators / benchmark iterations). Keyed by the fully-rendered source with a stable placeholder class name.
@@ -82,11 +83,12 @@ public final class FusedProjectionCompiler
     public FusedProjectionCompiler(ProjectionCodeGenerationPolicy policy)
     {
         this.policy = requireNonNull(policy, "policy is null");
+        this.genericScalarCompiler = new GenericScalarProjectionCompiler(policy.fusedDictionaryDomainMinimumReduction());
     }
 
     private enum PhysicalType { LONG, DOUBLE, BOOL, UTF8, NULLS_ONLY }
 
-    public enum InputPhysicalType { LONG, DOUBLE, UTF8, NULLS_ONLY }
+    public enum InputPhysicalType { LONG, DOUBLE, BOOLEAN, UTF8, NULLS_ONLY }
 
     private enum Utf8Component { DATA, START, LENGTH }
 
@@ -159,7 +161,7 @@ public final class FusedProjectionCompiler
             }
         }
         if (fusible.isEmpty()) {
-            return Optional.empty();
+            return genericScalarCompiler.tryCompile(plan, primitiveRegistry, candidateOutputs);
         }
 
         SliceBuilder combined = new SliceBuilder(assignments, primitiveRegistry);
@@ -197,6 +199,7 @@ public final class FusedProjectionCompiler
         }
         closed = true;
         cache.clear();
+        genericScalarCompiler.close();
     }
 
     private static boolean worthFusing(
