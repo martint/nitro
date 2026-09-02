@@ -13,18 +13,21 @@
  */
 package org.weakref.nitro.core.function.table;
 
+import org.weakref.nitro.core.batch.ColumnView;
 import org.weakref.nitro.core.batch.SourceBatch;
 
 import java.util.List;
 
+import static java.util.Objects.requireNonNull;
+
 /// Table-function output with explicit pass-through row-reference columns.
 ///
-/// Columns before [#properOutputCount()] are function results. Each [PassThroughReference]
-/// identifies one additional integral column containing zero-based logical positions in the
-/// selected input argument partition; its NULLS stream requests a null-extended pass-through row.
+/// Every logical column in the batch is a proper function result. Each [PassThroughReference]
+/// carries a separate integral column view containing zero-based logical positions in the selected
+/// input argument partition; its NULLS stream requests a null-extended pass-through row.
 /// The engine can use one reference to gather any number of requested columns from that argument.
-/// Reference descriptors correspond, in order, to the columns following the proper outputs. The
-/// processor transfers the batch to the caller, which closes it after downstream consumption.
+/// Reference views are physical metadata, not hidden logical output columns. The processor transfers
+/// the batch and reference views to the caller, which closes them after downstream consumption.
 public interface TableFunctionOutputBatch
         extends SourceBatch
 {
@@ -32,13 +35,14 @@ public interface TableFunctionOutputBatch
 
     List<PassThroughReference> passThroughReferences();
 
-    record PassThroughReference(int argument)
+    record PassThroughReference(int argument, ColumnView positions)
     {
         public PassThroughReference
         {
             if (argument < 0) {
                 throw new IllegalArgumentException("argument is negative");
             }
+            positions = requireNonNull(positions, "positions is null");
         }
     }
 }

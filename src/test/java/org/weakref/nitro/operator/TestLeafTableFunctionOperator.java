@@ -15,6 +15,7 @@ package org.weakref.nitro.operator;
 
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.core.batch.BatchCapability;
+import org.weakref.nitro.core.batch.ColumnTraits;
 import org.weakref.nitro.core.batch.ColumnView;
 import org.weakref.nitro.core.batch.Selection;
 import org.weakref.nitro.core.batch.SourceBatch;
@@ -29,9 +30,12 @@ import org.weakref.nitro.core.function.table.TableFunctionOutputDemand;
 import org.weakref.nitro.core.function.table.TableFunctionProcessor;
 import org.weakref.nitro.core.function.table.TableFunctionProgress;
 import org.weakref.nitro.core.type.Schema;
+import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.MaskSelection;
+import org.weakref.nitro.data.Stream;
+import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.execution.EngineResources;
 import org.weakref.nitro.operator.source.SourceBatchOperatorIngress;
 
@@ -122,7 +126,9 @@ final class TestLeafTableFunctionOperator
     @Test
     void testRejectsPassThroughReference()
     {
-        TestOutputBatch output = new TestOutputBatch(1, List.of(new TableFunctionOutputBatch.PassThroughReference(0)));
+        TestOutputBatch output = new TestOutputBatch(
+                1,
+                List.of(new TableFunctionOutputBatch.PassThroughReference(0, unusedReferencePositions(1))));
         TestingProcessor processor = new TestingProcessor(new TableFunctionProgress.Produced(output, Set.of()));
 
         try (Allocator allocator = new Allocator(EngineResources.createDefault());
@@ -137,6 +143,48 @@ final class TestLeafTableFunctionOperator
                     .hasMessage("leaf table function returned a pass-through reference");
         }
         assertThat(output.closed()).isTrue();
+    }
+
+    private static ColumnView unusedReferencePositions(int positionCount)
+    {
+        return new ColumnView()
+        {
+            @Override
+            public TypeBinding type()
+            {
+                throw new UnsupportedOperationException();
+            }
+
+            @Override
+            public int positionCount()
+            {
+                return positionCount;
+            }
+
+            @Override
+            public ColumnTraits traits()
+            {
+                throw new UnsupportedOperationException();
+            }
+
+            @Override
+            public Set<Stream> streams()
+            {
+                throw new UnsupportedOperationException();
+            }
+
+            @Override
+            public Vector borrow(Stream stream)
+            {
+                throw new UnsupportedOperationException();
+            }
+
+            @Override
+            public Vector take(Stream stream)
+            {
+                throw new UnsupportedOperationException();
+            }
+        };
     }
 
     private static final class TestingProcessor

@@ -49,7 +49,8 @@ final class TestTableFunctionOutputAssembler
 {
     private static final TypeBinding BIGINT = bigintType();
     private static final Schema INPUT_SCHEMA = new Schema(List.of(new Field("input", BIGINT, true)));
-    private static final Schema FUNCTION_OUTPUT_SCHEMA = new Schema(List.of(
+    private static final Schema PROPER_OUTPUT_SCHEMA = new Schema(List.of(new Field("proper", BIGINT, true)));
+    private static final Schema PHYSICAL_OUTPUT_SCHEMA = new Schema(List.of(
             new Field("proper", BIGINT, true),
             new Field("reference", BIGINT, true)));
     private static final Schema FINAL_OUTPUT_SCHEMA = new Schema(List.of(
@@ -152,7 +153,7 @@ final class TestTableFunctionOutputAssembler
                 ? allocator.allocateRangeMask(buffers.context(), 0, selection.size())
                 : allocator.allocateSparseMask(buffers.context(), selection.selectedPositions(), selection.size());
         SourceBatch delegate = new VectorSourceBatch(
-                FUNCTION_OUTPUT_SCHEMA,
+                PHYSICAL_OUTPUT_SCHEMA,
                 ownedSelection,
                 new VectorColumnGeneration[] {
                         new VectorColumnGeneration(Set.of(Stream.VALUES), _ -> properVector, buffers),
@@ -164,7 +165,9 @@ final class TestTableFunctionOutputAssembler
                 buffers,
                 _ -> {},
                 () -> {});
-        return new OutputBatch(delegate);
+        return new OutputBatch(
+                delegate,
+                List.of(new TableFunctionOutputBatch.PassThroughReference(0, delegate.column(1))));
     }
 
     private static RowPositionIndex observing(RowPositionIndex delegate, AtomicInteger reads)
@@ -241,7 +244,7 @@ final class TestTableFunctionOutputAssembler
         };
     }
 
-    private record OutputBatch(SourceBatch delegate)
+    private record OutputBatch(SourceBatch delegate, List<PassThroughReference> passThroughReferences)
             implements TableFunctionOutputBatch
     {
         @Override
@@ -251,15 +254,9 @@ final class TestTableFunctionOutputAssembler
         }
 
         @Override
-        public List<PassThroughReference> passThroughReferences()
-        {
-            return List.of(new PassThroughReference(0));
-        }
-
-        @Override
         public Schema schema()
         {
-            return delegate.schema();
+            return PROPER_OUTPUT_SCHEMA;
         }
 
         @Override

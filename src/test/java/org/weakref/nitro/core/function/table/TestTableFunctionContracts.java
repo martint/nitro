@@ -54,7 +54,7 @@ final class TestTableFunctionContracts
     @Test
     void testValidatesPassThroughArgument()
     {
-        assertThatThrownBy(() -> new TableFunctionOutputBatch.PassThroughReference(-1))
+        assertThatThrownBy(() -> new TableFunctionOutputBatch.PassThroughReference(-1, null))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("argument is negative");
     }

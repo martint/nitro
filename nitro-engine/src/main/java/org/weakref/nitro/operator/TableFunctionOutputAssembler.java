@@ -160,8 +160,8 @@ final class TableFunctionOutputAssembler
         if (output.properOutputCount() != properOutputCount) {
             throw new IllegalArgumentException("proper output count does not match plan");
         }
-        if (output.schema().size() != properOutputCount + output.passThroughReferences().size()) {
-            throw new IllegalArgumentException("table-function output schema does not match reference columns");
+        if (output.schema().size() != properOutputCount) {
+            throw new IllegalArgumentException("table-function output schema does not match proper outputs");
         }
         if (output.selection().count() == 0) {
             throw new IllegalArgumentException("table-function output is empty");
@@ -176,12 +176,15 @@ final class TableFunctionOutputAssembler
     private Map<Integer, Streams> references(TableFunctionOutputBatch output, VectorBatchScope buffers)
     {
         Map<Integer, Streams> references = new HashMap<>();
-        for (int index = 0; index < output.passThroughReferences().size(); index++) {
-            int argument = output.passThroughReferences().get(index).argument();
+        for (TableFunctionOutputBatch.PassThroughReference reference : output.passThroughReferences()) {
+            int argument = reference.argument();
             if (argument >= arguments.size()) {
                 throw new IllegalArgumentException("pass-through reference argument is out of bounds");
             }
-            if (references.put(argument, transferStreams(output.column(properOutputCount + index), buffers)) != null) {
+            if (reference.positions().positionCount() != output.selection().positionCount()) {
+                throw new IllegalArgumentException("pass-through reference domain does not match output");
+            }
+            if (references.put(argument, transferStreams(reference.positions(), buffers)) != null) {
                 throw new IllegalArgumentException("duplicate pass-through reference argument");
             }
         }

@@ -116,7 +116,7 @@ final class TestUnpartitionedTableFunctionOperator
                     ExecutionContext executionContext)
             {
                 return new TableFunctionProgress.Produced(
-                        new TestingOutputBatch(1, List.of(new TableFunctionOutputBatch.PassThroughReference(0))),
+                        referenceOutput(allocator, 0),
                         Set.of(0));
             }
 
@@ -438,7 +438,9 @@ final class TestUnpartitionedTableFunctionOperator
                 buffers,
                 _ -> {},
                 () -> {});
-        return new ReferenceOutputBatch(delegate);
+        return new ReferenceOutputBatch(
+                delegate,
+                List.of(new TableFunctionOutputBatch.PassThroughReference(0, delegate.column(0))));
     }
 
     private static TableFunctionOutputBatch referenceOutput(Allocator allocator, long[] referenceValues)
@@ -459,7 +461,7 @@ final class TestUnpartitionedTableFunctionOperator
                 _ -> {},
                 () -> {});
         return new MultiReferenceOutputBatch(delegate, java.util.stream.IntStream.range(0, referenceValues.length)
-                .mapToObj(TableFunctionOutputBatch.PassThroughReference::new)
+                .mapToObj(argument -> new TableFunctionOutputBatch.PassThroughReference(argument, delegate.column(argument)))
                 .toList());
     }
 
@@ -703,7 +705,7 @@ final class TestUnpartitionedTableFunctionOperator
         public void close() {}
     }
 
-    private record ReferenceOutputBatch(SourceBatch delegate)
+    private record ReferenceOutputBatch(SourceBatch delegate, List<PassThroughReference> passThroughReferences)
             implements TableFunctionOutputBatch
     {
         @Override
@@ -713,15 +715,9 @@ final class TestUnpartitionedTableFunctionOperator
         }
 
         @Override
-        public List<PassThroughReference> passThroughReferences()
-        {
-            return List.of(new PassThroughReference(0));
-        }
-
-        @Override
         public Schema schema()
         {
-            return delegate.schema();
+            return EMPTY_SCHEMA;
         }
 
         @Override
@@ -733,7 +729,7 @@ final class TestUnpartitionedTableFunctionOperator
         @Override
         public ColumnView column(int index)
         {
-            return delegate.column(index);
+            throw new IndexOutOfBoundsException(index);
         }
 
         @Override
@@ -766,7 +762,7 @@ final class TestUnpartitionedTableFunctionOperator
         @Override
         public Schema schema()
         {
-            return delegate.schema();
+            return EMPTY_SCHEMA;
         }
 
         @Override
@@ -778,7 +774,7 @@ final class TestUnpartitionedTableFunctionOperator
         @Override
         public ColumnView column(int index)
         {
-            return delegate.column(index);
+            throw new IndexOutOfBoundsException(index);
         }
 
         @Override
