@@ -13,13 +13,9 @@
  */
 package org.weakref.nitro.operator.source;
 
-import org.weakref.nitro.core.batch.Selection;
-import org.weakref.nitro.core.batch.SourceBatch;
 import org.weakref.nitro.core.source.BatchSource;
 import org.weakref.nitro.core.source.RuntimeFilter;
 import org.weakref.nitro.core.source.SourceColumnHandle;
-import org.weakref.nitro.data.Mask;
-import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.DynamicFilter;
 import org.weakref.nitro.operator.Operator;
 
@@ -31,21 +27,12 @@ import java.util.Optional;
 /// and connector implementations depend only on the core source SPI; they do not see this engine
 /// adapter or native operator types.
 public interface SourceOperatorIngress
+        extends SourceBatchOperatorIngress
 {
     /// Returns a direct operator only when the source is already a native compatibility facade.
     default Optional<Operator> directOperator(BatchSource source)
     {
         return Optional.empty();
-    }
-
-    /// On success, takes ownership of [batch] and returns a native batch that owns its resulting
-    /// lifetime. If adaptation fails, ownership remains with the caller.
-    Batch adapt(SourceBatch batch);
-
-    /// Translates the operator island's row selection into the source SPI.
-    default Selection selection(Mask mask)
-    {
-        throw new UnsupportedOperationException("selection translation is not supported");
     }
 
     /// Returns whether this ingress can translate an operator-island filter for [column] of [source].
