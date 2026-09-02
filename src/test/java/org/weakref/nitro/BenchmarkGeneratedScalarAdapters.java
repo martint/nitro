@@ -46,7 +46,6 @@ import org.weakref.nitro.function.scalar.PrimitiveFunction;
 import org.weakref.nitro.function.scalar.ScalarAdapterGenerator;
 import org.weakref.nitro.function.scalar.ScalarMethodTarget;
 import org.weakref.nitro.function.scalar.builtin.AddI64;
-import org.weakref.nitro.function.scalar.builtin.CastI64ToF64;
 
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
@@ -97,7 +96,6 @@ public class BenchmarkGeneratedScalarAdapters
     private PrimitiveFunction nativeAdd;
     private PrimitiveFunction generatedAdd;
     private PrimitiveFunction generatedBoundAdd;
-    private PrimitiveFunction nativeCast;
     private PrimitiveFunction generatedCast;
     private PrimitiveFunction generatedBoundCast;
     private PrimitiveFunction generatedMultiply;
@@ -137,7 +135,6 @@ public class BenchmarkGeneratedScalarAdapters
         doubleOutput = Streams.ofValues(new F64Vector(POSITION_COUNT));
 
         nativeAdd = new AddI64();
-        nativeCast = new CastI64ToF64();
         ScalarAdapterGenerator generator = new ScalarAdapterGenerator();
         generatedAdd = generator.adapt(
                 "generated_add",
@@ -236,12 +233,6 @@ public class BenchmarkGeneratedScalarAdapters
     public Streams generatedBoundAdd()
     {
         return generatedBoundAdd.apply(binaryInputs, mask, VALUES, longOutput, context);
-    }
-
-    @Benchmark
-    public Streams nativeCast()
-    {
-        return nativeCast.apply(unaryInput, mask, VALUES, doubleOutput, context);
     }
 
     @Benchmark
