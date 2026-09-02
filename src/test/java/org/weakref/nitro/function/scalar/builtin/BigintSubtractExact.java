@@ -32,12 +32,12 @@ import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
-@ScalarFunction(name = "add_exact")
-public final class AddExactI64
+@ScalarFunction(name = "bigint_subtract_exact")
+public final class BigintSubtractExact
         implements PrimitiveFunction
 {
-    private final Allocator.Context allocationContext = new Allocator.Context("AddExactI64");
-    private final Allocator.Context errorsContext = new Allocator.Context("AddExactI64.errors");
+    private final Allocator.Context allocationContext = new Allocator.Context("BigintSubtractExact");
+    private final Allocator.Context errorsContext = new Allocator.Context("BigintSubtractExact.errors");
 
     @Override
     public Set<Allocator.Context> allocationContexts()
@@ -46,38 +46,59 @@ public final class AddExactI64
     }
 
     @Override
+    public Set<Stream> requiredInputStreams(int inputIndex, Set<Stream> requestedOutputStreams)
+    {
+        return PrimitiveFunction.inputStreams(
+                requestedOutputStreams.contains(Stream.VALUES) || requestedOutputStreams.contains(Stream.NULLS) || requestedOutputStreams.contains(Stream.ERRORS),
+                requestedOutputStreams.contains(Stream.NULLS),
+                false);
+    }
+
+    @Override
     public Streams apply(List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
     {
-        checkArgument(inputs.size() == 2, "Unexpected argument count for add_exact");
+        checkArgument(inputs.size() == 2, "Unexpected argument count for bigint_subtract_exact");
 
         Vector left = inputs.get(0).values();
         Vector right = inputs.get(1).values();
+        Vector leftNulls = inputs.get(0).getOrNull(Stream.NULLS);
+        Vector rightNulls = inputs.get(1).getOrNull(Stream.NULLS);
         boolean requestValues = requestedStreams.contains(Stream.VALUES);
+        boolean requestNulls = requestedStreams.contains(Stream.NULLS);
         boolean requestErrors = requestedStreams.contains(Stream.ERRORS);
         Vector existingValues = output != null && output.has(Stream.VALUES) ? output.values() : null;
         Vector existingErrors = output != null && output.has(Stream.ERRORS) ? output.get(Stream.ERRORS) : null;
 
-        if (left instanceof RleVector leftRle && right instanceof RleVector rightRle && mask.all() && existingValues == null && existingErrors == null) {
+        if (left instanceof RleVector leftRle && right instanceof RleVector rightRle && mask.all() && existingValues == null && existingErrors == null && !requestNulls && leftNulls == null && rightNulls == null) {
             if (requestValues && requestErrors) {
                 int resultLength = RleVector.computeTargetRleLength(leftRle, rightRle);
                 I64Vector values = context.allocator().allocate(allocationContext, I64Vector.class, resultLength, I64Vector::new);
                 BooleanVector errors = context.allocator().allocate(errorsContext, BooleanVector.class, resultLength, BooleanVector::new);
-                I64BinaryDispatch.RleWithErrors result = I64BinaryDispatch.rleRleLongWithErrors(leftRle, rightRle, values, errors, AddExactI64::apply);
+                I64BinaryDispatch.RleWithErrors result = I64BinaryDispatch.rleRleLongWithErrors(leftRle, rightRle, values, errors, BigintSubtractExact::apply);
                 return Streams.ofValues(result.values()).with(Stream.ERRORS, result.errors());
             }
             if (requestErrors) {
                 BooleanVector errors = context.allocator().allocate(errorsContext, BooleanVector.class, RleVector.computeTargetRleLength(leftRle, rightRle), BooleanVector::new);
-                return Streams.of(Stream.ERRORS, I64BinaryDispatch.rleRleErrorsOnly(leftRle, rightRle, errors, AddExactI64::apply));
+                return Streams.of(Stream.ERRORS, I64BinaryDispatch.rleRleErrorsOnly(leftRle, rightRle, errors, BigintSubtractExact::apply));
             }
             if (requestValues) {
                 I64Vector values = context.allocator().allocate(allocationContext, I64Vector.class, RleVector.computeTargetRleLength(leftRle, rightRle), I64Vector::new);
-                return Streams.ofValues(I64BinaryDispatch.rleRleLong(leftRle, rightRle, values, AddExactI64::result));
+                return Streams.ofValues(I64BinaryDispatch.rleRleLong(leftRle, rightRle, values, BigintSubtractExact::result));
             }
             return Streams.empty();
         }
 
         int length = I64BinaryDispatch.requiredLength(mask, Math.max(left.length(), right.length()));
         Streams resultStreams = Streams.empty();
+        if (requestNulls) {
+            BooleanVector nulls = VectorAccess.writableBooleanVector(
+                    context.allocator(),
+                    allocationContext,
+                    output != null && output.has(Stream.NULLS) ? output.get(Stream.NULLS) : null,
+                    length);
+            applyNulls(leftNulls, rightNulls, mask, nulls);
+            resultStreams = resultStreams.with(Stream.NULLS, nulls);
+        }
         if (requestValues && requestErrors) {
             I64Vector result = context.allocator().allocateOrGrow(
                     allocationContext,
@@ -90,7 +111,7 @@ public final class AddExactI64
                     errorsContext,
                     existingErrors,
                     length);
-            I64BinaryDispatch.applyLongWithErrors(left, right, mask, result, errors, AddExactI64::apply);
+            I64BinaryDispatch.applyLongWithErrors(left, right, mask, result, errors, BigintSubtractExact::apply);
             resultStreams = Streams.ofValues(result).with(Stream.ERRORS, errors);
         }
         else if (requestErrors) {
@@ -99,7 +120,7 @@ public final class AddExactI64
                     errorsContext,
                     existingErrors,
                     length);
-            I64BinaryDispatch.applyErrorsOnly(left, right, mask, errors, AddExactI64::apply);
+            I64BinaryDispatch.applyErrorsOnly(left, right, mask, errors, BigintSubtractExact::apply);
             resultStreams = Streams.of(Stream.ERRORS, errors);
         }
         else if (requestValues) {
@@ -109,24 +130,29 @@ public final class AddExactI64
                     I64Vector.class,
                     length,
                     I64Vector::new);
-            I64BinaryDispatch.applyLong(left, right, mask, result, AddExactI64::result);
+            I64BinaryDispatch.applyLong(left, right, mask, result, BigintSubtractExact::result);
             resultStreams = Streams.ofValues(result);
         }
         return resultStreams;
     }
 
+    private static void applyNulls(Vector leftNulls, Vector rightNulls, Mask mask, BooleanVector outputNulls)
+    {
+        VectorAccess.combineNullsOr(leftNulls, rightNulls, mask, outputNulls);
+    }
+
     private static void apply(long leftValue, long rightValue, long[] values, boolean[] errors, int position)
     {
-        long result = leftValue + rightValue;
+        long result = leftValue - rightValue;
         if (values != null) {
             values[position] = result;
         }
-        // HD 2-12: overflow iff both arguments have the opposite sign of the result.
-        errors[position] = ((leftValue ^ result) & (rightValue ^ result)) < 0;
+        // HD 2-12: overflow iff the arguments have different signs and the result has the opposite sign of the left argument.
+        errors[position] = ((leftValue ^ rightValue) & (leftValue ^ result)) < 0;
     }
 
     private static long result(long leftValue, long rightValue)
     {
-        return leftValue + rightValue;
+        return leftValue - rightValue;
     }
 }

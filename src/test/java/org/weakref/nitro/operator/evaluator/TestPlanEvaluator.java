@@ -2169,7 +2169,7 @@ public class TestPlanEvaluator
     {
         PrimitiveRegistry primitiveRegistry = primitiveRegistry();
 
-        Streams addExact = primitiveRegistry.get("add_exact").apply(
+        Streams addExact = primitiveRegistry.get("bigint_add_exact").apply(
                 List.of(
                         Streams.ofValues(new RleVector(new int[] {2, 2}, new I64Vector(new long[] {1, 5}))),
                         Streams.ofValues(new RleVector(new int[] {1, 3}, new I64Vector(new long[] {10, 20})))),
@@ -2183,7 +2183,7 @@ public class TestPlanEvaluator
         assertThat(addExact.get(Stream.ERRORS)).isInstanceOf(RleVector.class);
         assertThat(((BooleanVector) ((RleVector) addExact.get(Stream.ERRORS)).values()).values()).containsExactly(false, false, false);
 
-        Streams subtractExact = primitiveRegistry.get("subtract_exact").apply(
+        Streams subtractExact = primitiveRegistry.get("bigint_subtract_exact").apply(
                 List.of(
                         Streams.ofValues(new RleVector(new int[] {2, 2}, new I64Vector(new long[] {10, 30}))),
                         Streams.ofValues(new I64Vector(new long[] {1, 2, 3, 4}))),
@@ -2202,7 +2202,7 @@ public class TestPlanEvaluator
     {
         PrimitiveRegistry primitiveRegistry = primitiveRegistry();
 
-        Streams addExact = primitiveRegistry.get("add_exact").apply(
+        Streams addExact = primitiveRegistry.get("bigint_add_exact").apply(
                 List.of(
                         Streams.ofValues(new I64Vector(new long[] {Long.MAX_VALUE, 1})),
                         Streams.ofValues(new I64Vector(new long[] {1, 2}))),
@@ -2214,7 +2214,7 @@ public class TestPlanEvaluator
         assertThat(((I64Vector) addExact.values()).values()).containsExactly(Long.MIN_VALUE, 3L);
         assertThat(((BooleanVector) addExact.get(Stream.ERRORS)).values()).containsExactly(true, false);
 
-        Streams subtractExact = primitiveRegistry.get("subtract_exact").apply(
+        Streams subtractExact = primitiveRegistry.get("bigint_subtract_exact").apply(
                 List.of(
                         Streams.ofValues(new I64Vector(new long[] {Long.MIN_VALUE, 10})),
                         Streams.ofValues(new I64Vector(new long[] {1, 3}))),
@@ -3737,7 +3737,7 @@ public class TestPlanEvaluator
         EvaluationPlan plan = new EvaluationPlan(
                 List.of(new Assignment(
                         difference,
-                        new Call("subtract_exact", List.of(
+                        new Call("bigint_subtract_exact", List.of(
                                 new Reference(new Input(0), Stream.VALUES),
                                 new Reference(new Input(1), Stream.VALUES))),
                         AllMask.ALL)),
@@ -3750,7 +3750,7 @@ public class TestPlanEvaluator
                 (reference, mask) -> {
                     if (reference.equals(new Reference(new Input(0), Stream.NULLS)) || reference.equals(new Reference(new Input(1), Stream.NULLS))) {
                         requestedNulls.set(true);
-                        throw new AssertionError("subtract_exact error-only path should not request input nulls");
+                        throw new AssertionError("bigint_subtract_exact error-only path should not request input nulls");
                     }
                     if (reference.equals(new Reference(new Input(0), Stream.VALUES))) {
                         return new I64Vector(new long[] {Long.MIN_VALUE, 10L});

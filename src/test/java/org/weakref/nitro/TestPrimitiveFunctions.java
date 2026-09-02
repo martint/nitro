@@ -23,14 +23,15 @@ import org.weakref.nitro.function.scalar.AnnotatedScalarLoader;
 import org.weakref.nitro.function.scalar.ScalarAdapterGenerator;
 import org.weakref.nitro.function.scalar.ScalarDescriptor;
 import org.weakref.nitro.function.scalar.ScalarMethodTarget;
-import org.weakref.nitro.function.scalar.builtin.AddExactI64;
 import org.weakref.nitro.function.scalar.builtin.AddF64Optimization;
 import org.weakref.nitro.function.scalar.builtin.AddI64;
 import org.weakref.nitro.function.scalar.builtin.AndBoolean;
 import org.weakref.nitro.function.scalar.builtin.ArrayElementI64;
 import org.weakref.nitro.function.scalar.builtin.ArrayMinI64;
 import org.weakref.nitro.function.scalar.builtin.ArraySumI64;
+import org.weakref.nitro.function.scalar.builtin.BigintAddExact;
 import org.weakref.nitro.function.scalar.builtin.BigintRatio;
+import org.weakref.nitro.function.scalar.builtin.BigintSubtractExact;
 import org.weakref.nitro.function.scalar.builtin.Cardinality;
 import org.weakref.nitro.function.scalar.builtin.CoalesceI64;
 import org.weakref.nitro.function.scalar.builtin.CoalesceI64Policy;
@@ -79,7 +80,6 @@ import org.weakref.nitro.function.scalar.builtin.RoundedBigintRatio;
 import org.weakref.nitro.function.scalar.builtin.ScaledRoundedBigintRatio;
 import org.weakref.nitro.function.scalar.builtin.StartsWithUtf8;
 import org.weakref.nitro.function.scalar.builtin.SubstringUtf8;
-import org.weakref.nitro.function.scalar.builtin.SubtractExactI64;
 import org.weakref.nitro.function.scalar.builtin.SubtractF64Optimization;
 import org.weakref.nitro.function.scalar.builtin.SubtractI64;
 import org.weakref.nitro.function.scalar.builtin.UpperUtf8;
@@ -141,9 +141,9 @@ public final class TestPrimitiveFunctions
                 MapKeys.class,
                 MapValues.class,
                 NullI64.class,
-                AddExactI64.class,
+                BigintAddExact.class,
                 SubtractI64.class,
-                SubtractExactI64.class,
+                BigintSubtractExact.class,
                 MultiplyI64.class,
                 DivideI64.class,
                 BigintRatio.class,
