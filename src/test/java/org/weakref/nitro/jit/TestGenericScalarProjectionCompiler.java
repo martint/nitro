@@ -90,6 +90,7 @@ final class TestGenericScalarProjectionCompiler
                 Allocator allocator = new Allocator(createDefault())) {
             FusedProjectionCompiler.CompiledMultiProjection compiled = compiler.tryCompile(plan, registry, List.of(output)).orElseThrow();
             assertThat(compiled.inputs()).containsExactly(input(0), input(1), input(2));
+            assertThat(compiled.compilationKind()).isEqualTo(FusedProjectionCompiler.CompilationKind.SCALAR_TARGET);
 
             Streams[] results = compiled.kernel().apply(
                     List.of(

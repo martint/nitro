@@ -1693,6 +1693,8 @@ public class TestOperators
         assertThat(diagnostics)
                 .containsEntry(ProjectOperator.PLANNED_ASSIGNMENTS, 3L)
                 .containsEntry(ProjectOperator.GENERATED_KERNELS, 1L)
+                .containsEntry(ProjectOperator.GENERATED_PHYSICAL_PROGRAM_KERNELS, 1L)
+                .containsEntry(ProjectOperator.GENERATED_SCALAR_TARGET_KERNELS, 0L)
                 .containsEntry(ProjectOperator.GENERATED_ATTEMPTS, 1L)
                 .containsEntry(ProjectOperator.GENERATED_SUCCESSES, 1L)
                 .containsEntry(ProjectOperator.GENERATED_SELECTED_POSITIONS, 3L)

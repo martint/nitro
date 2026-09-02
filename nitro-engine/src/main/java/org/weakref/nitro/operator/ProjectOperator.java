@@ -31,6 +31,7 @@ import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.execution.EngineResources;
 import org.weakref.nitro.function.scalar.PrimitiveExecutionContext;
+import org.weakref.nitro.jit.FusedProjectionCompiler.CompilationKind;
 import org.weakref.nitro.jit.FusedProjectionCompiler.CompiledMultiProjection;
 import org.weakref.nitro.operator.evaluator.PlanEvaluator;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
@@ -59,6 +60,8 @@ public class ProjectOperator
     public static final String PLANNED_COMPUTED_OUTPUTS = "nitro.projection.planned-computed-outputs";
     public static final String GENERATED_OUTPUTS = "nitro.projection.generated-outputs";
     public static final String GENERATED_KERNELS = "nitro.projection.generated-kernels";
+    public static final String GENERATED_PHYSICAL_PROGRAM_KERNELS = "nitro.projection.generated-physical-program-kernels";
+    public static final String GENERATED_SCALAR_TARGET_KERNELS = "nitro.projection.generated-scalar-target-kernels";
     public static final String GENERATED_ATTEMPTS = "nitro.projection.generated-attempts";
     public static final String GENERATED_SUCCESSES = "nitro.projection.generated-successes";
     public static final String GENERATED_ERROR_FALLBACKS = "nitro.projection.generated-error-fallbacks";
@@ -193,6 +196,12 @@ public class ProjectOperator
                 .count());
         diagnostics.record(GENERATED_OUTPUTS, compiled == null ? 0 : compiled.outputs().size());
         diagnostics.record(GENERATED_KERNELS, compiled == null ? 0 : 1);
+        diagnostics.record(
+                GENERATED_PHYSICAL_PROGRAM_KERNELS,
+                compiled != null && compiled.compilationKind() == CompilationKind.PHYSICAL_PROGRAM ? 1 : 0);
+        diagnostics.record(
+                GENERATED_SCALAR_TARGET_KERNELS,
+                compiled != null && compiled.compilationKind() == CompilationKind.SCALAR_TARGET ? 1 : 0);
     }
 
     private static Schema projectedSchema(EvaluationPlan evaluationPlan, Schema sourceSchema)

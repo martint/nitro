@@ -111,7 +111,8 @@ final class GenericScalarProjectionCompiler
                         canonical.leaves().stream().map(leaf -> inputPhysicalType(leaf.type())).toList(),
                         canonical.leaves().stream().map(_ -> false).toList(),
                         List.of(output),
-                        dictionaryDomainMinimumReduction));
+                        dictionaryDomainMinimumReduction,
+                        FusedProjectionCompiler.CompilationKind.SCALAR_TARGET));
             }
             catch (Unsupported ignored) {
                 // The ordinary evaluator remains authoritative for every unadmitted shape.

@@ -90,6 +90,8 @@ public final class FusedProjectionCompiler
 
     public enum InputPhysicalType { LONG, DOUBLE, BOOLEAN, UTF8, NULLS_ONLY }
 
+    public enum CompilationKind { PHYSICAL_PROGRAM, SCALAR_TARGET }
+
     private enum Utf8Component { DATA, START, LENGTH }
 
     private sealed interface Operand
@@ -120,7 +122,8 @@ public final class FusedProjectionCompiler
             List<InputPhysicalType> inputTypes,
             List<Boolean> flattensDictionaryValues,
             List<Reference> outputs,
-            int dictionaryDomainMinimumReduction) {}
+            int dictionaryDomainMinimumReduction,
+            CompilationKind compilationKind) {}
 
     /**
      * Compile every fusible output among {@code candidateOutputs} into one shared-loop kernel. Returns empty if none
@@ -188,7 +191,8 @@ public final class FusedProjectionCompiler
                 slice.inputTypes().stream().map(FusedProjectionCompiler::inputPhysicalType).toList(),
                 slice.inputTypes().stream().map(this::flattensDictionaryValues).toList(),
                 List.copyOf(fusible),
-                policy.fusedDictionaryDomainMinimumReduction()));
+                policy.fusedDictionaryDomainMinimumReduction(),
+                CompilationKind.PHYSICAL_PROGRAM));
     }
 
     @Override
