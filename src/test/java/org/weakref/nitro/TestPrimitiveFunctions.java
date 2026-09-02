@@ -23,7 +23,7 @@ import org.weakref.nitro.function.scalar.ScalarAdapterGenerator;
 import org.weakref.nitro.function.scalar.ScalarDescriptor;
 import org.weakref.nitro.function.scalar.ScalarMethodTarget;
 import org.weakref.nitro.function.scalar.builtin.AddExactI64;
-import org.weakref.nitro.function.scalar.builtin.AddF64;
+import org.weakref.nitro.function.scalar.builtin.AddF64Optimization;
 import org.weakref.nitro.function.scalar.builtin.AddI64;
 import org.weakref.nitro.function.scalar.builtin.AndBoolean;
 import org.weakref.nitro.function.scalar.builtin.ArrayContainsI64;
@@ -93,6 +93,7 @@ import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.util.List;
+import java.util.stream.Stream;
 
 import static org.weakref.nitro.core.function.FunctionSemantics.ArgumentNullConvention.RETURN_NULL_ON_NULL;
 import static org.weakref.nitro.core.function.FunctionSemantics.FailureConvention.NEVER_FAILS;
@@ -132,7 +133,6 @@ public final class TestPrimitiveFunctions
                 LessThanOrEqualUtf8.class,
                 MultiplyF64.class,
                 SubtractF64.class,
-                AddF64.class,
                 HashUtf8.class,
                 IfF64.class,
                 IfI32.class,
@@ -170,8 +170,38 @@ public final class TestPrimitiveFunctions
                 UpperUtf8.class)) {
             primitiveRegistry.register(load(scalarLoader, functionClass, utf8Policy));
         }
+        primitiveRegistry.register(generatedAddDouble());
         primitiveRegistry.register(generatedYearOfDate());
         return primitiveRegistry;
+    }
+
+    private static ScalarDescriptor generatedAddDouble()
+    {
+        TypeBinding doubleType = new TestingTypeBinding(new TypeIdentity("test-double"), double.class);
+        ScalarDescriptor generated;
+        try {
+            generated = new ScalarAdapterGenerator().adapt(
+                    "add_f64",
+                    new BoundSignature(doubleType, List.of(doubleType, doubleType)),
+                    new FunctionSemantics(true, List.of(RETURN_NULL_ON_NULL, RETURN_NULL_ON_NULL), false, NEVER_FAILS),
+                    new ScalarMethodTarget(MethodHandles.lookup().findStatic(
+                            TestPrimitiveFunctions.class,
+                            "addDouble",
+                            MethodType.methodType(double.class, double.class, double.class))));
+        }
+        catch (NoSuchMethodException | IllegalAccessException exception) {
+            throw new ExceptionInInitializerError(exception);
+        }
+        return new ScalarDescriptor(
+                generated.name(),
+                generated.deterministic(),
+                generated.implementation(),
+                Stream.concat(generated.capabilities().stream(), Stream.of(new AddF64Optimization())).toList());
+    }
+
+    private static double addDouble(double left, double right)
+    {
+        return left + right;
     }
 
     private static ScalarDescriptor generatedYearOfDate()
