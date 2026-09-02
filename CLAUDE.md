@@ -185,7 +185,7 @@ A working, lazy/memoized expression evaluator (not a stub):
   (`ScalarFunction`, `ScalarDescriptor`, `AnnotatedScalarLoader`);
   `function/scalar/builtin` holds built-ins across
   numeric, boolean, UTF-8/string, array, and map types (e.g. `AddI64`,
-  `EqualUtf8`, `RegexpReplaceUtf8`, `ArraySumI64`, `MapContainsKeyUtf8`,
+  `EqualUtf8`, `RegexpReplaceUtf8`, `Cardinality`, `MapContainsKeyUtf8`,
   `If*`/`Coalesce*`). Benchmark-only logical helpers remain under test sources.
 
 ### Parquet I/O

@@ -27,8 +27,6 @@ import org.weakref.nitro.function.scalar.builtin.AddF64Optimization;
 import org.weakref.nitro.function.scalar.builtin.AddI64;
 import org.weakref.nitro.function.scalar.builtin.AndBoolean;
 import org.weakref.nitro.function.scalar.builtin.ArrayElementI64;
-import org.weakref.nitro.function.scalar.builtin.ArrayMinI64;
-import org.weakref.nitro.function.scalar.builtin.ArraySumI64;
 import org.weakref.nitro.function.scalar.builtin.BigintAddExact;
 import org.weakref.nitro.function.scalar.builtin.BigintRatio;
 import org.weakref.nitro.function.scalar.builtin.BigintSubtractExact;
@@ -40,7 +38,6 @@ import org.weakref.nitro.function.scalar.builtin.ConcatUtf8;
 import org.weakref.nitro.function.scalar.builtin.ContainsUtf8;
 import org.weakref.nitro.function.scalar.builtin.DivideI64;
 import org.weakref.nitro.function.scalar.builtin.ElementAtI64Utf8;
-import org.weakref.nitro.function.scalar.builtin.ElementAtUtf8Utf8;
 import org.weakref.nitro.function.scalar.builtin.EqualF64;
 import org.weakref.nitro.function.scalar.builtin.EqualI64;
 import org.weakref.nitro.function.scalar.builtin.EqualUtf8;
@@ -104,8 +101,6 @@ public final class TestPrimitiveFunctions
         for (Class<?> functionClass : List.of(
                 AddI64.class,
                 ArrayElementI64.class,
-                ArrayMinI64.class,
-                ArraySumI64.class,
                 Cardinality.class,
                 BigintToIntegerExact.class,
                 MaterializeLongCarrier.class,
@@ -114,7 +109,6 @@ public final class TestPrimitiveFunctions
                 ConcatUtf8.class,
                 ContainsUtf8.class,
                 ElementAtI64Utf8.class,
-                ElementAtUtf8Utf8.class,
                 EqualF64.class,
                 EqualI64.class,
                 EqualUtf8.class,
