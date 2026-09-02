@@ -14,6 +14,7 @@
 package org.weakref.nitro;
 
 import org.weakref.nitro.core.function.BoundSignature;
+import org.weakref.nitro.core.function.FunctionCapability;
 import org.weakref.nitro.core.function.FunctionSemantics;
 import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.core.type.TypeIdentity;
@@ -71,7 +72,7 @@ import org.weakref.nitro.function.scalar.builtin.MapKeys;
 import org.weakref.nitro.function.scalar.builtin.MapValues;
 import org.weakref.nitro.function.scalar.builtin.MaterializeLongCarrier;
 import org.weakref.nitro.function.scalar.builtin.ModuloI64;
-import org.weakref.nitro.function.scalar.builtin.MultiplyF64;
+import org.weakref.nitro.function.scalar.builtin.MultiplyF64Optimization;
 import org.weakref.nitro.function.scalar.builtin.MultiplyI64;
 import org.weakref.nitro.function.scalar.builtin.NarrowLongCarrierToInt32Exact;
 import org.weakref.nitro.function.scalar.builtin.NotBoolean;
@@ -84,7 +85,7 @@ import org.weakref.nitro.function.scalar.builtin.RoundF64;
 import org.weakref.nitro.function.scalar.builtin.StartsWithUtf8;
 import org.weakref.nitro.function.scalar.builtin.SubstringUtf8;
 import org.weakref.nitro.function.scalar.builtin.SubtractExactI64;
-import org.weakref.nitro.function.scalar.builtin.SubtractF64;
+import org.weakref.nitro.function.scalar.builtin.SubtractF64Optimization;
 import org.weakref.nitro.function.scalar.builtin.SubtractI64;
 import org.weakref.nitro.function.scalar.builtin.UpperUtf8;
 import org.weakref.nitro.function.scalar.builtin.Utf8BinaryDispatchPolicy;
@@ -131,8 +132,6 @@ public final class TestPrimitiveFunctions
                 LessThanOrEqualF64.class,
                 LessThanOrEqualI64.class,
                 LessThanOrEqualUtf8.class,
-                MultiplyF64.class,
-                SubtractF64.class,
                 HashUtf8.class,
                 IfF64.class,
                 IfI32.class,
@@ -170,23 +169,25 @@ public final class TestPrimitiveFunctions
                 UpperUtf8.class)) {
             primitiveRegistry.register(load(scalarLoader, functionClass, utf8Policy));
         }
-        primitiveRegistry.register(generatedAddDouble());
+        primitiveRegistry.register(generatedDoubleBinary("add_f64", "addDouble", new AddF64Optimization()));
+        primitiveRegistry.register(generatedDoubleBinary("subtract_f64", "subtractDouble", new SubtractF64Optimization()));
+        primitiveRegistry.register(generatedDoubleBinary("multiply_f64", "multiplyDouble", new MultiplyF64Optimization()));
         primitiveRegistry.register(generatedYearOfDate());
         return primitiveRegistry;
     }
 
-    private static ScalarDescriptor generatedAddDouble()
+    private static ScalarDescriptor generatedDoubleBinary(String name, String methodName, FunctionCapability capability)
     {
         TypeBinding doubleType = new TestingTypeBinding(new TypeIdentity("test-double"), double.class);
         ScalarDescriptor generated;
         try {
             generated = new ScalarAdapterGenerator().adapt(
-                    "add_f64",
+                    name,
                     new BoundSignature(doubleType, List.of(doubleType, doubleType)),
                     new FunctionSemantics(true, List.of(RETURN_NULL_ON_NULL, RETURN_NULL_ON_NULL), false, NEVER_FAILS),
                     new ScalarMethodTarget(MethodHandles.lookup().findStatic(
                             TestPrimitiveFunctions.class,
-                            "addDouble",
+                            methodName,
                             MethodType.methodType(double.class, double.class, double.class))));
         }
         catch (NoSuchMethodException | IllegalAccessException exception) {
@@ -196,12 +197,22 @@ public final class TestPrimitiveFunctions
                 generated.name(),
                 generated.deterministic(),
                 generated.implementation(),
-                Stream.concat(generated.capabilities().stream(), Stream.of(new AddF64Optimization())).toList());
+                Stream.concat(generated.capabilities().stream(), Stream.of(capability)).toList());
     }
 
     private static double addDouble(double left, double right)
     {
         return left + right;
+    }
+
+    private static double subtractDouble(double left, double right)
+    {
+        return left - right;
+    }
+
+    private static double multiplyDouble(double left, double right)
+    {
+        return left * right;
     }
 
     private static ScalarDescriptor generatedYearOfDate()
