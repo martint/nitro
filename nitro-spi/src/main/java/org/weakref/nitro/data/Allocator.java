@@ -273,10 +273,17 @@ public class Allocator
 
     public RleVector allocateRle(Context context, int[] counts, Vector values)
     {
-        if (policy.directSingleRunRle() && counts.length == 1) {
+        return allocateRle(context, counts, counts.length, values);
+    }
+
+    public RleVector allocateRle(Context context, int[] counts, int count, Vector values)
+    {
+        requireNonNull(counts, "counts is null");
+        checkArgument(count >= 0 && count <= counts.length, "Invalid RLE count length: %s", count);
+        if (policy.directSingleRunRle() && count == 1) {
             return allocateSingleRunRle(context, counts[0], values);
         }
-        RleVector vector = new RleVector(Arrays.copyOf(counts, counts.length), values);
+        RleVector vector = new RleVector(Arrays.copyOf(counts, count), values);
         state(context).trackVector(vector, false);
         return vector;
     }

@@ -145,6 +145,39 @@ final class TestScalarAdapterGenerator
     }
 
     @Test
+    void testArbitraryArityPreservesRleDomains()
+            throws Throwable
+    {
+        MethodHandles.Lookup lookup = MethodHandles.lookup();
+        PrimitiveFunction function = new ScalarAdapterGenerator().adapt(
+                "multiply_add",
+                new BoundSignature(LONG, List.of(LONG, LONG, LONG)),
+                strictSemantics(3),
+                new ScalarMethodTarget(MethodHandles.collectArguments(
+                        lookup.findStatic(TestScalarAdapterGenerator.class, "add", MethodType.methodType(long.class, long.class, long.class)),
+                        0,
+                        lookup.findStatic(TestScalarAdapterGenerator.class, "multiply", MethodType.methodType(long.class, long.class, long.class)))))
+                .implementation();
+
+        try (Allocator allocator = new Allocator(createDefault())) {
+            Streams result = function.apply(
+                    List.of(
+                            Streams.ofValues(new RleVector(new int[] {2, 4}, new I64Vector(new long[] {2, 3}))),
+                            Streams.ofValues(new RleVector(new int[] {1, 2, 3}, new I64Vector(new long[] {5, 6, 7}))),
+                            Streams.ofValues(new RleVector(new int[] {3, 3}, new I64Vector(new long[] {8, 9})))),
+                    Mask.all(6),
+                    EnumSet.of(Stream.VALUES),
+                    Streams.empty(),
+                    new PrimitiveExecutionContext(allocator));
+
+            assertThat(result.values()).isInstanceOf(RleVector.class);
+            RleVector values = (RleVector) result.values();
+            assertThat(values.counts()).containsExactly(1, 1, 1, 3);
+            assertThat(((I64Vector) values.values()).values()).containsExactly(18, 20, 26, 30);
+        }
+    }
+
+    @Test
     void testNullOnlyDemandDoesNotReadValuesOrInvokeTarget()
             throws Throwable
     {

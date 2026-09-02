@@ -24,7 +24,7 @@ import org.weakref.nitro.function.scalar.ScalarAdapterGenerator;
 import org.weakref.nitro.function.scalar.ScalarDescriptor;
 import org.weakref.nitro.function.scalar.ScalarMethodTarget;
 import org.weakref.nitro.function.scalar.builtin.AddF64Optimization;
-import org.weakref.nitro.function.scalar.builtin.AddI64;
+import org.weakref.nitro.function.scalar.builtin.AddI64Optimization;
 import org.weakref.nitro.function.scalar.builtin.AndBoolean;
 import org.weakref.nitro.function.scalar.builtin.ArrayElementI64;
 import org.weakref.nitro.function.scalar.builtin.BigintAddExact;
@@ -99,7 +99,6 @@ public final class TestPrimitiveFunctions
         PrimitiveRegistry primitiveRegistry = new PrimitiveRegistry();
         Utf8BinaryDispatchPolicy utf8Policy = Utf8BinaryDispatchPolicy.fromSystemProperties();
         for (Class<?> functionClass : List.of(
-                AddI64.class,
                 ArrayElementI64.class,
                 Cardinality.class,
                 BigintToIntegerExact.class,
@@ -148,6 +147,7 @@ public final class TestPrimitiveFunctions
         }
         TypeBinding bigint = new TestingTypeBinding(new TypeIdentity("test-bigint"), long.class);
         TypeBinding doubleType = new TestingTypeBinding(new TypeIdentity("test-double"), double.class);
+        primitiveRegistry.register(generatedBinary("add", "addBigint", bigint, new AddI64Optimization()));
         primitiveRegistry.register(generatedBinary("subtract", "subtractBigint", bigint, new SubtractI64Optimization()));
         primitiveRegistry.register(generatedBinary("multiply", "multiplyBigint", bigint, new MultiplyI64Optimization()));
         primitiveRegistry.register(generatedBinary("add_f64", "addDouble", doubleType, new AddF64Optimization()));
@@ -283,6 +283,11 @@ public final class TestPrimitiveFunctions
     private static long multiplyBigint(long left, long right)
     {
         return left * right;
+    }
+
+    private static long addBigint(long left, long right)
+    {
+        return left + right;
     }
 
     private static ScalarDescriptor generatedYearOfDate()

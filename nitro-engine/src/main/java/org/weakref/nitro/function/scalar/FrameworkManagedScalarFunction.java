@@ -20,6 +20,7 @@ import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.F64Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
@@ -51,7 +52,7 @@ final class FrameworkManagedScalarFunction
         checkArgument(inputIndex >= 0 && inputIndex < signature.argumentTypes().size(), "Unexpected argument index: %s", inputIndex);
         return PrimitiveFunction.inputStreams(
                 requestedOutputStreams.contains(Stream.VALUES),
-                requestedOutputStreams.contains(Stream.VALUES) || requestedOutputStreams.contains(Stream.NULLS),
+                requestedOutputStreams.contains(Stream.NULLS),
                 false);
     }
 
@@ -79,7 +80,7 @@ final class FrameworkManagedScalarFunction
         }
         Allocator.Context allocationContext = context.allocationContext(name);
         InvocationState state = context.state(this, () -> new InvocationState(inputs.size()));
-        bindNulls(inputs, state);
+        bindNulls(inputs, state, requestNulls);
 
         Streams result = Streams.empty();
         if (requestNulls) {
@@ -93,6 +94,19 @@ final class FrameworkManagedScalarFunction
         }
         if (!requestValues) {
             return result;
+        }
+
+        if (mask.all() &&
+                (output == null || !output.has(Stream.VALUES)) &&
+                bindRleValuesIfNullFree(inputs, state, mask.size())) {
+            int runCount = mergeRuns(inputs, state);
+            Vector runValues = writableResult(context.allocator(), allocationContext, null, runCount);
+            kernel.applyDenseDictionaryNullFree(state.flatValues, state.rleIds, valueArray(runValues), runCount);
+            return result.with(Stream.VALUES, context.allocator().allocateRle(
+                    allocationContext,
+                    state.rleCounts,
+                    runCount,
+                    runValues));
         }
 
         Vector values = writableResult(context.allocator(), allocationContext, output, requiredLength);
@@ -149,6 +163,69 @@ final class FrameworkManagedScalarFunction
         return true;
     }
 
+    private boolean bindRleValuesIfNullFree(List<Streams> inputs, InvocationState state, int logicalLength)
+    {
+        if (inputs.isEmpty()) {
+            return false;
+        }
+        for (int index = 0; index < inputs.size(); index++) {
+            if (state.nulls[index] != null ||
+                    !(inputs.get(index).values() instanceof RleVector rle) ||
+                    rle.length() != logicalLength) {
+                return false;
+            }
+            Object values = primitiveArray(signature.argumentTypes().get(index).carrierType(), rle.values());
+            if (values == null) {
+                return false;
+            }
+            state.flatValues[index] = values;
+        }
+        return true;
+    }
+
+    private static int mergeRuns(List<Streams> inputs, InvocationState state)
+    {
+        int maximumRunCount = 1;
+        int logicalLength = -1;
+        for (Streams input : inputs) {
+            RleVector rle = (RleVector) input.values();
+            if (logicalLength < 0) {
+                logicalLength = rle.length();
+            }
+            else {
+                checkArgument(rle.length() == logicalLength, "RLE argument lengths do not match");
+            }
+            maximumRunCount += rle.counts().length - 1;
+        }
+        state.ensureRleCapacity(maximumRunCount);
+
+        int runCount = 0;
+        while (true) {
+            int count = Integer.MAX_VALUE;
+            for (int argument = 0; argument < inputs.size(); argument++) {
+                RleVector rle = (RleVector) inputs.get(argument).values();
+                int runIndex = state.rleRunIndices[argument];
+                if (runIndex == rle.counts().length) {
+                    return runCount;
+                }
+                if (state.rleRemaining[argument] == 0) {
+                    state.rleRemaining[argument] = rle.counts()[runIndex];
+                }
+                count = Math.min(count, state.rleRemaining[argument]);
+                state.rleIds[argument][runCount] = runIndex;
+            }
+
+            state.rleCounts[runCount] = count;
+            runCount++;
+            for (int argument = 0; argument < inputs.size(); argument++) {
+                state.rleRemaining[argument] -= count;
+                if (state.rleRemaining[argument] == 0) {
+                    state.rleRunIndices[argument]++;
+                }
+            }
+        }
+    }
+
     private boolean bindDictionaryValuesIfNullFree(List<Streams> inputs, InvocationState state)
     {
         for (int index = 0; index < inputs.size(); index++) {
@@ -181,9 +258,13 @@ final class FrameworkManagedScalarFunction
         }
     }
 
-    private static void bindNulls(List<Streams> inputs, InvocationState state)
+    private static void bindNulls(List<Streams> inputs, InvocationState state, boolean requested)
     {
         for (int index = 0; index < inputs.size(); index++) {
+            if (!requested) {
+                state.nulls[index] = null;
+                continue;
+            }
             Streams input = inputs.get(index);
             Vector nulls = input.getOrNull(Stream.NULLS);
             state.nulls[index] = VectorAccess.isAllFalseNulls(nulls) ? null : VectorAccess.booleanValues(nulls);
@@ -230,6 +311,20 @@ final class FrameworkManagedScalarFunction
         throw new IllegalArgumentException("Unsupported framework-managed argument carrier: " + carrier.getTypeName());
     }
 
+    private static Object primitiveArray(Class<?> carrier, Vector values)
+    {
+        if (carrier == long.class && values instanceof I64Vector vector) {
+            return vector.values();
+        }
+        if (carrier == double.class && values instanceof F64Vector vector) {
+            return vector.values();
+        }
+        if (carrier == boolean.class && values instanceof BooleanVector vector) {
+            return vector.values();
+        }
+        return null;
+    }
+
     private static Object valueArray(Vector vector)
     {
         return switch (vector) {
@@ -260,6 +355,10 @@ final class FrameworkManagedScalarFunction
         private final Object[] flatValues;
         private final int[][] dictionaryIds;
         private final Object[] nulls;
+        private final int[] rleRunIndices;
+        private final int[] rleRemaining;
+        private int[] rleCounts = new int[0];
+        private final int[][] rleIds;
 
         private InvocationState(int arity)
         {
@@ -267,6 +366,23 @@ final class FrameworkManagedScalarFunction
             flatValues = new Object[arity];
             dictionaryIds = new int[arity][];
             nulls = new Object[arity];
+            rleRunIndices = new int[arity];
+            rleRemaining = new int[arity];
+            rleIds = new int[arity][];
+        }
+
+        private void ensureRleCapacity(int capacity)
+        {
+            if (rleCounts.length < capacity) {
+                rleCounts = new int[capacity];
+            }
+            for (int argument = 0; argument < rleIds.length; argument++) {
+                if (rleIds[argument] == null || rleIds[argument].length < capacity) {
+                    rleIds[argument] = new int[capacity];
+                }
+                rleRunIndices[argument] = 0;
+                rleRemaining[argument] = 0;
+            }
         }
     }
 }

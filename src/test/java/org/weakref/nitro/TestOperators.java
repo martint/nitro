@@ -1933,7 +1933,7 @@ public class TestOperators
         }
 
         PrimitiveRegistry registry = new PrimitiveRegistry();
-        registry.register("guarded_add", new org.weakref.nitro.function.scalar.builtin.AddI64(), new GuardedProjection());
+        registry.register("guarded_add", new org.weakref.nitro.function.scalar.builtin.HandwrittenBigintAdd(), new GuardedProjection());
         Variable one = new Variable(0);
         Variable first = new Variable(1);
         Variable second = new Variable(2);

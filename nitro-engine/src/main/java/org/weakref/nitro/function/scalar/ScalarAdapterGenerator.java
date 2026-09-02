@@ -209,7 +209,7 @@ public final class ScalarAdapterGenerator
             code.aaload();
             code.checkcast(inputForm == InputForm.ACCESSOR ? accessorDescriptor(carrier) : arrayDescriptor(carrier));
             code.astore(valueAccessors + argument);
-            if (inputForm == InputForm.ACCESSOR) {
+            if (checkNulls) {
                 code.aload(nulls);
                 code.loadConstant(argument);
                 code.aaload();

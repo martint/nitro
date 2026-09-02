@@ -26,7 +26,7 @@ class TestScalarProviderResourceOwnership
     @Test
     void testProviderInstancesOwnDistinctAllocationContexts()
     {
-        assertContextsAreProviderOwned(new AddI64(), new AddI64());
+        assertContextsAreProviderOwned(new HandwrittenBigintAdd(), new HandwrittenBigintAdd());
         assertContextsAreProviderOwned(new BigintDivide(), new BigintDivide());
         assertContextsAreProviderOwned(new RegexpReplaceUtf8(), new RegexpReplaceUtf8());
     }

@@ -51,7 +51,7 @@ import org.weakref.nitro.execution.EngineResources;
 import org.weakref.nitro.execution.OperatorExecutionDriver;
 import org.weakref.nitro.function.scalar.PrimitiveExecutionContext;
 import org.weakref.nitro.function.scalar.PrimitiveFunction;
-import org.weakref.nitro.function.scalar.builtin.AddI64;
+import org.weakref.nitro.function.scalar.builtin.HandwrittenBigintAdd;
 import org.weakref.nitro.function.scalar.builtin.IsNullI64;
 import org.weakref.nitro.function.scalar.builtin.LessThanI64;
 import org.weakref.nitro.operator.Batch;
@@ -577,7 +577,7 @@ class TestCoreIntegrationSlice
     public static final class IsolatedAdd
             implements PrimitiveFunction
     {
-        private final AddI64 delegate = new AddI64();
+        private final HandwrittenBigintAdd delegate = new HandwrittenBigintAdd();
 
         @Override
         public Set<Allocator.Context> allocationContexts()

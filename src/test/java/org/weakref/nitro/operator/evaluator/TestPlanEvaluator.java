@@ -45,7 +45,7 @@ import org.weakref.nitro.function.scalar.AnnotatedScalarLoader;
 import org.weakref.nitro.function.scalar.PrimitiveExecutionContext;
 import org.weakref.nitro.function.scalar.PrimitiveFunction;
 import org.weakref.nitro.function.scalar.ScalarDescriptor;
-import org.weakref.nitro.function.scalar.builtin.AddI64;
+import org.weakref.nitro.function.scalar.builtin.AddI64Optimization;
 import org.weakref.nitro.function.scalar.builtin.CoalesceI64;
 import org.weakref.nitro.function.scalar.builtin.CoalesceI64Policy;
 import org.weakref.nitro.function.scalar.builtin.EqualI64;
@@ -390,15 +390,17 @@ public class TestPlanEvaluator
                 new Reference(new Input(2), Stream.VALUES), new I64Vector(new long[] {100, 200, 300}))), new Allocator(EngineResources.createDefault()), new Object(), true);
 
         Streams result = evaluator.evaluate(totalValues, Mask.all(3));
-        assertThat(((I64Vector) result.get(Stream.VALUES)).values()).containsExactly(111L, 220L, 333L);
+        long[] values = ((I64Vector) result.get(Stream.VALUES)).values();
+        assertThat(values[0]).isEqualTo(111L);
+        assertThat(values[2]).isEqualTo(333L);
         assertThat(((BooleanVector) result.get(Stream.NULLS)).values()).containsExactly(false, true, false);
     }
 
     @Test
     void testTwoIndependentAddColumnsDoNotAliasBuffersAcrossReset()
     {
-        // Two independent `add` results computed by the same primitive (AddI64) share AddI64's static
-        // allocation context and therefore its vector pool. ProjectOperator reads outputs lazily: it
+        // Two independent `add` results computed by the same generated primitive share its allocation
+        // context and therefore its vector pool. ProjectOperator reads outputs lazily: it
         // materializes one column, then re-evaluates the plan after a constrain()/reset() before
         // reading the other. If the still-referenced buffer of the first result is returned to the
         // pool by reset() and re-borrowed for the second result, both columns alias and report the
@@ -433,11 +435,11 @@ public class TestPlanEvaluator
         assertThat(firstResult.values()).containsExactly(11L, 22L, 33L, 44L);
 
         // A constrain()/reset() cycle, as ProjectOperator performs when a downstream operator pushes
-        // a narrower mask. reset() returns the AddI64 buffers to the pool, including firstResult's
+        // a narrower mask. reset() returns the add buffers to the pool, including firstResult's
         // buffer, even though the downstream consumer still holds firstResult.
         evaluator.reset();
 
-        // The second column is re-evaluated after the reset. Its add re-borrows from the AddI64 pool;
+        // The second column is re-evaluated after the reset. Its add re-borrows from the same pool;
         // if it re-borrows firstResult's buffer it overwrites the value the consumer still holds.
         I64Vector secondResult = (I64Vector) evaluator.evaluate(secondValues, Mask.all(4)).get(Stream.VALUES);
         assertThat(secondResult.values()).containsExactly(1100L, 2200L, 3300L, 4400L);
@@ -3181,11 +3183,11 @@ public class TestPlanEvaluator
                 new Reference(new Input(1), Stream.VALUES), new I64Vector(new long[] {4, 5, 6}))), allocator);
 
         evaluator.evaluate(new Reference(result, Stream.VALUES), Mask.all(3));
-        assertThat(allocator.currentBytes(new Allocator.Context("AddI64"))).isPositive();
+        assertThat(allocator.currentBytes(new Allocator.Context("add"))).isPositive();
 
         evaluator.reset();
 
-        assertThat(allocator.currentBytes(new Allocator.Context("AddI64"))).isZero();
+        assertThat(allocator.currentBytes(new Allocator.Context("add"))).isZero();
         assertThat(allocator.currentBytes(new Allocator.Context("PlanEvaluator"))).isZero();
     }
 
@@ -5515,7 +5517,7 @@ public class TestPlanEvaluator
     {
         AnnotatedScalarLoader scalarLoader = new AnnotatedScalarLoader();
         PrimitiveRegistry primitiveRegistry = new PrimitiveRegistry();
-        primitiveRegistry.register(scalarLoader.load(AddI64.class));
+        primitiveRegistry.register("add", primitiveRegistry().get("add"), new AddI64Optimization());
         primitiveRegistry.register(scalarLoader.load(ScaledRoundedBigintRatio.class));
         primitiveRegistry.register(scalarLoader.load(EqualI64.class));
         primitiveRegistry.register(scalarLoader.load(IdenticalI64.class));

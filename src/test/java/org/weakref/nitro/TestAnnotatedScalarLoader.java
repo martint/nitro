@@ -25,12 +25,12 @@ import org.weakref.nitro.function.scalar.PrimitiveExecutionContext;
 import org.weakref.nitro.function.scalar.PrimitiveFunction;
 import org.weakref.nitro.function.scalar.ScalarDescriptor;
 import org.weakref.nitro.function.scalar.ScalarFunction;
-import org.weakref.nitro.function.scalar.builtin.AddI64;
 import org.weakref.nitro.function.scalar.builtin.BoundLikeUtf8;
 import org.weakref.nitro.function.scalar.builtin.EqualF64;
 import org.weakref.nitro.function.scalar.builtin.EqualF64Optimization;
 import org.weakref.nitro.function.scalar.builtin.EqualI64;
 import org.weakref.nitro.function.scalar.builtin.EqualI64Optimization;
+import org.weakref.nitro.function.scalar.builtin.HandwrittenBigintAdd;
 import org.weakref.nitro.function.scalar.builtin.IsNullDirectMaskOptimization;
 import org.weakref.nitro.function.scalar.builtin.IsNullI64;
 import org.weakref.nitro.function.scalar.builtin.LikeUtf8;
@@ -46,11 +46,11 @@ public class TestAnnotatedScalarLoader
     @Test
     void testLoadsAnnotatedScalarFunction()
     {
-        ScalarDescriptor descriptor = new AnnotatedScalarLoader().load(TestAddI64.class);
+        ScalarDescriptor descriptor = new AnnotatedScalarLoader().load(TestHandwrittenBigintAdd.class);
 
         assertThat(descriptor.name()).isEqualTo("add");
         assertThat(descriptor.deterministic()).isTrue();
-        assertThat(descriptor.implementation()).isInstanceOf(TestAddI64.class);
+        assertThat(descriptor.implementation()).isInstanceOf(TestHandwrittenBigintAdd.class);
     }
 
     @Test
@@ -58,11 +58,11 @@ public class TestAnnotatedScalarLoader
     {
         PrimitiveRegistry primitiveRegistry = new PrimitiveRegistry();
 
-        ScalarDescriptor descriptor = new AnnotatedScalarLoader().load(AddI64.class);
+        ScalarDescriptor descriptor = new AnnotatedScalarLoader().load(HandwrittenBigintAdd.class);
         primitiveRegistry.register(descriptor);
 
-        assertThat(descriptor.implementation()).isInstanceOf(AddI64.class);
-        assertThat(primitiveRegistry.get("add")).isInstanceOf(AddI64.class);
+        assertThat(descriptor.implementation()).isInstanceOf(HandwrittenBigintAdd.class);
+        assertThat(primitiveRegistry.get("handwritten_bigint_add")).isInstanceOf(HandwrittenBigintAdd.class);
     }
 
     @Test
@@ -134,13 +134,13 @@ public class TestAnnotatedScalarLoader
     }
 
     @ScalarFunction(name = "add")
-    public static final class TestAddI64
+    public static final class TestHandwrittenBigintAdd
             implements PrimitiveFunction
     {
         @Override
         public Streams apply(java.util.List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
         {
-            return new AddI64().apply(inputs, mask, requestedStreams, output, context);
+            return new HandwrittenBigintAdd().apply(inputs, mask, requestedStreams, output, context);
         }
     }
 }

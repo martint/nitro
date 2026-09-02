@@ -32,11 +32,11 @@ import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
-@ScalarFunction(name = "add", capabilities = AddI64Optimization.class)
-public final class AddI64
+@ScalarFunction(name = "handwritten_bigint_add", capabilities = AddI64Optimization.class)
+public final class HandwrittenBigintAdd
         implements PrimitiveFunction
 {
-    private final Allocator.Context allocationContext = new Allocator.Context("AddI64");
+    private final Allocator.Context allocationContext = new Allocator.Context("HandwrittenBigintAdd");
 
     @Override
     public Set<Allocator.Context> allocationContexts()
@@ -89,7 +89,7 @@ public final class AddI64
 
         if (left instanceof RleVector leftRle && right instanceof RleVector rightRle && mask.all() && existing == null && leftNulls == null && rightNulls == null) {
             I64Vector values = context.allocator().allocate(allocationContext, I64Vector.class, RleVector.computeTargetRleLength(leftRle, rightRle), I64Vector::new);
-            return result.with(Stream.VALUES, I64BinaryDispatch.rleRleLong(leftRle, rightRle, values, AddI64::apply));
+            return result.with(Stream.VALUES, I64BinaryDispatch.rleRleLong(leftRle, rightRle, values, HandwrittenBigintAdd::apply));
         }
 
         I64Vector resultValues = context.allocator().allocateOrGrow(
@@ -98,7 +98,7 @@ public final class AddI64
                 I64Vector.class,
                 I64BinaryDispatch.requiredLength(mask, Math.max(left.length(), right.length())),
                 I64Vector::new);
-        I64BinaryDispatch.applyLong(left, right, mask, resultValues, AddI64::apply);
+        I64BinaryDispatch.applyLong(left, right, mask, resultValues, HandwrittenBigintAdd::apply);
         return result.with(Stream.VALUES, resultValues);
     }
 

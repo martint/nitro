@@ -45,7 +45,7 @@ import org.weakref.nitro.function.scalar.PrimitiveExecutionContext;
 import org.weakref.nitro.function.scalar.PrimitiveFunction;
 import org.weakref.nitro.function.scalar.ScalarAdapterGenerator;
 import org.weakref.nitro.function.scalar.ScalarMethodTarget;
-import org.weakref.nitro.function.scalar.builtin.AddI64;
+import org.weakref.nitro.function.scalar.builtin.HandwrittenBigintAdd;
 
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
@@ -134,7 +134,7 @@ public class BenchmarkGeneratedScalarAdapters
         materializedAddInputs = List.of(intermediateOutput, Streams.ofValues(offsetVector));
         doubleOutput = Streams.ofValues(new F64Vector(POSITION_COUNT));
 
-        nativeAdd = new AddI64();
+        nativeAdd = new HandwrittenBigintAdd();
         ScalarAdapterGenerator generator = new ScalarAdapterGenerator();
         generatedAdd = generator.adapt(
                 "generated_add",
