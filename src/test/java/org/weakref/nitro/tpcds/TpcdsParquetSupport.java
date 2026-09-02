@@ -797,25 +797,25 @@ final class TpcdsParquetSupport
         return new ProjectOperator(
                 allocator,
                 new EvaluationPlan(List.of(
-                        new Assignment(averageQuantity, new Call("divide_round_i64", List.of(
+                        new Assignment(averageQuantity, new Call("rounded_bigint_ratio", List.of(
                                 new Reference(new Input(5), Stream.VALUES),
                                 new Reference(new Input(6), Stream.VALUES))), AllMask.ALL),
-                        new Assignment(averageListPrice, new Call("divide_round_i64", List.of(
+                        new Assignment(averageListPrice, new Call("rounded_bigint_ratio", List.of(
                                 new Reference(new Input(7), Stream.VALUES),
                                 new Reference(new Input(8), Stream.VALUES))), AllMask.ALL),
-                        new Assignment(averageCouponAmount, new Call("divide_round_i64", List.of(
+                        new Assignment(averageCouponAmount, new Call("rounded_bigint_ratio", List.of(
                                 new Reference(new Input(9), Stream.VALUES),
                                 new Reference(new Input(10), Stream.VALUES))), AllMask.ALL),
-                        new Assignment(averageSalesPrice, new Call("divide_round_i64", List.of(
+                        new Assignment(averageSalesPrice, new Call("rounded_bigint_ratio", List.of(
                                 new Reference(new Input(11), Stream.VALUES),
                                 new Reference(new Input(12), Stream.VALUES))), AllMask.ALL),
-                        new Assignment(averageNetProfit, new Call("divide_round_i64", List.of(
+                        new Assignment(averageNetProfit, new Call("rounded_bigint_ratio", List.of(
                                 new Reference(new Input(13), Stream.VALUES),
                                 new Reference(new Input(14), Stream.VALUES))), AllMask.ALL),
-                        new Assignment(averageBirthYear, new Call("divide_round_i64", List.of(
+                        new Assignment(averageBirthYear, new Call("rounded_bigint_ratio", List.of(
                                 new Reference(new Input(15), Stream.VALUES),
                                 new Reference(new Input(16), Stream.VALUES))), AllMask.ALL),
-                        new Assignment(averageDependentCount, new Call("divide_round_i64", List.of(
+                        new Assignment(averageDependentCount, new Call("rounded_bigint_ratio", List.of(
                                 new Reference(new Input(17), Stream.VALUES),
                                 new Reference(new Input(18), Stream.VALUES))), AllMask.ALL)),
                 List.of(
@@ -4369,10 +4369,10 @@ final class TpcdsParquetSupport
         Variable itemAverage = new Variable(0);
         Variable scalarAverage = new Variable(1);
         List<Assignment> assignments = List.of(
-                new Assignment(itemAverage, new Call("divide_round_i64", List.of(
+                new Assignment(itemAverage, new Call("rounded_bigint_ratio", List.of(
                         new Reference(new Input(2), Stream.VALUES),
                         new Reference(new Input(3), Stream.VALUES))), AllMask.ALL),
-                new Assignment(scalarAverage, new Call("divide_round_i64", List.of(
+                new Assignment(scalarAverage, new Call("rounded_bigint_ratio", List.of(
                         new Reference(new Input(5), Stream.VALUES),
                         new Reference(new Input(6), Stream.VALUES))), AllMask.ALL));
         List<Reference> outputs = List.of(
@@ -7791,16 +7791,16 @@ final class TpcdsParquetSupport
                         new Assignment(scaledTotalRevenue, new Call("multiply", List.of(
                                 new Reference(totalRevenue, Stream.VALUES),
                                 new Reference(resultAverageScale, Stream.VALUES))), AllMask.ALL),
-                        new Assignment(storeDeviation, new Call("divide_round_i64", List.of(
+                        new Assignment(storeDeviation, new Call("rounded_bigint_ratio", List.of(
                                 new Reference(scaledStoreRevenue, Stream.VALUES),
                                 new Reference(denominator, Stream.VALUES))), AllMask.ALL),
-                        new Assignment(catalogDeviation, new Call("divide_round_i64", List.of(
+                        new Assignment(catalogDeviation, new Call("rounded_bigint_ratio", List.of(
                                 new Reference(scaledCatalogRevenue, Stream.VALUES),
                                 new Reference(denominator, Stream.VALUES))), AllMask.ALL),
-                        new Assignment(webDeviation, new Call("divide_round_i64", List.of(
+                        new Assignment(webDeviation, new Call("rounded_bigint_ratio", List.of(
                                 new Reference(scaledWebRevenue, Stream.VALUES),
                                 new Reference(denominator, Stream.VALUES))), AllMask.ALL),
-                        new Assignment(average, new Call("divide_round_i64", List.of(
+                        new Assignment(average, new Call("rounded_bigint_ratio", List.of(
                                 new Reference(scaledTotalRevenue, Stream.VALUES),
                                 new Reference(three, Stream.VALUES))), AllMask.ALL)),
                 List.of(
@@ -7824,7 +7824,7 @@ final class TpcdsParquetSupport
                 allocator,
                 new EvaluationPlan(List.of(
                         new Assignment(scale, new Literal(100_000_000_000_000L), AllMask.ALL),
-                        new Assignment(percent, new Call("divide_scale_round_i64", List.of(
+                        new Assignment(percent, new Call("scaled_rounded_bigint_ratio", List.of(
                                 new Reference(new Input(0), Stream.VALUES),
                                 new Reference(new Input(1), Stream.VALUES),
                                 new Reference(scale, Stream.VALUES))), AllMask.ALL)),
@@ -7842,7 +7842,7 @@ final class TpcdsParquetSupport
         return new ProjectOperator(
                 allocator,
                 new EvaluationPlan(List.of(
-                        new Assignment(average, new Call("divide_round_i64", List.of(
+                        new Assignment(average, new Call("rounded_bigint_ratio", List.of(
                                 new Reference(new Input(1), Stream.VALUES),
                                 new Reference(new Input(2), Stream.VALUES))), AllMask.ALL)),
                 List.of(
@@ -7859,10 +7859,10 @@ final class TpcdsParquetSupport
         return new ProjectOperator(
                 allocator,
                 new EvaluationPlan(List.of(
-                        new Assignment(averageSalesPrice, new Call("divide_round_i64", List.of(
+                        new Assignment(averageSalesPrice, new Call("rounded_bigint_ratio", List.of(
                                 new Reference(new Input(1), Stream.VALUES),
                                 new Reference(new Input(2), Stream.VALUES))), AllMask.ALL),
-                        new Assignment(averageWholesaleCost, new Call("divide_round_i64", List.of(
+                        new Assignment(averageWholesaleCost, new Call("rounded_bigint_ratio", List.of(
                                 new Reference(new Input(3), Stream.VALUES),
                                 new Reference(new Input(4), Stream.VALUES))), AllMask.ALL)),
                 List.of(
@@ -7882,13 +7882,13 @@ final class TpcdsParquetSupport
         return new ProjectOperator(
                 allocator,
                 new EvaluationPlan(List.of(
-                        new Assignment(averageListPrice, new Call("divide_round_i64", List.of(
+                        new Assignment(averageListPrice, new Call("rounded_bigint_ratio", List.of(
                                 new Reference(new Input(2), Stream.VALUES),
                                 new Reference(new Input(3), Stream.VALUES))), AllMask.ALL),
-                        new Assignment(averageCouponAmount, new Call("divide_round_i64", List.of(
+                        new Assignment(averageCouponAmount, new Call("rounded_bigint_ratio", List.of(
                                 new Reference(new Input(4), Stream.VALUES),
                                 new Reference(new Input(5), Stream.VALUES))), AllMask.ALL),
-                        new Assignment(averageSalesPrice, new Call("divide_round_i64", List.of(
+                        new Assignment(averageSalesPrice, new Call("rounded_bigint_ratio", List.of(
                                 new Reference(new Input(6), Stream.VALUES),
                                 new Reference(new Input(7), Stream.VALUES))), AllMask.ALL)),
                 List.of(
@@ -7927,7 +7927,7 @@ final class TpcdsParquetSupport
         return new ProjectOperator(
                 allocator,
                 new EvaluationPlan(List.of(
-                        new Assignment(average, new Call("divide_round_i64", List.of(
+                        new Assignment(average, new Call("rounded_bigint_ratio", List.of(
                                 new Reference(new Input(sumIndex), Stream.VALUES),
                                 new Reference(new Input(countIndex), Stream.VALUES))), AllMask.ALL)),
                 List.of(new Reference(average, Stream.VALUES))),
@@ -8363,31 +8363,31 @@ final class TpcdsParquetSupport
                 new EvaluationPlan(
                         List.of(
                                 new Assignment(hundred, new Literal(100L), AllMask.ALL),
-                                new Assignment(sundayRatio, new Call("divide_scale_round_i64", List.of(
+                                new Assignment(sundayRatio, new Call("scaled_rounded_bigint_ratio", List.of(
                                         new Reference(new Input(1), Stream.VALUES),
                                         new Reference(new Input(8), Stream.VALUES),
                                         new Reference(hundred, Stream.VALUES))), AllMask.ALL),
-                                new Assignment(mondayRatio, new Call("divide_scale_round_i64", List.of(
+                                new Assignment(mondayRatio, new Call("scaled_rounded_bigint_ratio", List.of(
                                         new Reference(new Input(2), Stream.VALUES),
                                         new Reference(new Input(9), Stream.VALUES),
                                         new Reference(hundred, Stream.VALUES))), AllMask.ALL),
-                                new Assignment(tuesdayRatio, new Call("divide_scale_round_i64", List.of(
+                                new Assignment(tuesdayRatio, new Call("scaled_rounded_bigint_ratio", List.of(
                                         new Reference(new Input(3), Stream.VALUES),
                                         new Reference(new Input(10), Stream.VALUES),
                                         new Reference(hundred, Stream.VALUES))), AllMask.ALL),
-                                new Assignment(wednesdayRatio, new Call("divide_scale_round_i64", List.of(
+                                new Assignment(wednesdayRatio, new Call("scaled_rounded_bigint_ratio", List.of(
                                         new Reference(new Input(4), Stream.VALUES),
                                         new Reference(new Input(11), Stream.VALUES),
                                         new Reference(hundred, Stream.VALUES))), AllMask.ALL),
-                                new Assignment(thursdayRatio, new Call("divide_scale_round_i64", List.of(
+                                new Assignment(thursdayRatio, new Call("scaled_rounded_bigint_ratio", List.of(
                                         new Reference(new Input(5), Stream.VALUES),
                                         new Reference(new Input(12), Stream.VALUES),
                                         new Reference(hundred, Stream.VALUES))), AllMask.ALL),
-                                new Assignment(fridayRatio, new Call("divide_scale_round_i64", List.of(
+                                new Assignment(fridayRatio, new Call("scaled_rounded_bigint_ratio", List.of(
                                         new Reference(new Input(6), Stream.VALUES),
                                         new Reference(new Input(13), Stream.VALUES),
                                         new Reference(hundred, Stream.VALUES))), AllMask.ALL),
-                                new Assignment(saturdayRatio, new Call("divide_scale_round_i64", List.of(
+                                new Assignment(saturdayRatio, new Call("scaled_rounded_bigint_ratio", List.of(
                                         new Reference(new Input(7), Stream.VALUES),
                                         new Reference(new Input(14), Stream.VALUES),
                                         new Reference(hundred, Stream.VALUES))), AllMask.ALL)),
@@ -8575,31 +8575,31 @@ final class TpcdsParquetSupport
                 new EvaluationPlan(
                         List.of(
                                 new Assignment(decimalScale, new Literal(1_000_000L), AllMask.ALL),
-                                new Assignment(sundayRatio, new Call("divide_scale_round_i64", List.of(
+                                new Assignment(sundayRatio, new Call("scaled_rounded_bigint_ratio", List.of(
                                         new Reference(new Input(3), Stream.VALUES),
                                         new Reference(new Input(12), Stream.VALUES),
                                         new Reference(decimalScale, Stream.VALUES))), AllMask.ALL),
-                                new Assignment(mondayRatio, new Call("divide_scale_round_i64", List.of(
+                                new Assignment(mondayRatio, new Call("scaled_rounded_bigint_ratio", List.of(
                                         new Reference(new Input(4), Stream.VALUES),
                                         new Reference(new Input(13), Stream.VALUES),
                                         new Reference(decimalScale, Stream.VALUES))), AllMask.ALL),
-                                new Assignment(tuesdayRatio, new Call("divide_scale_round_i64", List.of(
+                                new Assignment(tuesdayRatio, new Call("scaled_rounded_bigint_ratio", List.of(
                                         new Reference(new Input(5), Stream.VALUES),
                                         new Reference(new Input(14), Stream.VALUES),
                                         new Reference(decimalScale, Stream.VALUES))), AllMask.ALL),
-                                new Assignment(wednesdayRatio, new Call("divide_scale_round_i64", List.of(
+                                new Assignment(wednesdayRatio, new Call("scaled_rounded_bigint_ratio", List.of(
                                         new Reference(new Input(6), Stream.VALUES),
                                         new Reference(new Input(15), Stream.VALUES),
                                         new Reference(decimalScale, Stream.VALUES))), AllMask.ALL),
-                                new Assignment(thursdayRatio, new Call("divide_scale_round_i64", List.of(
+                                new Assignment(thursdayRatio, new Call("scaled_rounded_bigint_ratio", List.of(
                                         new Reference(new Input(7), Stream.VALUES),
                                         new Reference(new Input(16), Stream.VALUES),
                                         new Reference(decimalScale, Stream.VALUES))), AllMask.ALL),
-                                new Assignment(fridayRatio, new Call("divide_scale_round_i64", List.of(
+                                new Assignment(fridayRatio, new Call("scaled_rounded_bigint_ratio", List.of(
                                         new Reference(new Input(8), Stream.VALUES),
                                         new Reference(new Input(17), Stream.VALUES),
                                         new Reference(decimalScale, Stream.VALUES))), AllMask.ALL),
-                                new Assignment(saturdayRatio, new Call("divide_scale_round_i64", List.of(
+                                new Assignment(saturdayRatio, new Call("scaled_rounded_bigint_ratio", List.of(
                                         new Reference(new Input(9), Stream.VALUES),
                                         new Reference(new Input(18), Stream.VALUES),
                                         new Reference(decimalScale, Stream.VALUES))), AllMask.ALL)),
@@ -8684,7 +8684,7 @@ final class TpcdsParquetSupport
         return new ProjectOperator(
                 allocator,
                 new EvaluationPlan(
-                        List.of(new Assignment(average, new Call("divide_round_i64", List.of(
+                        List.of(new Assignment(average, new Call("rounded_bigint_ratio", List.of(
                                 new Reference(new Input(0), Stream.VALUES),
                                 new Reference(new Input(1), Stream.VALUES))), AllMask.ALL)),
                         List.of(
@@ -8856,7 +8856,7 @@ final class TpcdsParquetSupport
                 new EvaluationPlan(
                         List.of(
                                 new Assignment(scale, new Literal(100_000_000L), AllMask.ALL),
-                                new Assignment(ratio, new Call("divide_scale_round_i64", List.of(
+                                new Assignment(ratio, new Call("scaled_rounded_bigint_ratio", List.of(
                                         new Reference(new Input(5), Stream.VALUES),
                                         new Reference(new Input(6), Stream.VALUES),
                                         new Reference(scale, Stream.VALUES))), AllMask.ALL)),
@@ -9565,19 +9565,19 @@ final class TpcdsParquetSupport
                         List.of(
                                 new Assignment(year, new Literal(2000L), AllMask.ALL),
                                 new Assignment(scale, new Literal(1_000_000L), AllMask.ALL),
-                                new Assignment(webQuarterOneToTwoIncrease, new Call("divide_scale_round_i64", List.of(
+                                new Assignment(webQuarterOneToTwoIncrease, new Call("scaled_rounded_bigint_ratio", List.of(
                                         new Reference(new Input(webQuarterTwoIndex), Stream.VALUES),
                                         new Reference(new Input(webQuarterOneIndex), Stream.VALUES),
                                         new Reference(scale, Stream.VALUES))), AllMask.ALL),
-                                new Assignment(storeQuarterOneToTwoIncrease, new Call("divide_scale_round_i64", List.of(
+                                new Assignment(storeQuarterOneToTwoIncrease, new Call("scaled_rounded_bigint_ratio", List.of(
                                         new Reference(new Input(storeQuarterTwoIndex), Stream.VALUES),
                                         new Reference(new Input(storeQuarterOneIndex), Stream.VALUES),
                                         new Reference(scale, Stream.VALUES))), AllMask.ALL),
-                                new Assignment(webQuarterTwoToThreeIncrease, new Call("divide_scale_round_i64", List.of(
+                                new Assignment(webQuarterTwoToThreeIncrease, new Call("scaled_rounded_bigint_ratio", List.of(
                                         new Reference(new Input(webQuarterThreeIndex), Stream.VALUES),
                                         new Reference(new Input(webQuarterTwoIndex), Stream.VALUES),
                                         new Reference(scale, Stream.VALUES))), AllMask.ALL),
-                                new Assignment(storeQuarterTwoToThreeIncrease, new Call("divide_scale_round_i64", List.of(
+                                new Assignment(storeQuarterTwoToThreeIncrease, new Call("scaled_rounded_bigint_ratio", List.of(
                                         new Reference(new Input(storeQuarterThreeIndex), Stream.VALUES),
                                         new Reference(new Input(storeQuarterTwoIndex), Stream.VALUES),
                                         new Reference(scale, Stream.VALUES))), AllMask.ALL)),
@@ -10164,7 +10164,7 @@ final class TpcdsParquetSupport
     {
         Variable roundedAverage = new Variable(0);
         List<Assignment> assignments = List.of(
-                new Assignment(roundedAverage, new Call("divide_round_i64", List.of(
+                new Assignment(roundedAverage, new Call("rounded_bigint_ratio", List.of(
                         new Reference(new Input(2), Stream.VALUES),
                         new Reference(new Input(1), Stream.VALUES))), AllMask.ALL));
         List<Reference> outputs = List.of(
@@ -10373,7 +10373,7 @@ final class TpcdsParquetSupport
         assignments.add(new Assignment(decimalScale, new Literal(10_000L), AllMask.ALL));
         for (int month = 0; month < 12; month++) {
             perSquareFoot[month] = new Variable(month);
-            assignments.add(new Assignment(perSquareFoot[month], new Call("divide_scale_round_i64", List.of(
+            assignments.add(new Assignment(perSquareFoot[month], new Call("scaled_rounded_bigint_ratio", List.of(
                     new Reference(new Input(8 + month), Stream.VALUES),
                     new Reference(new Input(1), Stream.VALUES),
                     new Reference(decimalScale, Stream.VALUES))), AllMask.ALL));
@@ -10747,11 +10747,11 @@ final class TpcdsParquetSupport
                 allocator,
                 new EvaluationPlan(List.of(
                         new Assignment(scale, new Literal(1_000_000_000_000L), AllMask.ALL),
-                        new Assignment(returnRatio, new Call("divide_scale_round_i64", List.of(
+                        new Assignment(returnRatio, new Call("scaled_rounded_bigint_ratio", List.of(
                                 new Reference(new Input(1), Stream.VALUES),
                                 new Reference(new Input(2), Stream.VALUES),
                                 new Reference(scale, Stream.VALUES))), AllMask.ALL),
-                        new Assignment(currencyRatio, new Call("divide_scale_round_i64", List.of(
+                        new Assignment(currencyRatio, new Call("scaled_rounded_bigint_ratio", List.of(
                                 new Reference(new Input(3), Stream.VALUES),
                                 new Reference(new Input(4), Stream.VALUES),
                                 new Reference(scale, Stream.VALUES))), AllMask.ALL)),
@@ -10841,7 +10841,7 @@ final class TpcdsParquetSupport
                         new Reference(groupIdIsTwo, Stream.VALUES),
                         new Reference(new Input(0), Stream.VALUES),
                         new Reference(sentinel, Stream.VALUES))), AllMask.ALL),
-                new Assignment(grossMargin, new Call("divide_scale_round_i64", List.of(
+                new Assignment(grossMargin, new Call("scaled_rounded_bigint_ratio", List.of(
                         new Reference(new Input(4), Stream.VALUES),
                         new Reference(new Input(3), Stream.VALUES),
                         new Reference(scale, Stream.VALUES))), AllMask.ALL));
@@ -11339,7 +11339,7 @@ final class TpcdsParquetSupport
                                 new Assignment(otherSalesPrice, new Call("add", List.of(
                                         new Reference(webSalesPrice, Stream.VALUES),
                                         new Reference(catalogSalesPrice, Stream.VALUES))), AllMask.ALL),
-                                new Assignment(ratio, new Call("divide_scale_round_i64", List.of(
+                                new Assignment(ratio, new Call("scaled_rounded_bigint_ratio", List.of(
                                         new Reference(new Input(3), Stream.VALUES),
                                         new Reference(otherQuantity, Stream.VALUES),
                                         new Reference(hundred, Stream.VALUES))), AllMask.ALL)),
@@ -11388,7 +11388,7 @@ final class TpcdsParquetSupport
                                 new Assignment(webSalesPrice, new Call("coalesce_i64", List.of(new Reference(new Input(8), Stream.VALUES), new Reference(zero, Stream.VALUES))), AllMask.ALL),
                                 new Assignment(catalogSalesPrice, new Call("coalesce_i64", List.of(new Reference(new Input(11), Stream.VALUES), new Reference(zero, Stream.VALUES))), AllMask.ALL),
                                 new Assignment(otherSalesPrice, new Call("add", List.of(new Reference(webSalesPrice, Stream.VALUES), new Reference(catalogSalesPrice, Stream.VALUES))), AllMask.ALL),
-                                new Assignment(ratio, new Call("divide_scale_round_i64", List.of(new Reference(new Input(3), Stream.VALUES), new Reference(otherQuantity, Stream.VALUES), new Reference(hundred, Stream.VALUES))), AllMask.ALL)),
+                                new Assignment(ratio, new Call("scaled_rounded_bigint_ratio", List.of(new Reference(new Input(3), Stream.VALUES), new Reference(otherQuantity, Stream.VALUES), new Reference(hundred, Stream.VALUES))), AllMask.ALL)),
                         List.of(
                                 new Reference(new Input(2), Stream.VALUES),
                                 new Reference(ratio, Stream.VALUES),

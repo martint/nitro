@@ -48,7 +48,6 @@ import org.weakref.nitro.function.scalar.ScalarDescriptor;
 import org.weakref.nitro.function.scalar.builtin.AddI64;
 import org.weakref.nitro.function.scalar.builtin.CoalesceI64;
 import org.weakref.nitro.function.scalar.builtin.CoalesceI64Policy;
-import org.weakref.nitro.function.scalar.builtin.DivideScaleRoundI64;
 import org.weakref.nitro.function.scalar.builtin.EqualI64;
 import org.weakref.nitro.function.scalar.builtin.IdenticalI64;
 import org.weakref.nitro.function.scalar.builtin.InUtf8;
@@ -57,6 +56,7 @@ import org.weakref.nitro.function.scalar.builtin.LessThanI64;
 import org.weakref.nitro.function.scalar.builtin.LessThanOrEqualI64;
 import org.weakref.nitro.function.scalar.builtin.LessThanOrEqualUtf8;
 import org.weakref.nitro.function.scalar.builtin.LessThanUtf8;
+import org.weakref.nitro.function.scalar.builtin.ScaledRoundedBigintRatio;
 import org.weakref.nitro.function.scalar.builtin.SubstringUtf8;
 import org.weakref.nitro.function.scalar.builtin.SubstringUtf8BinarySliceProjection;
 import org.weakref.nitro.jit.ProjectionMaskCompiler;
@@ -2085,7 +2085,7 @@ public class TestPlanEvaluator
     @Test
     void testDivideScaleRoundFunctionRoundsScaledDivision()
     {
-        PrimitiveFunction divideScaleRound = builtinPrimitiveRegistry().get("divide_scale_round_i64");
+        PrimitiveFunction divideScaleRound = builtinPrimitiveRegistry().get("scaled_rounded_bigint_ratio");
 
         Streams result = divideScaleRound.apply(
                 List.of(
@@ -5516,7 +5516,7 @@ public class TestPlanEvaluator
         AnnotatedScalarLoader scalarLoader = new AnnotatedScalarLoader();
         PrimitiveRegistry primitiveRegistry = new PrimitiveRegistry();
         primitiveRegistry.register(scalarLoader.load(AddI64.class));
-        primitiveRegistry.register(scalarLoader.load(DivideScaleRoundI64.class));
+        primitiveRegistry.register(scalarLoader.load(ScaledRoundedBigintRatio.class));
         primitiveRegistry.register(scalarLoader.load(EqualI64.class));
         primitiveRegistry.register(scalarLoader.load(IdenticalI64.class));
         primitiveRegistry.register(scalarLoader.load(InUtf8.class));

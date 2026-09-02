@@ -28,13 +28,14 @@ import org.weakref.nitro.function.scalar.PrimitiveExecutionContext;
 import org.weakref.nitro.function.scalar.PrimitiveFunction;
 import org.weakref.nitro.function.scalar.ScalarFunction;
 
+import java.math.BigInteger;
 import java.util.List;
 import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
-@ScalarFunction(name = "divide_round_i64")
-public final class DivideRoundI64
+@ScalarFunction(name = "scaled_rounded_bigint_ratio")
+public final class ScaledRoundedBigintRatio
         implements PrimitiveFunction
 {
     @Override
@@ -46,19 +47,21 @@ public final class DivideRoundI64
     @Override
     public Streams apply(List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
     {
-        checkArgument(inputs.size() == 2, "Unexpected argument count for divide_round_i64");
+        checkArgument(inputs.size() == 3, "Unexpected argument count for scaled_rounded_bigint_ratio");
         boolean requestValues = requestedStreams.contains(Stream.VALUES);
         boolean requestNulls = requestedStreams.contains(Stream.NULLS);
         if (!requestValues && !requestNulls) {
             return Streams.empty();
         }
 
-        Allocator.Context allocationContext = context.allocationContext("DivideRoundI64");
+        Allocator.Context allocationContext = context.allocationContext("ScaledRoundedBigintRatio");
         Vector numeratorValues = inputs.get(0).values();
         Vector denominatorValues = inputs.get(1).values();
+        Vector scaleValues = inputs.get(2).values();
         Vector numeratorNulls = inputs.get(0).getOrNull(Stream.NULLS);
         Vector denominatorNulls = inputs.get(1).getOrNull(Stream.NULLS);
-        int requiredLength = Math.max(mask.maxPosition() + 1, Math.max(numeratorValues.length(), denominatorValues.length()));
+        Vector scaleNulls = inputs.get(2).getOrNull(Stream.NULLS);
+        int requiredLength = Math.max(mask.maxPosition() + 1, Math.max(numeratorValues.length(), Math.max(denominatorValues.length(), scaleValues.length())));
 
         Streams result = Streams.empty();
         if (requestNulls) {
@@ -70,8 +73,9 @@ public final class DivideRoundI64
             boolean[] nullValues = nulls.values();
             VectorAccess.BooleanValues numeratorNullValues = VectorAccess.booleanValues(numeratorNulls);
             VectorAccess.BooleanValues denominatorNullValues = VectorAccess.booleanValues(denominatorNulls);
+            VectorAccess.BooleanValues scaleNullValues = VectorAccess.booleanValues(scaleNulls);
             for (int position : mask) {
-                nullValues[position] = numeratorNullValues.value(position) || denominatorNullValues.value(position) || value(denominatorValues, position) == 0;
+                nullValues[position] = numeratorNullValues.value(position) || denominatorNullValues.value(position) || scaleNullValues.value(position) || value(denominatorValues, position) == 0;
             }
             result = result.with(Stream.NULLS, nulls);
         }
@@ -88,17 +92,23 @@ public final class DivideRoundI64
         long[] outputValues = values.values();
         for (int position : mask) {
             long denominator = value(denominatorValues, position);
-            outputValues[position] = denominator == 0 ? 0 : roundDivide(value(numeratorValues, position), denominator);
+            outputValues[position] = denominator == 0 ? 0 : roundScaledDivide(value(numeratorValues, position), denominator, value(scaleValues, position));
         }
         return result.with(Stream.VALUES, values);
     }
 
-    private static long roundDivide(long numerator, long denominator)
+    private static long roundScaledDivide(long numerator, long denominator, long scale)
     {
-        long positiveNumerator = numerator >= 0 ? numerator : -numerator;
-        long positiveDenominator = denominator >= 0 ? denominator : -denominator;
-        long rounded = (positiveNumerator + (positiveDenominator / 2)) / positiveDenominator;
-        return (numerator < 0) ^ (denominator < 0) ? -rounded : rounded;
+        boolean negative = (numerator < 0) ^ (denominator < 0) ^ (scale < 0);
+        BigInteger scaledNumerator = BigInteger.valueOf(numerator).abs().multiply(BigInteger.valueOf(scale).abs());
+        BigInteger positiveDenominator = BigInteger.valueOf(denominator).abs();
+        BigInteger[] division = scaledNumerator.divideAndRemainder(positiveDenominator);
+        BigInteger quotient = division[0];
+        if (division[1].shiftLeft(1).compareTo(positiveDenominator) >= 0) {
+            quotient = quotient.add(BigInteger.ONE);
+        }
+        long rounded = quotient.longValueExact();
+        return negative ? -rounded : rounded;
     }
 
     private static long value(Vector vector, int position)

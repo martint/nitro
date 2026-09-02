@@ -37,8 +37,6 @@ import org.weakref.nitro.function.scalar.builtin.CoalesceI64Policy;
 import org.weakref.nitro.function.scalar.builtin.ConcatUtf8;
 import org.weakref.nitro.function.scalar.builtin.ContainsUtf8;
 import org.weakref.nitro.function.scalar.builtin.DivideI64;
-import org.weakref.nitro.function.scalar.builtin.DivideRoundI64;
-import org.weakref.nitro.function.scalar.builtin.DivideScaleRoundI64;
 import org.weakref.nitro.function.scalar.builtin.ElementAtI64Utf8;
 import org.weakref.nitro.function.scalar.builtin.ElementAtUtf8Utf8;
 import org.weakref.nitro.function.scalar.builtin.EqualF64;
@@ -77,6 +75,8 @@ import org.weakref.nitro.function.scalar.builtin.OrBoolean;
 import org.weakref.nitro.function.scalar.builtin.ParseUtf8Long;
 import org.weakref.nitro.function.scalar.builtin.RegexpReplaceUtf8;
 import org.weakref.nitro.function.scalar.builtin.RegexpReplaceUtf8Policy;
+import org.weakref.nitro.function.scalar.builtin.RoundedBigintRatio;
+import org.weakref.nitro.function.scalar.builtin.ScaledRoundedBigintRatio;
 import org.weakref.nitro.function.scalar.builtin.StartsWithUtf8;
 import org.weakref.nitro.function.scalar.builtin.SubstringUtf8;
 import org.weakref.nitro.function.scalar.builtin.SubtractExactI64;
@@ -147,8 +147,8 @@ public final class TestPrimitiveFunctions
                 MultiplyI64.class,
                 DivideI64.class,
                 BigintRatio.class,
-                DivideRoundI64.class,
-                DivideScaleRoundI64.class,
+                RoundedBigintRatio.class,
+                ScaledRoundedBigintRatio.class,
                 ModuloI64.class,
                 AndBoolean.class,
                 OrBoolean.class,
