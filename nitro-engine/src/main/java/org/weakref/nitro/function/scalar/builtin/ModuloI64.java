@@ -14,6 +14,7 @@
 package org.weakref.nitro.function.scalar.builtin;
 
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.BinaryDispatchSupport;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.I64BinaryDispatch;
 import org.weakref.nitro.data.I64Vector;
@@ -97,7 +98,9 @@ public final class ModuloI64
                     errorsContext,
                     existingErrors,
                     length);
-            I64BinaryDispatch.applyLongWithErrors(left, right, mask, result, errors, ModuloI64::apply);
+            if (!tryApplyFlatConstant(left, right, mask, result.values(), errors.values())) {
+                I64BinaryDispatch.applyLongWithErrors(left, right, mask, result, errors, ModuloI64::apply);
+            }
             resultStreams = Streams.ofValues(result).with(Stream.ERRORS, errors);
         }
         else if (requestErrors) {
@@ -106,7 +109,9 @@ public final class ModuloI64
                     errorsContext,
                     existingErrors,
                     length);
-            I64BinaryDispatch.applyErrorsOnly(left, right, mask, errors, ModuloI64::apply);
+            if (!tryApplyFlatConstant(left, right, mask, null, errors.values())) {
+                I64BinaryDispatch.applyErrorsOnly(left, right, mask, errors, ModuloI64::apply);
+            }
             resultStreams = Streams.of(Stream.ERRORS, errors);
         }
         else if (requestValues) {
@@ -116,10 +121,63 @@ public final class ModuloI64
                     I64Vector.class,
                     length,
                     I64Vector::new);
-            I64BinaryDispatch.applyLong(left, right, mask, result, ModuloI64::result);
+            if (!tryApplyFlatConstant(left, right, mask, result.values(), null)) {
+                I64BinaryDispatch.applyLong(left, right, mask, result, ModuloI64::result);
+            }
             resultStreams = Streams.ofValues(result);
         }
         return resultStreams;
+    }
+
+    private static boolean tryApplyFlatConstant(
+            Vector left,
+            Vector right,
+            Mask mask,
+            long[] output,
+            boolean[] errors)
+    {
+        if (!(left instanceof I64Vector leftValues) ||
+                !(right instanceof RleVector rightRle) ||
+                rightRle.counts().length != 1) {
+            return false;
+        }
+        BinaryDispatchSupport.validateLength(left, mask);
+        BinaryDispatchSupport.validateLength(right, mask);
+        long divisor = VectorAccess.longValues(rightRle.values()).value(0);
+        long[] input = leftValues.values();
+        int rows = mask.count();
+        int[] selected = mask.all() ? null : mask.selectedPositions();
+        if (divisor == 0) {
+            for (int index = 0; index < rows; index++) {
+                int position = selected == null ? index : selected[index];
+                if (output != null) {
+                    output[position] = 0;
+                }
+                if (errors != null) {
+                    errors[position] = true;
+                }
+            }
+            return true;
+        }
+        if (output == null) {
+            for (int index = 0; index < rows; index++) {
+                errors[selected == null ? index : selected[index]] = false;
+            }
+            return true;
+        }
+        if (errors == null) {
+            for (int index = 0; index < rows; index++) {
+                int position = selected == null ? index : selected[index];
+                output[position] = input[position] % divisor;
+            }
+            return true;
+        }
+        for (int index = 0; index < rows; index++) {
+            int position = selected == null ? index : selected[index];
+            output[position] = input[position] % divisor;
+            errors[position] = false;
+        }
+        return true;
     }
 
     private static void apply(long leftValue, long rightValue, long[] values, boolean[] errors, int position)

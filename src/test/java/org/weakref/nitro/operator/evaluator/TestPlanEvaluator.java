@@ -2356,6 +2356,38 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testModuloFlatInputAndConstantDivisorRespectMasksAndErrors()
+    {
+        PrimitiveRegistry primitiveRegistry = primitiveRegistry();
+        PrimitiveExecutionContext context = new PrimitiveExecutionContext(new Allocator(EngineResources.createDefault()));
+        Streams divisor = Streams.ofValues(new RleVector(new int[] {4}, new I64Vector(new long[] {3})));
+
+        Streams modulo = primitiveRegistry.get("modulo").apply(
+                List.of(
+                        Streams.ofValues(new I64Vector(new long[] {10, 11, 12, 13})),
+                        divisor),
+                Mask.all(4),
+                Set.of(Stream.VALUES, Stream.ERRORS),
+                null,
+                context);
+
+        assertThat(((I64Vector) modulo.values()).values()).containsExactly(1L, 2L, 0L, 1L);
+        assertThat(((BooleanVector) modulo.get(Stream.ERRORS)).values()).containsExactly(false, false, false, false);
+
+        Streams zeroDivisor = primitiveRegistry.get("modulo").apply(
+                List.of(
+                        Streams.ofValues(new I64Vector(new long[] {10, 11, 12, 13})),
+                        Streams.ofValues(new RleVector(new int[] {4}, new I64Vector(new long[] {0})))),
+                Mask.sparse(new int[] {1, 3}, 4),
+                Set.of(Stream.VALUES, Stream.ERRORS),
+                modulo,
+                context);
+
+        assertThat(((I64Vector) zeroDivisor.values()).values()).containsExactly(1L, 0L, 0L, 0L);
+        assertThat(((BooleanVector) zeroDivisor.get(Stream.ERRORS)).values()).containsExactly(false, true, false, true);
+    }
+
+    @Test
     void testMergeCopiesRleInputsIntoMaskedOutput()
     {
         PrimitiveRegistry primitiveRegistry = builtinPrimitiveRegistry();
