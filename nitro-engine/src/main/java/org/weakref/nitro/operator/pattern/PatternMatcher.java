@@ -16,7 +16,9 @@ package org.weakref.nitro.operator.pattern;
 import org.weakref.nitro.core.execution.ExecutionContext;
 import org.weakref.nitro.data.PrimitiveArrayPool;
 
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 
 import static java.lang.Math.max;
 import static java.util.Objects.checkIndex;
@@ -26,11 +28,16 @@ import static java.util.Objects.requireNonNull;
 ///
 /// A session owns all mutable match state and remains restartable at input-position checkpoints. Forked automaton
 /// threads share immutable persistent label and exclusion histories, so a split does not copy a partition-length
-/// array. Every primitive work array comes from the explicitly supplied pool and is returned when the session closes.
+/// array. The matcher retains the maximum workspace reached by sequential sessions, including arrays too small for
+/// the shared primitive pool, and returns that workspace to the explicitly supplied pool when the matcher closes.
 public final class PatternMatcher
+        implements AutoCloseable
 {
     private final PatternProgram program;
     private final PrimitiveArrayPool arrayPool;
+    private final List<int[]> cachedArrays = new ArrayList<>();
+    private int activeSessions;
+    private boolean closed;
 
     public PatternMatcher(PatternProgram program, PrimitiveArrayPool arrayPool)
     {
@@ -40,10 +47,53 @@ public final class PatternMatcher
 
     public Session start(int inputLength, boolean matchingAtPartitionStart, PatternLabelEvaluator evaluator)
     {
+        if (closed) {
+            throw new IllegalStateException("pattern matcher is closed");
+        }
+        if (activeSessions != 0) {
+            throw new IllegalStateException("pattern matcher already has an active session");
+        }
         if (inputLength < 0) {
             throw new IllegalArgumentException("inputLength is negative");
         }
-        return new Session(inputLength, matchingAtPartitionStart, requireNonNull(evaluator, "evaluator is null"));
+        Session session = new Session(inputLength, matchingAtPartitionStart, requireNonNull(evaluator, "evaluator is null"));
+        activeSessions = 1;
+        return session;
+    }
+
+    @Override
+    public void close()
+    {
+        if (closed) {
+            return;
+        }
+        if (activeSessions != 0) {
+            throw new IllegalStateException("pattern matcher has active sessions");
+        }
+        for (int[] array : cachedArrays) {
+            arrayPool.release(array);
+        }
+        cachedArrays.clear();
+        closed = true;
+    }
+
+    private int[] borrowInts(int length)
+    {
+        for (int index = cachedArrays.size() - 1; index >= 0; index--) {
+            int[] array = cachedArrays.get(index);
+            if (array.length == length) {
+                int last = cachedArrays.size() - 1;
+                cachedArrays.set(index, cachedArrays.get(last));
+                cachedArrays.remove(last);
+                return array;
+            }
+        }
+        return arrayPool.borrowInts(length);
+    }
+
+    private void release(int[] array)
+    {
+        cachedArrays.add(array);
     }
 
     public final class Session
@@ -65,7 +115,7 @@ public final class PatternMatcher
         private final PooledIntList taskThreads = new PooledIntList();
         private final PooledIntList taskPointers = new PooledIntList();
         private final BorrowedLabelHistory labelHistory = new BorrowedLabelHistory();
-        private int[] instructionHeads = arrayPool.borrowInts(program.size());
+        private int[] instructionHeads = borrowInts(program.size());
         private int inputPosition;
         private int currentIndex;
         private int resultThread = -1;
@@ -399,8 +449,9 @@ public final class PatternMatcher
             visitNext.close();
             taskThreads.close();
             taskPointers.close();
-            arrayPool.release(instructionHeads);
+            release(instructionHeads);
             instructionHeads = null;
+            activeSessions--;
             closed = true;
         }
 
@@ -425,10 +476,10 @@ public final class PatternMatcher
         private final class ThreadStore
                 implements AutoCloseable
         {
-            private int[] pointers = arrayPool.borrowInts(16);
-            private int[] labelHeads = arrayPool.borrowInts(16);
-            private int[] exclusionHeads = arrayPool.borrowInts(16);
-            private int[] states = arrayPool.borrowInts(16);
+            private int[] pointers = borrowInts(16);
+            private int[] labelHeads = borrowInts(16);
+            private int[] exclusionHeads = borrowInts(16);
+            private int[] states = borrowInts(16);
             private int allocatedCount;
 
             int newThread()
@@ -534,10 +585,10 @@ public final class PatternMatcher
             @Override
             public void close()
             {
-                arrayPool.release(pointers);
-                arrayPool.release(labelHeads);
-                arrayPool.release(exclusionHeads);
-                arrayPool.release(states);
+                PatternMatcher.this.release(pointers);
+                PatternMatcher.this.release(labelHeads);
+                PatternMatcher.this.release(exclusionHeads);
+                PatternMatcher.this.release(states);
                 pointers = null;
                 labelHeads = null;
                 exclusionHeads = null;
@@ -548,10 +599,10 @@ public final class PatternMatcher
         private final class HistoryArena
                 implements AutoCloseable
         {
-            private int[] values = arrayPool.borrowInts(16);
-            private int[] previous = arrayPool.borrowInts(16);
-            private int[] lengths = arrayPool.borrowInts(16);
-            private int[] references = arrayPool.borrowInts(16);
+            private int[] values = borrowInts(16);
+            private int[] previous = borrowInts(16);
+            private int[] lengths = borrowInts(16);
+            private int[] references = borrowInts(16);
             private final PooledIntList free = new PooledIntList();
             private int nodeCount;
 
@@ -651,10 +702,10 @@ public final class PatternMatcher
             public void close()
             {
                 free.close();
-                arrayPool.release(values);
-                arrayPool.release(previous);
-                arrayPool.release(lengths);
-                arrayPool.release(references);
+                PatternMatcher.this.release(values);
+                PatternMatcher.this.release(previous);
+                PatternMatcher.this.release(lengths);
+                PatternMatcher.this.release(references);
                 values = null;
                 previous = null;
                 lengths = null;
@@ -665,7 +716,7 @@ public final class PatternMatcher
         private final class PooledIntList
                 implements AutoCloseable
         {
-            private int[] values = arrayPool.borrowInts(16);
+            private int[] values = borrowInts(16);
             private int size;
 
             void add(int value)
@@ -717,7 +768,7 @@ public final class PatternMatcher
             @Override
             public void close()
             {
-                arrayPool.release(values);
+                release(values);
                 values = null;
                 size = 0;
             }
@@ -725,9 +776,9 @@ public final class PatternMatcher
 
         private int[] grow(int[] source, int capacity, int used)
         {
-            int[] replacement = arrayPool.borrowInts(capacity);
+            int[] replacement = borrowInts(capacity);
             System.arraycopy(source, 0, replacement, 0, used);
-            arrayPool.release(source);
+            release(source);
             return replacement;
         }
     }

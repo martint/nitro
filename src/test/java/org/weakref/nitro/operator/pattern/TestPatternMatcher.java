@@ -162,21 +162,25 @@ final class TestPatternMatcher
     }
 
     @Test
-    void testReturnsAllWorkspaceToPool()
+    void testReusesWorkspaceBelowSharedPoolThreshold()
     {
-        try (PrimitiveArrayPool pool = new PrimitiveArrayPool(1 << 20, 0)) {
-            PatternMatcher matcher = new PatternMatcher(
-                    PatternCompiler.compile(new PatternExpression.Label(0)),
-                    pool);
-            try (PatternMatcher.Session session = matcher.start(1, true, (_, _, _) -> true)) {
+        PatternExpression pattern = new PatternExpression.Quantified(
+                new PatternExpression.Label(0),
+                1000,
+                OptionalInt.of(1000),
+                true);
+        try (PrimitiveArrayPool pool = new PrimitiveArrayPool(1 << 20, 1 << 16);
+                PatternMatcher matcher = new PatternMatcher(
+                        PatternCompiler.compile(pattern),
+                        pool)) {
+            try (PatternMatcher.Session session = matcher.start(1000, true, (_, _, _) -> true)) {
                 assertThat(session.run(new TestingExecutionContext())).isTrue();
             }
             long allocations = pool.allocationCount();
-            try (PatternMatcher.Session session = matcher.start(1, true, (_, _, _) -> true)) {
+            try (PatternMatcher.Session session = matcher.start(1000, true, (_, _, _) -> true)) {
                 assertThat(session.run(new TestingExecutionContext())).isTrue();
             }
             assertThat(pool.allocationCount()).isEqualTo(allocations);
-            assertThat(pool.reuseCount()).isPositive();
         }
     }
 

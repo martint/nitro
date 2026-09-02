@@ -67,6 +67,7 @@ public final class PatternRecognitionOperator
     private final EncodedRowBuffer rows;
 
     private PatternSearch search;
+    private PatternMatcher matcher;
     private PatternPartitionOutput partitionOutput;
     private int nextPartitionStart;
     private int partitionEnd;
@@ -225,9 +226,8 @@ public final class PatternRecognitionOperator
         }
         rows.load(source);
         PatternDefinitionEvaluator evaluator = new PatternDefinitionEvaluator(rows, definitions);
-        search = new PatternSearch(
-                new PatternMatcher(PatternCompiler.compile(pattern), allocator.primitiveArrays()),
-                evaluator);
+        matcher = new PatternMatcher(PatternCompiler.compile(pattern), allocator.primitiveArrays());
+        search = new PatternSearch(matcher, evaluator);
         loaded = true;
     }
 
@@ -366,6 +366,15 @@ public final class PatternRecognitionOperator
             catch (RuntimeException closeFailure) {
                 failure = appendFailure(failure, closeFailure);
             }
+        }
+        if (matcher != null) {
+            try {
+                matcher.close();
+            }
+            catch (RuntimeException closeFailure) {
+                failure = appendFailure(failure, closeFailure);
+            }
+            matcher = null;
         }
         try {
             rows.close();
