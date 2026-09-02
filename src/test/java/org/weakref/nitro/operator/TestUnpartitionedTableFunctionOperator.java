@@ -238,6 +238,108 @@ final class TestUnpartitionedTableFunctionOperator
         }
     }
 
+    @Test
+    void testCreatesIsolatedProcessorForEachOrderedPartition()
+    {
+        TableOperator source = TableOperator.retained(
+                BIGINT_SCHEMA,
+                List.of(
+                        TableOperator.Page.values(1, new I64Vector[] {new I64Vector(new long[] {1})}, Mask.all(1)),
+                        TableOperator.Page.values(2, new I64Vector[] {new I64Vector(new long[] {1, 2})}, Mask.all(2)),
+                        TableOperator.Page.values(1, new I64Vector[] {new I64Vector(new long[] {2})}, Mask.all(1))));
+        AtomicInteger processors = new AtomicInteger();
+
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                PartitionedTableFunctionOperator operator = new PartitionedTableFunctionOperator(
+                        allocator,
+                        new TestingExecutionContext(),
+                        source,
+                        BIGINT_SCHEMA,
+                        new int[] {0},
+                        new int[] {0},
+                        new WindowInputOrder(true, 0),
+                        0,
+                        BIGINT_SCHEMA,
+                        0,
+                        List.of(new TableFunctionPassThroughColumn(0, 0)),
+                        () -> {
+                            processors.incrementAndGet();
+                            return new FirstRowProcessor();
+                        },
+                        false,
+                        8,
+                        resources.operatorResources())) {
+            assertThat(operator.hasNext()).isTrue();
+            try (Batch first = operator.next()) {
+                assertThat(((I64Vector) first.output(0).borrow(Stream.VALUES)).values()).containsExactly(1);
+            }
+            assertThat(operator.hasNext()).isTrue();
+            try (Batch second = operator.next()) {
+                assertThat(((I64Vector) second.output(0).borrow(Stream.VALUES)).values()).containsExactly(2);
+            }
+            assertThat(operator.hasNext()).isFalse();
+        }
+
+        assertThat(processors).hasValue(2);
+    }
+
+    @Test
+    void testEmptyPartitionPolicyControlsProcessorCreation()
+    {
+        AtomicInteger prunedProcessors = new AtomicInteger();
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                PartitionedTableFunctionOperator operator = new PartitionedTableFunctionOperator(
+                        allocator,
+                        new TestingExecutionContext(),
+                        TableOperator.retained(EMPTY_SCHEMA, List.of()),
+                        EMPTY_SCHEMA,
+                        new int[0],
+                        new int[0],
+                        new WindowInputOrder(true, 0),
+                        0,
+                        EMPTY_SCHEMA,
+                        0,
+                        List.of(),
+                        () -> {
+                            prunedProcessors.incrementAndGet();
+                            return new FinishedProcessor();
+                        },
+                        false,
+                        8,
+                        resources.operatorResources())) {
+            assertThat(operator.hasNext()).isFalse();
+        }
+        assertThat(prunedProcessors).hasValue(0);
+
+        AtomicInteger retainedProcessors = new AtomicInteger();
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                PartitionedTableFunctionOperator operator = new PartitionedTableFunctionOperator(
+                        allocator,
+                        new TestingExecutionContext(),
+                        TableOperator.retained(EMPTY_SCHEMA, List.of()),
+                        EMPTY_SCHEMA,
+                        new int[0],
+                        new int[0],
+                        new WindowInputOrder(true, 0),
+                        0,
+                        EMPTY_SCHEMA,
+                        0,
+                        List.of(),
+                        () -> {
+                            retainedProcessors.incrementAndGet();
+                            return new FinishedProcessor();
+                        },
+                        true,
+                        8,
+                        resources.operatorResources())) {
+            assertThat(operator.hasNext()).isFalse();
+        }
+        assertThat(retainedProcessors).hasValue(1);
+    }
+
     private static TableFunctionOutputBatch referenceOutput(Allocator allocator, long reference)
     {
         VectorBatchScope buffers = new VectorBatchScope(allocator, "reference-output");
@@ -339,6 +441,50 @@ final class TestUnpartitionedTableFunctionOperator
         {
             return closed;
         }
+    }
+
+    private static final class FirstRowProcessor
+            implements TableFunctionProcessor
+    {
+        private boolean produced;
+
+        @Override
+        public TableFunctionProgress process(
+                TableFunctionInput input,
+                TableFunctionOutputDemand outputDemand,
+                Allocator allocator,
+                Allocator.Context allocationContext,
+                ExecutionContext executionContext)
+        {
+            if (produced || input.arguments().getFirst() instanceof TableFunctionArgument.Finished) {
+                return TableFunctionProgress.Finished.FINISHED;
+            }
+            produced = true;
+            assertThat(outputDemand.passThroughArguments()).containsExactly(0);
+            return new TableFunctionProgress.Produced(referenceOutput(allocator, 0), Set.of(0));
+        }
+
+        @Override
+        public void close() {}
+    }
+
+    private static final class FinishedProcessor
+            implements TableFunctionProcessor
+    {
+        @Override
+        public TableFunctionProgress process(
+                TableFunctionInput input,
+                TableFunctionOutputDemand outputDemand,
+                Allocator allocator,
+                Allocator.Context allocationContext,
+                ExecutionContext executionContext)
+        {
+            assertThat(input.arguments().getFirst()).isEqualTo(TableFunctionArgument.Finished.FINISHED);
+            return TableFunctionProgress.Finished.FINISHED;
+        }
+
+        @Override
+        public void close() {}
     }
 
     private static final class TestingSource
