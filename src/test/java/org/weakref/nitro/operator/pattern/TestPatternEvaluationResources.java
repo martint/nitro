@@ -28,6 +28,7 @@ import org.weakref.nitro.operator.evaluator.ir.Assignment;
 import org.weakref.nitro.operator.evaluator.ir.Call;
 import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
 import org.weakref.nitro.operator.evaluator.ir.Input;
+import org.weakref.nitro.operator.evaluator.ir.Literal;
 import org.weakref.nitro.operator.evaluator.ir.Reference;
 import org.weakref.nitro.operator.evaluator.ir.Variable;
 
@@ -38,6 +39,34 @@ import static org.weakref.nitro.TestPrimitiveFunctions.primitiveRegistry;
 
 final class TestPatternEvaluationResources
 {
+    @Test
+    void testEvaluatesLiteralDefinitionWithoutPerRowAllocation()
+    {
+        Variable result = new Variable(0);
+        Reference predicate = new Reference(result, Stream.VALUES);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(result, new Literal(true), AllMask.ALL)),
+                List.of(predicate));
+        PatternEvaluationContext context = new PatternEvaluationContext(new TestRows());
+        context.resetMatch(0, 2, 0, 1);
+        context.resetRow(0, labels(0));
+
+        try (OperatorResources resources = OperatorResources.createDefault();
+                Allocator allocator = new Allocator(EngineResources.createDefault());
+                PatternDefinition definition = resources.patternEvaluation().definition(
+                        allocator,
+                        plan,
+                        primitiveRegistry(),
+                        new PatternValueProgram(List.of()),
+                        predicate,
+                        (_, _) -> {})) {
+            long allocatedBytes = allocator.allocatedBytes();
+            assertThat(definition.matches(context)).isTrue();
+            assertThat(definition.matches(context)).isTrue();
+            assertThat(allocator.allocatedBytes()).isEqualTo(allocatedBytes);
+        }
+    }
+
     @Test
     void testEvaluatesSelectedRowsInTheirSourceDomain()
     {

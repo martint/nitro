@@ -24,7 +24,9 @@ import org.weakref.nitro.operator.evaluator.PlanEvaluator;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
 import org.weakref.nitro.operator.evaluator.ir.Input;
+import org.weakref.nitro.operator.evaluator.ir.Literal;
 import org.weakref.nitro.operator.evaluator.ir.Reference;
+import org.weakref.nitro.operator.evaluator.ir.Variable;
 import org.weakref.nitro.operator.pattern.PatternAggregationInput;
 import org.weakref.nitro.operator.pattern.PatternDefinition;
 import org.weakref.nitro.operator.pattern.PatternDefinitionErrorHandler;
@@ -33,6 +35,7 @@ import org.weakref.nitro.operator.pattern.PatternValueEvaluator;
 import org.weakref.nitro.operator.pattern.PatternValueProgram;
 
 import static java.util.Objects.requireNonNull;
+import static org.weakref.nitro.operator.evaluator.ir.AllMask.ALL;
 
 /// Engine-owner-scoped resources for evaluating expressions in row-pattern execution.
 public final class PatternEvaluationResources
@@ -80,6 +83,10 @@ public final class PatternEvaluationResources
             Reference predicate,
             PatternDefinitionErrorHandler errorHandler)
     {
+        PatternDefinition constant = constantDefinition(plan, inputs, predicate);
+        if (constant != null) {
+            return constant;
+        }
         return new ExpressionDefinition(
                 allocator,
                 plan,
@@ -90,6 +97,43 @@ public final class PatternEvaluationResources
                 projectionMaskCompiler,
                 evaluationPolicy,
                 bufferPoolGroup);
+    }
+
+    private static PatternDefinition constantDefinition(
+            EvaluationPlan plan,
+            PatternValueProgram inputs,
+            Reference predicate)
+    {
+        if (predicate.stream() != Stream.VALUES || !(predicate.producer() instanceof Variable variable)) {
+            return null;
+        }
+        for (var assignment : plan.assignments()) {
+            if (assignment.output().equals(variable) &&
+                    assignment.mask() == ALL &&
+                    assignment.operation() instanceof Literal literal) {
+                Object value = literal.value();
+                if (value != null && !(value instanceof Boolean)) {
+                    throw new IllegalArgumentException("pattern definition literal is not Boolean");
+                }
+                inputs.close();
+                return new ConstantDefinition(Boolean.TRUE.equals(value));
+            }
+        }
+        return null;
+    }
+
+    private record ConstantDefinition(boolean result)
+            implements PatternDefinition
+    {
+        @Override
+        public boolean matches(PatternEvaluationContext context)
+        {
+            requireNonNull(context, "context is null");
+            return result;
+        }
+
+        @Override
+        public void close() {}
     }
 
     /// Binds one compiled measure expression to its match-local value producers.
