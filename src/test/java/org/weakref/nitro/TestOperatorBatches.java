@@ -70,6 +70,7 @@ import org.weakref.nitro.operator.RunningMaxI64WindowFunction;
 import org.weakref.nitro.operator.RunningSumI64WindowFunction;
 import org.weakref.nitro.operator.SemiJoinOperator;
 import org.weakref.nitro.operator.SingleBatchOperator;
+import org.weakref.nitro.operator.SortOperator;
 import org.weakref.nitro.operator.SortSession;
 import org.weakref.nitro.operator.TableOperator;
 import org.weakref.nitro.operator.TopNOperator;
@@ -4701,6 +4702,37 @@ public class TestOperatorBatches
                 assertThat(utf8(payload, 2)).isEqualTo("second");
                 assertThat(utf8(payload, 3)).isEqualTo("fourth");
             }
+        }
+    }
+
+    @Test
+    void testSortOperatorPullsAndOrdersMultipleBatches()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        Schema schema;
+        try (Operator first = new ConstantTableOperator(
+                allocator,
+                2,
+                List.of(row(9L, "second"), row(1L, "first")))) {
+            schema = first.outputSchema();
+        }
+        try (Operator source = new UnionAllOperator(schema, List.of(
+                new ConstantTableOperator(allocator, 2, List.of(row(9L, "second"), row(1L, "first"))),
+                new ConstantTableOperator(allocator, 2, List.of(row(12L, "fourth"), row(5L, "third")))));
+                Operator sort = new SortOperator(
+                        allocator,
+                        new int[] {0},
+                        new boolean[] {false},
+                        new boolean[] {false},
+                        source,
+                        EngineResources.from(allocator).operatorResources())) {
+            assertThat(sort.outputSchema()).isEqualTo(schema);
+            assertThat(OperatorAssertions.OperatorAssert.toRows(sort))
+                    .containsExactly(
+                            row(1L, "first"),
+                            row(5L, "third"),
+                            row(9L, "second"),
+                            row(12L, "fourth"));
         }
     }
 
