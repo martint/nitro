@@ -44,31 +44,54 @@ public final class PatternValueProgram
             int outputPosition,
             int outputSize)
     {
+        if (output != null && output.length != evaluators.size()) {
+            throw new IllegalArgumentException("output column count does not match value program");
+        }
+        return append(context, allocator, allocationContext, output, 0, outputPosition, outputSize);
+    }
+
+    /// Appends into a caller-owned column range without allocating a temporary array per output row.
+    public Streams[] append(
+            PatternEvaluationContext context,
+            Allocator allocator,
+            Allocator.Context allocationContext,
+            Streams[] output,
+            int outputColumnOffset,
+            int outputPosition,
+            int outputSize)
+    {
         requireNonNull(context, "context is null");
         requireNonNull(allocator, "allocator is null");
         requireNonNull(allocationContext, "allocationContext is null");
         if (outputPosition < 0 || outputPosition >= outputSize) {
             throw new IllegalArgumentException("outputPosition is outside output");
         }
+        if (outputColumnOffset < 0) {
+            throw new IllegalArgumentException("outputColumnOffset is negative");
+        }
         if (output == null) {
+            if (outputColumnOffset != 0) {
+                throw new IllegalArgumentException("outputColumnOffset requires caller-owned output");
+            }
             output = new Streams[evaluators.size()];
         }
-        else if (output.length != evaluators.size()) {
-            throw new IllegalArgumentException("output column count does not match value program");
+        else if (output.length < outputColumnOffset + evaluators.size()) {
+            throw new IllegalArgumentException("output column range does not fit value program");
         }
 
         for (int index = 0; index < evaluators.size(); index++) {
+            int outputColumn = outputColumnOffset + index;
             Streams column = requireNonNull(evaluators.get(index).append(
                     context,
                     allocator,
                     allocationContext,
-                    output[index] == null ? Streams.empty() : output[index],
+                    output[outputColumn] == null ? Streams.empty() : output[outputColumn],
                     outputPosition,
                     outputSize), "pattern value evaluator returned null");
             if (column.values().length() != outputSize) {
                 throw new IllegalStateException("pattern value evaluator returned the wrong output size");
             }
-            output[index] = column;
+            output[outputColumn] = column;
         }
         return output;
     }
