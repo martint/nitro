@@ -29,6 +29,7 @@ import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
+/// Standalone test-registry fixture; production semantics come from the host function registry.
 @ScalarFunction(name = "is_null_i32", capabilities = {IsNullProjectionOptimization.class, IsNullDirectMaskOptimization.class})
 public final class IsNullI32
         implements PrimitiveFunction

@@ -42,6 +42,7 @@ import static java.util.Objects.requireNonNull;
  * and decoding a constant vector at execution time and lets host engines use Nitro's encoding-aware implementation
  * without teaching the evaluator about the host engine's pattern representation.
  */
+/// Standalone test-registry fixture; production semantics come from the host function registry.
 @ScalarFunction(name = "bound_like_utf8")
 public final class BoundLikeUtf8
         implements PrimitiveFunction, MaskEvaluablePrimitiveFunction

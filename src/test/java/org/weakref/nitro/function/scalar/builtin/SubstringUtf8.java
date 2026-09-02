@@ -35,6 +35,7 @@ import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
+/// Standalone test-registry fixture; production semantics come from the host function registry.
 @ScalarFunction(name = "substring_utf8", capabilities = SubstringUtf8BinarySliceProjection.class)
 public final class SubstringUtf8
         implements PrimitiveFunction

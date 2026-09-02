@@ -33,6 +33,7 @@ import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
+/// Standalone test-registry fixture; production semantics come from the host function registry.
 @ScalarFunction(name = "upper_utf8")
 public final class UpperUtf8
         implements PrimitiveFunction

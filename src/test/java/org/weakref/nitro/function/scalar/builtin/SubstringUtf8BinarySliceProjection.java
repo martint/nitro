@@ -22,6 +22,7 @@ import java.util.Optional;
 /**
  * Function-owned non-copying lowering for constant-bound UTF-8 substring.
  */
+/// Projection capability used only by the standalone substring test fixture.
 public final class SubstringUtf8BinarySliceProjection
         implements BinarySliceProjectionProvider
 {

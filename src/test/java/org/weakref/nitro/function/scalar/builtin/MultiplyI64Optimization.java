@@ -22,9 +22,10 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * Registry-owned projection lowering for a UTF-8 prefix predicate.
+ * Registry-owned projection lowering for I64 multiplication.
  */
-public final class StartsWithUtf8Optimization
+/// Projection fixture for the standalone generated BIGINT test binding.
+public final class MultiplyI64Optimization
         implements ProjectionCodeProvider
 {
     @Override
@@ -33,11 +34,11 @@ public final class StartsWithUtf8Optimization
         if (arguments.size() != 2) {
             return Optional.empty();
         }
+        var left = builder.argument(0, ProjectionCodeBuilder.ValueType.I64);
+        var right = builder.argument(1, ProjectionCodeBuilder.ValueType.I64);
         return Optional.of(builder.program(
-                List.of(ProjectionCodeBuilder.ValueType.UTF8, ProjectionCodeBuilder.ValueType.UTF8),
-                builder.utf8StartsWith(
-                        builder.argument(0, ProjectionCodeBuilder.ValueType.UTF8),
-                        builder.argument(1, ProjectionCodeBuilder.ValueType.UTF8)),
+                List.of(ProjectionCodeBuilder.ValueType.I64, ProjectionCodeBuilder.ValueType.I64),
+                builder.multiply(left, right),
                 builder.or(builder.isNull(0), builder.isNull(1))));
     }
 }

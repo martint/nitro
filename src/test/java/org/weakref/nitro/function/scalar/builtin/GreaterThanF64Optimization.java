@@ -16,7 +16,8 @@ package org.weakref.nitro.function.scalar.builtin;
 import org.weakref.nitro.core.function.mask.MaskCodeProvider;
 import org.weakref.nitro.core.function.projection.ProjectionCodeBuilder;
 
-public final class GreaterThanOrEqualF64Optimization
+/// Projection fixture for generator coverage; production capabilities come from function bindings.
+public final class GreaterThanF64Optimization
         extends BinaryF64ProjectionOptimization
         implements MaskCodeProvider
 {
@@ -26,6 +27,6 @@ public final class GreaterThanOrEqualF64Optimization
             ProjectionCodeBuilder.Value left,
             ProjectionCodeBuilder.Value right)
     {
-        return builder.greaterThanOrEqual(left, right);
+        return builder.greaterThan(left, right);
     }
 }

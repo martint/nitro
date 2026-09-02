@@ -22,9 +22,10 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * Registry-owned projection lowering for I64 multiplication.
+ * Registry-owned projection lowering for I64 subtraction.
  */
-public final class MultiplyI64Optimization
+/// Projection fixture for the standalone generated BIGINT test binding.
+public final class SubtractI64Optimization
         implements ProjectionCodeProvider
 {
     @Override
@@ -37,7 +38,7 @@ public final class MultiplyI64Optimization
         var right = builder.argument(1, ProjectionCodeBuilder.ValueType.I64);
         return Optional.of(builder.program(
                 List.of(ProjectionCodeBuilder.ValueType.I64, ProjectionCodeBuilder.ValueType.I64),
-                builder.multiply(left, right),
+                builder.subtract(left, right),
                 builder.or(builder.isNull(0), builder.isNull(1))));
     }
 }

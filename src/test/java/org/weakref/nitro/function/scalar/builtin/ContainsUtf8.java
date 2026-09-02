@@ -24,19 +24,20 @@ import org.weakref.nitro.function.scalar.ScalarFunction;
 import java.util.List;
 import java.util.Set;
 
-@ScalarFunction(name = "starts_with_utf8", capabilities = StartsWithUtf8Optimization.class)
-public final class StartsWithUtf8
+/// Standalone test-registry fixture; production semantics come from the host function registry.
+@ScalarFunction(name = "contains_utf8")
+public final class ContainsUtf8
         implements PrimitiveFunction
 {
-    private final Allocator.Context allocationContext = new Allocator.Context("StartsWithUtf8");
+    private final Allocator.Context allocationContext = new Allocator.Context("ContainsUtf8");
     private final Utf8BinaryDispatch dispatch;
 
-    public StartsWithUtf8()
+    public ContainsUtf8()
     {
         this(Utf8BinaryDispatchPolicy.defaults());
     }
 
-    public StartsWithUtf8(Utf8BinaryDispatchPolicy policy)
+    public ContainsUtf8(Utf8BinaryDispatchPolicy policy)
     {
         dispatch = new Utf8BinaryDispatch(policy);
     }
@@ -56,6 +57,6 @@ public final class StartsWithUtf8
     @Override
     public Streams apply(List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
     {
-        return dispatch.applyStartsWith("starts_with_utf8", allocationContext, inputs, mask, requestedStreams, output, context);
+        return dispatch.applyContains("contains_utf8", allocationContext, inputs, mask, requestedStreams, output, context);
     }
 }

@@ -33,6 +33,7 @@ import java.util.Set;
 import static com.google.common.base.Preconditions.checkArgument;
 import static java.lang.Math.toIntExact;
 
+/// Standalone test-registry fixture; production semantics come from the host function registry.
 @ScalarFunction(name = "array_element_i64")
 public final class ArrayElementI64
         implements PrimitiveFunction
