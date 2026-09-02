@@ -137,6 +137,34 @@ final class TestGenericScalarProjectionCompiler
     }
 
     @Test
+    void testSingleCallIsAvailableOnlyForDictionaryDomainDemand()
+            throws Throwable
+    {
+        ResolvedCall call = resolvedCall(
+                "dynamic_single",
+                LONG,
+                List.of(LONG),
+                MethodHandles.lookup().findStatic(
+                        TestGenericScalarProjectionCompiler.class,
+                        "negate",
+                        MethodType.methodType(long.class, long.class)));
+        Variable result = new Variable(0);
+        Reference output = new Reference(result, Stream.VALUES);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(result, new Call(call, List.of(input(0))), AllMask.ALL)),
+                List.of(output));
+
+        try (FusedProjectionCompiler compiler = new FusedProjectionCompiler()) {
+            FusedProjectionCompiler.CompiledMultiProjection compiled = compiler
+                    .tryCompile(plan, new PrimitiveRegistry(), List.of(output))
+                    .orElseThrow();
+
+            assertThat(compiled.compilationKind()).isEqualTo(FusedProjectionCompiler.CompilationKind.SCALAR_TARGET);
+            assertThat(compiled.dictionaryDomainOnly()).isTrue();
+        }
+    }
+
+    @Test
     void testDoesNotDuplicateSharedComputedExpression()
             throws Throwable
     {
@@ -281,6 +309,11 @@ final class TestGenericScalarProjectionCompiler
     private static double addDouble(double left, double right)
     {
         return left + right;
+    }
+
+    private static long negate(long value)
+    {
+        return -value;
     }
 
     private record TestingTypeBinding(TypeIdentity identity, Class<?> carrierType)

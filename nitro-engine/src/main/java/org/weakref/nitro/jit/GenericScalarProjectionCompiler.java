@@ -85,7 +85,7 @@ final class GenericScalarProjectionCompiler
             }
             try {
                 ScalarExpression expression = expression(output, null, assignments, primitiveRegistry, new HashSet<>());
-                if (expression.operationCount() < 2 || expression.leaves().isEmpty()) {
+                if (expression.operationCount() < 1 || expression.leaves().isEmpty()) {
                     continue;
                 }
                 ScalarExpression canonical = canonicalizeLeaves(expression);
@@ -112,7 +112,8 @@ final class GenericScalarProjectionCompiler
                         canonical.leaves().stream().map(_ -> false).toList(),
                         List.of(output),
                         dictionaryDomainMinimumReduction,
-                        FusedProjectionCompiler.CompilationKind.SCALAR_TARGET));
+                        FusedProjectionCompiler.CompilationKind.SCALAR_TARGET,
+                        canonical.operationCount() == 1));
             }
             catch (Unsupported ignored) {
                 // The ordinary evaluator remains authoritative for every unadmitted shape.

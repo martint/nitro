@@ -681,7 +681,9 @@ public class ProjectOperator
         {
             if (!fusedResultsComputed) {
                 fusedResultsComputed = true;
-                if (fusedProjection != null && !mask.none()) {
+                if (fusedProjection != null &&
+                        (!fusedProjection.dictionaryDomainOnly() || fusedDictionaryDomainDemanded) &&
+                        !mask.none()) {
                     generatedAttempts++;
                     generatedSelectedPositions += mask.count();
                     List<Streams> inputs = new ArrayList<>(fusedProjection.inputs().size());
