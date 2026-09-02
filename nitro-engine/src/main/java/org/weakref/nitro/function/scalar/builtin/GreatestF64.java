@@ -29,7 +29,7 @@ import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
-@ScalarFunction(name = "greatest_f64")
+@ScalarFunction(name = "greatest_f64", capabilities = GreatestF64ScalarInvocation.class)
 public final class GreatestF64
         implements PrimitiveFunction
 {

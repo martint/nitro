@@ -23,18 +23,22 @@ import org.weakref.nitro.core.type.TypeIdentity;
 import org.weakref.nitro.core.type.TypeOperators;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.F64Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Row;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
+import org.weakref.nitro.data.ValueDemand;
 import org.weakref.nitro.function.scalar.PrimitiveExecutionContext;
 import org.weakref.nitro.function.scalar.PrimitiveFunction;
 import org.weakref.nitro.function.scalar.ScalarMethodTarget;
+import org.weakref.nitro.function.scalar.builtin.GreatestF64ScalarInvocation;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.ConstantTableOperator;
 import org.weakref.nitro.operator.ProjectOperator;
+import org.weakref.nitro.operator.TableOperator;
 import org.weakref.nitro.operator.evaluator.PrimitiveInvocationBinding;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 import org.weakref.nitro.operator.evaluator.ir.AllMask;
@@ -42,6 +46,7 @@ import org.weakref.nitro.operator.evaluator.ir.Assignment;
 import org.weakref.nitro.operator.evaluator.ir.Call;
 import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
 import org.weakref.nitro.operator.evaluator.ir.Input;
+import org.weakref.nitro.operator.evaluator.ir.Literal;
 import org.weakref.nitro.operator.evaluator.ir.Reference;
 import org.weakref.nitro.operator.evaluator.ir.Variable;
 
@@ -50,8 +55,12 @@ import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.util.EnumSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 
+import static java.util.Collections.nCopies;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.weakref.nitro.core.function.FunctionSemantics.ArgumentNullConvention.CALLED_ON_NULL;
 import static org.weakref.nitro.core.function.FunctionSemantics.ArgumentNullConvention.RETURN_NULL_ON_NULL;
 import static org.weakref.nitro.core.function.FunctionSemantics.FailureConvention.NEVER_FAILS;
 import static org.weakref.nitro.execution.EngineResources.createDefault;
@@ -266,9 +275,119 @@ final class TestGenericScalarProjectionCompiler
         }
     }
 
+    @Test
+    void testComposesNullableVariadicCallThroughExplicitNullPropagatingTarget()
+            throws Throwable
+    {
+        ResolvedCall cast = resolvedCall(
+                "dynamic_cast",
+                DOUBLE,
+                List.of(LONG),
+                MethodHandles.lookup().findStatic(TestGenericScalarProjectionCompiler.class, "cast", MethodType.methodType(double.class, long.class)));
+        ResolvedCall greatest = nullableGreatestCall(3);
+
+        Variable castValue = new Variable(0);
+        Variable result = new Variable(1);
+        Reference output = new Reference(result, Stream.VALUES);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(castValue, new Call(cast, List.of(input(0))), AllMask.ALL),
+                        new Assignment(result, new Call(greatest, List.of(new Reference(castValue, Stream.VALUES), input(1), input(2))), AllMask.ALL)),
+                List.of(output));
+
+        try (FusedProjectionCompiler compiler = new FusedProjectionCompiler();
+                Allocator allocator = new Allocator(createDefault())) {
+            FusedProjectionCompiler.CompiledMultiProjection compiled = compiler.tryCompile(plan, new PrimitiveRegistry(), List.of(output)).orElseThrow();
+            assertThat(compiled.compilationKind()).isEqualTo(FusedProjectionCompiler.CompilationKind.SCALAR_TARGET);
+
+            Streams[] results = compiled.kernel().apply(
+                    List.of(
+                            Streams.ofValues(new I64Vector(new long[] {1, 7, 4, 9})),
+                            Streams.ofValuesAndNulls(
+                                    new F64Vector(new double[] {2, 8, 3, 1}),
+                                    new BooleanVector(new boolean[] {false, false, true, false})),
+                            Streams.ofValues(new F64Vector(new double[] {0, 6, 5, Double.NaN}))),
+                    Mask.all(4),
+                    EnumSet.of(Stream.VALUES, Stream.NULLS),
+                    new PrimitiveExecutionContext(allocator));
+
+            assertThat(((F64Vector) results[0].values()).values()).containsExactly(2, 8, 0, Double.NaN);
+            assertThat(((BooleanVector) results[0].get(Stream.NULLS)).values()).containsExactly(false, false, true, false);
+        }
+    }
+
+    @Test
+    void testNullableScalarProjectionPreservesDictionaryDomainCountsAcrossStreams()
+            throws Throwable
+    {
+        ResolvedCall cast = resolvedCall(
+                "dynamic_cast",
+                DOUBLE,
+                List.of(LONG),
+                MethodHandles.lookup().findStatic(TestGenericScalarProjectionCompiler.class, "cast", MethodType.methodType(double.class, long.class)));
+        ResolvedCall greatest = nullableGreatestCall(2);
+        Variable castValue = new Variable(0);
+        Variable literal = new Variable(1);
+        Variable result = new Variable(2);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(castValue, new Call(cast, List.of(input(0))), AllMask.ALL),
+                        new Assignment(literal, new Literal(8.0), AllMask.ALL),
+                        new Assignment(result, new Call(greatest, List.of(
+                                new Reference(castValue, Stream.VALUES),
+                                new Reference(literal, Stream.VALUES))), AllMask.ALL)),
+                List.of(new Reference(result, Stream.VALUES)));
+        DictionaryVector input = DictionaryVector.wrapWithDomainFrequencies(
+                new int[] {0, 1, 0, 2, 0, 1, 0, 2, 0, 1, 0, 2},
+                12,
+                new I64Vector(new long[] {0, 8, 15}),
+                new int[] {6, 3, 3});
+        TableOperator source = new TableOperator(1, List.of(new TableOperator.Page(
+                12,
+                new Streams[] {Streams.ofValues(input)},
+                Mask.all(12))))
+        {
+            @Override
+            public Optional<Map<Integer, ValueDemand>> sourceOutputDemand(Map<Integer, ValueDemand> demandedOutputs)
+            {
+                return Optional.of(Map.copyOf(demandedOutputs));
+            }
+        };
+
+        try (Allocator allocator = new Allocator(createDefault());
+                ProjectOperator project = new ProjectOperator(
+                        allocator,
+                        plan,
+                        new PrimitiveRegistry(),
+                        source)) {
+            assertThat(project.sourceOutputDemand(Map.of(0, ValueDemand.FULL_WITH_DOMAIN_COUNTS)).orElseThrow())
+                    .containsExactlyEntriesOf(Map.of(0, ValueDemand.FULL_WITH_DOMAIN_COUNTS));
+            try (Batch batch = project.next()) {
+                DictionaryVector values = (DictionaryVector) batch.output(0).borrow(Stream.VALUES);
+                DictionaryVector nulls = (DictionaryVector) batch.output(0).borrow(Stream.NULLS);
+                assertThat(values.hasSameRowMapping(nulls)).isTrue();
+                assertThat(values.hasDomainFrequencies()).isTrue();
+                assertThat(values.domainFrequency(0)).isEqualTo(6);
+                assertThat(((F64Vector) values.values()).values()).containsExactly(8, 8, 15);
+                assertThat(((BooleanVector) nulls.values()).values()).containsExactly(false, false, false);
+            }
+        }
+    }
+
     private static ResolvedCall resolvedCall(String name, MethodHandle target)
     {
         return resolvedCall(name, LONG, List.of(LONG, LONG), target);
+    }
+
+    private static ResolvedCall nullableGreatestCall(int arity)
+    {
+        List<TypeBinding> arguments = nCopies(arity, DOUBLE);
+        return new ResolvedCall(
+                new FunctionIdentity("dynamic_greatest"),
+                new BoundSignature(DOUBLE, arguments),
+                new FunctionSemantics(true, nCopies(arity, CALLED_ON_NULL), true, NEVER_FAILS),
+                List.of(),
+                new PrimitiveInvocationBinding(UNUSED_VECTOR_IMPLEMENTATION, List.of(new GreatestF64ScalarInvocation())));
     }
 
     private static ResolvedCall resolvedCall(String name, TypeBinding resultType, List<TypeBinding> argumentTypes, MethodHandle target)

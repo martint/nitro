@@ -15,6 +15,7 @@ package org.weakref.nitro.jit;
 
 import org.weakref.nitro.core.function.BoundSignature;
 import org.weakref.nitro.core.function.FunctionSemantics;
+import org.weakref.nitro.core.function.NullPropagatingScalarInvocationProvider;
 import org.weakref.nitro.core.function.ResolvedCall;
 import org.weakref.nitro.core.function.ScalarInvocationProvider;
 import org.weakref.nitro.core.type.TypeBinding;
@@ -52,9 +53,10 @@ import static org.weakref.nitro.core.function.FunctionSemantics.FailureConventio
  * Composes resolved scalar call trees into one generated batch adapter.
  *
  * <p>This is the generic complement to provider-authored projection lowering. It treats every scalar target as an
- * opaque exact call site, so neither this compiler nor the evaluator needs function-specific vocabulary. The first
- * admitted shape is a deterministic, strict, non-nullable, non-failing tree over primitive stack carriers. Those
- * constraints make the root null exactly when any leaf is null and preserve invocation counts under encoded-domain
+ * opaque exact call site, so neither this compiler nor the evaluator needs function-specific vocabulary. It admits
+ * deterministic, non-failing trees over primitive stack carriers when every call either has strict non-null
+ * semantics or explicitly supplies a non-null target with null-propagation delegated to the framework. Those
+ * contracts make the root null exactly when any leaf is null and preserve invocation counts under encoded-domain
  * execution.
  */
 final class GenericScalarProjectionCompiler
@@ -179,11 +181,16 @@ final class GenericScalarProjectionCompiler
         ResolvedCall resolvedCall = call.resolvedCall();
         BoundSignature signature = resolvedCall.signature();
         FunctionSemantics semantics = resolvedCall.semantics();
-        ScalarInvocationProvider provider = primitiveRegistry.capabilityOrNull(call, ScalarInvocationProvider.class);
-        if (provider == null ||
+        ScalarInvocationProvider exactProvider = primitiveRegistry.capabilityOrNull(call, ScalarInvocationProvider.class);
+        NullPropagatingScalarInvocationProvider nullPropagatingProvider =
+                primitiveRegistry.capabilityOrNull(call, NullPropagatingScalarInvocationProvider.class);
+        boolean frameworkManagedNulls = semantics.argumentNullConventions().stream()
+                .allMatch(convention -> convention == RETURN_NULL_ON_NULL) && !semantics.nullableResult();
+        MethodHandle invocationTarget = frameworkManagedNulls && exactProvider != null
+                ? exactProvider.target()
+                : nullPropagatingProvider == null ? null : nullPropagatingProvider.target(signature).orElse(null);
+        if (invocationTarget == null ||
                 !semantics.deterministic() ||
-                semantics.argumentNullConventions().stream().anyMatch(convention -> convention != RETURN_NULL_ON_NULL) ||
-                semantics.nullableResult() ||
                 semantics.failureConvention() != NEVER_FAILS ||
                 !supportedCarrier(signature.resultType().carrierType()) ||
                 signature.argumentTypes().stream().map(TypeBinding::carrierType).anyMatch(carrier -> !supportedCarrier(carrier)) ||
@@ -192,7 +199,7 @@ final class GenericScalarProjectionCompiler
             throw new Unsupported();
         }
 
-        MethodHandle target = provider.target();
+        MethodHandle target = invocationTarget;
         MethodType expectedTargetType = MethodType.methodType(
                 signature.resultType().carrierType(),
                 signature.argumentTypes().stream().map(TypeBinding::carrierType).toArray(Class<?>[]::new));
@@ -223,7 +230,7 @@ final class GenericScalarProjectionCompiler
                 signature.resultType(),
                 List.copyOf(leaves),
                 operationCount,
-                new CallKey(provider.target(), arguments.stream().map(ScalarExpression::key).toList()));
+                new CallKey(invocationTarget, arguments.stream().map(ScalarExpression::key).toList()));
     }
 
     private static ScalarExpression canonicalizeLeaves(ScalarExpression expression)

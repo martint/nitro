@@ -330,6 +330,7 @@ public class ProjectOperator
         requireNonNull(demandedOutputs, "demandedOutputs is null");
         boolean encodedDomainDemand = false;
         boolean ordinaryFullDemand = false;
+        ValueDemand strongestEncodedDomainDemand = ValueDemand.FULL;
         java.util.HashMap<Reference, ValueDemand> demandedReferences = new java.util.HashMap<>();
         for (Map.Entry<Integer, ValueDemand> entry : demandedOutputs.entrySet()) {
             int output = entry.getKey();
@@ -341,9 +342,15 @@ public class ProjectOperator
             if (fusedProjection != null && fusedOrdinal.containsKey(reference.producer())) {
                 encodedDomainDemand = true;
                 ordinaryFullDemand |= entry.getValue().compareTo(ValueDemand.FULL) <= 0;
+                strongestEncodedDomainDemand = strongestEncodedDomainDemand.merge(entry.getValue());
             }
         }
         fusedDictionaryDomainDemanded = encodedDomainDemand && !ordinaryFullDemand;
+        if (fusedDictionaryDomainDemanded) {
+            for (Reference input : fusedProjection.inputs()) {
+                demandedReferences.merge(input, strongestEncodedDomainDemand, ValueDemand::merge);
+            }
+        }
         return source.sourceOutputDemand(InputDependencies.valueDemands(evaluationPlan, primitiveRegistry, demandedReferences));
     }
 

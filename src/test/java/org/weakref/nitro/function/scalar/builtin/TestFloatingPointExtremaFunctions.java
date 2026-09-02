@@ -14,6 +14,10 @@
 package org.weakref.nitro.function.scalar.builtin;
 
 import org.junit.jupiter.api.Test;
+import org.weakref.nitro.core.function.BoundSignature;
+import org.weakref.nitro.core.type.TypeBinding;
+import org.weakref.nitro.core.type.TypeIdentity;
+import org.weakref.nitro.core.type.TypeOperators;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.F64Vector;
@@ -30,6 +34,20 @@ import static org.weakref.nitro.execution.EngineResources.createDefault;
 
 final class TestFloatingPointExtremaFunctions
 {
+    @Test
+    void testGreatestScalarTargetSupportsResolvedArity()
+            throws Throwable
+    {
+        GreatestF64ScalarInvocation provider = new GreatestF64ScalarInvocation();
+        var signature = new BoundSignature(
+                new TestingDoubleType(),
+                List.of(new TestingDoubleType(), new TestingDoubleType(), new TestingDoubleType(), new TestingDoubleType()));
+
+        var target = provider.target(signature).orElseThrow();
+        assertThat(target.type().parameterCount()).isEqualTo(4);
+        assertThat((double) target.invokeExact(2.0, 7.0, 4.0, 6.0)).isEqualTo(7.0);
+    }
+
     @Test
     void testVariadicGreatestHonorsTrinoDoubleAndNullSemantics()
     {
@@ -64,6 +82,28 @@ final class TestFloatingPointExtremaFunctions
                     EnumSet.of(Stream.VALUES, Stream.NULLS),
                     Streams.empty(),
                     new PrimitiveExecutionContext(allocator));
+        }
+    }
+
+    private record TestingDoubleType()
+            implements TypeBinding
+    {
+        @Override
+        public TypeIdentity identity()
+        {
+            return new TypeIdentity("test-double");
+        }
+
+        @Override
+        public Class<?> carrierType()
+        {
+            return double.class;
+        }
+
+        @Override
+        public TypeOperators operators()
+        {
+            return TypeOperators.UNSPECIFIED;
         }
     }
 }
