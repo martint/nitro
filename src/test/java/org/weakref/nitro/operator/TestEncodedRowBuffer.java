@@ -161,7 +161,7 @@ final class TestEncodedRowBuffer
                 EncodedRowBuffer rows = new EncodedRowBuffer(allocator, new Allocator.Context("test"), 1)) {
             rows.load(source);
 
-            try (Batch copy = rows.copyRange(1, 3, new int[] {0})) {
+            try (Batch copy = rows.copyRange(allocator, 1, 3, new int[] {0})) {
                 assertThat(((I64Vector) copy.output(0).borrow(Stream.VALUES)).values())
                         .containsExactly(30, 40, 50);
             }

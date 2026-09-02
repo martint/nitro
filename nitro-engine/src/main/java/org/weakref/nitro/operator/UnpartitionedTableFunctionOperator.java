@@ -303,7 +303,7 @@ public final class UnpartitionedTableFunctionOperator
             return;
         }
         bufferedInputLength = min(maxInputBatchRows, bufferedRows.size() - bufferedPosition);
-        Batch batch = bufferedRows.copyRange(bufferedPosition, bufferedInputLength, inputChannels);
+        Batch batch = bufferedRows.copyRange(allocator, bufferedPosition, bufferedInputLength, inputChannels);
         input = OperatorBatchSource.batch(inputSchema, batch);
         input.selection();
         executionContext.checkpoint();

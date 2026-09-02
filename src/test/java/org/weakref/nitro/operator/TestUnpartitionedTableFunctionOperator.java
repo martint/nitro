@@ -35,10 +35,12 @@ import org.weakref.nitro.core.type.TypeIdentity;
 import org.weakref.nitro.core.type.TypeOperators;
 import org.weakref.nitro.core.type.TypeVectorFactory;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.MaskSelection;
 import org.weakref.nitro.data.Stream;
+import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorBatchScope;
 import org.weakref.nitro.data.VectorColumnGeneration;
@@ -49,6 +51,7 @@ import org.weakref.nitro.operator.source.SourceBatchOperatorIngress;
 import java.util.ArrayDeque;
 import java.util.List;
 import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
@@ -340,6 +343,86 @@ final class TestUnpartitionedTableFunctionOperator
         assertThat(retainedProcessors).hasValue(1);
     }
 
+    @Test
+    void testExcludesMultiArgumentMarkerSuffixes()
+    {
+        Schema sourceSchema = new Schema(List.of(
+                new Field("left", BIGINT, true),
+                new Field("left_marker", BIGINT, true),
+                new Field("right", BIGINT, true),
+                new Field("right_marker", BIGINT, true)));
+        TableOperator source = TableOperator.retained(
+                sourceSchema,
+                List.of(new TableOperator.Page(
+                        3,
+                        new Streams[] {
+                                Streams.ofValues(new I64Vector(new long[] {10, 20, 0})),
+                                Streams.of(
+                                        new I64Vector(new long[] {1, 1, 0}),
+                                        new BooleanVector(new boolean[] {false, false, true}),
+                                        null),
+                                Streams.ofValues(new I64Vector(new long[] {30, 0, 0})),
+                                Streams.of(
+                                        new I64Vector(new long[] {1, 0, 0}),
+                                        new BooleanVector(new boolean[] {false, true, true}),
+                                        null),
+                        },
+                        Mask.all(3))));
+        TableFunctionProcessor processor = new TableFunctionProcessor()
+        {
+            private boolean produced;
+
+            @Override
+            public TableFunctionProgress process(
+                    TableFunctionInput input,
+                    TableFunctionOutputDemand outputDemand,
+                    Allocator allocator,
+                    Allocator.Context allocationContext,
+                    ExecutionContext executionContext)
+            {
+                if (produced) {
+                    return TableFunctionProgress.Finished.FINISHED;
+                }
+                produced = true;
+                assertThat(((TableFunctionArgument.Rows) input.arguments().get(0)).batch().selection().count()).isEqualTo(2);
+                assertThat(((TableFunctionArgument.Rows) input.arguments().get(1)).batch().selection().count()).isEqualTo(1);
+                return new TableFunctionProgress.Produced(
+                        referenceOutput(allocator, new long[] {1, 0}),
+                        Set.of(0, 1));
+            }
+
+            @Override
+            public void close() {}
+        };
+
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                PartitionedTableFunctionOperator operator = new PartitionedTableFunctionOperator(
+                        allocator,
+                        new TestingExecutionContext(),
+                        source,
+                        List.of(
+                                new TableFunctionArgumentLayout(BIGINT_SCHEMA, new int[] {0}, OptionalInt.of(1)),
+                                new TableFunctionArgumentLayout(BIGINT_SCHEMA, new int[] {2}, OptionalInt.of(3))),
+                        new int[0],
+                        new WindowInputOrder(true, 0),
+                        0,
+                        new Schema(List.of(new Field("left", BIGINT, true), new Field("right", BIGINT, true))),
+                        0,
+                        List.of(new TableFunctionPassThroughColumn(0, 0), new TableFunctionPassThroughColumn(1, 2)),
+                        () -> processor,
+                        false,
+                        8,
+                        resources.operatorResources())) {
+            assertThat(operator.hasNext()).isTrue();
+            try (Batch output = operator.next()) {
+                assertThat(((I64Vector) output.output(0).borrow(Stream.VALUES)).values()).containsExactly(20);
+                assertThat(((I64Vector) output.output(1).borrow(Stream.VALUES)).values()).containsExactly(30);
+            }
+            assertThat(operator.hasNext()).isFalse();
+        }
+    }
+
     private static TableFunctionOutputBatch referenceOutput(Allocator allocator, long reference)
     {
         VectorBatchScope buffers = new VectorBatchScope(allocator, "reference-output");
@@ -356,6 +439,28 @@ final class TestUnpartitionedTableFunctionOperator
                 _ -> {},
                 () -> {});
         return new ReferenceOutputBatch(delegate);
+    }
+
+    private static TableFunctionOutputBatch referenceOutput(Allocator allocator, long[] referenceValues)
+    {
+        VectorBatchScope buffers = new VectorBatchScope(allocator, "multi-reference-output");
+        VectorColumnGeneration[] columns = new VectorColumnGeneration[referenceValues.length];
+        for (int column = 0; column < columns.length; column++) {
+            I64Vector references = allocator.allocate(buffers.context(), I64Vector.class, 1, I64Vector::new);
+            references.values()[0] = referenceValues[column];
+            columns[column] = new VectorColumnGeneration(Set.of(Stream.VALUES), _ -> references, buffers);
+        }
+        Mask mask = allocator.allocateRangeMask(buffers.context(), 0, 1);
+        SourceBatch delegate = new VectorSourceBatch(
+                Schema.unspecified(referenceValues.length),
+                mask,
+                columns,
+                buffers,
+                _ -> {},
+                () -> {});
+        return new MultiReferenceOutputBatch(delegate, java.util.stream.IntStream.range(0, referenceValues.length)
+                .mapToObj(TableFunctionOutputBatch.PassThroughReference::new)
+                .toList());
     }
 
     private static TypeBinding bigintType()
@@ -635,6 +740,57 @@ final class TestUnpartitionedTableFunctionOperator
         public void select(Selection selection)
         {
             delegate.select(selection);
+        }
+
+        @Override
+        public void close()
+        {
+            delegate.close();
+        }
+    }
+
+    private record MultiReferenceOutputBatch(SourceBatch delegate, List<PassThroughReference> passThroughReferences)
+            implements TableFunctionOutputBatch
+    {
+        private MultiReferenceOutputBatch
+        {
+            passThroughReferences = List.copyOf(passThroughReferences);
+        }
+
+        @Override
+        public int properOutputCount()
+        {
+            return 0;
+        }
+
+        @Override
+        public Schema schema()
+        {
+            return delegate.schema();
+        }
+
+        @Override
+        public Selection selection()
+        {
+            return delegate.selection();
+        }
+
+        @Override
+        public ColumnView column(int index)
+        {
+            return delegate.column(index);
+        }
+
+        @Override
+        public void select(Selection selection)
+        {
+            delegate.select(selection);
+        }
+
+        @Override
+        public <T> Optional<T> capability(org.weakref.nitro.core.batch.BatchCapability<T> capability)
+        {
+            return delegate.capability(capability);
         }
 
         @Override

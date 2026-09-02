@@ -30,6 +30,7 @@ import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.operator.source.compatibility.OperatorBatchSource;
 
 import java.util.List;
+import java.util.OptionalInt;
 import java.util.Set;
 
 import static java.lang.Math.min;
@@ -43,14 +44,11 @@ import static java.util.Objects.requireNonNull;
 public final class PartitionedTableFunctionOperator
         implements Operator
 {
-    private static final Set<Integer> ARGUMENT = Set.of(0);
-
     private final Allocator allocator;
     private final Allocator.Context allocationContext = new Allocator.Context("PartitionedTableFunctionOperator");
     private final ExecutionContext executionContext;
     private final Operator source;
-    private final Schema inputSchema;
-    private final int[] inputChannels;
+    private final List<TableFunctionArgumentLayout> arguments;
     private final int[] partitionChannels;
     private final Schema outputSchema;
     private final int properOutputCount;
@@ -64,15 +62,16 @@ public final class PartitionedTableFunctionOperator
 
     private TableFunctionProcessor processor;
     private TableFunctionOutputAssembler outputAssembler;
-    private SourceBatch input;
+    private SourceBatch[] inputs;
+    private RowPositionIndex[] partitionRows;
     private Batch staged;
     private Batch currentBatch;
     private int nextPartitionStart;
     private int partitionStart;
     private int partitionEnd;
-    private int inputPosition;
-    private int inputLength;
-    private boolean inputFinished;
+    private int[] inputPositions;
+    private int[] inputLengths;
+    private boolean[] inputFinished;
     private boolean loaded;
     private boolean emptyPartitionStarted;
     private boolean finished;
@@ -95,11 +94,46 @@ public final class PartitionedTableFunctionOperator
             int maxInputBatchRows,
             OperatorResources resources)
     {
+        this(
+                allocator,
+                executionContext,
+                source,
+                List.of(new TableFunctionArgumentLayout(inputSchema, inputChannels, OptionalInt.empty())),
+                partitionChannels,
+                inputOrder,
+                orderingColumnCount,
+                outputSchema,
+                properOutputCount,
+                passThroughColumns,
+                processorFactory,
+                processEmptyInput,
+                maxInputBatchRows,
+                resources);
+    }
+
+    public PartitionedTableFunctionOperator(
+            Allocator allocator,
+            ExecutionContext executionContext,
+            Operator source,
+            List<TableFunctionArgumentLayout> arguments,
+            int[] partitionChannels,
+            WindowInputOrder inputOrder,
+            int orderingColumnCount,
+            Schema outputSchema,
+            int properOutputCount,
+            List<TableFunctionPassThroughColumn> passThroughColumns,
+            TableFunctionProcessorFactory processorFactory,
+            boolean processEmptyInput,
+            int maxInputBatchRows,
+            OperatorResources resources)
+    {
         this.allocator = requireNonNull(allocator, "allocator is null");
         this.executionContext = requireNonNull(executionContext, "executionContext is null");
         this.source = requireNonNull(source, "source is null");
-        this.inputSchema = requireNonNull(inputSchema, "inputSchema is null");
-        this.inputChannels = requireNonNull(inputChannels, "inputChannels is null").clone();
+        this.arguments = List.copyOf(arguments);
+        if (this.arguments.isEmpty()) {
+            throw new IllegalArgumentException("table function has no arguments");
+        }
         this.partitionChannels = requireNonNull(partitionChannels, "partitionChannels is null").clone();
         if (!requireNonNull(inputOrder, "inputOrder is null").isFullyOrdered(orderingColumnCount)) {
             throw new IllegalArgumentException("table-function input is not fully partitioned and ordered");
@@ -113,35 +147,37 @@ public final class PartitionedTableFunctionOperator
         if (properOutputCount + this.passThroughColumns.size() != outputSchema.size()) {
             throw new IllegalArgumentException("output schema does not match pass-through columns");
         }
-        if (this.passThroughColumns.stream().anyMatch(column -> column.argument() != 0)) {
-            throw new IllegalArgumentException("partitioned table function has only argument zero");
+        if (this.passThroughColumns.stream().anyMatch(column -> column.argument() >= this.arguments.size())) {
+            throw new IllegalArgumentException("pass-through argument is outside argument layouts");
         }
         this.processorFactory = requireNonNull(processorFactory, "processorFactory is null");
         this.outputDemand = new TableFunctionOutputDemand(
                 Operator.fullOutputDemand(properOutputCount),
-                this.passThroughColumns.isEmpty() ? Set.of() : ARGUMENT);
+                this.passThroughColumns.stream().map(TableFunctionPassThroughColumn::argument).collect(java.util.stream.Collectors.toUnmodifiableSet()));
         this.processEmptyInput = processEmptyInput;
         if (maxInputBatchRows <= 0) {
             throw new IllegalArgumentException("maxInputBatchRows is not positive");
         }
         this.maxInputBatchRows = maxInputBatchRows;
 
-        if (inputSchema.size() != this.inputChannels.length) {
-            throw new IllegalArgumentException("input schema does not match input channels");
-        }
-        for (int input = 0; input < this.inputChannels.length; input++) {
-            int sourceChannel = this.inputChannels[input];
-            checkSourceChannel(sourceChannel, "input");
-            if (!inputSchema.field(input).type().identity()
-                    .equals(source.outputSchema().field(sourceChannel).type().identity())) {
-                throw new IllegalArgumentException("input channel type does not match input schema");
+        for (TableFunctionArgumentLayout argument : this.arguments) {
+            int[] inputChannels = argument.inputChannelsInternal();
+            for (int input = 0; input < inputChannels.length; input++) {
+                int sourceChannel = inputChannels[input];
+                checkSourceChannel(sourceChannel, "input");
+                if (!argument.schema().field(input).type().identity()
+                        .equals(source.outputSchema().field(sourceChannel).type().identity())) {
+                    throw new IllegalArgumentException("input channel type does not match input schema");
+                }
             }
+            argument.markerChannel().ifPresent(channel -> checkSourceChannel(channel, "marker"));
         }
         for (int channel : this.partitionChannels) {
             checkSourceChannel(channel, "partition");
         }
         for (int index = 0; index < this.passThroughColumns.size(); index++) {
-            int inputColumn = this.passThroughColumns.get(index).inputColumn();
+            TableFunctionPassThroughColumn passThrough = this.passThroughColumns.get(index);
+            int inputColumn = passThrough.inputColumn();
             checkSourceChannel(inputColumn, "pass-through input");
             if (!outputSchema.field(properOutputCount + index).type().identity()
                     .equals(source.outputSchema().field(inputColumn).type().identity())) {
@@ -204,13 +240,16 @@ public final class PartitionedTableFunctionOperator
                 finished = true;
                 return;
             }
-            prepareInput();
-            TableFunctionArgument argument = input == null
-                    ? TableFunctionArgument.Finished.FINISHED
-                    : new TableFunctionArgument.Rows(input);
+            prepareInputs();
+            List<TableFunctionArgument> functionArguments = new java.util.ArrayList<>(arguments.size());
+            for (SourceBatch input : inputs) {
+                functionArguments.add(input == null
+                        ? TableFunctionArgument.Finished.FINISHED
+                        : new TableFunctionArgument.Rows(input));
+            }
             TableFunctionProgress progress = requireNonNull(
                     processor.process(
-                            new TableFunctionInput(List.of(argument)),
+                            new TableFunctionInput(functionArguments),
                             outputDemand,
                             allocator,
                             allocationContext,
@@ -260,33 +299,68 @@ public final class PartitionedTableFunctionOperator
                 partitionEnd++;
             }
         }
-        inputPosition = partitionStart;
-        inputFinished = false;
+        partitionRows = new RowPositionIndex[arguments.size()];
+        inputs = new SourceBatch[arguments.size()];
+        inputPositions = new int[arguments.size()];
+        inputLengths = new int[arguments.size()];
+        inputFinished = new boolean[arguments.size()];
+        List<TableFunctionOutputAssembler.Argument> outputArguments = new java.util.ArrayList<>(arguments.size());
+        int[] partitionStarts = new int[arguments.size()];
+        int[] partitionEnds = new int[arguments.size()];
+        for (int argument = 0; argument < arguments.size(); argument++) {
+            TableFunctionArgumentLayout layout = arguments.get(argument);
+            int end = argumentEnd(layout.markerChannel());
+            partitionRows[argument] = new SliceRowPositionIndex(rows, partitionStart, end);
+            outputArguments.add(new TableFunctionOutputAssembler.Argument(source.outputSchema(), partitionRows[argument]));
+            partitionEnds[argument] = partitionRows[argument].size();
+        }
         processor = requireNonNull(processorFactory.create(), "processorFactory returned null");
         outputAssembler = new TableFunctionOutputAssembler(
                 allocator,
                 outputSchema,
                 properOutputCount,
                 passThroughColumns,
-                List.of(new TableFunctionOutputAssembler.Argument(source.outputSchema(), rows)),
-                new int[] {partitionStart},
-                new int[] {partitionEnd});
+                outputArguments,
+                partitionStarts,
+                partitionEnds);
         return true;
     }
 
-    private void prepareInput()
+    private int argumentEnd(OptionalInt markerChannel)
     {
-        if (input != null || inputFinished) {
-            return;
+        if (markerChannel.isEmpty() || partitionStart == partitionEnd) {
+            return partitionEnd;
         }
-        if (inputPosition == partitionEnd) {
-            inputFinished = true;
-            return;
+        int channel = markerChannel.orElseThrow();
+        int end = partitionStart;
+        while (end < partitionEnd && !rows.isNull(channel, end)) {
+            end++;
         }
-        inputLength = min(maxInputBatchRows, partitionEnd - inputPosition);
-        Batch batch = rows.copyRange(inputPosition, inputLength, inputChannels);
-        input = OperatorBatchSource.batch(inputSchema, batch);
-        input.selection();
+        for (int position = end; position < partitionEnd; position++) {
+            if (!rows.isNull(channel, position)) {
+                throw new IllegalStateException("table-function marker data is not a partition prefix");
+            }
+        }
+        return end;
+    }
+
+    private void prepareInputs()
+    {
+        for (int argument = 0; argument < arguments.size(); argument++) {
+            if (inputs[argument] != null || inputFinished[argument]) {
+                continue;
+            }
+            RowPositionIndex argumentRows = partitionRows[argument];
+            if (inputPositions[argument] == argumentRows.size()) {
+                inputFinished[argument] = true;
+                continue;
+            }
+            inputLengths[argument] = min(maxInputBatchRows, argumentRows.size() - inputPositions[argument]);
+            TableFunctionArgumentLayout layout = arguments.get(argument);
+            Batch batch = argumentRows.copyRange(allocator, inputPositions[argument], inputLengths[argument], layout.inputChannelsInternal());
+            inputs[argument] = OperatorBatchSource.batch(layout.schema(), batch);
+            inputs[argument].selection();
+        }
         executionContext.checkpoint();
     }
 
@@ -306,32 +380,38 @@ public final class PartitionedTableFunctionOperator
 
     private void validateConsumed(Set<Integer> consumed)
     {
-        if (!consumed.isEmpty() && !consumed.equals(ARGUMENT)) {
-            throw new IllegalStateException("table function consumed an unexpected argument");
-        }
-        if (!consumed.isEmpty() && input == null) {
-            throw new IllegalStateException("table function consumed a finished argument");
+        for (int argument : consumed) {
+            if (argument < 0 || argument >= arguments.size()) {
+                throw new IllegalStateException("table function consumed an unexpected argument");
+            }
+            if (inputs[argument] == null) {
+                throw new IllegalStateException("table function consumed a finished argument");
+            }
         }
     }
 
     private void consumeInput(Set<Integer> consumed)
     {
-        if (!consumed.isEmpty()) {
-            closeInput();
-            inputPosition += inputLength;
-            inputLength = 0;
+        for (int argument : consumed) {
+            inputs[argument].close();
+            inputs[argument] = null;
+            inputPositions[argument] += inputLengths[argument];
+            inputLengths[argument] = 0;
         }
     }
 
     private void finishPartition()
     {
-        closeInput();
+        closeInputs();
         processor.close();
         processor = null;
         outputAssembler = null;
         nextPartitionStart = partitionEnd;
-        inputLength = 0;
-        inputFinished = false;
+        inputs = null;
+        partitionRows = null;
+        inputPositions = null;
+        inputLengths = null;
+        inputFinished = null;
     }
 
     @Override
@@ -362,7 +442,7 @@ public final class PartitionedTableFunctionOperator
         failure = closeBatch(currentBatch, failure);
         currentBatch = null;
         try {
-            closeInput();
+            closeInputs();
         }
         catch (RuntimeException closeFailure) {
             failure = appendFailure(failure, closeFailure);
@@ -399,11 +479,26 @@ public final class PartitionedTableFunctionOperator
         }
     }
 
-    private void closeInput()
+    private void closeInputs()
     {
-        if (input != null) {
-            input.close();
-            input = null;
+        if (inputs == null) {
+            return;
+        }
+        RuntimeException failure = null;
+        for (int argument = 0; argument < inputs.length; argument++) {
+            if (inputs[argument] == null) {
+                continue;
+            }
+            try {
+                inputs[argument].close();
+            }
+            catch (RuntimeException closeFailure) {
+                failure = appendFailure(failure, closeFailure);
+            }
+            inputs[argument] = null;
+        }
+        if (failure != null) {
+            throw failure;
         }
     }
 
