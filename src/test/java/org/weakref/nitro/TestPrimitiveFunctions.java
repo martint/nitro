@@ -44,8 +44,6 @@ import org.weakref.nitro.function.scalar.builtin.ElementAtUtf8Utf8;
 import org.weakref.nitro.function.scalar.builtin.EqualF64;
 import org.weakref.nitro.function.scalar.builtin.EqualI64;
 import org.weakref.nitro.function.scalar.builtin.EqualUtf8;
-import org.weakref.nitro.function.scalar.builtin.GreaterThanF64;
-import org.weakref.nitro.function.scalar.builtin.GreaterThanOrEqualF64;
 import org.weakref.nitro.function.scalar.builtin.IdenticalI64;
 import org.weakref.nitro.function.scalar.builtin.IfF64;
 import org.weakref.nitro.function.scalar.builtin.IfI64;
@@ -120,8 +118,6 @@ public final class TestPrimitiveFunctions
                 EqualF64.class,
                 EqualI64.class,
                 EqualUtf8.class,
-                GreaterThanF64.class,
-                GreaterThanOrEqualF64.class,
                 LessThanF64.class,
                 LessThanOrEqualF64.class,
                 LessThanOrEqualI64.class,
