@@ -33,8 +33,9 @@ import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.ValueDemand;
 import org.weakref.nitro.function.scalar.PrimitiveExecutionContext;
 import org.weakref.nitro.function.scalar.PrimitiveFunction;
+import org.weakref.nitro.function.scalar.ScalarAdapterGenerator;
+import org.weakref.nitro.function.scalar.ScalarDescriptor;
 import org.weakref.nitro.function.scalar.ScalarMethodTarget;
-import org.weakref.nitro.function.scalar.builtin.GreatestF64ScalarInvocation;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.ConstantTableOperator;
 import org.weakref.nitro.operator.ProjectOperator;
@@ -380,14 +381,33 @@ final class TestGenericScalarProjectionCompiler
     }
 
     private static ResolvedCall nullableGreatestCall(int arity)
+            throws Throwable
     {
+        if (arity < 1) {
+            throw new IllegalArgumentException("arity must be positive");
+        }
         List<TypeBinding> arguments = nCopies(arity, DOUBLE);
+        BoundSignature signature = new BoundSignature(DOUBLE, arguments);
+        FunctionSemantics semantics = new FunctionSemantics(true, nCopies(arity, CALLED_ON_NULL), true, NEVER_FAILS);
+        MethodHandle maximum = MethodHandles.lookup().findStatic(
+                TestGenericScalarProjectionCompiler.class,
+                "maximum",
+                MethodType.methodType(double.class, double.class, double.class));
+        MethodHandle target = arity == 1 ? MethodHandles.identity(double.class) : maximum;
+        for (int argument = 2; argument < arity; argument++) {
+            target = MethodHandles.collectArguments(maximum, 0, target);
+        }
+        ScalarDescriptor descriptor = new ScalarAdapterGenerator().adaptNullPropagating(
+                "dynamic_greatest",
+                signature,
+                semantics,
+                new ScalarMethodTarget(target));
         return new ResolvedCall(
                 new FunctionIdentity("dynamic_greatest"),
-                new BoundSignature(DOUBLE, arguments),
-                new FunctionSemantics(true, nCopies(arity, CALLED_ON_NULL), true, NEVER_FAILS),
+                signature,
+                semantics,
                 List.of(),
-                new PrimitiveInvocationBinding(UNUSED_VECTOR_IMPLEMENTATION, List.of(new GreatestF64ScalarInvocation())));
+                new PrimitiveInvocationBinding(UNUSED_VECTOR_IMPLEMENTATION, descriptor.capabilities()));
     }
 
     private static ResolvedCall resolvedCall(String name, TypeBinding resultType, List<TypeBinding> argumentTypes, MethodHandle target)
@@ -423,6 +443,11 @@ final class TestGenericScalarProjectionCompiler
     private static double cast(long value)
     {
         return value;
+    }
+
+    private static double maximum(double left, double right)
+    {
+        return Math.max(left, right);
     }
 
     private static double addDouble(double left, double right)

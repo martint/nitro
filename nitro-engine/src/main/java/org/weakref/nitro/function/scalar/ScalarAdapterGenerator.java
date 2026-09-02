@@ -14,7 +14,9 @@
 package org.weakref.nitro.function.scalar;
 
 import org.weakref.nitro.core.function.BoundSignature;
+import org.weakref.nitro.core.function.FunctionCapability;
 import org.weakref.nitro.core.function.FunctionSemantics;
+import org.weakref.nitro.core.function.NullPropagatingScalarInvocationProvider;
 
 import java.lang.classfile.ClassFile;
 import java.lang.classfile.CodeBuilder;
@@ -27,6 +29,7 @@ import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static com.google.common.base.Preconditions.checkArgument;
@@ -83,11 +86,51 @@ public final class ScalarAdapterGenerator
         requireNonNull(semantics, "semantics is null");
         requireNonNull(target, "target is null");
         validate(signature, semantics, target.target());
+        return descriptor(name, signature, semantics, target, List.of(target));
+    }
+
+    /**
+     * Adapts a non-null primitive target when the registry asserts that null propagation belongs to the framework.
+     *
+     * <p>The supplied target is invoked only when every argument is non-null. This entry point is intentionally
+     * separate from {@link #adapt}: nullable host calling conventions do not by themselves prove null-propagating
+     * semantics. The registry adapter making this call supplies that proof for this exact logical signature.
+     */
+    public ScalarDescriptor adaptNullPropagating(
+            String name,
+            BoundSignature signature,
+            FunctionSemantics semantics,
+            ScalarMethodTarget target)
+    {
+        requireNonNull(name, "name is null");
+        requireNonNull(signature, "signature is null");
+        requireNonNull(semantics, "semantics is null");
+        requireNonNull(target, "target is null");
+        checkArgument(semantics.argumentNullConventions().size() == signature.argumentTypes().size(),
+                "Scalar semantics argument count does not match bound signature");
+        checkArgument(semantics.failureConvention() == NEVER_FAILS,
+                "Framework-managed null-propagating scalar currently requires a non-failing target");
+        validateTarget(signature, target.target());
+        return descriptor(
+                name,
+                signature,
+                semantics,
+                target,
+                List.of(new BoundNullPropagatingTarget(signature, target.target())));
+    }
+
+    private ScalarDescriptor descriptor(
+            String name,
+            BoundSignature signature,
+            FunctionSemantics semantics,
+            ScalarMethodTarget target,
+            List<FunctionCapability> capabilities)
+    {
         return new ScalarDescriptor(
                 name,
                 semantics.deterministic(),
                 new FrameworkManagedScalarFunction(name, signature, generate(signature, target)),
-                List.of(target));
+                capabilities);
     }
 
     private GeneratedScalarKernel generate(BoundSignature signature, ScalarMethodTarget target)
@@ -248,16 +291,39 @@ public final class ScalarAdapterGenerator
 
     private static void validate(BoundSignature signature, FunctionSemantics semantics, MethodHandle target)
     {
+        checkArgument(semantics.argumentNullConventions().size() == signature.argumentTypes().size(),
+                "Scalar semantics argument count does not match bound signature");
         checkArgument(semantics.argumentNullConventions().stream().allMatch(RETURN_NULL_ON_NULL::equals),
                 "Framework-managed scalar currently requires strict arguments");
         checkArgument(!semantics.nullableResult(), "Framework-managed scalar currently requires a non-null result");
         checkArgument(semantics.failureConvention() == NEVER_FAILS, "Framework-managed scalar currently requires a non-failing target");
+        validateTarget(signature, target);
+    }
+
+    private static void validateTarget(BoundSignature signature, MethodHandle target)
+    {
         signature.argumentTypes().forEach(type -> checkCarrier(type.carrierType()));
         checkCarrier(signature.resultType().carrierType());
         MethodType expected = MethodType.methodType(
                 signature.resultType().carrierType(),
                 signature.argumentTypes().stream().map(type -> type.carrierType()).toArray(Class<?>[]::new));
         checkArgument(target.type().equals(expected), "Scalar target type %s does not match bound signature %s", target.type(), expected);
+    }
+
+    private record BoundNullPropagatingTarget(BoundSignature signature, MethodHandle target)
+            implements NullPropagatingScalarInvocationProvider
+    {
+        private BoundNullPropagatingTarget
+        {
+            requireNonNull(signature, "signature is null");
+            requireNonNull(target, "target is null");
+        }
+
+        @Override
+        public Optional<MethodHandle> target(BoundSignature requestedSignature)
+        {
+            return signature.equals(requestedSignature) ? Optional.of(target) : Optional.empty();
+        }
     }
 
     private static void checkCarrier(Class<?> carrier)

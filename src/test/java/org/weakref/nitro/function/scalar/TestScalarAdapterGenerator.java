@@ -16,6 +16,7 @@ package org.weakref.nitro.function.scalar;
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.core.function.BoundSignature;
 import org.weakref.nitro.core.function.FunctionSemantics;
+import org.weakref.nitro.core.function.NullPropagatingScalarInvocationProvider;
 import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.core.type.TypeIdentity;
 import org.weakref.nitro.core.type.TypeOperators;
@@ -183,6 +184,79 @@ final class TestScalarAdapterGenerator
     }
 
     @Test
+    void testExplicitNullPropagatingConvention()
+            throws Throwable
+    {
+        CountingTarget target = new CountingTarget();
+        BoundSignature signature = new BoundSignature(LONG, List.of(LONG, LONG));
+        ScalarDescriptor descriptor = new ScalarAdapterGenerator().adaptNullPropagating(
+                "nullable_maximum",
+                signature,
+                new FunctionSemantics(true, List.of(CALLED_ON_NULL, CALLED_ON_NULL), true, NEVER_FAILS),
+                new ScalarMethodTarget(MethodHandles.lookup().findVirtual(
+                                CountingTarget.class,
+                                "maximum",
+                                MethodType.methodType(long.class, long.class, long.class))
+                        .bindTo(target)));
+
+        assertThat(descriptor.capabilities()).singleElement().isInstanceOf(NullPropagatingScalarInvocationProvider.class);
+        NullPropagatingScalarInvocationProvider provider = (NullPropagatingScalarInvocationProvider) descriptor.capabilities().getFirst();
+        assertThat(provider.target(signature)).isPresent();
+        assertThat(provider.target(new BoundSignature(LONG, List.of(LONG)))).isEmpty();
+
+        try (Allocator allocator = new Allocator(createDefault())) {
+            Streams result = descriptor.implementation().apply(
+                    List.of(
+                            Streams.ofValues(new I64Vector(new long[] {3, 8, 5})),
+                            Streams.ofValuesAndNulls(
+                                    new I64Vector(new long[] {7, 2, 9}),
+                                    new BooleanVector(new boolean[] {false, true, false}))),
+                    Mask.all(3),
+                    EnumSet.of(Stream.VALUES, Stream.NULLS),
+                    Streams.empty(),
+                    new PrimitiveExecutionContext(allocator));
+
+            assertThat(((I64Vector) result.values()).values()).containsExactly(7, 0, 9);
+            assertThat(((BooleanVector) result.get(Stream.NULLS)).values()).containsExactly(false, true, false);
+            assertThat(target.invocations).isEqualTo(2);
+        }
+    }
+
+    @Test
+    void testNullPropagatingDoubleTargetPreservesFloatingPointSemantics()
+            throws Throwable
+    {
+        BoundSignature signature = new BoundSignature(DOUBLE, List.of(DOUBLE, DOUBLE, DOUBLE));
+        ScalarDescriptor descriptor = new ScalarAdapterGenerator().adaptNullPropagating(
+                "nullable_maximum",
+                signature,
+                new FunctionSemantics(true, List.of(CALLED_ON_NULL, CALLED_ON_NULL, CALLED_ON_NULL), true, NEVER_FAILS),
+                new ScalarMethodTarget(MethodHandles.lookup().findStatic(
+                        TestScalarAdapterGenerator.class,
+                        "maximum",
+                        MethodType.methodType(double.class, double.class, double.class, double.class))));
+
+        try (Allocator allocator = new Allocator(createDefault())) {
+            Streams result = descriptor.implementation().apply(
+                    List.of(
+                            Streams.ofValues(new F64Vector(new double[] {-0.0, 7.0, Double.NaN})),
+                            Streams.ofValuesAndNulls(
+                                    new F64Vector(new double[] {0.0, 3.0, 10.0}),
+                                    new BooleanVector(new boolean[] {false, true, false})),
+                            Streams.ofValues(new F64Vector(new double[] {-1.0, 6.0, 9.0}))),
+                    Mask.all(3),
+                    EnumSet.of(Stream.VALUES, Stream.NULLS),
+                    Streams.empty(),
+                    new PrimitiveExecutionContext(allocator));
+
+            double[] values = ((F64Vector) result.values()).values();
+            assertThat(Double.doubleToRawLongBits(values[0])).isEqualTo(Double.doubleToRawLongBits(0.0));
+            assertThat(values[2]).isNaN();
+            assertThat(((BooleanVector) result.get(Stream.NULLS)).values()).containsExactly(false, true, false);
+        }
+    }
+
+    @Test
     void testUnsupportedSemanticFormsFailAtBinding()
             throws Throwable
     {
@@ -226,6 +300,11 @@ final class TestScalarAdapterGenerator
         return left * right;
     }
 
+    private static double maximum(double first, double second, double third)
+    {
+        return Math.max(first, Math.max(second, third));
+    }
+
     private static final class CountingTarget
     {
         private int invocations;
@@ -234,6 +313,12 @@ final class TestScalarAdapterGenerator
         {
             invocations++;
             return value;
+        }
+
+        public long maximum(long left, long right)
+        {
+            invocations++;
+            return Math.max(left, right);
         }
     }
 
