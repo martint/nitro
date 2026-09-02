@@ -14,10 +14,7 @@
 package org.weakref.nitro.function.scalar;
 
 import java.lang.invoke.MethodHandle;
-import java.lang.invoke.MethodHandleInfo;
-import java.lang.invoke.MethodHandles;
 
-import static com.google.common.base.Preconditions.checkArgument;
 import static java.util.Objects.requireNonNull;
 
 /// Exact, already-specialized scalar semantics supplied by a function registry.
@@ -27,44 +24,14 @@ import static java.util.Objects.requireNonNull;
 public final class ScalarMethodTarget
 {
     private final MethodHandle handle;
-    private final DirectInvocation directInvocation;
 
     public ScalarMethodTarget(MethodHandle handle)
     {
-        this(handle, null);
-    }
-
-    private ScalarMethodTarget(MethodHandle handle, DirectInvocation directInvocation)
-    {
         this.handle = requireNonNull(handle, "handle is null");
-        this.directInvocation = directInvocation;
-    }
-
-    /**
-     * Supplies a direct scalar target that generated code may link symbolically.
-     *
-     * <p>The lookup keeps generation in the provider's classloader and access domain. The exact method handle
-     * remains the classloader-neutral fallback and the source of the bound JVM calling convention.
-     */
-    public static ScalarMethodTarget direct(MethodHandles.Lookup lookup, MethodHandle handle)
-    {
-        requireNonNull(lookup, "lookup is null");
-        requireNonNull(handle, "handle is null");
-        MethodHandleInfo info = lookup.revealDirect(handle);
-        checkArgument(info.getReferenceKind() == MethodHandleInfo.REF_invokeStatic,
-                "Direct scalar generation currently requires a static target");
-        return new ScalarMethodTarget(handle, new DirectInvocation(lookup, info.getDeclaringClass(), info.getName()));
     }
 
     public MethodHandle handle()
     {
         return handle;
     }
-
-    DirectInvocation directInvocation()
-    {
-        return directInvocation;
-    }
-
-    record DirectInvocation(MethodHandles.Lookup lookup, Class<?> declaringClass, String name) {}
 }

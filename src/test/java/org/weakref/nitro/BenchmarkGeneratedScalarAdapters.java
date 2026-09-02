@@ -94,8 +94,10 @@ public class BenchmarkGeneratedScalarAdapters
     private Streams doubleOutput;
     private PrimitiveFunction nativeAdd;
     private PrimitiveFunction generatedAdd;
+    private PrimitiveFunction generatedBoundAdd;
     private PrimitiveFunction nativeCast;
     private PrimitiveFunction generatedCast;
+    private PrimitiveFunction generatedBoundCast;
 
     @Setup
     public void setup()
@@ -127,9 +129,7 @@ public class BenchmarkGeneratedScalarAdapters
                 "generated_add",
                 new BoundSignature(LONG, List.of(LONG, LONG)),
                 strictSemantics(2),
-                ScalarMethodTarget.direct(
-                        MethodHandles.lookup(),
-                        MethodHandles.lookup().findStatic(
+                new ScalarMethodTarget(MethodHandles.lookup().findStatic(
                                 BenchmarkGeneratedScalarAdapters.class,
                                 "add",
                                 MethodType.methodType(long.class, long.class, long.class))))
@@ -138,12 +138,31 @@ public class BenchmarkGeneratedScalarAdapters
                 "generated_cast",
                 new BoundSignature(DOUBLE, List.of(LONG)),
                 strictSemantics(1),
-                ScalarMethodTarget.direct(
-                        MethodHandles.lookup(),
-                        MethodHandles.lookup().findStatic(
+                new ScalarMethodTarget(MethodHandles.lookup().findStatic(
                                 BenchmarkGeneratedScalarAdapters.class,
                                 "cast",
                                 MethodType.methodType(double.class, long.class))))
+                .implementation();
+        ScalarTargets scalarTargets = new ScalarTargets();
+        generatedBoundAdd = generator.adapt(
+                "generated_bound_add",
+                new BoundSignature(LONG, List.of(LONG, LONG)),
+                strictSemantics(2),
+                new ScalarMethodTarget(MethodHandles.lookup().findVirtual(
+                                ScalarTargets.class,
+                                "add",
+                                MethodType.methodType(long.class, long.class, long.class))
+                        .bindTo(scalarTargets)))
+                .implementation();
+        generatedBoundCast = generator.adapt(
+                "generated_bound_cast",
+                new BoundSignature(DOUBLE, List.of(LONG)),
+                strictSemantics(1),
+                new ScalarMethodTarget(MethodHandles.lookup().findVirtual(
+                                ScalarTargets.class,
+                                "cast",
+                                MethodType.methodType(double.class, long.class))
+                        .bindTo(scalarTargets)))
                 .implementation();
     }
 
@@ -167,6 +186,12 @@ public class BenchmarkGeneratedScalarAdapters
     }
 
     @Benchmark
+    public Streams generatedBoundAdd()
+    {
+        return generatedBoundAdd.apply(binaryInputs, mask, VALUES, longOutput, context);
+    }
+
+    @Benchmark
     public Streams nativeCast()
     {
         return nativeCast.apply(unaryInput, mask, VALUES, doubleOutput, context);
@@ -176,6 +201,12 @@ public class BenchmarkGeneratedScalarAdapters
     public Streams generatedCast()
     {
         return generatedCast.apply(unaryInput, mask, VALUES, doubleOutput, context);
+    }
+
+    @Benchmark
+    public Streams generatedBoundCast()
+    {
+        return generatedBoundCast.apply(unaryInput, mask, VALUES, doubleOutput, context);
     }
 
     public static void main(String[] args)
@@ -230,6 +261,19 @@ public class BenchmarkGeneratedScalarAdapters
     private static double cast(long value)
     {
         return (double) value;
+    }
+
+    private static final class ScalarTargets
+    {
+        public long add(long left, long right)
+        {
+            return left + right;
+        }
+
+        public double cast(long value)
+        {
+            return (double) value;
+        }
     }
 
     private record BenchmarkTypeBinding(TypeIdentity identity, Class<?> carrierType)

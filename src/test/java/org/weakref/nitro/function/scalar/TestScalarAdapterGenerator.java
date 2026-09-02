@@ -56,9 +56,7 @@ final class TestScalarAdapterGenerator
                 "select_arithmetic",
                 new BoundSignature(DOUBLE, List.of(LONG, DOUBLE, BOOLEAN)),
                 strictSemantics(3),
-                ScalarMethodTarget.direct(
-                        MethodHandles.lookup(),
-                        MethodHandles.lookup().findStatic(
+                new ScalarMethodTarget(MethodHandles.lookup().findStatic(
                                 TestScalarAdapterGenerator.class,
                                 "selectArithmetic",
                                 MethodType.methodType(double.class, long.class, double.class, boolean.class))))
@@ -96,9 +94,7 @@ final class TestScalarAdapterGenerator
                 "half",
                 new BoundSignature(DOUBLE, List.of(LONG)),
                 strictSemantics(1),
-                ScalarMethodTarget.direct(
-                        MethodHandles.lookup(),
-                        MethodHandles.lookup().findStatic(
+                new ScalarMethodTarget(MethodHandles.lookup().findStatic(
                                 TestScalarAdapterGenerator.class,
                                 "half",
                                 MethodType.methodType(double.class, long.class))))
@@ -144,6 +140,15 @@ final class TestScalarAdapterGenerator
 
             assertThat(((BooleanVector) result.get(Stream.NULLS)).values()).containsExactly(false, true, false);
             assertThat(target.invocations).isZero();
+
+            Streams values = function.apply(
+                    List.of(Streams.ofValues(new I64Vector(new long[] {3, 5}))),
+                    Mask.all(2),
+                    EnumSet.of(Stream.VALUES),
+                    Streams.empty(),
+                    new PrimitiveExecutionContext(allocator));
+            assertThat(((I64Vector) values.values()).values()).containsExactly(3, 5);
+            assertThat(target.invocations).isEqualTo(2);
         }
     }
 

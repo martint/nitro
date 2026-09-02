@@ -20,6 +20,8 @@ import java.lang.classfile.ClassFile;
 import java.lang.classfile.CodeBuilder;
 import java.lang.classfile.Label;
 import java.lang.constant.ClassDesc;
+import java.lang.constant.DirectMethodHandleDesc;
+import java.lang.constant.DynamicCallSiteDesc;
 import java.lang.constant.MethodTypeDesc;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
@@ -28,11 +30,13 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import static java.lang.constant.ConstantDescs.CD_CallSite;
 import static java.lang.constant.ConstantDescs.CD_boolean;
 import static java.lang.constant.ConstantDescs.CD_double;
 import static java.lang.constant.ConstantDescs.CD_int;
 import static java.lang.constant.ConstantDescs.CD_long;
 import static java.lang.constant.ConstantDescs.CD_void;
+import static java.lang.constant.ConstantDescs.ofCallsiteBootstrap;
 import static java.util.Objects.requireNonNull;
 import static org.weakref.nitro.core.function.FunctionSemantics.ArgumentNullConvention.RETURN_NULL_ON_NULL;
 import static org.weakref.nitro.core.function.FunctionSemantics.FailureConvention.NEVER_FAILS;
@@ -51,7 +55,7 @@ public final class ScalarAdapterGenerator
     private static final ClassDesc CD_LONG_ARRAY = ClassDesc.ofDescriptor("[J");
     private static final ClassDesc CD_DOUBLE_ARRAY = ClassDesc.ofDescriptor("[D");
     private static final ClassDesc CD_BOOLEAN_ARRAY = ClassDesc.ofDescriptor("[Z");
-    private static final ClassDesc CD_METHOD_HANDLE = ClassDesc.of("java.lang.invoke.MethodHandle");
+    private static final ClassDesc CD_BOOTSTRAP = ClassDesc.of("org.weakref.nitro.function.scalar.ScalarAdapterBootstrap");
     private static final ClassDesc CD_KERNEL = ClassDesc.of("org.weakref.nitro.function.scalar.GeneratedScalarKernel");
     private static final ClassDesc CD_LONG_VALUES = ClassDesc.of("org.weakref.nitro.data.VectorAccess$LongValues");
     private static final ClassDesc CD_DOUBLE_VALUES = ClassDesc.of("org.weakref.nitro.data.VectorAccess$DoubleValues");
@@ -64,6 +68,7 @@ public final class ScalarAdapterGenerator
     private static final MethodTypeDesc SPARSE_DICTIONARY_NULL_FREE = MethodTypeDesc.of(CD_void, CD_OBJECT_ARRAY, CD_INT_ARRAY_ARRAY, CD_OBJECT, CD_INT_ARRAY, CD_int);
     private static final MethodTypeDesc DENSE = MethodTypeDesc.of(CD_void, CD_OBJECT_ARRAY, CD_OBJECT_ARRAY, CD_OBJECT, CD_int);
     private static final MethodTypeDesc SPARSE = MethodTypeDesc.of(CD_void, CD_OBJECT_ARRAY, CD_OBJECT_ARRAY, CD_OBJECT, CD_INT_ARRAY, CD_int);
+    private static final DirectMethodHandleDesc BSM_SCALAR_TARGET = ofCallsiteBootstrap(CD_BOOTSTRAP, "bootstrap", CD_CallSite);
 
     private final AtomicInteger nextClassId = new AtomicInteger();
 
@@ -90,8 +95,7 @@ public final class ScalarAdapterGenerator
                 .<Class<?>>map(type -> type.carrierType())
                 .toList();
         Class<?> result = signature.resultType().carrierType();
-        ScalarMethodTarget.DirectInvocation direct = target.directInvocation();
-        MethodHandles.Lookup definitionLookup = direct == null ? MethodHandles.lookup() : direct.lookup();
+        MethodHandles.Lookup definitionLookup = MethodHandles.lookup();
         String packageName = definitionLookup.lookupClass().getPackageName();
         String className = (packageName.isEmpty() ? "" : packageName + ".") + "GeneratedScalarKernel" + nextClassId.incrementAndGet();
         ClassDesc thisClass = ClassDesc.of(className);
@@ -102,43 +106,32 @@ public final class ScalarAdapterGenerator
             builder.withSuperclass(CD_OBJECT);
             builder.withInterfaceSymbols(CD_KERNEL);
             builder.withFlags(ClassFile.ACC_FINAL | ClassFile.ACC_SYNTHETIC);
-            if (direct == null) {
-                builder.withField("target", CD_METHOD_HANDLE, ClassFile.ACC_PRIVATE | ClassFile.ACC_FINAL);
-            }
-            MethodTypeDesc constructorType = direct == null ? MethodTypeDesc.of(CD_void, CD_METHOD_HANDLE) : MethodTypeDesc.of(CD_void);
-            builder.withMethodBody("<init>", constructorType, ClassFile.ACC_PUBLIC, code -> {
+            builder.withMethodBody("<init>", MethodTypeDesc.of(CD_void), ClassFile.ACC_PUBLIC, code -> {
                 code.aload(0);
                 code.invokespecial(CD_OBJECT, "<init>", MethodTypeDesc.of(CD_void));
-                if (direct == null) {
-                    code.aload(0);
-                    code.aload(1);
-                    code.putfield(thisClass, "target", CD_METHOD_HANDLE);
-                }
                 code.return_();
             });
             builder.withMethodBody("applyDenseFlatNullFree", DENSE_FLAT_NULL_FREE, ClassFile.ACC_PUBLIC,
-                    code -> emitLoop(code, thisClass, arguments, result, invocationType, direct, false, InputForm.FLAT));
+                    code -> emitLoop(code, arguments, result, invocationType, false, InputForm.FLAT));
             builder.withMethodBody("applySparseFlatNullFree", SPARSE_FLAT_NULL_FREE, ClassFile.ACC_PUBLIC,
-                    code -> emitLoop(code, thisClass, arguments, result, invocationType, direct, true, InputForm.FLAT));
+                    code -> emitLoop(code, arguments, result, invocationType, true, InputForm.FLAT));
             builder.withMethodBody("applyDenseDictionaryNullFree", DENSE_DICTIONARY_NULL_FREE, ClassFile.ACC_PUBLIC,
-                    code -> emitLoop(code, thisClass, arguments, result, invocationType, direct, false, InputForm.DICTIONARY));
+                    code -> emitLoop(code, arguments, result, invocationType, false, InputForm.DICTIONARY));
             builder.withMethodBody("applySparseDictionaryNullFree", SPARSE_DICTIONARY_NULL_FREE, ClassFile.ACC_PUBLIC,
-                    code -> emitLoop(code, thisClass, arguments, result, invocationType, direct, true, InputForm.DICTIONARY));
+                    code -> emitLoop(code, arguments, result, invocationType, true, InputForm.DICTIONARY));
             builder.withMethodBody("applyDense", DENSE, ClassFile.ACC_PUBLIC,
-                    code -> emitLoop(code, thisClass, arguments, result, invocationType, direct, false, InputForm.ACCESSOR));
+                    code -> emitLoop(code, arguments, result, invocationType, false, InputForm.ACCESSOR));
             builder.withMethodBody("applySparse", SPARSE, ClassFile.ACC_PUBLIC,
-                    code -> emitLoop(code, thisClass, arguments, result, invocationType, direct, true, InputForm.ACCESSOR));
+                    code -> emitLoop(code, arguments, result, invocationType, true, InputForm.ACCESSOR));
         });
 
         try {
-            MethodHandles.Lookup lookup = definitionLookup
-                    .defineHiddenClass(bytes, true, MethodHandles.Lookup.ClassOption.NESTMATE);
-            if (direct != null) {
-                return (GeneratedScalarKernel) lookup.findConstructor(lookup.lookupClass(), MethodType.methodType(void.class)).invoke();
-            }
-            return (GeneratedScalarKernel) lookup.findConstructor(
-                    lookup.lookupClass(),
-                    MethodType.methodType(void.class, MethodHandle.class)).invoke(target.handle());
+            MethodHandles.Lookup lookup = definitionLookup.defineHiddenClassWithClassData(
+                    bytes,
+                    target.handle(),
+                    true,
+                    MethodHandles.Lookup.ClassOption.NESTMATE);
+            return (GeneratedScalarKernel) lookup.findConstructor(lookup.lookupClass(), MethodType.methodType(void.class)).invoke();
         }
         catch (Throwable throwable) {
             throw new IllegalStateException("Failed to generate scalar adapter for " + target.handle().type(), throwable);
@@ -147,11 +140,9 @@ public final class ScalarAdapterGenerator
 
     private static void emitLoop(
             CodeBuilder code,
-            ClassDesc thisClass,
             List<Class<?>> arguments,
             Class<?> result,
             MethodTypeDesc invocationType,
-            ScalarMethodTarget.DirectInvocation direct,
             boolean sparse,
             InputForm inputForm)
     {
@@ -225,10 +216,6 @@ public final class ScalarAdapterGenerator
         code.aload(output);
         code.checkcast(arrayDescriptor(result));
         code.iload(position);
-        if (direct == null) {
-            code.aload(0);
-            code.getfield(thisClass, "target", CD_METHOD_HANDLE);
-        }
         for (int argument = 0; argument < arguments.size(); argument++) {
             Class<?> carrier = arguments.get(argument);
             code.aload(valueAccessors + argument);
@@ -248,16 +235,7 @@ public final class ScalarAdapterGenerator
                 code.invokeinterface(accessorDescriptor(carrier), "value", MethodTypeDesc.of(descriptor(carrier), CD_int));
             }
         }
-        if (direct == null) {
-            code.invokevirtual(CD_METHOD_HANDLE, "invokeExact", invocationType);
-        }
-        else {
-            code.invokestatic(
-                    ClassDesc.of(direct.declaringClass().getName()),
-                    direct.name(),
-                    invocationType,
-                    direct.declaringClass().isInterface());
-        }
+        code.invokedynamic(DynamicCallSiteDesc.of(BSM_SCALAR_TARGET, "apply", invocationType));
         store(code, result);
 
         code.labelBinding(next);
