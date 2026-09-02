@@ -37,6 +37,24 @@ public final class PatternSearch
         return new Session(partitionStart, partitionEnd, attemptStart, initial, matchNumber);
     }
 
+    /// Positions the shared evaluator for a value produced from an accepted match.
+    public PatternEvaluationContext positionMatch(
+            int partitionStart,
+            int partitionEnd,
+            int patternStart,
+            long matchNumber,
+            int currentRow,
+            PatternLabelEvaluator.LabelHistory labels)
+    {
+        return evaluator.positionMatch(
+                partitionStart,
+                partitionEnd,
+                patternStart,
+                matchNumber,
+                currentRow,
+                labels);
+    }
+
     public final class Session
             implements AutoCloseable
     {

@@ -25,6 +25,7 @@ public final class PatternPartitionCursor
     private final PatternSkipPolicy skip;
     private final int partitionStart;
     private final int partitionEnd;
+    private final boolean initial;
     private int nextInputStart;
     private int inputStart;
     private long nextMatchNumber = 1;
@@ -39,6 +40,16 @@ public final class PatternPartitionCursor
             int partitionStart,
             int partitionEnd)
     {
+        this(search, skip, partitionStart, partitionEnd, true);
+    }
+
+    public PatternPartitionCursor(
+            PatternSearch search,
+            PatternSkipPolicy skip,
+            int partitionStart,
+            int partitionEnd,
+            boolean initial)
+    {
         this.search = requireNonNull(search, "search is null");
         this.skip = requireNonNull(skip, "skip is null");
         if (partitionStart < 0 || partitionStart > partitionEnd) {
@@ -46,6 +57,7 @@ public final class PatternPartitionCursor
         }
         this.partitionStart = partitionStart;
         this.partitionEnd = partitionEnd;
+        this.initial = initial;
         nextInputStart = partitionStart;
     }
 
@@ -63,7 +75,7 @@ public final class PatternPartitionCursor
                 return false;
             }
             inputStart = nextInputStart;
-            current = search.start(partitionStart, partitionEnd, inputStart, true, nextMatchNumber);
+            current = search.start(partitionStart, partitionEnd, inputStart, initial, nextMatchNumber);
         }
 
         boolean matched = current.run(context);
@@ -109,6 +121,19 @@ public final class PatternPartitionCursor
     {
         checkMatched();
         return current.match();
+    }
+
+    /// Positions the match evaluator for a measure emitted from the current accepted match.
+    public PatternEvaluationContext positionMatch(int currentRow)
+    {
+        checkMatched();
+        return search.positionMatch(
+                partitionStart,
+                partitionEnd,
+                current.patternStart(),
+                matchNumber,
+                currentRow,
+                current.match());
     }
 
     private void checkMatched()
