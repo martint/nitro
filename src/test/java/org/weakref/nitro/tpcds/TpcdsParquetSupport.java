@@ -738,7 +738,7 @@ final class TpcdsParquetSupport
     {
         Variable average = new Variable(0);
         List<Assignment> assignments = List.of(
-                new Assignment(average, new Call("divide_i64_to_f64", List.of(
+                new Assignment(average, new Call("bigint_ratio", List.of(
                         new Reference(new Input(sumIndex), Stream.VALUES),
                         new Reference(new Input(countIndex), Stream.VALUES))), AllMask.ALL));
         List<Reference> outputs = List.of(
@@ -6062,7 +6062,7 @@ final class TpcdsParquetSupport
         return new ProjectOperator(
                 allocator,
                 new EvaluationPlan(
-                        List.of(new Assignment(ratio, new Call("divide_i64_to_f64", List.of(
+                        List.of(new Assignment(ratio, new Call("bigint_ratio", List.of(
                                 new Reference(new Input(morningCountIndex), Stream.VALUES),
                                 new Reference(new Input(eveningCountIndex), Stream.VALUES))), AllMask.ALL)),
                         List.of(new Reference(ratio, Stream.VALUES))),

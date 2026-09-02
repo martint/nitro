@@ -30,8 +30,8 @@ import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
-@ScalarFunction(name = "divide_i64_to_f64")
-public final class DivideI64ToF64
+@ScalarFunction(name = "bigint_ratio")
+public final class BigintRatio
         implements PrimitiveFunction
 {
     @Override
@@ -43,14 +43,14 @@ public final class DivideI64ToF64
     @Override
     public Streams apply(List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
     {
-        checkArgument(inputs.size() == 2, "Unexpected argument count for divide_i64_to_f64");
+        checkArgument(inputs.size() == 2, "Unexpected argument count for bigint_ratio");
         boolean requestValues = requestedStreams.contains(Stream.VALUES);
         boolean requestNulls = requestedStreams.contains(Stream.NULLS);
         if (!requestValues && !requestNulls) {
             return Streams.empty();
         }
 
-        Allocator.Context allocationContext = context.allocationContext("DivideI64ToF64");
+        Allocator.Context allocationContext = context.allocationContext("BigintRatio");
         VectorAccess.LongValues numeratorValues = VectorAccess.longValues(inputs.get(0).values());
         VectorAccess.LongValues denominatorValues = VectorAccess.longValues(inputs.get(1).values());
         VectorAccess.BooleanValues numeratorNulls = VectorAccess.booleanValues(inputs.get(0).getOrNull(Stream.NULLS));

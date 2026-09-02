@@ -3703,13 +3703,13 @@ public class TestPlanEvaluator
     }
 
     @Test
-    void testDivideI64ToF64ProjectsFloatingPointAverage()
+    void testBigintRatioProjectsFloatingPointAverage()
     {
         Variable average = new Variable(0);
         EvaluationPlan plan = new EvaluationPlan(
                 List.of(new Assignment(
                         average,
-                        new Call("divide_i64_to_f64", List.of(
+                        new Call("bigint_ratio", List.of(
                                 new Reference(new Input(0), Stream.VALUES),
                                 new Reference(new Input(1), Stream.VALUES))),
                         AllMask.ALL)),

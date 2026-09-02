@@ -30,13 +30,13 @@ import org.weakref.nitro.function.scalar.builtin.AndBoolean;
 import org.weakref.nitro.function.scalar.builtin.ArrayElementI64;
 import org.weakref.nitro.function.scalar.builtin.ArrayMinI64;
 import org.weakref.nitro.function.scalar.builtin.ArraySumI64;
+import org.weakref.nitro.function.scalar.builtin.BigintRatio;
 import org.weakref.nitro.function.scalar.builtin.Cardinality;
 import org.weakref.nitro.function.scalar.builtin.CoalesceI64;
 import org.weakref.nitro.function.scalar.builtin.CoalesceI64Policy;
 import org.weakref.nitro.function.scalar.builtin.ConcatUtf8;
 import org.weakref.nitro.function.scalar.builtin.ContainsUtf8;
 import org.weakref.nitro.function.scalar.builtin.DivideI64;
-import org.weakref.nitro.function.scalar.builtin.DivideI64ToF64;
 import org.weakref.nitro.function.scalar.builtin.DivideRoundI64;
 import org.weakref.nitro.function.scalar.builtin.DivideScaleRoundI64;
 import org.weakref.nitro.function.scalar.builtin.ElementAtI64Utf8;
@@ -146,7 +146,7 @@ public final class TestPrimitiveFunctions
                 SubtractExactI64.class,
                 MultiplyI64.class,
                 DivideI64.class,
-                DivideI64ToF64.class,
+                BigintRatio.class,
                 DivideRoundI64.class,
                 DivideScaleRoundI64.class,
                 ModuloI64.class,

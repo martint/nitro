@@ -1416,7 +1416,7 @@ public final class ClickBenchHitsSupport
 
             Variable average = new Variable(0);
             EvaluationPlan averages = new EvaluationPlan(
-                    List.of(new Assignment(average, new Call("divide_i64_to_f64", List.of(
+                    List.of(new Assignment(average, new Call("bigint_ratio", List.of(
                             new Reference(new Input(4), Stream.VALUES),
                             new Reference(new Input(5), Stream.VALUES))), AllMask.ALL)),
                     List.of(
