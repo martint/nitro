@@ -114,6 +114,36 @@ final class TestScalarAdapterGenerator
     }
 
     @Test
+    void testComposedMethodHandleRunsAsSingleGeneratedLoop()
+            throws Throwable
+    {
+        MethodHandles.Lookup lookup = MethodHandles.lookup();
+        PrimitiveFunction function = new ScalarAdapterGenerator().adapt(
+                "multiply_add",
+                new BoundSignature(LONG, List.of(LONG, LONG, LONG)),
+                strictSemantics(3),
+                new ScalarMethodTarget(MethodHandles.collectArguments(
+                        lookup.findStatic(TestScalarAdapterGenerator.class, "add", MethodType.methodType(long.class, long.class, long.class)),
+                        0,
+                        lookup.findStatic(TestScalarAdapterGenerator.class, "multiply", MethodType.methodType(long.class, long.class, long.class)))))
+                .implementation();
+
+        try (Allocator allocator = new Allocator(createDefault())) {
+            Streams result = function.apply(
+                    List.of(
+                            Streams.ofValues(new I64Vector(new long[] {2, 3, 4})),
+                            Streams.ofValues(new I64Vector(new long[] {5, 6, 7})),
+                            Streams.ofValues(new I64Vector(new long[] {8, 9, 10}))),
+                    Mask.all(3),
+                    EnumSet.of(Stream.VALUES),
+                    Streams.empty(),
+                    new PrimitiveExecutionContext(allocator));
+
+            assertThat(((I64Vector) result.values()).values()).containsExactly(18, 27, 38);
+        }
+    }
+
+    @Test
     void testNullOnlyDemandDoesNotReadValuesOrInvokeTarget()
             throws Throwable
     {
@@ -184,6 +214,16 @@ final class TestScalarAdapterGenerator
     private static double half(long value)
     {
         return value / 2.0;
+    }
+
+    private static long add(long left, long right)
+    {
+        return left + right;
+    }
+
+    private static long multiply(long left, long right)
+    {
+        return left * right;
     }
 
     private static final class CountingTarget
