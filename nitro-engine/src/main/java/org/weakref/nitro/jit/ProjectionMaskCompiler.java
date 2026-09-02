@@ -25,6 +25,7 @@ import org.weakref.nitro.jit.ProjectionProgramBuilder.ArgumentNull;
 import org.weakref.nitro.jit.ProjectionProgramBuilder.ArgumentValue;
 import org.weakref.nitro.jit.ProjectionProgramBuilder.Binary;
 import org.weakref.nitro.jit.ProjectionProgramBuilder.BinaryOperation;
+import org.weakref.nitro.jit.ProjectionProgramBuilder.BooleanConstant;
 import org.weakref.nitro.jit.ProjectionProgramBuilder.Program;
 import org.weakref.nitro.jit.ProjectionProgramBuilder.Utf8Equal;
 
@@ -92,6 +93,8 @@ public final class ProjectionMaskCompiler
             return Optional.empty();
         }
         if (program.argumentTypes().size() != 2 ||
+                !(program.fallback() instanceof BooleanConstant fallback) ||
+                fallback.value() ||
                 program.argumentTypes().get(0) != program.argumentTypes().get(1) ||
                 !(program.isNull() instanceof Binary nulls) ||
                 nulls.operation() != BinaryOperation.BOOLEAN_OR ||

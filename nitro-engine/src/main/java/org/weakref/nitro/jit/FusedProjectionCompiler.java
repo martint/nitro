@@ -25,6 +25,7 @@ import org.weakref.nitro.jit.ProjectionProgramBuilder.BooleanConstant;
 import org.weakref.nitro.jit.ProjectionProgramBuilder.BooleanNot;
 import org.weakref.nitro.jit.ProjectionProgramBuilder.Conditional;
 import org.weakref.nitro.jit.ProjectionProgramBuilder.Expression;
+import org.weakref.nitro.jit.ProjectionProgramBuilder.LongLiteral;
 import org.weakref.nitro.jit.ProjectionProgramBuilder.Program;
 import org.weakref.nitro.jit.ProjectionProgramBuilder.Utf8Equal;
 import org.weakref.nitro.jit.ProjectionProgramBuilder.Utf8StartsWith;
@@ -481,6 +482,7 @@ public final class FusedProjectionCompiler
                         : TruthPossibilities.BOTH;
             }
             case BooleanConstant constant -> TruthPossibilities.of(constant.value());
+            case LongLiteral _ -> throw new IllegalArgumentException("numeric expression used as a boolean");
             case Binary binary -> switch (binary.operation()) {
                 case BOOLEAN_AND -> truthPossibilities(binary.left(), operands, steps)
                         .and(truthPossibilities(binary.right(), operands, steps));
@@ -488,7 +490,7 @@ public final class FusedProjectionCompiler
                         .or(truthPossibilities(binary.right(), operands, steps));
                 case LESS_THAN, GREATER_THAN, LESS_THAN_OR_EQUAL, GREATER_THAN_OR_EQUAL, EQUAL ->
                         TruthPossibilities.BOTH;
-                case ADD, SUBTRACT, MULTIPLY ->
+                case ADD, SUBTRACT, MULTIPLY, DIVIDE, REMAINDER ->
                         throw new IllegalArgumentException("numeric expression used as a boolean");
             };
             case BooleanNot not -> truthPossibilities(not.value(), operands, steps).not();
@@ -652,15 +654,16 @@ public final class FusedProjectionCompiler
             }
             appendPositionLoop(out, sizingBody);
         }
+        out.append("    var outputContext = context.allocationContext(\"FusedProjection\");\n");
         for (int output = 0; output < outputCount; output++) {
             if (outputType[output] == PhysicalType.DOUBLE) {
                 out.append("    F64Vector out").append(output).append(" = context.allocator().allocate("
-                        + "context.allocationContext(\"FusedProjection\"), F64Vector.class, required, F64Vector::new);\n");
+                        + "outputContext, F64Vector.class, required, F64Vector::new);\n");
                 out.append("    double[] o").append(output).append(" = out").append(output).append(".values();\n");
             }
             else if (outputType[output] == PhysicalType.UTF8) {
                 out.append("    BinaryVector out").append(output).append(" = BinaryVector.allocate("
-                        + "context.allocator(), context.allocationContext(\"FusedProjection\"), required, bytes").append(output).append(");\n");
+                        + "context.allocator(), outputContext, required, bytes").append(output).append(");\n");
                 out.append("    out").append(output).append(".addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);\n");
                 out.append("    byte[] od").append(output).append(" = out").append(output).append(".data();\n");
                 out.append("    int[] oo").append(output).append(" = out").append(output).append(".offsets();\n");
@@ -669,17 +672,17 @@ public final class FusedProjectionCompiler
             }
             else {
                 out.append("    I64Vector out").append(output).append(" = context.allocator().allocate("
-                        + "context.allocationContext(\"FusedProjection\"), I64Vector.class, required, I64Vector::new);\n");
+                        + "outputContext, I64Vector.class, required, I64Vector::new);\n");
                 out.append("    long[] o").append(output).append(" = out").append(output).append(".values();\n");
             }
             if (nullable[output]) {
                 out.append("    BooleanVector outNulls").append(output).append(" = wantNulls ? context.allocator().allocate("
-                        + "context.allocationContext(\"FusedProjection\"), BooleanVector.class, required, BooleanVector::new) : null;\n");
+                        + "outputContext, BooleanVector.class, required, BooleanVector::new) : null;\n");
                 out.append("    boolean[] on").append(output).append(" = wantNulls ? outNulls").append(output).append(".values() : null;\n");
             }
         }
 
-        String body = loopBody(slice, nullable, utf8Constants);
+        String body = loopBody(slice, nullable, utf8Constants, releaseOutputs(outputCount, nullable));
         appendPositionLoop(out, body);
         for (int output = 0; output < outputCount; output++) {
             if (outputType[output] == PhysicalType.UTF8) {
@@ -808,7 +811,7 @@ public final class FusedProjectionCompiler
         if (!hasUtf8Output) {
             return "";
         }
-        StringBuilder body = new StringBuilder(stepBody(slice, utf8Constants));
+        StringBuilder body = new StringBuilder(stepBody(slice, utf8Constants, "return null;"));
         for (int output = 0; output < slice.roots().size(); output++) {
             Operand root = slice.roots().get(output);
             if (operandType(root) == PhysicalType.UTF8) {
@@ -821,7 +824,7 @@ public final class FusedProjectionCompiler
     }
 
     /** The per-position computation shared by the variable-width sizing pass and the output pass. */
-    private String stepBody(Slice slice, Map<String, Integer> utf8Constants)
+    private String stepBody(Slice slice, Map<String, Integer> utf8Constants, String fallbackStatement)
     {
         StringBuilder body = new StringBuilder();
         for (int slot = 0; slot < slice.inputTypes().size(); slot++) {
@@ -843,6 +846,9 @@ public final class FusedProjectionCompiler
             }
         }
         for (Step step : slice.steps()) {
+            body.append("        if (!(").append(nullExpr(step, utf8Constants)).append(") && (")
+                    .append(renderExpression(step.program().fallback(), step.operands(), utf8Constants))
+                    .append(")) { ").append(fallbackStatement).append(" }\n");
             if (step.type() == PhysicalType.UTF8) {
                 body.append("        byte[] svd").append(step.id()).append(" = ")
                         .append(renderUtf8Expression(step.program().value(), step.operands(), Utf8Component.DATA, utf8Constants)).append(";\n");
@@ -869,9 +875,9 @@ public final class FusedProjectionCompiler
     }
 
     /** The per-position body: one local (value, is-null) pair per shared step, then each output's writes. */
-    private String loopBody(Slice slice, boolean[] nullable, Map<String, Integer> utf8Constants)
+    private String loopBody(Slice slice, boolean[] nullable, Map<String, Integer> utf8Constants, String fallbackStatement)
     {
-        StringBuilder body = new StringBuilder(stepBody(slice, utf8Constants));
+        StringBuilder body = new StringBuilder(stepBody(slice, utf8Constants, fallbackStatement));
         List<Operand> roots = slice.roots();
         for (int output = 0; output < roots.size(); output++) {
             Operand root = roots.get(output);
@@ -898,6 +904,19 @@ public final class FusedProjectionCompiler
         return body.toString();
     }
 
+    private static String releaseOutputs(int outputCount, boolean[] nullable)
+    {
+        StringBuilder release = new StringBuilder();
+        for (int output = 0; output < outputCount; output++) {
+            release.append("context.allocator().release(outputContext, out").append(output).append("); ");
+            if (nullable[output]) {
+                release.append("if (outNulls").append(output).append(" != null) { context.allocator().release(outputContext, outNulls")
+                        .append(output).append("); } ");
+            }
+        }
+        return release.append("return null;").toString();
+    }
+
     private String valueExpr(Step step, Map<String, Integer> utf8Constants)
     {
         return renderExpression(step.program().value(), step.operands(), utf8Constants);
@@ -917,6 +936,7 @@ public final class FusedProjectionCompiler
             case ArgumentValue argument -> value(operands.get(argument.index()));
             case ArgumentNull argument -> isNull(operands.get(argument.index()));
             case BooleanConstant constant -> Boolean.toString(constant.value());
+            case LongLiteral constant -> constant.value() + "L";
             case Binary binary -> {
                 String left = renderExpression(binary.left(), operands, utf8Constants);
                 String right = renderExpression(binary.right(), operands, utf8Constants);
@@ -924,6 +944,8 @@ public final class FusedProjectionCompiler
                     case ADD -> "+";
                     case SUBTRACT -> "-";
                     case MULTIPLY -> "*";
+                    case DIVIDE -> "/";
+                    case REMAINDER -> "%";
                     case LESS_THAN -> "<";
                     case GREATER_THAN -> ">";
                     case LESS_THAN_OR_EQUAL -> "<=";
@@ -1082,6 +1104,7 @@ public final class FusedProjectionCompiler
         for (Step step : slice.steps()) {
             collectUtf8Categories(step.program().value(), step.operands(), constants, categories);
             collectUtf8Categories(step.program().isNull(), step.operands(), constants, categories);
+            collectUtf8Categories(step.program().fallback(), step.operands(), constants, categories);
         }
         return categories;
     }
@@ -1093,7 +1116,7 @@ public final class FusedProjectionCompiler
             Map<Integer, List<Integer>> categories)
     {
         switch (expression) {
-            case ArgumentValue _, ArgumentNull _, BooleanConstant _ -> {}
+            case ArgumentValue _, ArgumentNull _, BooleanConstant _, LongLiteral _ -> {}
             case Binary binary -> {
                 collectUtf8Categories(binary.left(), operands, constants, categories);
                 collectUtf8Categories(binary.right(), operands, constants, categories);

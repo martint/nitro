@@ -60,6 +60,12 @@ final class ProjectionProgramBuilder
     }
 
     @Override
+    public Value constant(long value)
+    {
+        return new LongLiteral(value);
+    }
+
+    @Override
     public Value add(Value left, Value right)
     {
         return arithmetic(BinaryOperation.ADD, left, right);
@@ -75,6 +81,18 @@ final class ProjectionProgramBuilder
     public Value multiply(Value left, Value right)
     {
         return arithmetic(BinaryOperation.MULTIPLY, left, right);
+    }
+
+    @Override
+    public Value divide(Value left, Value right)
+    {
+        return arithmetic(BinaryOperation.DIVIDE, left, right);
+    }
+
+    @Override
+    public Value remainder(Value left, Value right)
+    {
+        return arithmetic(BinaryOperation.REMAINDER, left, right);
     }
 
     @Override
@@ -161,18 +179,22 @@ final class ProjectionProgramBuilder
     }
 
     @Override
-    public ProjectionProgram program(
+    public ProjectionProgram guardedProgram(
             List<ValueType> argumentTypes,
             Value value,
-            Value isNull)
+            Value isNull,
+            Value fallback)
     {
         List<ValueType> types = List.copyOf(requireNonNull(argumentTypes, "argumentTypes is null"));
         Expression valueExpression = expression(value);
         Expression nullExpression = expression(isNull);
+        Expression fallbackExpression = expression(fallback);
         requireType(nullExpression, ValueType.BOOLEAN);
+        requireType(fallbackExpression, ValueType.BOOLEAN);
         validateArguments(valueExpression, types);
         validateArguments(nullExpression, types);
-        return new Program(owner, types, valueExpression, nullExpression);
+        validateArguments(fallbackExpression, types);
+        return new Program(owner, types, valueExpression, nullExpression, fallbackExpression);
     }
 
     Program requireProgram(ProjectionProgram program)
@@ -243,7 +265,7 @@ final class ProjectionProgramBuilder
                     throw new IllegalArgumentException("null reference does not match program signature");
                 }
             }
-            case BooleanConstant _ -> {}
+            case BooleanConstant _, LongLiteral _ -> {}
             case Binary binary -> {
                 validateArguments(binary.left(), argumentTypes);
                 validateArguments(binary.right(), argumentTypes);
@@ -267,7 +289,7 @@ final class ProjectionProgramBuilder
 
     sealed interface Expression
             extends Value
-            permits ArgumentValue, ArgumentNull, BooleanConstant, Binary, BooleanNot, Conditional, Utf8Equal, Utf8StartsWith {}
+            permits ArgumentValue, ArgumentNull, BooleanConstant, LongLiteral, Binary, BooleanNot, Conditional, Utf8Equal, Utf8StartsWith {}
 
     record ArgumentValue(int index, ValueType type)
             implements Expression {}
@@ -289,6 +311,16 @@ final class ProjectionProgramBuilder
         public ValueType type()
         {
             return ValueType.BOOLEAN;
+        }
+    }
+
+    record LongLiteral(long value)
+            implements Expression
+    {
+        @Override
+        public ValueType type()
+        {
+            return ValueType.I64;
         }
     }
 
@@ -340,7 +372,8 @@ final class ProjectionProgramBuilder
             Object owner,
             List<ValueType> argumentTypes,
             Expression value,
-            Expression isNull)
+            Expression isNull,
+            Expression fallback)
             implements ProjectionProgram {}
 
     enum BinaryOperation
@@ -348,6 +381,8 @@ final class ProjectionProgramBuilder
         ADD,
         SUBTRACT,
         MULTIPLY,
+        DIVIDE,
+        REMAINDER,
         LESS_THAN,
         GREATER_THAN,
         LESS_THAN_OR_EQUAL,

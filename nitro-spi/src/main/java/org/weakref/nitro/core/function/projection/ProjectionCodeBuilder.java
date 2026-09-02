@@ -29,11 +29,17 @@ public interface ProjectionCodeBuilder
 
     Value constant(boolean value);
 
+    Value constant(long value);
+
     Value add(Value left, Value right);
 
     Value subtract(Value left, Value right);
 
     Value multiply(Value left, Value right);
+
+    Value divide(Value left, Value right);
+
+    Value remainder(Value left, Value right);
 
     Value lessThan(Value left, Value right);
 
@@ -57,7 +63,19 @@ public interface ProjectionCodeBuilder
 
     Value conditional(Value condition, Value whenTrue, Value whenFalse);
 
-    ProjectionProgram program(List<ValueType> argumentTypes, Value value, Value isNull);
+    default ProjectionProgram program(List<ValueType> argumentTypes, Value value, Value isNull)
+    {
+        return guardedProgram(argumentTypes, value, isNull, constant(false));
+    }
+
+    /**
+     * Completes a projection program whose generated fast path is valid only while {@code fallback} is false.
+     *
+     * <p>If the predicate is true for any selected position, the generated kernel abandons the batch before publishing
+     * output and the evaluator invokes the registered function normally. This lets fallible functions participate in
+     * fusion without moving provider-specific error construction into the engine or weakening error semantics.
+     */
+    ProjectionProgram guardedProgram(List<ValueType> argumentTypes, Value value, Value isNull, Value fallback);
 
     interface Value
     {

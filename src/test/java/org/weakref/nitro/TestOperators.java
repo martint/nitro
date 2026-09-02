@@ -1909,6 +1909,65 @@ public class TestOperators
     }
 
     @Test
+    void testFusedProjectionFallsBackForProviderGuard()
+    {
+        class GuardedProjection
+                implements ProjectionCodeProvider
+        {
+            @Override
+            public Optional<ProjectionProgram> generate(ProjectionCodeBuilder builder, List<ProjectionArgument> arguments)
+            {
+                if (arguments.size() != 2) {
+                    return Optional.empty();
+                }
+                var left = builder.argument(0, ProjectionCodeBuilder.ValueType.I64);
+                var right = builder.argument(1, ProjectionCodeBuilder.ValueType.I64);
+                return Optional.of(builder.guardedProgram(
+                        List.of(ProjectionCodeBuilder.ValueType.I64, ProjectionCodeBuilder.ValueType.I64),
+                        builder.add(left, right),
+                        builder.or(builder.isNull(0), builder.isNull(1)),
+                        builder.equal(left, builder.constant(7L))));
+            }
+        }
+
+        PrimitiveRegistry registry = new PrimitiveRegistry();
+        registry.register("guarded_add", new org.weakref.nitro.function.scalar.builtin.AddI64(), new GuardedProjection());
+        Variable one = new Variable(0);
+        Variable first = new Variable(1);
+        Variable second = new Variable(2);
+        Reference result = new Reference(second, Stream.VALUES);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(one, new Literal(1L), AllMask.ALL),
+                        new Assignment(first, new Call("guarded_add", List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(one, Stream.VALUES))), AllMask.ALL),
+                        new Assignment(second, new Call("guarded_add", List.of(
+                                new Reference(first, Stream.VALUES),
+                                new Reference(one, Stream.VALUES))), AllMask.ALL)),
+                List.of(result));
+        Map<String, Long> diagnostics = new LinkedHashMap<>();
+
+        try (ProjectOperator operator = new ProjectOperator(
+                allocator,
+                plan,
+                registry,
+                new ConstantTableOperator(allocator, 1, List.of(row(2L), row(7L))),
+                Schema.unspecified(1),
+                EngineResources.from(allocator).operatorResources(),
+                (event, value) -> diagnostics.merge(event, value, Long::sum));
+                Batch batch = operator.next()) {
+            assertThat(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values()).containsExactly(4L, 9L);
+        }
+
+        assertThat(diagnostics)
+                .containsEntry(ProjectOperator.GENERATED_ATTEMPTS, 1L)
+                .containsEntry(ProjectOperator.GENERATED_SUCCESSES, 0L)
+                .containsEntry(ProjectOperator.GENERATED_LAYOUT_FALLBACKS, 1L);
+        assertThat(allocator.currentBytes(new Allocator.Context("FusedProjection"))).isZero();
+    }
+
+    @Test
     void testFusedProjectionCompilesMixedWidthNullTests()
     {
         Variable zero = new Variable(0);
