@@ -32,6 +32,7 @@ import org.weakref.nitro.function.scalar.builtin.ArraySumI64;
 import org.weakref.nitro.function.scalar.builtin.BigintAddExact;
 import org.weakref.nitro.function.scalar.builtin.BigintRatio;
 import org.weakref.nitro.function.scalar.builtin.BigintSubtractExact;
+import org.weakref.nitro.function.scalar.builtin.BigintToIntegerExact;
 import org.weakref.nitro.function.scalar.builtin.Cardinality;
 import org.weakref.nitro.function.scalar.builtin.CoalesceI64;
 import org.weakref.nitro.function.scalar.builtin.CoalesceI64Policy;
@@ -69,11 +70,9 @@ import org.weakref.nitro.function.scalar.builtin.MaterializeLongCarrier;
 import org.weakref.nitro.function.scalar.builtin.ModuloI64;
 import org.weakref.nitro.function.scalar.builtin.MultiplyF64Optimization;
 import org.weakref.nitro.function.scalar.builtin.MultiplyI64;
-import org.weakref.nitro.function.scalar.builtin.NarrowLongCarrierToInt32Exact;
 import org.weakref.nitro.function.scalar.builtin.NotBooleanOptimization;
 import org.weakref.nitro.function.scalar.builtin.NullI64;
 import org.weakref.nitro.function.scalar.builtin.OrBoolean;
-import org.weakref.nitro.function.scalar.builtin.ParseUtf8Long;
 import org.weakref.nitro.function.scalar.builtin.RegexpReplaceUtf8;
 import org.weakref.nitro.function.scalar.builtin.RegexpReplaceUtf8Policy;
 import org.weakref.nitro.function.scalar.builtin.RoundedBigintRatio;
@@ -84,6 +83,7 @@ import org.weakref.nitro.function.scalar.builtin.SubtractF64Optimization;
 import org.weakref.nitro.function.scalar.builtin.SubtractI64;
 import org.weakref.nitro.function.scalar.builtin.UpperUtf8;
 import org.weakref.nitro.function.scalar.builtin.Utf8BinaryDispatchPolicy;
+import org.weakref.nitro.function.scalar.builtin.VarcharToBigint;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 
 import java.lang.invoke.MethodHandles;
@@ -109,9 +109,9 @@ public final class TestPrimitiveFunctions
                 ArrayMinI64.class,
                 ArraySumI64.class,
                 Cardinality.class,
-                NarrowLongCarrierToInt32Exact.class,
+                BigintToIntegerExact.class,
                 MaterializeLongCarrier.class,
-                ParseUtf8Long.class,
+                VarcharToBigint.class,
                 CoalesceI64.class,
                 ConcatUtf8.class,
                 ContainsUtf8.class,

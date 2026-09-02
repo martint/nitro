@@ -1607,13 +1607,13 @@ public class TestPlanEvaluator
     }
 
     @Test
-    void testParseUtf8LongParsesSignedDigits()
+    void testVarcharToBigintParsesSignedDigits()
     {
         Variable cast = new Variable(0);
         EvaluationPlan plan = new EvaluationPlan(
                 List.of(new Assignment(
                         cast,
-                        new Call("parse_utf8_long", List.of(new Reference(new Input(0), Stream.VALUES))),
+                        new Call("cast_varchar_to_bigint", List.of(new Reference(new Input(0), Stream.VALUES))),
                         AllMask.ALL)),
                 List.of(
                         new Reference(cast, Stream.VALUES),
@@ -3418,13 +3418,13 @@ public class TestPlanEvaluator
     }
 
     @Test
-    void testNarrowLongCarrierToInt32ExactProjectsDictionaryEncodedValues()
+    void testBigintToIntegerExactProjectsDictionaryEncodedValues()
     {
         Variable castValue = new Variable(0);
         EvaluationPlan plan = new EvaluationPlan(
                 List.of(new Assignment(
                         castValue,
-                        new Call("narrow_long_carrier_to_int32_exact", List.of(new Reference(new Input(0), Stream.VALUES))),
+                        new Call("cast_bigint_to_integer", List.of(new Reference(new Input(0), Stream.VALUES))),
                         AllMask.ALL)),
                 List.of(new Reference(castValue, Stream.VALUES)));
 
@@ -3481,7 +3481,7 @@ public class TestPlanEvaluator
     }
 
     @Test
-    void testNarrowLongCarrierToInt32ExactDoesNotRequestInputNullsWhenOnlyValuesAreNeeded()
+    void testBigintToIntegerExactDoesNotRequestInputNullsWhenOnlyValuesAreNeeded()
     {
         Variable castValue = new Variable(0);
         Variable zero = new Variable(1);
@@ -3490,7 +3490,7 @@ public class TestPlanEvaluator
                 List.of(
                         new Assignment(
                                 castValue,
-                                new Call("narrow_long_carrier_to_int32_exact", List.of(new Reference(new Input(0), Stream.VALUES))),
+                                new Call("cast_bigint_to_integer", List.of(new Reference(new Input(0), Stream.VALUES))),
                                 AllMask.ALL),
                         new Assignment(zero, new Literal(0L), AllMask.ALL),
                         new Assignment(

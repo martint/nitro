@@ -5677,7 +5677,7 @@ final class TpcdsParquetSupport
         return new ProjectOperator(
                 allocator,
                 new EvaluationPlan(
-                        List.of(new Assignment(zipKey, new Call("parse_utf8_long", List.of(
+                        List.of(new Assignment(zipKey, new Call("cast_varchar_to_bigint", List.of(
                                 new Reference(new Input(3), Stream.VALUES))), AllMask.ALL)),
                         List.of(
                                 new Reference(new Input(0), Stream.VALUES),
@@ -5726,7 +5726,7 @@ final class TpcdsParquetSupport
         return new ProjectOperator(
                 allocator,
                 new EvaluationPlan(
-                        List.of(new Assignment(zipKey, new Call("parse_utf8_long", List.of(
+                        List.of(new Assignment(zipKey, new Call("cast_varchar_to_bigint", List.of(
                                 new Reference(new Input(1), Stream.VALUES))), AllMask.ALL)),
                         List.of(
                                 new Reference(new Input(0), Stream.VALUES),
@@ -5743,7 +5743,7 @@ final class TpcdsParquetSupport
                 allocator,
                 new EvaluationPlan(
                         List.of(
-                                new Assignment(zipKey, new Call("parse_utf8_long", List.of(
+                                new Assignment(zipKey, new Call("cast_varchar_to_bigint", List.of(
                                         new Reference(new Input(1), Stream.VALUES))), AllMask.ALL),
                                 new Assignment(upperCountry, new Call("upper_utf8", List.of(
                                         new Reference(new Input(3), Stream.VALUES))), AllMask.ALL)),
@@ -10685,7 +10685,7 @@ final class TpcdsParquetSupport
                         new Reference(groupIdIsZero, Stream.VALUES),
                         new Reference(two, Stream.VALUES),
                         new Reference(stateSubtotalHierarchy, Stream.VALUES))), AllMask.ALL),
-                new Assignment(hierarchy, new Call("narrow_long_carrier_to_int32_exact", List.of(
+                new Assignment(hierarchy, new Call("cast_bigint_to_integer", List.of(
                         new Reference(hierarchyLong, Stream.VALUES))), AllMask.ALL),
                 new Assignment(sentinel, new Literal(NULLS_LAST_SENTINEL_STRING), AllMask.ALL),
                 new Assignment(stateForRank, new Call("if_utf8", List.of(
@@ -10834,7 +10834,7 @@ final class TpcdsParquetSupport
                         new Reference(groupIdIsZero, Stream.VALUES),
                         new Reference(two, Stream.VALUES),
                         new Reference(classSubtotalHierarchy, Stream.VALUES))), AllMask.ALL),
-                new Assignment(hierarchy, new Call("narrow_long_carrier_to_int32_exact", List.of(
+                new Assignment(hierarchy, new Call("cast_bigint_to_integer", List.of(
                         new Reference(hierarchyLong, Stream.VALUES))), AllMask.ALL),
                 new Assignment(sentinel, new Literal(NULLS_LAST_SENTINEL_STRING), AllMask.ALL),
                 new Assignment(categoryForRank, new Call("if_utf8", List.of(
@@ -10892,7 +10892,7 @@ final class TpcdsParquetSupport
                         new Reference(groupIdIsZero, Stream.VALUES),
                         new Reference(two, Stream.VALUES),
                         new Reference(classSubtotalHierarchy, Stream.VALUES))), AllMask.ALL),
-                new Assignment(hierarchy, new Call("narrow_long_carrier_to_int32_exact", List.of(
+                new Assignment(hierarchy, new Call("cast_bigint_to_integer", List.of(
                         new Reference(hierarchyLong, Stream.VALUES))), AllMask.ALL),
                 new Assignment(sentinel, new Literal(NULLS_LAST_SENTINEL_STRING), AllMask.ALL),
                 new Assignment(categoryForRank, new Call("if_utf8", List.of(

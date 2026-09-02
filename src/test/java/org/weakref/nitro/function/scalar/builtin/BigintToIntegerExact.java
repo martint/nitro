@@ -31,11 +31,11 @@ import static com.google.common.base.Preconditions.checkArgument;
 import static java.lang.Math.toIntExact;
 
 /** Checked physical narrowing used by legacy operator benchmarks; logical cast selection belongs to a registry. */
-@ScalarFunction(name = "narrow_long_carrier_to_int32_exact")
-public final class NarrowLongCarrierToInt32Exact
+@ScalarFunction(name = "cast_bigint_to_integer")
+public final class BigintToIntegerExact
         implements PrimitiveFunction
 {
-    private final Allocator.Context allocationContext = new Allocator.Context("NarrowLongCarrierToInt32Exact");
+    private final Allocator.Context allocationContext = new Allocator.Context("BigintToIntegerExact");
 
     @Override
     public Set<Allocator.Context> allocationContexts()
@@ -55,7 +55,7 @@ public final class NarrowLongCarrierToInt32Exact
     @Override
     public Streams apply(List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
     {
-        checkArgument(inputs.size() == 1, "Unexpected argument count for narrow_long_carrier_to_int32_exact");
+        checkArgument(inputs.size() == 1, "Unexpected argument count for cast_bigint_to_integer");
         if (!requestedStreams.contains(Stream.VALUES) && !requestedStreams.contains(Stream.NULLS)) {
             return Streams.empty();
         }
