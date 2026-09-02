@@ -172,6 +172,7 @@ public final class SortSession
         }
 
         stableSort(orderedSlots, sortScratch, slotCount);
+        releaseSortWorkspace();
         state.setOrderedSlots(orderedSlots, slotCount);
         Mask outputMask = allocator.allocateRangeMask(allocationContext, 0, slotCount);
         Output[] outputs = new Output[outputSchema.size()];
@@ -199,19 +200,19 @@ public final class SortSession
         int capacity = Math.max(required, Math.max(256, orderedSlots.length * 2));
         int[] oldOrdered = orderedSlots;
         int[] oldScratch = sortScratch;
-        long[] oldKeys = sortKeys;
         orderedSlots = arrayPool.borrowInts(capacity);
         sortScratch = arrayPool.borrowInts(capacity);
-        sortKeys = arrayPool.borrowLongs(capacity);
         System.arraycopy(oldOrdered, 0, orderedSlots, 0, Math.min(oldOrdered.length, required));
         arrayPool.release(oldOrdered);
         arrayPool.release(oldScratch);
-        arrayPool.release(oldKeys);
     }
 
     private void stableSort(int[] values, int[] scratch, int count)
     {
         if (state.hasSingleFixedWidthNonNullOrdering(count)) {
+            if (NarrowRangeSort.trySort(arrayPool, policy.countingSortMaxRange(), values, scratch, count, state)) {
+                return;
+            }
             radixSort(values, scratch, count);
             return;
         }
@@ -219,8 +220,19 @@ public final class SortSession
         IntArrays.mergeSort(values, 0, count, (left, right) -> state.compareSlots(right, left), scratch);
     }
 
+    private void releaseSortWorkspace()
+    {
+        arrayPool.release(sortScratch);
+        arrayPool.release(sortKeys);
+        arrayPool.release(radixCounts);
+        sortScratch = new int[0];
+        sortKeys = new long[0];
+        radixCounts = new int[0];
+    }
+
     private void radixSort(int[] values, int[] scratch, int count)
     {
+        sortKeys = arrayPool.borrowLongs(values.length);
         if (radixCounts.length == 0) {
             radixCounts = arrayPool.borrowInts(256);
         }

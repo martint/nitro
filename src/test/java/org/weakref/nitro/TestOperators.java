@@ -72,6 +72,7 @@ import org.weakref.nitro.operator.GroupOperator;
 import org.weakref.nitro.operator.GroupedAggregationOperator;
 import org.weakref.nitro.operator.HashJoinExecutionPolicy;
 import org.weakref.nitro.operator.HashJoinOperator;
+import org.weakref.nitro.operator.JoinBufferPolicy;
 import org.weakref.nitro.operator.JoinSessionOperator;
 import org.weakref.nitro.operator.LimitOperator;
 import org.weakref.nitro.operator.MarkDistinctMarkerOperator;
@@ -93,6 +94,7 @@ import org.weakref.nitro.operator.RankingWindowFunction;
 import org.weakref.nitro.operator.SelectedPositionWindowFunction;
 import org.weakref.nitro.operator.SemiJoinOperator;
 import org.weakref.nitro.operator.SortOperator;
+import org.weakref.nitro.operator.SortOperatorPolicy;
 import org.weakref.nitro.operator.StaticFilterEnforcement;
 import org.weakref.nitro.operator.TableOperator;
 import org.weakref.nitro.operator.TopNOperator;
@@ -816,6 +818,39 @@ public class TestOperators
                         row(2.0, 10L),
                         row(2.0, 30L),
                         row(1.0, 20L)));
+    }
+
+    @Test
+    void testSortOperatorUsesLessWorkspaceForNarrowKeyRange()
+    {
+        long countingSortBytes = sortWorkspaceBytes(new SortOperatorPolicy(true, 8, 3));
+        long radixSortBytes = sortWorkspaceBytes(new SortOperatorPolicy(true, 8, 0));
+
+        assertThat(countingSortBytes).isLessThan(radixSortBytes);
+    }
+
+    private static long sortWorkspaceBytes(SortOperatorPolicy policy)
+    {
+        try (EngineResources resources = EngineResources.createDefault(0);
+                Allocator allocator = new Allocator(resources)) {
+            long initialBytes = resources.primitiveArrays().allocatedBytes();
+            assertThat(operator(new SortOperator(
+                    allocator,
+                    new int[] {0},
+                    new boolean[] {true},
+                    new ConstantTableOperator(
+                            allocator,
+                            2,
+                            List.of(row(0L, 10L), row(-1L, 20L), row(0L, 30L), row(1L, 40L))),
+                    policy,
+                    JoinBufferPolicy.defaults())))
+                    .matchesExactly(List.of(
+                            row(1L, 40L),
+                            row(0L, 10L),
+                            row(0L, 30L),
+                            row(-1L, 20L)));
+            return resources.primitiveArrays().allocatedBytes() - initialBytes;
+        }
     }
 
     @Test
@@ -7010,7 +7045,8 @@ public class TestOperators
                 new boolean[] {false},
                 new ConstantTableOperator(allocator, 1, List.of(row(3L), row(1L), row(2L))))) {
             try (Batch ignored = sort.next()) {
-                assertThat(allocator.currentBytes(sortContext)).isGreaterThan(4_000);
+                assertThat(allocator.currentBytes(sortContext)).isPositive();
+                assertThat(allocator.currentBytes(sortContext)).isLessThan(allocator.peakBytes(sortContext));
             }
         }
         assertThat(allocator.currentBytes(sortContext)).isZero();

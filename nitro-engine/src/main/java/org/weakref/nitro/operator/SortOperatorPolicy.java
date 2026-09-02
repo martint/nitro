@@ -17,11 +17,21 @@ package org.weakref.nitro.operator;
 ///
 /// The property-backed factory is a standalone composition adapter. Sort operators receive one immutable policy
 /// from their resource owner and never consult process-global configuration.
-public record SortOperatorPolicy(boolean columnarBuffer, int columnarBufferMaxColumns)
+public record SortOperatorPolicy(boolean columnarBuffer, int columnarBufferMaxColumns, int countingSortMaxRange)
 {
+    public SortOperatorPolicy
+    {
+        if (columnarBufferMaxColumns < 0) {
+            throw new IllegalArgumentException("columnarBufferMaxColumns is negative");
+        }
+        if (countingSortMaxRange < 0) {
+            throw new IllegalArgumentException("countingSortMaxRange is negative");
+        }
+    }
+
     public static SortOperatorPolicy defaults()
     {
-        return new SortOperatorPolicy(true, 8);
+        return new SortOperatorPolicy(true, 8, 1 << 16);
     }
 
     public static SortOperatorPolicy fromSystemProperties()
@@ -33,6 +43,9 @@ public record SortOperatorPolicy(boolean columnarBuffer, int columnarBufferMaxCo
                         Boolean.toString(defaults.columnarBuffer()))),
                 Integer.getInteger(
                         "nitro.sort.columnarBufferMaxColumns",
-                        defaults.columnarBufferMaxColumns()));
+                        defaults.columnarBufferMaxColumns()),
+                Integer.getInteger(
+                        "nitro.sort.countingSortMaxRange",
+                        defaults.countingSortMaxRange()));
     }
 }

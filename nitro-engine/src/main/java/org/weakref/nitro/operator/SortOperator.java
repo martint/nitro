@@ -235,6 +235,7 @@ public class SortOperator
             state.prepareEmptyOutputSchema();
         }
         stableSort(orderedSlots, sortScratch, slotCount);
+        releaseSortWorkspace();
         state.setOrderedSlots(orderedSlots, slotCount);
         done = true;
         return allocator.allocateRangeMask(allocationContext, 0, slotCount);
@@ -250,18 +251,18 @@ public class SortOperator
         int[] oldScratch = sortScratch;
         orderedSlots = arrayPool.borrowInts(capacity);
         sortScratch = arrayPool.borrowInts(capacity);
-        long[] oldKeys = sortKeys;
-        sortKeys = arrayPool.borrowLongs(capacity);
         System.arraycopy(oldOrdered, 0, orderedSlots, 0, Math.min(oldOrdered.length, required));
         arrayPool.release(oldOrdered);
         arrayPool.release(oldScratch);
-        arrayPool.release(oldKeys);
         accountRetainedArrays();
     }
 
     private void stableSort(int[] values, int[] scratch, int count)
     {
         if (state.hasSingleFixedWidthNonNullOrdering(count)) {
+            if (NarrowRangeSort.trySort(arrayPool, policy.countingSortMaxRange(), values, scratch, count, state)) {
+                return;
+            }
             radixSort(values, scratch, count);
             return;
         }
@@ -269,8 +270,21 @@ public class SortOperator
         IntArrays.mergeSort(values, 0, count, (left, right) -> state.compareSlots(right, left), scratch);
     }
 
+    private void releaseSortWorkspace()
+    {
+        arrayPool.release(sortScratch);
+        arrayPool.release(sortKeys);
+        arrayPool.release(radixCounts);
+        sortScratch = new int[0];
+        sortKeys = new long[0];
+        radixCounts = new int[0];
+        accountRetainedArrays();
+    }
+
     private void radixSort(int[] values, int[] scratch, int count)
     {
+        sortKeys = arrayPool.borrowLongs(values.length);
+        accountRetainedArrays();
         if (radixCounts.length == 0) {
             radixCounts = arrayPool.borrowInts(256);
             accountRetainedArrays();
