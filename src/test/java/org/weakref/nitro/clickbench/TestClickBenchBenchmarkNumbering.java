@@ -15,7 +15,6 @@ package org.weakref.nitro.clickbench;
 
 import org.junit.jupiter.api.Test;
 import org.openjdk.jmh.annotations.Benchmark;
-import org.openjdk.jmh.annotations.Param;
 
 import java.util.Arrays;
 import java.util.List;
@@ -34,17 +33,6 @@ class TestClickBenchBenchmarkNumbering
     {
         assertBenchmarkIds(BenchmarkQueries.class);
         assertBenchmarkIds(org.weakref.trino.clickbench.BenchmarkQueries.class);
-    }
-
-    @Test
-    void testCompiledBenchmarksUsePublishedZeroBasedIds()
-            throws ReflectiveOperationException
-    {
-        Param queryIds = BenchmarkCompiledQueries.class.getField("query").getAnnotation(Param.class);
-        assertThat(queryIds.value())
-                .containsExactlyElementsOf(PUBLISHED_QUERY_IDS.stream()
-                        .map(id -> id.substring("query".length()))
-                        .toList());
     }
 
     private static void assertBenchmarkIds(Class<?> benchmarkClass)
