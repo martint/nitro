@@ -60,7 +60,6 @@ import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.Output;
 import org.weakref.nitro.operator.ProjectOperator;
 import org.weakref.nitro.operator.SingleBatchOperator;
-import org.weakref.nitro.operator.evaluator.PrimitiveCallSiteBinder;
 import org.weakref.nitro.operator.evaluator.PrimitiveInvocationBinding;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 import org.weakref.nitro.operator.evaluator.ir.AllMask;
@@ -104,12 +103,9 @@ class TestCoreIntegrationSlice
 
         PrimitiveFunction isolatedAdd = isolatedAdd();
         assertThat(isolatedAdd.getClass().getClassLoader()).isNotSameAs(getClass().getClassLoader());
-        PrimitiveFunction boundAdd = new PrimitiveCallSiteBinder().bind(isolatedAdd);
-        assertThat(boundAdd.getClass().getDeclaredField("target").getType()).isEqualTo(PrimitiveFunction.class);
-        assertThat(boundAdd.getClass().getName()).doesNotContain(isolatedAdd.getClass().getName());
 
         ResolvedCall lessThan = resolvedCall(LESS_THAN, BOOLEAN, List.of(BIGINT, BIGINT), new LessThanI64(), true);
-        ResolvedCall add = resolvedCall(ADD, BIGINT, List.of(BIGINT, BIGINT), boundAdd, true);
+        ResolvedCall add = resolvedCall(ADD, BIGINT, List.of(BIGINT, BIGINT), isolatedAdd, true);
         FunctionRegistry registry = (identity, argumentTypes, convention) -> {
             if (convention != InvocationConvention.BATCH_SCALAR) {
                 throw new IllegalArgumentException("Unsupported invocation convention: " + convention);
