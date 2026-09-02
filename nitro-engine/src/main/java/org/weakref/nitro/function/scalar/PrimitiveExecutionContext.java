@@ -17,7 +17,9 @@ import org.weakref.nitro.data.Allocator;
 
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.Map;
+import java.util.function.Supplier;
 
 import static java.util.Objects.requireNonNull;
 
@@ -25,6 +27,7 @@ public final class PrimitiveExecutionContext
 {
     private final Allocator allocator;
     private final Map<String, Allocator.Context> allocationContexts = new HashMap<>();
+    private final Map<Object, Object> states = new IdentityHashMap<>();
 
     public PrimitiveExecutionContext(Allocator allocator)
     {
@@ -44,5 +47,19 @@ public final class PrimitiveExecutionContext
     public Collection<Allocator.Context> allocationContexts()
     {
         return allocationContexts.values();
+    }
+
+    /// Returns invocation-local reusable state for an immutable function implementation.
+    ///
+    /// The execution context is evaluator-owned and thread-confined. Function implementations use
+    /// identity keys so unrelated providers cannot collide and steady-state calls do not allocate
+    /// temporary argument arrays or other batch scaffolding.
+    public <T> T state(Object key, Supplier<T> factory)
+    {
+        requireNonNull(key, "key is null");
+        requireNonNull(factory, "factory is null");
+        @SuppressWarnings("unchecked")
+        T state = (T) states.computeIfAbsent(key, _ -> requireNonNull(factory.get(), "factory returned null"));
+        return state;
     }
 }
