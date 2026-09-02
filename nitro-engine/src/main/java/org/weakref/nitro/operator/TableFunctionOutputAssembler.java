@@ -18,6 +18,7 @@ import org.weakref.nitro.core.batch.Selection;
 import org.weakref.nitro.core.function.table.TableFunctionOutputBatch;
 import org.weakref.nitro.core.function.table.TableFunctionPassThroughColumn;
 import org.weakref.nitro.core.type.Schema;
+import org.weakref.nitro.core.type.TypeVectorFactory;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.Mask;
@@ -271,39 +272,75 @@ final class TableFunctionOutputAssembler
         private Streams gather()
         {
             int size = selection.positionCount();
+            TypeVectorFactory vectorFactory = schema.field(outputColumn).type().vectorFactory()
+                    .orElseThrow(() -> new IllegalArgumentException("pass-through type has no vector factory"));
             Streams result = WindowValueCopySupport.mutableNullOutput(
-                    schema.field(outputColumn).type().vectorFactory()
-                            .orElseThrow(() -> new IllegalArgumentException("pass-through type has no vector factory")),
+                    vectorFactory,
                     allocator,
                     context,
                     size);
             BooleanVector errors = allocator.allocate(context, BooleanVector.class, size, BooleanVector::new);
             result = allocator.reuseOrCreateStreams(result, result.values(), result.get(Stream.NULLS), errors);
 
-            for (int index = 0; index < selection.count(); index++) {
-                int outputPosition = selection.position(index);
-                if (OperatorVectorSupport.isNull(reference.getOrNull(Stream.NULLS), outputPosition)) {
-                    continue;
+            Vector nullPlaceholder = result.values().requiresMonotonicOutputWrites()
+                    ? vectorFactory.nullValues(allocator.vectorAllocator(context), 1)
+                    : null;
+            try {
+                Streams nullSource = nullPlaceholder == null ? null : Streams.ofValues(nullPlaceholder);
+                int nextMonotonicPosition = 0;
+                for (int index = 0; index < selection.count(); index++) {
+                    int outputPosition = selection.position(index);
+                    while (nullSource != null && nextMonotonicPosition < outputPosition) {
+                        result = allocator.copyNullPositionInto(
+                                context,
+                                nullSource,
+                                result,
+                                0,
+                                nextMonotonicPosition++,
+                                size);
+                    }
+                    if (OperatorVectorSupport.isNull(reference.getOrNull(Stream.NULLS), outputPosition)) {
+                        if (nullSource != null) {
+                            result = allocator.copyNullPositionInto(context, nullSource, result, 0, outputPosition, size);
+                            nextMonotonicPosition = outputPosition + 1;
+                        }
+                        continue;
+                    }
+                    Vector referenceErrors = reference.getOrNull(Stream.ERRORS);
+                    if (referenceErrors != null && OperatorVectorSupport.booleanValue(referenceErrors, outputPosition)) {
+                        throw new IllegalArgumentException("pass-through row reference is an error");
+                    }
+                    long relativePosition = OperatorVectorSupport.longValue(reference.values(), outputPosition);
+                    long sourcePosition = (long) partitionStart + relativePosition;
+                    if (relativePosition < 0 || sourcePosition >= partitionEnd) {
+                        throw new IllegalArgumentException("pass-through row reference is outside its partition");
+                    }
+                    int position = toIntExact(sourcePosition);
+                    result = allocator.copySinglePositionInto(
+                            context,
+                            argument.column(inputColumn, position),
+                            result,
+                            argument.sourcePosition(position),
+                            outputPosition,
+                            size);
+                    nextMonotonicPosition = outputPosition + 1;
                 }
-                Vector referenceErrors = reference.getOrNull(Stream.ERRORS);
-                if (referenceErrors != null && OperatorVectorSupport.booleanValue(referenceErrors, outputPosition)) {
-                    throw new IllegalArgumentException("pass-through row reference is an error");
+                while (nullSource != null && nextMonotonicPosition < size) {
+                    result = allocator.copyNullPositionInto(
+                            context,
+                            nullSource,
+                            result,
+                            0,
+                            nextMonotonicPosition++,
+                            size);
                 }
-                long relativePosition = OperatorVectorSupport.longValue(reference.values(), outputPosition);
-                long sourcePosition = (long) partitionStart + relativePosition;
-                if (relativePosition < 0 || sourcePosition >= partitionEnd) {
-                    throw new IllegalArgumentException("pass-through row reference is outside its partition");
-                }
-                int position = toIntExact(sourcePosition);
-                result = allocator.copySinglePositionInto(
-                        context,
-                        argument.column(inputColumn, position),
-                        result,
-                        argument.sourcePosition(position),
-                        outputPosition,
-                        size);
+                return result;
             }
-            return result;
+            finally {
+                if (nullPlaceholder != null) {
+                    allocator.release(context, nullPlaceholder);
+                }
+            }
         }
     }
 }

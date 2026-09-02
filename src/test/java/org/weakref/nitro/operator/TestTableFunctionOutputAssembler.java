@@ -27,12 +27,14 @@ import org.weakref.nitro.core.type.TypeIdentity;
 import org.weakref.nitro.core.type.TypeOperators;
 import org.weakref.nitro.core.type.TypeVectorFactory;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.ArrayVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.data.VectorAllocator;
 import org.weakref.nitro.data.VectorBatchScope;
 import org.weakref.nitro.data.VectorColumnGeneration;
 import org.weakref.nitro.data.VectorSourceBatch;
@@ -48,6 +50,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 final class TestTableFunctionOutputAssembler
 {
     private static final TypeBinding BIGINT = bigintType();
+    private static final TypeBinding ARRAY_BIGINT = arrayType(BIGINT);
     private static final Schema INPUT_SCHEMA = new Schema(List.of(new Field("input", BIGINT, true)));
     private static final Schema PROPER_OUTPUT_SCHEMA = new Schema(List.of(new Field("proper", BIGINT, true)));
     private static final Schema PHYSICAL_OUTPUT_SCHEMA = new Schema(List.of(
@@ -131,6 +134,47 @@ final class TestTableFunctionOutputAssembler
                 assertThat(result.borrowMask().selectedPositions()).containsExactly(0, 2);
                 assertThat(((I64Vector) result.output(1).borrow(Stream.VALUES)).values())
                         .containsExactly(33, 0, 11);
+            }
+        }
+    }
+
+    @Test
+    void testGathersNestedPassThroughValues()
+    {
+        Schema inputSchema = new Schema(List.of(new Field("input", ARRAY_BIGINT, true)));
+        Schema outputSchema = new Schema(List.of(
+                new Field("proper", BIGINT, true),
+                new Field("pass_through", ARRAY_BIGINT, true)));
+        ArrayVector input = new ArrayVector(4);
+        System.arraycopy(new int[] {0, 1, 3, 3, 6}, 0, input.offsets(), 0, 5);
+        input.setElements(Streams.ofValues(new I64Vector(new long[] {10, 20, 21, 40, 41, 42})));
+
+        try (Allocator allocator = new Allocator(EngineResources.createDefault());
+                EncodedRowBuffer rows = new EncodedRowBuffer(allocator, new Allocator.Context("rows"), 1)) {
+            rows.load(TableOperator.retained(
+                    inputSchema,
+                    List.of(TableOperator.Page.values(4, new Vector[] {input}, Mask.all(4)))));
+            TableFunctionOutputBatch output = output(
+                    allocator,
+                    new long[] {100, 200, 300},
+                    new long[] {2, 0, 1},
+                    new boolean[] {false, false, true},
+                    Mask.all(3));
+            TableFunctionOutputAssembler assembler = new TableFunctionOutputAssembler(
+                    allocator,
+                    outputSchema,
+                    1,
+                    List.of(new TableFunctionPassThroughColumn(0, 0)),
+                    List.of(new TableFunctionOutputAssembler.Argument(inputSchema, rows)),
+                    new int[] {1},
+                    new int[] {4});
+
+            try (Batch result = assembler.assemble(output)) {
+                ArrayVector arrays = (ArrayVector) result.output(1).borrow(Stream.VALUES);
+                assertThat(arrays.offsets()).containsExactly(0, 3, 5, 5);
+                assertThat(((I64Vector) arrays.elements().values()).values()).containsExactly(40, 41, 42, 20, 21);
+                assertThat(((BooleanVector) result.output(1).borrow(Stream.NULLS)).values())
+                        .containsExactly(false, false, true);
             }
         }
     }
@@ -229,15 +273,72 @@ final class TestTableFunctionOutputAssembler
                 return Optional.of(new TypeVectorFactory()
                 {
                     @Override
-                    public Vector constant(org.weakref.nitro.data.VectorAllocator allocator, Object value, int length)
+                    public Vector constant(VectorAllocator allocator, Object value, int length)
                     {
                         throw new UnsupportedOperationException();
                     }
 
                     @Override
-                    public Vector nullValues(org.weakref.nitro.data.VectorAllocator allocator, int length)
+                    public Vector nullValues(VectorAllocator allocator, int length)
                     {
                         return allocator.allocate(I64Vector.class, length, I64Vector::new);
+                    }
+                });
+            }
+        };
+    }
+
+    private static TypeBinding arrayType(TypeBinding elements)
+    {
+        return new TypeBinding()
+        {
+            @Override
+            public TypeIdentity identity()
+            {
+                return new TypeIdentity("testing:array(" + elements.identity().value() + ")");
+            }
+
+            @Override
+            public Class<?> carrierType()
+            {
+                return Object.class;
+            }
+
+            @Override
+            public TypeOperators operators()
+            {
+                return TypeOperators.UNSPECIFIED;
+            }
+
+            @Override
+            public List<TypeBinding> nestedValueTypes()
+            {
+                return List.of(elements);
+            }
+
+            @Override
+            public Set<Class<? extends Vector>> supportedVectorTypes()
+            {
+                return Set.of(ArrayVector.class);
+            }
+
+            @Override
+            public Optional<TypeVectorFactory> vectorFactory()
+            {
+                return Optional.of(new TypeVectorFactory()
+                {
+                    @Override
+                    public Vector constant(VectorAllocator allocator, Object value, int length)
+                    {
+                        throw new UnsupportedOperationException();
+                    }
+
+                    @Override
+                    public Vector nullValues(VectorAllocator allocator, int length)
+                    {
+                        ArrayVector arrays = allocator.allocate(ArrayVector.class, length, ArrayVector::new);
+                        arrays.setElements(Streams.ofValues(elements.vectorFactory().orElseThrow().nullValues(allocator, 0)));
+                        return arrays;
                     }
                 });
             }
