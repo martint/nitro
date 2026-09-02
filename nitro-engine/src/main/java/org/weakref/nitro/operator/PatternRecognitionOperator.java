@@ -220,12 +220,12 @@ public final class PatternRecognitionOperator
         if (loaded) {
             return;
         }
-        loaded = true;
         rows.load(source);
         PatternDefinitionEvaluator evaluator = new PatternDefinitionEvaluator(rows, definitions);
         search = new PatternSearch(
                 new PatternMatcher(PatternCompiler.compile(pattern), allocator.primitiveArrays()),
                 evaluator);
+        loaded = true;
     }
 
     private boolean startPartition()

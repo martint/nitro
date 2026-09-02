@@ -22,7 +22,10 @@ import org.weakref.nitro.core.execution.ExecutionSuspension;
 import org.weakref.nitro.core.execution.MemoryReservation;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.I64Vector;
+import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
+import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.execution.EngineResources;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
@@ -85,6 +88,72 @@ final class TestPatternRecognitionOperator
                 assertThatThrownBy(operator::hasNext).isInstanceOf(ExecutionSuspension.class);
                 assertThat(OperatorAssertions.OperatorAssert.toRows(operator))
                         .containsExactly(row(7L, 1L), row(8L, 2L), row(9L, 3L));
+            }
+        }
+    }
+
+    @Test
+    void testResumesInputLoadingAfterExecutionSuspension()
+    {
+        try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
+            Operator delegate = new TableOperator(
+                    1,
+                    List.of(
+                            TableOperator.Page.values(1, new Vector[] {new I64Vector(new long[] {7})}, Mask.all(1)),
+                            TableOperator.Page.values(1, new Vector[] {new I64Vector(new long[] {8})}, Mask.all(1))));
+            Operator source = new Operator()
+            {
+                private int hasNextCalls;
+
+                @Override
+                public int outputCount()
+                {
+                    return delegate.outputCount();
+                }
+
+                @Override
+                public Schema outputSchema()
+                {
+                    return delegate.outputSchema();
+                }
+
+                @Override
+                public boolean hasNext()
+                {
+                    if (++hasNextCalls == 2) {
+                        throw ExecutionSuspension.yield();
+                    }
+                    return delegate.hasNext();
+                }
+
+                @Override
+                public Batch next()
+                {
+                    return delegate.next();
+                }
+
+                @Override
+                public void constrain(Mask mask)
+                {
+                    delegate.constrain(mask);
+                }
+
+                @Override
+                public void close()
+                {
+                    delegate.close();
+                }
+            };
+
+            try (Operator operator = operator(
+                    allocator,
+                    new TestingExecutionContext(),
+                    source,
+                    new PatternExpression.Label(0),
+                    4)) {
+                assertThatThrownBy(operator::hasNext).isSameAs(ExecutionSuspension.yield());
+                assertThat(OperatorAssertions.OperatorAssert.toRows(operator))
+                        .containsExactly(row(7L, 1L), row(8L, 2L));
             }
         }
     }
