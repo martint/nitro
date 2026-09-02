@@ -22,7 +22,7 @@ import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.execution.EngineResources;
-import org.weakref.nitro.function.scalar.builtin.CastI64ToI64;
+import org.weakref.nitro.function.scalar.builtin.MaterializeLongCarrier;
 import org.weakref.nitro.operator.AdaptiveSqlPartialAggregationOperator;
 import org.weakref.nitro.operator.AggregationOperator;
 import org.weakref.nitro.operator.Batch;
@@ -410,13 +410,13 @@ public final class ClickBenchHitsSupport
     {
         Operator scan = profiled(profile, "q10.scan", clickBenchScan(allocator, file, "RegionID", "AdvEngineID", "ResolutionWidth", "UserID"));
         PrimitiveRegistry primitiveRegistry = new PrimitiveRegistry();
-        primitiveRegistry.register("cast_i64_to_i64", new CastI64ToI64());
+        primitiveRegistry.register("materialize_long_carrier", new MaterializeLongCarrier());
         Variable advEngineId = new Variable(0);
         Variable resolutionWidth = new Variable(1);
         EvaluationPlan projection = new EvaluationPlan(
                 List.of(
-                        new Assignment(advEngineId, new Call("cast_i64_to_i64", List.of(new Reference(new Input(1), Stream.VALUES))), AllMask.ALL),
-                        new Assignment(resolutionWidth, new Call("cast_i64_to_i64", List.of(new Reference(new Input(2), Stream.VALUES))), AllMask.ALL)),
+                        new Assignment(advEngineId, new Call("materialize_long_carrier", List.of(new Reference(new Input(1), Stream.VALUES))), AllMask.ALL),
+                        new Assignment(resolutionWidth, new Call("materialize_long_carrier", List.of(new Reference(new Input(2), Stream.VALUES))), AllMask.ALL)),
                 List.of(
                         new Reference(new Input(0), Stream.VALUES),
                         new Reference(advEngineId, Stream.VALUES),

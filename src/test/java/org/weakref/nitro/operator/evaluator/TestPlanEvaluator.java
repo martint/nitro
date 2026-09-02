@@ -1607,13 +1607,13 @@ public class TestPlanEvaluator
     }
 
     @Test
-    void testCastUtf8ToI64ParsesSignedDigits()
+    void testParseUtf8LongParsesSignedDigits()
     {
         Variable cast = new Variable(0);
         EvaluationPlan plan = new EvaluationPlan(
                 List.of(new Assignment(
                         cast,
-                        new Call("cast_utf8_to_i64", List.of(new Reference(new Input(0), Stream.VALUES))),
+                        new Call("parse_utf8_long", List.of(new Reference(new Input(0), Stream.VALUES))),
                         AllMask.ALL)),
                 List.of(
                         new Reference(cast, Stream.VALUES),
@@ -3418,13 +3418,13 @@ public class TestPlanEvaluator
     }
 
     @Test
-    void testCastI64ToI32ProjectsDictionaryEncodedValues()
+    void testNarrowLongCarrierToInt32ExactProjectsDictionaryEncodedValues()
     {
         Variable castValue = new Variable(0);
         EvaluationPlan plan = new EvaluationPlan(
                 List.of(new Assignment(
                         castValue,
-                        new Call("cast_i64_to_i32", List.of(new Reference(new Input(0), Stream.VALUES))),
+                        new Call("narrow_long_carrier_to_int32_exact", List.of(new Reference(new Input(0), Stream.VALUES))),
                         AllMask.ALL)),
                 List.of(new Reference(castValue, Stream.VALUES)));
 
@@ -3452,13 +3452,13 @@ public class TestPlanEvaluator
     }
 
     @Test
-    void testCastI64ToI64ProjectsDictionaryEncodedValues()
+    void testMaterializeLongCarrierProjectsDictionaryEncodedValues()
     {
         Variable castValue = new Variable(0);
         EvaluationPlan plan = new EvaluationPlan(
                 List.of(new Assignment(
                         castValue,
-                        new Call("cast_i64_to_i64", List.of(new Reference(new Input(0), Stream.VALUES))),
+                        new Call("materialize_long_carrier", List.of(new Reference(new Input(0), Stream.VALUES))),
                         AllMask.ALL)),
                 List.of(new Reference(castValue, Stream.VALUES)));
 
@@ -3481,7 +3481,7 @@ public class TestPlanEvaluator
     }
 
     @Test
-    void testCastI64ToI32DoesNotRequestInputNullsWhenOnlyValuesAreNeeded()
+    void testNarrowLongCarrierToInt32ExactDoesNotRequestInputNullsWhenOnlyValuesAreNeeded()
     {
         Variable castValue = new Variable(0);
         Variable zero = new Variable(1);
@@ -3490,7 +3490,7 @@ public class TestPlanEvaluator
                 List.of(
                         new Assignment(
                                 castValue,
-                                new Call("cast_i64_to_i32", List.of(new Reference(new Input(0), Stream.VALUES))),
+                                new Call("narrow_long_carrier_to_int32_exact", List.of(new Reference(new Input(0), Stream.VALUES))),
                                 AllMask.ALL),
                         new Assignment(zero, new Literal(0L), AllMask.ALL),
                         new Assignment(
@@ -3509,7 +3509,7 @@ public class TestPlanEvaluator
                 (reference, mask) -> {
                     if (reference.equals(new Reference(new Input(0), Stream.NULLS))) {
                         requestedNulls.set(true);
-                        throw new AssertionError("cast_i64_to_i32 should not request input nulls for values-only output");
+                        throw new AssertionError("narrowing should not request input nulls for values-only output");
                     }
                     if (reference.equals(new Reference(new Input(0), Stream.VALUES))) {
                         return values;

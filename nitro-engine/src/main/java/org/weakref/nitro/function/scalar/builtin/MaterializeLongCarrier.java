@@ -30,12 +30,11 @@ import java.util.Set;
 import static com.google.common.base.Preconditions.checkArgument;
 
 /**
- * Copies an integral long-carrier value without changing its numeric value.
- * Logical registries use this for exact widening conversions between domains
- * that share Nitro's long carrier.
+ * Materializes any vector exposing long-carrier values into a flat {@link I64Vector}.
+ * This is a physical test/benchmark primitive, not a logical cast.
  */
-@ScalarFunction(name = "cast_i64_to_i64")
-public final class CastI64ToI64
+@ScalarFunction(name = "materialize_long_carrier")
+public final class MaterializeLongCarrier
         implements PrimitiveFunction
 {
     @Override
@@ -47,14 +46,14 @@ public final class CastI64ToI64
     @Override
     public Streams apply(List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
     {
-        checkArgument(inputs.size() == 1, "Unexpected argument count for cast_i64_to_i64");
+        checkArgument(inputs.size() == 1, "Unexpected argument count for materialize_long_carrier");
         boolean requestValues = requestedStreams.contains(Stream.VALUES);
         boolean requestNulls = requestedStreams.contains(Stream.NULLS);
         if (!requestValues && !requestNulls) {
             return Streams.empty();
         }
 
-        Allocator.Context allocationContext = context.allocationContext("CastI64ToI64");
+        Allocator.Context allocationContext = context.allocationContext("MaterializeLongCarrier");
         int requiredLength = Math.max(mask.maxPosition() + 1, inputs.getFirst().values().length());
         Streams result = Streams.empty();
 

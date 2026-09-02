@@ -30,11 +30,12 @@ import java.util.Set;
 import static com.google.common.base.Preconditions.checkArgument;
 import static java.lang.Math.toIntExact;
 
-@ScalarFunction(name = "cast_i64_to_i32")
-public final class CastI64ToI32
+/** Checked physical narrowing used by legacy operator benchmarks; logical cast selection belongs to a registry. */
+@ScalarFunction(name = "narrow_long_carrier_to_int32_exact")
+public final class NarrowLongCarrierToInt32Exact
         implements PrimitiveFunction
 {
-    private final Allocator.Context allocationContext = new Allocator.Context("CastI64ToI32");
+    private final Allocator.Context allocationContext = new Allocator.Context("NarrowLongCarrierToInt32Exact");
 
     @Override
     public Set<Allocator.Context> allocationContexts()
@@ -54,7 +55,7 @@ public final class CastI64ToI32
     @Override
     public Streams apply(List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
     {
-        checkArgument(inputs.size() == 1, "Unexpected argument count for cast_i64_to_i32");
+        checkArgument(inputs.size() == 1, "Unexpected argument count for narrow_long_carrier_to_int32_exact");
         if (!requestedStreams.contains(Stream.VALUES) && !requestedStreams.contains(Stream.NULLS)) {
             return Streams.empty();
         }

@@ -55,7 +55,7 @@ import org.weakref.nitro.execution.EngineResources;
 import org.weakref.nitro.function.scalar.PrimitiveExecutionContext;
 import org.weakref.nitro.function.scalar.PrimitiveFunction;
 import org.weakref.nitro.function.scalar.builtin.Cardinality;
-import org.weakref.nitro.function.scalar.builtin.CastI64ToI64;
+import org.weakref.nitro.function.scalar.builtin.MaterializeLongCarrier;
 import org.weakref.nitro.jit.FusedProjectionCompiler;
 import org.weakref.nitro.operator.AggregationOperator;
 import org.weakref.nitro.operator.Batch;
@@ -2024,7 +2024,7 @@ public class TestOperators
     void testFusedProjectionMaterializesUnsupportedSharedInputOnce()
     {
         PrimitiveRegistry registry = primitiveRegistry();
-        registry.register("boundary", new CastI64ToI64());
+        registry.register("boundary", new MaterializeLongCarrier());
         Variable one = new Variable(0);
         Variable boundary = new Variable(1);
         Variable incremented = new Variable(2);
@@ -2115,7 +2115,7 @@ public class TestOperators
     void testFusedProjectionPreservesBoundaryComparison()
     {
         PrimitiveRegistry registry = primitiveRegistry();
-        registry.register("boundary", new CastI64ToI64());
+        registry.register("boundary", new MaterializeLongCarrier());
         Variable boundary = new Variable(0);
         Variable limit = new Variable(1);
         Variable condition = new Variable(2);

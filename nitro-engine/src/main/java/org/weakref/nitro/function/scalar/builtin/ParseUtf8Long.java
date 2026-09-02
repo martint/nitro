@@ -33,11 +33,12 @@ import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
-@ScalarFunction(name = "cast_utf8_to_i64")
-public final class CastUtf8ToI64
+/** Physical UTF-8 decimal parser used by legacy operator benchmarks; it does not select a logical SQL cast. */
+@ScalarFunction(name = "parse_utf8_long")
+public final class ParseUtf8Long
         implements PrimitiveFunction
 {
-    private final Allocator.Context allocationContext = new Allocator.Context("CastUtf8ToI64");
+    private final Allocator.Context allocationContext = new Allocator.Context("ParseUtf8Long");
 
     @Override
     public Set<Allocator.Context> allocationContexts()
@@ -54,7 +55,7 @@ public final class CastUtf8ToI64
     @Override
     public Streams apply(List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
     {
-        checkArgument(inputs.size() == 1, "Unexpected argument count for cast_utf8_to_i64");
+        checkArgument(inputs.size() == 1, "Unexpected argument count for parse_utf8_long");
 
         Vector values = inputs.getFirst().values();
         Vector inputNulls = inputs.getFirst().getOrNull(Stream.NULLS);
@@ -104,7 +105,7 @@ public final class CastUtf8ToI64
             case BinaryVector vector -> parse(vector.data(), vector.startOffset(position), vector.endOffset(position));
             case DictionaryVector vector -> parse(vector.values(), vector.ids()[position]);
             case RleVector vector -> parse(vector.values(), vector.runIndex(position));
-            default -> throw new IllegalArgumentException("Unsupported cast_utf8_to_i64 vector type: " + values.getClass().getSimpleName());
+            default -> throw new IllegalArgumentException("Unsupported parse_utf8_long vector type: " + values.getClass().getSimpleName());
         };
     }
 
