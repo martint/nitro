@@ -14,6 +14,7 @@
 package org.weakref.nitro.operator;
 
 import org.junit.jupiter.api.Test;
+import org.weakref.nitro.core.execution.ExecutionSuspension;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.DictionaryVector;
@@ -25,6 +26,7 @@ import org.weakref.nitro.execution.EngineResources;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 final class TestEncodedRowBuffer
 {
@@ -73,6 +75,69 @@ final class TestEncodedRowBuffer
             assertThat(rows.sourceSize(2)).isEqualTo(2);
             assertThat(rows.sharesSource(0, 1)).isTrue();
             assertThat(rows.sharesSource(1, 2)).isFalse();
+        }
+    }
+
+    @Test
+    void testResumesLoadingAfterExecutionSuspension()
+    {
+        Operator delegate = new TableOperator(
+                1,
+                List.of(
+                        TableOperator.Page.values(1, new I64Vector[] {new I64Vector(new long[] {11})}, Mask.all(1)),
+                        TableOperator.Page.values(1, new I64Vector[] {new I64Vector(new long[] {22})}, Mask.all(1))));
+        Operator source = new Operator()
+        {
+            private int hasNextCalls;
+
+            @Override
+            public int outputCount()
+            {
+                return delegate.outputCount();
+            }
+
+            @Override
+            public Schema outputSchema()
+            {
+                return delegate.outputSchema();
+            }
+
+            @Override
+            public boolean hasNext()
+            {
+                if (++hasNextCalls == 2) {
+                    throw ExecutionSuspension.yield();
+                }
+                return delegate.hasNext();
+            }
+
+            @Override
+            public Batch next()
+            {
+                return delegate.next();
+            }
+
+            @Override
+            public void constrain(Mask mask)
+            {
+                delegate.constrain(mask);
+            }
+
+            @Override
+            public void close()
+            {
+                delegate.close();
+            }
+        };
+
+        try (Allocator allocator = new Allocator(EngineResources.createDefault());
+                EncodedRowBuffer rows = new EncodedRowBuffer(allocator, new Allocator.Context("test"), 1)) {
+            assertThatThrownBy(() -> rows.load(source)).isSameAs(ExecutionSuspension.yield());
+
+            rows.load(source);
+            assertThat(rows.size()).isEqualTo(2);
+            assertThat(rows.longValue(0, 0)).isEqualTo(11);
+            assertThat(rows.longValue(0, 1)).isEqualTo(22);
         }
     }
 

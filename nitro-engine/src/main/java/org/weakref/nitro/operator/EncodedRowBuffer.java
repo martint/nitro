@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.core.execution.ExecutionSuspension;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
@@ -67,8 +68,6 @@ final class EncodedRowBuffer
         if (source.outputCount() != columnCount) {
             throw new IllegalArgumentException("source column count does not match row buffer");
         }
-        loaded = true;
-
         boolean retain = source.supportsRetainedBatches();
         try {
             while (source.hasNext()) {
@@ -84,6 +83,12 @@ final class EncodedRowBuffer
                     appendCopied(batch);
                 }
             }
+            loaded = true;
+        }
+        catch (ExecutionSuspension suspension) {
+            // Loading is incremental. A cooperative checkpoint in the source preserves every page already appended,
+            // so the caller can resume this same buffer when its driver is scheduled again.
+            throw suspension;
         }
         catch (RuntimeException | Error failure) {
             try {
