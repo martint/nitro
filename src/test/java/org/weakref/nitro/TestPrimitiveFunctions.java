@@ -27,7 +27,6 @@ import org.weakref.nitro.function.scalar.builtin.AddExactI64;
 import org.weakref.nitro.function.scalar.builtin.AddF64Optimization;
 import org.weakref.nitro.function.scalar.builtin.AddI64;
 import org.weakref.nitro.function.scalar.builtin.AndBoolean;
-import org.weakref.nitro.function.scalar.builtin.ArrayContainsI64;
 import org.weakref.nitro.function.scalar.builtin.ArrayElementI64;
 import org.weakref.nitro.function.scalar.builtin.ArrayMinI64;
 import org.weakref.nitro.function.scalar.builtin.ArraySumI64;
@@ -48,10 +47,8 @@ import org.weakref.nitro.function.scalar.builtin.EqualI64;
 import org.weakref.nitro.function.scalar.builtin.EqualUtf8;
 import org.weakref.nitro.function.scalar.builtin.GreaterThanF64;
 import org.weakref.nitro.function.scalar.builtin.GreaterThanOrEqualF64;
-import org.weakref.nitro.function.scalar.builtin.HashUtf8;
 import org.weakref.nitro.function.scalar.builtin.IdenticalI64;
 import org.weakref.nitro.function.scalar.builtin.IfF64;
-import org.weakref.nitro.function.scalar.builtin.IfI32;
 import org.weakref.nitro.function.scalar.builtin.IfI64;
 import org.weakref.nitro.function.scalar.builtin.IfUtf8;
 import org.weakref.nitro.function.scalar.builtin.InUtf8;
@@ -109,7 +106,6 @@ public final class TestPrimitiveFunctions
         Utf8BinaryDispatchPolicy utf8Policy = Utf8BinaryDispatchPolicy.fromSystemProperties();
         for (Class<?> functionClass : List.of(
                 AddI64.class,
-                ArrayContainsI64.class,
                 ArrayElementI64.class,
                 ArrayMinI64.class,
                 ArraySumI64.class,
@@ -131,9 +127,7 @@ public final class TestPrimitiveFunctions
                 LessThanOrEqualF64.class,
                 LessThanOrEqualI64.class,
                 LessThanOrEqualUtf8.class,
-                HashUtf8.class,
                 IfF64.class,
-                IfI32.class,
                 IfI64.class,
                 IfUtf8.class,
                 IdenticalI64.class,
