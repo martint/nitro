@@ -13,8 +13,15 @@
  */
 package org.weakref.nitro;
 
+import org.weakref.nitro.core.function.BoundSignature;
+import org.weakref.nitro.core.function.FunctionSemantics;
+import org.weakref.nitro.core.type.TypeBinding;
+import org.weakref.nitro.core.type.TypeIdentity;
+import org.weakref.nitro.core.type.TypeOperators;
 import org.weakref.nitro.function.scalar.AnnotatedScalarLoader;
+import org.weakref.nitro.function.scalar.ScalarAdapterGenerator;
 import org.weakref.nitro.function.scalar.ScalarDescriptor;
+import org.weakref.nitro.function.scalar.ScalarMethodTarget;
 import org.weakref.nitro.function.scalar.builtin.AddExactI64;
 import org.weakref.nitro.function.scalar.builtin.AddF64;
 import org.weakref.nitro.function.scalar.builtin.AddI64;
@@ -81,10 +88,14 @@ import org.weakref.nitro.function.scalar.builtin.SubtractF64;
 import org.weakref.nitro.function.scalar.builtin.SubtractI64;
 import org.weakref.nitro.function.scalar.builtin.UpperUtf8;
 import org.weakref.nitro.function.scalar.builtin.Utf8BinaryDispatchPolicy;
-import org.weakref.nitro.function.scalar.builtin.YearOfDate;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 import java.util.List;
+
+import static org.weakref.nitro.core.function.FunctionSemantics.ArgumentNullConvention.RETURN_NULL_ON_NULL;
+import static org.weakref.nitro.core.function.FunctionSemantics.FailureConvention.NEVER_FAILS;
 
 public final class TestPrimitiveFunctions
 {
@@ -156,11 +167,53 @@ public final class TestPrimitiveFunctions
                 RoundF64.class,
                 StartsWithUtf8.class,
                 SubstringUtf8.class,
-                UpperUtf8.class,
-                YearOfDate.class)) {
+                UpperUtf8.class)) {
             primitiveRegistry.register(load(scalarLoader, functionClass, utf8Policy));
         }
+        primitiveRegistry.register(generatedYearOfDate());
         return primitiveRegistry;
+    }
+
+    private static ScalarDescriptor generatedYearOfDate()
+    {
+        TypeBinding date = new TestingTypeBinding(new TypeIdentity("test-date"), long.class);
+        TypeBinding bigint = new TestingTypeBinding(new TypeIdentity("test-bigint"), long.class);
+        try {
+            return new ScalarAdapterGenerator().adapt(
+                    "year_of_date",
+                    new BoundSignature(bigint, List.of(date)),
+                    new FunctionSemantics(true, List.of(RETURN_NULL_ON_NULL), false, NEVER_FAILS),
+                    new ScalarMethodTarget(MethodHandles.lookup().findStatic(
+                            TestPrimitiveFunctions.class,
+                            "yearOfEpochDay",
+                            MethodType.methodType(long.class, long.class))));
+        }
+        catch (NoSuchMethodException | IllegalAccessException exception) {
+            throw new ExceptionInInitializerError(exception);
+        }
+    }
+
+    private static long yearOfEpochDay(long epochDay)
+    {
+        long z = epochDay + 719468;
+        long era = Math.floorDiv(z, 146097);
+        long dayOfEra = z - era * 146097;
+        long yearOfEra = (dayOfEra - dayOfEra / 1460 + dayOfEra / 36524 - dayOfEra / 146096) / 365;
+        long year = yearOfEra + era * 400;
+        long dayOfYear = dayOfEra - (365 * yearOfEra + yearOfEra / 4 - yearOfEra / 100);
+        long monthPrime = (5 * dayOfYear + 2) / 153;
+        long month = monthPrime < 10 ? monthPrime + 3 : monthPrime - 9;
+        return month <= 2 ? year + 1 : year;
+    }
+
+    private record TestingTypeBinding(TypeIdentity identity, Class<?> carrierType)
+            implements TypeBinding
+    {
+        @Override
+        public TypeOperators operators()
+        {
+            return TypeOperators.UNSPECIFIED;
+        }
     }
 
     private static ScalarDescriptor load(
