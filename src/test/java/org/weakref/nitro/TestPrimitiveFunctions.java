@@ -171,8 +171,33 @@ public final class TestPrimitiveFunctions
         primitiveRegistry.register(generatedDoubleBinary("multiply_f64", "multiplyDouble", new MultiplyF64Optimization()));
         primitiveRegistry.register(generatedBooleanUnary("not", "notBoolean", new NotBooleanOptimization()));
         primitiveRegistry.register(generatedDoubleUnary("round_f64", "roundDouble"));
+        primitiveRegistry.register(generatedBigintToDoubleCast());
         primitiveRegistry.register(generatedYearOfDate());
         return primitiveRegistry;
+    }
+
+    private static ScalarDescriptor generatedBigintToDoubleCast()
+    {
+        TypeBinding bigint = new TestingTypeBinding(new TypeIdentity("test-bigint"), long.class);
+        TypeBinding doubleType = new TestingTypeBinding(new TypeIdentity("test-double"), double.class);
+        try {
+            return new ScalarAdapterGenerator().adapt(
+                    "cast_bigint_to_double",
+                    new BoundSignature(doubleType, List.of(bigint)),
+                    new FunctionSemantics(true, List.of(RETURN_NULL_ON_NULL), false, NEVER_FAILS),
+                    new ScalarMethodTarget(MethodHandles.lookup().findStatic(
+                            TestPrimitiveFunctions.class,
+                            "bigintToDouble",
+                            MethodType.methodType(double.class, long.class))));
+        }
+        catch (NoSuchMethodException | IllegalAccessException exception) {
+            throw new ExceptionInInitializerError(exception);
+        }
+    }
+
+    private static double bigintToDouble(long value)
+    {
+        return value;
     }
 
     private static ScalarDescriptor generatedDoubleUnary(String name, String methodName)

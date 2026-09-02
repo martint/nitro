@@ -1514,7 +1514,7 @@ final class TpchParquetSupport
                 allocator,
                 new EvaluationPlan(
                         List.of(
-                                new Assignment(availableQuantity, new Call("cast_i64_to_f64", List.of(
+                                new Assignment(availableQuantity, new Call("cast_bigint_to_double", List.of(
                                         new Reference(new Input(grouped ? 3 : 2), Stream.VALUES))), AllMask.ALL),
                                 new Assignment(value, new Call("multiply_f64", List.of(
                                         new Reference(new Input(grouped ? 2 : 1), Stream.VALUES),
@@ -1704,7 +1704,7 @@ final class TpchParquetSupport
         Operator castAvailable = profiled(profile, "q20.project.available", new ProjectOperator(
                 allocator,
                 new EvaluationPlan(
-                        List.of(new Assignment(available, new Call("cast_i64_to_f64", List.of(
+                        List.of(new Assignment(available, new Call("cast_bigint_to_double", List.of(
                                 new Reference(new Input(2), Stream.VALUES))), AllMask.ALL)),
                         List.of(
                                 new Reference(new Input(1), Stream.VALUES),
