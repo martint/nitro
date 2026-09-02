@@ -58,7 +58,6 @@ import org.weakref.nitro.function.scalar.builtin.LessThanI64;
 import org.weakref.nitro.function.scalar.builtin.LessThanOrEqualI64;
 import org.weakref.nitro.function.scalar.builtin.LessThanOrEqualUtf8;
 import org.weakref.nitro.function.scalar.builtin.LessThanUtf8;
-import org.weakref.nitro.function.scalar.builtin.ScaledRelativeDifferenceGtI64;
 import org.weakref.nitro.function.scalar.builtin.SubstringUtf8;
 import org.weakref.nitro.function.scalar.builtin.SubstringUtf8BinarySliceProjection;
 import org.weakref.nitro.jit.ProjectionMaskCompiler;
@@ -1214,56 +1213,6 @@ public class TestPlanEvaluator
     }
 
     @Test
-    void testExtractHostUtf8PreservesDictionaryEncoding()
-    {
-        Variable host = new Variable(0);
-        EvaluationPlan plan = new EvaluationPlan(
-                List.of(new Assignment(
-                        host,
-                        new Call("extract_host_utf8", List.of(new Reference(new Input(0), Stream.VALUES))),
-                        AllMask.ALL)),
-                List.of(
-                        new Reference(host, Stream.VALUES),
-                        new Reference(host, Stream.NULLS)));
-
-        BinaryVector dictionaryValues = new BinaryVector(6, 256);
-        dictionaryValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
-        dictionaryValues.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
-        dictionaryValues.setBytes(0, "https://www.google.com/search".getBytes(java.nio.charset.StandardCharsets.UTF_8));
-        dictionaryValues.setBytes(1, "http://news.ycombinator.com/item".getBytes(java.nio.charset.StandardCharsets.UTF_8));
-        dictionaryValues.setBytes(2, "https://www.google.com/maps".getBytes(java.nio.charset.StandardCharsets.UTF_8));
-        dictionaryValues.setBytes(3, "https://www.example.com".getBytes(java.nio.charset.StandardCharsets.UTF_8));
-        dictionaryValues.setBytes(4, "ftp://www.example.com/path".getBytes(java.nio.charset.StandardCharsets.UTF_8));
-        dictionaryValues.setBytes(5, "http://www./path".getBytes(java.nio.charset.StandardCharsets.UTF_8));
-
-        DictionaryVector input = DictionaryVector.wrap(new int[] {0, 1, 2, 3, 4, 5}, dictionaryValues);
-        BooleanVector nulls = new BooleanVector(new boolean[] {false, false, false, false, false, false});
-
-        PlanEvaluator evaluator = planEvaluator(
-                plan,
-                primitiveRegistry(),
-                inputResolver(Map.of(
-                        new Reference(new Input(0), Stream.VALUES), input,
-                        new Reference(new Input(0), Stream.NULLS), nulls)),
-                new Allocator(EngineResources.createDefault()));
-
-        Streams result = evaluator.evaluate(new Reference(host, Stream.VALUES), Mask.all(6));
-        assertThat(result.values()).isInstanceOf(DictionaryVector.class);
-
-        DictionaryVector hosts = (DictionaryVector) result.values();
-        assertThat(hosts.ids()).containsExactly(0, 1, 2, 3, 4, 5);
-        BinaryVector extractedValues = (BinaryVector) hosts.values();
-        assertThat(utf8(extractedValues, 0)).isEqualTo("google.com");
-        assertThat(utf8(extractedValues, 1)).isEqualTo("news.ycombinator.com");
-        assertThat(utf8(extractedValues, 2)).isEqualTo("google.com");
-        assertThat(utf8(extractedValues, 3)).isEqualTo("https://www.example.com");
-        assertThat(utf8(extractedValues, 4)).isEqualTo("ftp://www.example.com/path");
-        assertThat(utf8(extractedValues, 5)).isEqualTo("www.");
-        assertThat(extractedValues.hasTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID)).isTrue();
-        assertThat(extractedValues.hasTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY)).isTrue();
-    }
-
-    @Test
     void testReusesDeterministicImmutableDictionaryDomainAcrossBatches()
     {
         AtomicInteger invocations = new AtomicInteger();
@@ -1511,34 +1460,6 @@ public class TestPlanEvaluator
         BinaryVector values = (BinaryVector) evaluator.evaluate(new Reference(selected, Stream.VALUES), Mask.all(2)).values();
         assertThat(utf8(values, 0)).isEqualTo("alpha");
         assertThat(values.length(1)).isZero();
-    }
-
-    @Test
-    void testExtractHostUtf8SparseMaskKeepsOffsetsAligned()
-    {
-        Variable host = new Variable(0);
-        EvaluationPlan plan = new EvaluationPlan(
-                List.of(
-                        new Assignment(host, new Call("extract_host_utf8", List.of(new Reference(new Input(0), Stream.VALUES))), AllMask.ALL)),
-                List.of(new Reference(host, Stream.VALUES)));
-
-        BinaryVector values = new BinaryVector(4, 160);
-        values.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_VALID);
-        values.setBytes(0, "https://www.google.com/search".getBytes(java.nio.charset.StandardCharsets.UTF_8));
-        values.setBytes(1, "http://news.ycombinator.com/item".getBytes(java.nio.charset.StandardCharsets.UTF_8));
-        values.setBytes(2, "https://example.com/page".getBytes(java.nio.charset.StandardCharsets.UTF_8));
-        values.setBytes(3, "http://tambov.irr.ru/0/c1".getBytes(java.nio.charset.StandardCharsets.UTF_8));
-
-        PlanEvaluator evaluator = planEvaluator(
-                plan,
-                primitiveRegistry(),
-                inputResolver(Map.of(new Reference(new Input(0), Stream.VALUES), values)),
-                new Allocator(EngineResources.createDefault()));
-
-        Streams result = evaluator.evaluate(new Reference(host, Stream.VALUES), Mask.sparse(new int[] {1, 3}, 4));
-        BinaryVector hosts = (BinaryVector) result.values();
-        assertThat(utf8(hosts, 1)).isEqualTo("news.ycombinator.com");
-        assertThat(utf8(hosts, 3)).isEqualTo("tambov.irr.ru");
     }
 
     @Test
@@ -3498,36 +3419,6 @@ public class TestPlanEvaluator
     }
 
     @Test
-    void testMultiplyNullAsZeroI64CoalescesEitherNullInput()
-    {
-        Variable value = new Variable(0);
-        EvaluationPlan plan = new EvaluationPlan(
-                List.of(new Assignment(
-                        value,
-                        new Call("multiply_null_as_zero_i64", List.of(
-                                new Reference(new Input(0), Stream.VALUES),
-                                new Reference(new Input(1), Stream.VALUES))),
-                        AllMask.ALL)),
-                List.of(
-                        new Reference(value, Stream.VALUES),
-                        new Reference(value, Stream.NULLS)));
-
-        PlanEvaluator evaluator = planEvaluator(
-                plan,
-                primitiveRegistry(),
-                inputResolver(Map.of(
-                        new Reference(new Input(0), Stream.VALUES), new I64Vector(new long[] {10, 20, 30, 40}),
-                        new Reference(new Input(0), Stream.NULLS), new BooleanVector(new boolean[] {false, true, false, true}),
-                        new Reference(new Input(1), Stream.VALUES), new I32Vector(new int[] {2, 3, 4, 5}),
-                        new Reference(new Input(1), Stream.NULLS), new BooleanVector(new boolean[] {false, false, true, true}))),
-                new Allocator(EngineResources.createDefault()));
-
-        Streams result = evaluator.evaluate(new Reference(value, Stream.VALUES), Mask.all(4));
-        assertThat(((I64Vector) result.get(Stream.VALUES)).values()).containsExactly(20L, 0L, 0L, 0L);
-        assertThat(readBooleans(result.get(Stream.NULLS))).containsExactly(false, false, false, false);
-    }
-
-    @Test
     void testCastI64ToI32ProjectsDictionaryEncodedValues()
     {
         Variable castValue = new Variable(0);
@@ -4030,32 +3921,58 @@ public class TestPlanEvaluator
     }
 
     @Test
-    void testScaledRelativeDifferenceGtI64OptimizesQuarterlyDeviationMask()
+    void testQuarterlyDeviationPredicateUsesGeneralScalarComposition()
     {
-        Variable ten = new Variable(0);
-        Variable deviationLarge = new Variable(1);
-        EvaluationPlan plan = new EvaluationPlan(
+        Variable zero = new Variable(0);
+        Variable ten = new Variable(1);
+        Variable positiveBaseline = new Variable(2);
+        Variable valueLessThanBaseline = new Variable(3);
+        Variable baselineMinusValue = new Variable(4);
+        Variable valueMinusBaseline = new Variable(5);
+        Variable absoluteDifference = new Variable(6);
+        Variable scaledDifference = new Variable(7);
+        Variable deviationLarge = new Variable(8);
+        EvaluationPlan plan = IrNormalizer.standard().normalizePlan(new EvaluationPlan(
                 List.of(
+                        new Assignment(zero, new Literal(0L), AllMask.ALL),
                         new Assignment(ten, new Literal(10L), AllMask.ALL),
-                        new Assignment(
-                                deviationLarge,
-                                new Call("scaled_relative_difference_gt_i64", List.of(
-                                        new Reference(new Input(0), Stream.VALUES),
-                                        new Reference(new Input(1), Stream.VALUES),
-                                        new Reference(ten, Stream.VALUES))),
-                                AllMask.ALL)),
-                List.of());
+                        new Assignment(positiveBaseline, new Call("lt", List.of(
+                                new Reference(zero, Stream.VALUES),
+                                new Reference(new Input(1), Stream.VALUES))), AllMask.ALL),
+                        new Assignment(valueLessThanBaseline, new Call("lt", List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(new Input(1), Stream.VALUES))), AllMask.ALL),
+                        new Assignment(baselineMinusValue, new Call("subtract", List.of(
+                                new Reference(new Input(1), Stream.VALUES),
+                                new Reference(new Input(0), Stream.VALUES))), AllMask.ALL),
+                        new Assignment(valueMinusBaseline, new Call("subtract", List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(new Input(1), Stream.VALUES))), AllMask.ALL),
+                        new Assignment(absoluteDifference, new Conditional(
+                                new Reference(valueLessThanBaseline, Stream.VALUES),
+                                new Reference(baselineMinusValue, Stream.VALUES),
+                                new Reference(valueMinusBaseline, Stream.VALUES)), AllMask.ALL),
+                        new Assignment(scaledDifference, new Call("multiply", List.of(
+                                new Reference(absoluteDifference, Stream.VALUES),
+                                new Reference(ten, Stream.VALUES))), AllMask.ALL),
+                        new Assignment(deviationLarge, new Call("lt", List.of(
+                                new Reference(new Input(1), Stream.VALUES),
+                                new Reference(scaledDifference, Stream.VALUES))), AllMask.ALL)),
+                List.of()));
 
         PlanEvaluator evaluator = planEvaluator(
                 plan,
-                builtinPrimitiveRegistry(),
+                primitiveRegistry(),
                 inputResolver(Map.of(
                         new Reference(new Input(0), Stream.VALUES), new I64Vector(new long[] {100L, 105L, 80L, 100L}),
-                        new Reference(new Input(1), Stream.VALUES), new I64Vector(new long[] {90L, 100L, 100L, 0L}),
-                        new Reference(new Input(1), Stream.NULLS), new BooleanVector(new boolean[] {false, false, false, false}))),
+                        new Reference(new Input(1), Stream.VALUES), new I64Vector(new long[] {90L, 100L, 100L, 0L}))),
                 new Allocator(EngineResources.createDefault()));
 
-        Mask result = evaluator.evaluate(new ReferenceMask(new Reference(deviationLarge, Stream.VALUES)), Mask.all(4));
+        Mask result = evaluator.evaluate(
+                new AndMask(List.of(
+                        new ReferenceMask(new Reference(positiveBaseline, Stream.VALUES)),
+                        new ReferenceMask(new Reference(deviationLarge, Stream.VALUES)))),
+                Mask.all(4));
         assertThat(result.selectedCount()).isEqualTo(2);
         assertThat(result.position(0)).isEqualTo(0);
         assertThat(result.position(1)).isEqualTo(2);
@@ -5609,7 +5526,6 @@ public class TestPlanEvaluator
         primitiveRegistry.register(scalarRegistry.register(scalarLoader.load(LessThanOrEqualI64.class)));
         primitiveRegistry.register(scalarRegistry.register(scalarLoader.load(LessThanUtf8.class)));
         primitiveRegistry.register(scalarRegistry.register(scalarLoader.load(LessThanOrEqualUtf8.class)));
-        primitiveRegistry.register(scalarRegistry.register(scalarLoader.load(ScaledRelativeDifferenceGtI64.class)));
         return primitiveRegistry;
     }
 

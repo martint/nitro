@@ -44,7 +44,6 @@ import org.weakref.nitro.function.scalar.builtin.ElementAtUtf8Utf8;
 import org.weakref.nitro.function.scalar.builtin.EqualF64;
 import org.weakref.nitro.function.scalar.builtin.EqualI64;
 import org.weakref.nitro.function.scalar.builtin.EqualUtf8;
-import org.weakref.nitro.function.scalar.builtin.ExtractHostUtf8;
 import org.weakref.nitro.function.scalar.builtin.GreaterThanF64;
 import org.weakref.nitro.function.scalar.builtin.GreaterThanOrEqualF64;
 import org.weakref.nitro.function.scalar.builtin.HashUtf8;
@@ -72,14 +71,12 @@ import org.weakref.nitro.function.scalar.builtin.MapValues;
 import org.weakref.nitro.function.scalar.builtin.ModuloI64;
 import org.weakref.nitro.function.scalar.builtin.MultiplyF64;
 import org.weakref.nitro.function.scalar.builtin.MultiplyI64;
-import org.weakref.nitro.function.scalar.builtin.MultiplyNullAsZeroI64;
 import org.weakref.nitro.function.scalar.builtin.NotBoolean;
 import org.weakref.nitro.function.scalar.builtin.NullI64;
 import org.weakref.nitro.function.scalar.builtin.OrBoolean;
 import org.weakref.nitro.function.scalar.builtin.RegexpReplaceUtf8;
 import org.weakref.nitro.function.scalar.builtin.RegexpReplaceUtf8Policy;
 import org.weakref.nitro.function.scalar.builtin.RoundF64;
-import org.weakref.nitro.function.scalar.builtin.ScaledRelativeDifferenceGtI64;
 import org.weakref.nitro.function.scalar.builtin.StartsWithUtf8;
 import org.weakref.nitro.function.scalar.builtin.SubstringUtf8;
 import org.weakref.nitro.function.scalar.builtin.SubtractExactI64;
@@ -117,7 +114,6 @@ public final class TestPrimitiveFunctions
                 ConcatUtf8.class,
                 ContainsUtf8.class,
                 DivideF64.class,
-                ExtractHostUtf8.class,
                 ElementAtI64Utf8.class,
                 ElementAtUtf8Utf8.class,
                 EqualF64.class,
@@ -150,12 +146,10 @@ public final class TestPrimitiveFunctions
                 MapValues.class,
                 NotBoolean.class,
                 NullI64.class,
-                ScaledRelativeDifferenceGtI64.class,
                 AddExactI64.class,
                 SubtractI64.class,
                 SubtractExactI64.class,
                 MultiplyI64.class,
-                MultiplyNullAsZeroI64.class,
                 DivideI64.class,
                 DivideI64ToF64.class,
                 DivideRoundI64.class,

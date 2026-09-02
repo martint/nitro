@@ -64,6 +64,7 @@ import org.weakref.nitro.operator.evaluator.ir.AllMask;
 import org.weakref.nitro.operator.evaluator.ir.AndMask;
 import org.weakref.nitro.operator.evaluator.ir.Assignment;
 import org.weakref.nitro.operator.evaluator.ir.Call;
+import org.weakref.nitro.operator.evaluator.ir.Conditional;
 import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
 import org.weakref.nitro.operator.evaluator.ir.Input;
 import org.weakref.nitro.operator.evaluator.ir.Literal;
@@ -4201,15 +4202,37 @@ final class TpcdsParquetSupport
     private static FilterSpec query53QuarterlyDeviationPredicate(int sumIndex, int averageIndex)
     {
         Variable ten = new Variable(0);
-        Variable result = new Variable(1);
+        Variable valueLessThanBaseline = new Variable(1);
+        Variable baselineMinusValue = new Variable(2);
+        Variable valueMinusBaseline = new Variable(3);
+        Variable absoluteDifference = new Variable(4);
+        Variable scaledDifference = new Variable(5);
+        Variable result = new Variable(6);
 
         EvaluationPlan plan = new EvaluationPlan(List.of(
                 new Assignment(ten, new Literal(10L), AllMask.ALL),
-                new Assignment(result, new Call("scaled_relative_difference_gt_i64", List.of(
+                new Assignment(valueLessThanBaseline, new Call("lt", List.of(
                         new Reference(new Input(sumIndex), Stream.VALUES),
+                        new Reference(new Input(averageIndex), Stream.VALUES))), AllMask.ALL),
+                new Assignment(baselineMinusValue, new Call("subtract", List.of(
                         new Reference(new Input(averageIndex), Stream.VALUES),
-                        new Reference(ten, Stream.VALUES))), AllMask.ALL)), List.of());
-        return new FilterSpec(plan, new ReferenceMask(new Reference(result, Stream.VALUES)));
+                        new Reference(new Input(sumIndex), Stream.VALUES))), AllMask.ALL),
+                new Assignment(valueMinusBaseline, new Call("subtract", List.of(
+                        new Reference(new Input(sumIndex), Stream.VALUES),
+                        new Reference(new Input(averageIndex), Stream.VALUES))), AllMask.ALL),
+                new Assignment(absoluteDifference, new Conditional(
+                        new Reference(valueLessThanBaseline, Stream.VALUES),
+                        new Reference(baselineMinusValue, Stream.VALUES),
+                        new Reference(valueMinusBaseline, Stream.VALUES)), AllMask.ALL),
+                new Assignment(scaledDifference, new Call("multiply", List.of(
+                        new Reference(absoluteDifference, Stream.VALUES),
+                        new Reference(ten, Stream.VALUES))), AllMask.ALL),
+                new Assignment(result, new Call("lt", List.of(
+                        new Reference(new Input(averageIndex), Stream.VALUES),
+                        new Reference(scaledDifference, Stream.VALUES))), AllMask.ALL)), List.of());
+        return and(
+                greaterThan(averageIndex, 0),
+                new FilterSpec(plan, new ReferenceMask(new Reference(result, Stream.VALUES))));
     }
 
     private static FilterSpec query49SalesPredicate(int quantityIndex, int netPaidIndex, int netProfitIndex)
