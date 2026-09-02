@@ -43,6 +43,34 @@ final class WindowValueCopySupport
         return Streams.ofValuesAndNulls(values, nulls);
     }
 
+    static Streams mutableNullOutput(
+            TypeVectorFactory vectorFactory,
+            Allocator allocator,
+            Allocator.Context allocationContext,
+            int size)
+    {
+        Vector placeholder = vectorFactory.nullValues(allocator.vectorAllocator(allocationContext), size);
+        Vector values = null;
+        try {
+            values = placeholder.copySinglePositionRangeInto(
+                    allocator,
+                    allocationContext,
+                    null,
+                    0,
+                    0,
+                    size,
+                    size);
+        }
+        finally {
+            if (values != placeholder) {
+                allocator.release(allocationContext, placeholder);
+            }
+        }
+        BooleanVector nulls = allocator.allocate(allocationContext, BooleanVector.class, size, BooleanVector::new);
+        Arrays.fill(nulls.values(), true);
+        return Streams.ofValuesAndNulls(values, nulls);
+    }
+
     static Streams copyRange(
             Allocator allocator,
             Allocator.Context allocationContext,

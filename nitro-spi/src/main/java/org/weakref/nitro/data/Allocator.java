@@ -363,6 +363,21 @@ public class Allocator
         return reuseOrCreateStreams(existing, values, nulls, errors);
     }
 
+    /** Replaces the values stream while marking one output position as non-null and error-free. */
+    public Streams replaceValuesAndMarkPositionValid(
+            Context context,
+            Streams existing,
+            Vector values,
+            int outputPosition,
+            int size)
+    {
+        requireNonNull(existing, "existing is null");
+        requireNonNull(values, "values is null");
+        Vector nulls = clearOptionalPosition(context, existing.getOrNull(Stream.NULLS), outputPosition, size);
+        Vector errors = clearOptionalPosition(context, existing.getOrNull(Stream.ERRORS), outputPosition, size);
+        return reuseOrCreateStreams(existing, values, nulls, errors);
+    }
+
     /** Copies one source position across an output range while preserving transport-tuple reuse. */
     public Streams copySinglePositionRangeInto(
             Context context,

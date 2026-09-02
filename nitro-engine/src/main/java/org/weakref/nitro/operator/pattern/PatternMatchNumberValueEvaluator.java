@@ -44,6 +44,11 @@ public final class PatternMatchNumberValueEvaluator
                 outputSize,
                 I64Vector::new);
         values.values()[outputPosition] = context.matchNumber();
-        return allocator.reuseOrCreateStreams(output, values, null, null);
+        return allocator.replaceValuesAndMarkPositionValid(
+                allocationContext,
+                output,
+                values,
+                outputPosition,
+                outputSize);
     }
 }

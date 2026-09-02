@@ -117,8 +117,8 @@ public final class PatternRecognitionOperator
         if (outputSchema.size() != outputChannels.length + measures.size()) {
             throw new IllegalArgumentException("output schema does not match pass-through and measure columns");
         }
-        if (outputMode.outputsUnmatchedRows() || outputMode == PatternOutputMode.WINDOW) {
-            throw new IllegalArgumentException("unmatched and WINDOW output require nullable/frame-aware output support");
+        if (outputMode == PatternOutputMode.WINDOW) {
+            throw new IllegalArgumentException("WINDOW output requires frame-aware output support");
         }
         for (int column : this.partitionColumns) {
             if (column < 0 || column >= source.outputCount()) {
@@ -180,6 +180,7 @@ public final class PatternRecognitionOperator
         load();
         if (buildingColumns == null) {
             buildingColumns = new Streams[outputCount()];
+            initializeNullableMeasureColumns();
         }
 
         while (buildingRows < outputBatchRows) {
@@ -195,14 +196,16 @@ public final class PatternRecognitionOperator
             }
 
             appendSourceColumns(partitionOutput.sourcePosition());
-            measures.append(
-                    partitionOutput.measureContext(),
-                    allocator,
-                    allocationContext,
-                    buildingColumns,
-                    outputChannels.length,
-                    buildingRows,
-                    outputBatchRows);
+            if (partitionOutput.measureContext() != null) {
+                measures.append(
+                        partitionOutput.measureContext(),
+                        allocator,
+                        allocationContext,
+                        buildingColumns,
+                        outputChannels.length,
+                        buildingRows,
+                        outputBatchRows);
+            }
             buildingRows++;
         }
 
@@ -267,6 +270,23 @@ public final class PatternRecognitionOperator
                     buildingColumns[output] == null ? Streams.empty() : buildingColumns[output],
                     rows.sourcePosition(rowPosition),
                     buildingRows,
+                    outputBatchRows);
+        }
+    }
+
+    private void initializeNullableMeasureColumns()
+    {
+        if (!outputMode.outputsUnmatchedRows()) {
+            return;
+        }
+        for (int measure = 0; measure < measures.size(); measure++) {
+            int outputColumn = outputChannels.length + measure;
+            var vectorFactory = outputSchema.field(outputColumn).type().vectorFactory()
+                    .orElseThrow(() -> new IllegalArgumentException("pattern measure type does not provide a vector factory"));
+            buildingColumns[outputColumn] = WindowValueCopySupport.mutableNullOutput(
+                    vectorFactory,
+                    allocator,
+                    allocationContext,
                     outputBatchRows);
         }
     }

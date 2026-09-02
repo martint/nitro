@@ -20,7 +20,12 @@ import org.weakref.nitro.core.execution.ExecutionDiagnostics;
 import org.weakref.nitro.core.execution.ExecutionPolicy;
 import org.weakref.nitro.core.execution.ExecutionSuspension;
 import org.weakref.nitro.core.execution.MemoryReservation;
+import org.weakref.nitro.core.type.Field;
 import org.weakref.nitro.core.type.Schema;
+import org.weakref.nitro.core.type.TypeBinding;
+import org.weakref.nitro.core.type.TypeIdentity;
+import org.weakref.nitro.core.type.TypeOperators;
+import org.weakref.nitro.core.type.TypeVectorFactory;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
@@ -39,6 +44,8 @@ import org.weakref.nitro.operator.pattern.PatternValuePointer;
 import org.weakref.nitro.operator.pattern.PatternValueProgram;
 
 import java.util.List;
+import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
@@ -47,6 +54,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.weakref.nitro.data.Row.row;
 import static org.weakref.nitro.operator.pattern.PatternNavigation.Origin.LAST;
 import static org.weakref.nitro.operator.pattern.PatternNavigation.Scope.RUNNING;
+import static org.weakref.nitro.operator.pattern.PatternOutputMode.ALL_WITH_UNMATCHED;
 import static org.weakref.nitro.operator.pattern.PatternOutputMode.ONE;
 import static org.weakref.nitro.operator.pattern.PatternSkipPolicy.Fixed.PAST_LAST;
 
@@ -190,6 +198,43 @@ final class TestPatternRecognitionOperator
     }
 
     @Test
+    void testAllRowsWithUnmatchedProducesNullMeasures()
+    {
+        try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
+            ConstantTableOperator source = new ConstantTableOperator(allocator, 1, List.of(
+                    row(2L), row(7L), row(8L), row(2L), row(9L), row(10L)));
+            try (Operator operator = new PatternRecognitionOperator(
+                    allocator,
+                    new TestingExecutionContext(),
+                    source,
+                    new int[0],
+                    new WindowInputOrder(true, 0),
+                    0,
+                    new int[] {0},
+                    new PatternExpression.Concatenation(List.of(
+                            new PatternExpression.Label(0),
+                            new PatternExpression.Label(0))),
+                    List.of(definition -> definition.rows().longValue(0, definition.currentRow()) > 5),
+                    PAST_LAST,
+                    ALL_WITH_UNMATCHED,
+                    new PatternValueProgram(List.of(new PatternMatchNumberValueEvaluator())),
+                    true,
+                    8,
+                    new Schema(List.of(new Field(longType(), false), new Field(longType(), true))),
+                    EngineResources.from(allocator).operatorResources())) {
+                assertThat(OperatorAssertions.OperatorAssert.toRows(operator))
+                        .containsExactly(
+                                row(2L, null),
+                                row(7L, 1L),
+                                row(8L, 1L),
+                                row(2L, null),
+                                row(9L, 2L),
+                                row(10L, 2L));
+            }
+        }
+    }
+
+    @Test
     void testEvaluatesCompiledDefinitionOverMatchLocalValues()
     {
         try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
@@ -292,6 +337,55 @@ final class TestPatternRecognitionOperator
                 outputBatchRows,
                 Schema.unspecified(2),
                 EngineResources.from(allocator).operatorResources());
+    }
+
+    private static TypeBinding longType()
+    {
+        return new TypeBinding()
+        {
+            @Override
+            public TypeIdentity identity()
+            {
+                return new TypeIdentity("testing:bigint");
+            }
+
+            @Override
+            public Class<?> carrierType()
+            {
+                return long.class;
+            }
+
+            @Override
+            public TypeOperators operators()
+            {
+                throw new UnsupportedOperationException();
+            }
+
+            @Override
+            public Optional<TypeVectorFactory> vectorFactory()
+            {
+                return Optional.of(new TypeVectorFactory()
+                {
+                    @Override
+                    public Vector constant(org.weakref.nitro.data.VectorAllocator allocator, Object value, int length)
+                    {
+                        throw new UnsupportedOperationException();
+                    }
+
+                    @Override
+                    public Vector nullValues(org.weakref.nitro.data.VectorAllocator allocator, int length)
+                    {
+                        return allocator.allocate(I64Vector.class, length, I64Vector::new);
+                    }
+                });
+            }
+
+            @Override
+            public Set<Class<? extends Vector>> supportedVectorTypes()
+            {
+                return Set.of(I64Vector.class);
+            }
+        };
     }
 
     private static class TestingExecutionContext
