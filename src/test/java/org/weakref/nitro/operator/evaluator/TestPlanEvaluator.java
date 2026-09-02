@@ -3978,7 +3978,7 @@ public class TestPlanEvaluator
     }
 
     @Test
-    void testMultiplyNullEvaluationStillRequestsInputValues()
+    void testGeneratedMultiplyNullEvaluationDoesNotRequestInputValues()
     {
         Variable product = new Variable(0);
         EvaluationPlan plan = new EvaluationPlan(
@@ -4016,8 +4016,8 @@ public class TestPlanEvaluator
 
         Streams result = evaluator.evaluate(new Reference(product, Stream.NULLS), Mask.all(2));
         assertThat(((BooleanVector) result.get(Stream.NULLS)).values()).containsExactly(false, true);
-        assertThat(requestedLeftValues).isTrue();
-        assertThat(requestedRightValues).isTrue();
+        assertThat(requestedLeftValues).isFalse();
+        assertThat(requestedRightValues).isFalse();
     }
 
     @Test

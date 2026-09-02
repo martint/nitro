@@ -64,7 +64,7 @@ import org.weakref.nitro.function.scalar.builtin.MapValues;
 import org.weakref.nitro.function.scalar.builtin.MaterializeLongCarrier;
 import org.weakref.nitro.function.scalar.builtin.ModuloI64;
 import org.weakref.nitro.function.scalar.builtin.MultiplyF64Optimization;
-import org.weakref.nitro.function.scalar.builtin.MultiplyI64;
+import org.weakref.nitro.function.scalar.builtin.MultiplyI64Optimization;
 import org.weakref.nitro.function.scalar.builtin.NotBooleanOptimization;
 import org.weakref.nitro.function.scalar.builtin.NullI64;
 import org.weakref.nitro.function.scalar.builtin.OrBoolean;
@@ -75,7 +75,7 @@ import org.weakref.nitro.function.scalar.builtin.ScaledRoundedBigintRatio;
 import org.weakref.nitro.function.scalar.builtin.StartsWithUtf8;
 import org.weakref.nitro.function.scalar.builtin.SubstringUtf8;
 import org.weakref.nitro.function.scalar.builtin.SubtractF64Optimization;
-import org.weakref.nitro.function.scalar.builtin.SubtractI64;
+import org.weakref.nitro.function.scalar.builtin.SubtractI64Optimization;
 import org.weakref.nitro.function.scalar.builtin.UpperUtf8;
 import org.weakref.nitro.function.scalar.builtin.Utf8BinaryDispatchPolicy;
 import org.weakref.nitro.function.scalar.builtin.VarcharToBigint;
@@ -132,9 +132,7 @@ public final class TestPrimitiveFunctions
                 MapValues.class,
                 NullI64.class,
                 BigintAddExact.class,
-                SubtractI64.class,
                 BigintSubtractExact.class,
-                MultiplyI64.class,
                 DivideI64.class,
                 BigintRatio.class,
                 RoundedBigintRatio.class,
@@ -148,9 +146,13 @@ public final class TestPrimitiveFunctions
                 UpperUtf8.class)) {
             primitiveRegistry.register(load(scalarLoader, functionClass, utf8Policy));
         }
-        primitiveRegistry.register(generatedDoubleBinary("add_f64", "addDouble", new AddF64Optimization()));
-        primitiveRegistry.register(generatedDoubleBinary("subtract_f64", "subtractDouble", new SubtractF64Optimization()));
-        primitiveRegistry.register(generatedDoubleBinary("multiply_f64", "multiplyDouble", new MultiplyF64Optimization()));
+        TypeBinding bigint = new TestingTypeBinding(new TypeIdentity("test-bigint"), long.class);
+        TypeBinding doubleType = new TestingTypeBinding(new TypeIdentity("test-double"), double.class);
+        primitiveRegistry.register(generatedBinary("subtract", "subtractBigint", bigint, new SubtractI64Optimization()));
+        primitiveRegistry.register(generatedBinary("multiply", "multiplyBigint", bigint, new MultiplyI64Optimization()));
+        primitiveRegistry.register(generatedBinary("add_f64", "addDouble", doubleType, new AddF64Optimization()));
+        primitiveRegistry.register(generatedBinary("subtract_f64", "subtractDouble", doubleType, new SubtractF64Optimization()));
+        primitiveRegistry.register(generatedBinary("multiply_f64", "multiplyDouble", doubleType, new MultiplyF64Optimization()));
         primitiveRegistry.register(generatedBooleanUnary("not", "notBoolean", new NotBooleanOptimization()));
         primitiveRegistry.register(generatedDoubleUnary("round_f64", "roundDouble"));
         primitiveRegistry.register(generatedBigintToDoubleCast());
@@ -234,19 +236,19 @@ public final class TestPrimitiveFunctions
         return !value;
     }
 
-    private static ScalarDescriptor generatedDoubleBinary(String name, String methodName, FunctionCapability capability)
+    private static ScalarDescriptor generatedBinary(String name, String methodName, TypeBinding type, FunctionCapability capability)
     {
-        TypeBinding doubleType = new TestingTypeBinding(new TypeIdentity("test-double"), double.class);
+        Class<?> carrier = type.carrierType();
         ScalarDescriptor generated;
         try {
             generated = new ScalarAdapterGenerator().adapt(
                     name,
-                    new BoundSignature(doubleType, List.of(doubleType, doubleType)),
+                    new BoundSignature(type, List.of(type, type)),
                     new FunctionSemantics(true, List.of(RETURN_NULL_ON_NULL, RETURN_NULL_ON_NULL), false, NEVER_FAILS),
                     new ScalarMethodTarget(MethodHandles.lookup().findStatic(
                             TestPrimitiveFunctions.class,
                             methodName,
-                            MethodType.methodType(double.class, double.class, double.class))));
+                            MethodType.methodType(carrier, carrier, carrier))));
         }
         catch (NoSuchMethodException | IllegalAccessException exception) {
             throw new ExceptionInInitializerError(exception);
@@ -269,6 +271,16 @@ public final class TestPrimitiveFunctions
     }
 
     private static double multiplyDouble(double left, double right)
+    {
+        return left * right;
+    }
+
+    private static long subtractBigint(long left, long right)
+    {
+        return left - right;
+    }
+
+    private static long multiplyBigint(long left, long right)
     {
         return left * right;
     }
