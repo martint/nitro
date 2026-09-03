@@ -319,8 +319,10 @@ Function-specific aggregation-state vector types belong with function implementa
 vocabulary.
 
 An aggregation implementation that accepts exact multiplicities may consume an independently encoded input by first
-counting selected row ids into allocator-owned reusable domain scratch. Mapping identity remains required for direct
-zero-pass domain reuse; the exact counting fallback does not permit the engine to infer function semantics.
+counting selected row ids into allocator-owned reusable domain scratch. Mapping identity permits direct zero-pass
+domain reuse. Independently owned mappings may reuse the same counts only after an explicit O(rows) proof that their
+complete ID sequences are equal; unequal mappings use the exact counting fallback. Neither path permits the engine to
+infer function semantics.
 
 A provider may describe each generated grouped update as an ordered, non-empty tuple of physical contributions and
 an exact method handle over its opaque state, group id, and those carriers. Each input contribution declares one

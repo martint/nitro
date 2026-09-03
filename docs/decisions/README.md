@@ -144,3 +144,4 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | [0062](0062-expose-composed-type-identity-to-functions.md) | Expose composed type identity to registry-bound functions | accepted |
 | [0063](0063-expose-composed-key-binding-to-stateful-functions.md) | Expose composed key binding to stateful registry functions | accepted |
 | [0064](0064-count-independent-encoded-domains.md) | Count independent encoded domains under a mask | accepted |
+| [0065](0065-reuse-domain-counts-after-equivalent-mapping-proof.md) | Reuse domain counts after an equivalent-mapping proof | accepted |

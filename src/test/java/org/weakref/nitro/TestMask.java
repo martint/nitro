@@ -21,6 +21,7 @@ import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.RleVector;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -288,6 +289,30 @@ class TestMask
 
         assertThat(populated).isEqualTo(2);
         assertThat(frequencies).containsExactly(0, 2, 2);
+    }
+
+    @Test
+    void reusesEquivalentIndependentDictionaryDomainCounts()
+    {
+        int[] predicateIds = {0, 1, 0, 2, 1, 2};
+        DictionaryVector predicate = DictionaryVector.wrapWithDomainFrequencies(
+                predicateIds,
+                predicateIds.length,
+                new I64Vector(new long[] {10, 20, 30}),
+                new int[] {2, 2, 2});
+        DictionaryVector payload = DictionaryVector.wrap(
+                Arrays.copyOf(predicateIds, predicateIds.length),
+                predicateIds.length,
+                new I64Vector(new long[] {40, 50, 60}));
+        Mask mask = Mask.all(predicateIds.length);
+        mask.retainDictionaryComparison(predicate, new boolean[] {false, true, true});
+        int[] frequencies = new int[3];
+
+        int populated = payload.populateSelectedDomainFrequencies(mask, frequencies);
+
+        assertThat(populated).isEqualTo(2);
+        assertThat(frequencies).containsExactly(0, 2, 2);
+        assertThat(mask.dictionaryDomainSelection(payload)).isNull();
     }
 
     @Test

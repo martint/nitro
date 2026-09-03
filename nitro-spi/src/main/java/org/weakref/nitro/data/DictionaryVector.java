@@ -306,7 +306,7 @@ public final class DictionaryVector
         checkArgument(frequencies.length >= domainSize, "Frequency scratch is smaller than dictionary domain");
         Arrays.fill(frequencies, 0, domainSize, 0);
 
-        Mask.DictionaryDomainSelection selection = mask.dictionaryDomainSelection(this);
+        Mask.DictionaryDomainSelection selection = mask.dictionaryDomainSelectionForEquivalentMapping(this);
         if (selection != null) {
             int populated = 0;
             for (int dictionaryId = 0; dictionaryId < domainSize; dictionaryId++) {

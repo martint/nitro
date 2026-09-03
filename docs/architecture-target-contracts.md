@@ -2210,9 +2210,10 @@ and pick specialized paths when possible.
 
 An independently derived mask does not erase the value of a dictionary encoding. When mappings do not align, a
 weighted consumer can populate reusable domain-frequency scratch with one exact pass over the selected ids, then do
-value-level work once per populated entry. Aligned masks may reuse their existing counts directly. This physical
-mechanism is function-neutral; each registered implementation still decides whether multiplicities preserve its
-semantics.
+value-level work once per populated entry. Identity-aligned masks reuse their existing counts directly. Independently
+owned mappings may also reuse those counts after an explicit full-ID-sequence equality proof, which is O(rows) but
+avoids dependent histogram updates. This physical mechanism is function-neutral; each registered implementation still
+decides whether multiplicities preserve its semantics.
 
 Examples:
 

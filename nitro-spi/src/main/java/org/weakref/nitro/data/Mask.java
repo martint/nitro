@@ -1367,6 +1367,26 @@ public class Mask
         return selection;
     }
 
+    /**
+     * Returns the encoded selection when {@code dictionary} has the same row-to-domain mapping, even if the two
+     * mappings are independently owned. Proving equivalence is O(rows); callers should use this only when reusing the
+     * existing domain histogram avoids more expensive per-selected-row work.
+     */
+    public DictionaryDomainSelection dictionaryDomainSelectionForEquivalentMapping(DictionaryVector dictionary)
+    {
+        DictionaryDomainSelection selection = dictionaryDomainSelection(dictionary);
+        if (selection != null) {
+            return selection;
+        }
+        selection = dictionaryDomainSelection;
+        if (selection == null || dictionary == null || selection.length() != dictionary.length()) {
+            return null;
+        }
+        return Arrays.equals(selection.ids(), 0, selection.length(), dictionary.ids(), 0, dictionary.length())
+                ? selection
+                : null;
+    }
+
     /** Whether this mask still carries a compact dictionary-domain selection for some row mapping. */
     public boolean hasDictionaryDomainSelection()
     {
