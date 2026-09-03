@@ -1296,6 +1296,41 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testDictionaryDomainProjectionAcceptsPooledCapacityLargerThanDomain()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        PlanEvaluator evaluator = planEvaluator(
+                new EvaluationPlan(List.of(), List.of()),
+                new PrimitiveRegistry(),
+                inputResolver(Map.of()),
+                allocator);
+        DictionaryVector input = DictionaryVector.wrap(
+                new int[] {0, 0, 0, 0},
+                new F64Vector(new double[] {3.5}));
+
+        PlanEvaluator.DictionaryDomainProjectionResult result = evaluator.tryEvaluateDictionaryDomainProjection(
+                List.of(Streams.ofValues(input)),
+                Mask.all(input.length()),
+                2,
+                (_, domainMask) -> {
+                    assertThat(domainMask.size()).isEqualTo(1);
+                    double[] pooledCapacity = new double[16];
+                    pooledCapacity[0] = 5.5;
+                    return new Streams[] {Streams.ofValues(new F64Vector(pooledCapacity))};
+                });
+
+        assertThat(result).isNotNull();
+        assertThat(result.physicalPositionCount()).isEqualTo(1);
+        VectorAccess.DoubleValues values = VectorAccess.doubleValues(result.results()[0].values());
+        assertThat(java.util.stream.IntStream.range(0, input.length())
+                .mapToDouble(values::value)
+                .toArray())
+                .containsExactly(5.5, 5.5, 5.5, 5.5);
+        evaluator.close();
+        allocator.close();
+    }
+
+    @Test
     void testPeelsDictionaryValuesAcrossConstantEncodedCompanionMapping()
     {
         AtomicInteger physicalPositions = new AtomicInteger();

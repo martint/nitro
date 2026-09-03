@@ -956,7 +956,14 @@ public final class PlanEvaluator
             Streams[] results = new Streams[domainResults.length];
             for (int output = 0; output < domainResults.length; output++) {
                 for (Vector vector : domainResults[output].asMap().values()) {
-                    checkArgument(vector.length() == peeling.baseMask().size(), "Dictionary-domain projection result length differs from domain");
+                    checkArgument(
+                            vector.length() >= peeling.baseMask().size(),
+                            "Dictionary-domain projection result length %s (%s) does not cover domain %s (selected %s, max %s)",
+                            vector.length(),
+                            vector.getClass().getSimpleName(),
+                            peeling.baseMask().size(),
+                            peeling.baseMask().count(),
+                            peeling.baseMask().maxPosition());
                 }
                 results[output] = wrapDictionaryPeeledStreams(
                         peeling.mapping(),
