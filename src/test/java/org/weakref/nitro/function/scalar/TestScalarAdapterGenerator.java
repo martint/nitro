@@ -17,6 +17,8 @@ import org.junit.jupiter.api.Test;
 import org.weakref.nitro.core.function.BoundSignature;
 import org.weakref.nitro.core.function.FunctionSemantics;
 import org.weakref.nitro.core.function.NullPropagatingScalarInvocationProvider;
+import org.weakref.nitro.core.function.ScalarResultWriter;
+import org.weakref.nitro.core.function.ScalarResultWriterFactory;
 import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.core.type.TypeIdentity;
 import org.weakref.nitro.core.type.TypeOperators;
@@ -32,7 +34,9 @@ import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
+import org.weakref.nitro.data.VectorAllocator;
 
+import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.util.Collections;
@@ -40,10 +44,12 @@ import java.util.EnumSet;
 import java.util.List;
 import java.util.Optional;
 
+import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.weakref.nitro.core.function.FunctionSemantics.ArgumentNullConvention.CALLED_ON_NULL;
 import static org.weakref.nitro.core.function.FunctionSemantics.ArgumentNullConvention.RETURN_NULL_ON_NULL;
+import static org.weakref.nitro.core.function.FunctionSemantics.FailureConvention.MAY_FAIL;
 import static org.weakref.nitro.core.function.FunctionSemantics.FailureConvention.NEVER_FAILS;
 import static org.weakref.nitro.execution.EngineResources.createDefault;
 
@@ -56,6 +62,77 @@ final class TestScalarAdapterGenerator
             new TypeIdentity("test-string"),
             String.class,
             valueReader("readAscii", String.class));
+    private static final TypeBinding STRING_RESULT = new ResultTypeBinding(
+            new TypeIdentity("test-string-result"),
+            String.class,
+            resultWriter());
+
+    @Test
+    void testRegistryOwnedReferenceResultWritesDirectlyToVector()
+            throws Throwable
+    {
+        PrimitiveFunction function = new ScalarAdapterGenerator().adapt(
+                "render_long",
+                new BoundSignature(STRING_RESULT, List.of(LONG)),
+                strictSemantics(1),
+                new ScalarMethodTarget(MethodHandles.lookup().findStatic(
+                        TestScalarAdapterGenerator.class,
+                        "renderLong",
+                        MethodType.methodType(String.class, long.class))))
+                .implementation();
+
+        try (Allocator allocator = new Allocator(createDefault())) {
+            PrimitiveExecutionContext context = new PrimitiveExecutionContext(allocator);
+            Streams dense = function.apply(
+                    List.of(Streams.ofValues(new I64Vector(new long[] {1, 22, 333}))),
+                    Mask.all(3),
+                    EnumSet.of(Stream.VALUES),
+                    Streams.empty(),
+                    context);
+            assertThat(strings((BinaryVector) dense.values())).containsExactly("v1", "v22", "v333");
+
+            Streams sparse = function.apply(
+                    List.of(Streams.ofValues(new I64Vector(new long[] {1, 22, 333}))),
+                    Mask.sparse(new int[] {1}, 3),
+                    EnumSet.of(Stream.VALUES),
+                    Streams.ofValues(binary("keep-left", "old", "keep-right")),
+                    context);
+            assertThat(strings((BinaryVector) sparse.values())).containsExactly("keep-left", "v22", "keep-right");
+
+            Streams nullable = function.apply(
+                    List.of(Streams.ofValuesAndNulls(
+                            new I64Vector(new long[] {1, 22, 333}),
+                            new BooleanVector(new boolean[] {false, true, false}))),
+                    Mask.all(3),
+                    EnumSet.of(Stream.VALUES, Stream.NULLS),
+                    Streams.empty(),
+                    context);
+            assertThat(strings((BinaryVector) nullable.values())).containsExactly("v1", "", "v333");
+            assertThat(((BooleanVector) nullable.get(Stream.NULLS)).values()).containsExactly(false, true, false);
+
+            Streams valuesOnly = function.apply(
+                    List.of(Streams.ofValuesAndNulls(
+                            new I64Vector(new long[] {1, 22, 333}),
+                            new BooleanVector(new boolean[] {false, true, false}))),
+                    Mask.all(3),
+                    EnumSet.of(Stream.VALUES),
+                    Streams.empty(),
+                    context);
+            // VALUES beneath an unrequested semantic NULL are deliberately unspecified.
+            assertThat(strings((BinaryVector) valuesOnly.values())).containsExactly("v1", "v22", "v333");
+
+            Streams rle = function.apply(
+                    List.of(Streams.ofValues(new RleVector(new int[] {2, 3}, new I64Vector(new long[] {1, 22})))),
+                    Mask.all(5),
+                    EnumSet.of(Stream.VALUES),
+                    Streams.empty(),
+                    context);
+            assertThat(rle.values()).isInstanceOf(RleVector.class);
+            RleVector encoded = (RleVector) rle.values();
+            assertThat(encoded.counts()).containsExactly(2, 3);
+            assertThat(strings((BinaryVector) encoded.values())).containsExactly("v1", "v22");
+        }
+    }
 
     @Test
     void testRegistryOwnedReferenceCarrierAcrossPhysicalEncodings()
@@ -391,6 +468,76 @@ final class TestScalarAdapterGenerator
                 .hasMessageContaining("strict arguments");
     }
 
+    @Test
+    void testFallibleTargetOnlyObservesSelectedPositions()
+            throws Throwable
+    {
+        PrimitiveFunction function = new ScalarAdapterGenerator().adapt(
+                "require_non_negative",
+                new BoundSignature(LONG, List.of(LONG)),
+                new FunctionSemantics(true, List.of(RETURN_NULL_ON_NULL), false, MAY_FAIL),
+                new ScalarMethodTarget(MethodHandles.lookup().findStatic(
+                        TestScalarAdapterGenerator.class,
+                        "requireNonNegative",
+                        MethodType.methodType(long.class, long.class))))
+                .implementation();
+
+        try (Allocator allocator = new Allocator(createDefault())) {
+            PrimitiveExecutionContext context = new PrimitiveExecutionContext(allocator);
+            Streams result = function.apply(
+                    List.of(Streams.ofValues(new I64Vector(new long[] {-1, 7}))),
+                    Mask.sparse(new int[] {1}, 2),
+                    EnumSet.of(Stream.VALUES),
+                    Streams.empty(),
+                    context);
+            assertThat(((I64Vector) result.values()).values()).containsExactly(0, 7);
+
+            assertThatThrownBy(() -> function.apply(
+                    List.of(Streams.ofValues(new I64Vector(new long[] {-1, 7}))),
+                    Mask.all(2),
+                    EnumSet.of(Stream.VALUES),
+                    Streams.empty(),
+                    context))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessage("negative value");
+        }
+    }
+
+    @Test
+    void testReferenceResultWriterRecoversAfterTargetFailure()
+            throws Throwable
+    {
+        PrimitiveFunction function = new ScalarAdapterGenerator().adapt(
+                "render_non_negative",
+                new BoundSignature(STRING_RESULT, List.of(LONG)),
+                new FunctionSemantics(true, List.of(RETURN_NULL_ON_NULL), false, MAY_FAIL),
+                new ScalarMethodTarget(MethodHandles.lookup().findStatic(
+                        TestScalarAdapterGenerator.class,
+                        "renderNonNegative",
+                        MethodType.methodType(String.class, long.class))))
+                .implementation();
+
+        try (Allocator allocator = new Allocator(createDefault())) {
+            PrimitiveExecutionContext context = new PrimitiveExecutionContext(allocator);
+            assertThatThrownBy(() -> function.apply(
+                    List.of(Streams.ofValues(new I64Vector(new long[] {-1}))),
+                    Mask.all(1),
+                    EnumSet.of(Stream.VALUES),
+                    Streams.empty(),
+                    context))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessage("negative value");
+
+            Streams recovered = function.apply(
+                    List.of(Streams.ofValues(new I64Vector(new long[] {7}))),
+                    Mask.all(1),
+                    EnumSet.of(Stream.VALUES),
+                    Streams.empty(),
+                    context);
+            assertThat(strings((BinaryVector) recovered.values())).containsExactly("v7");
+        }
+    }
+
     private static FunctionSemantics strictSemantics(int arity)
     {
         return new FunctionSemantics(true, Collections.nCopies(arity, RETURN_NULL_ON_NULL), false, NEVER_FAILS);
@@ -426,6 +573,25 @@ final class TestScalarAdapterGenerator
         return value.length();
     }
 
+    private static String renderLong(long value)
+    {
+        return "v" + value;
+    }
+
+    private static String renderNonNegative(long value)
+    {
+        requireNonNegative(value);
+        return renderLong(value);
+    }
+
+    private static long requireNonNegative(long value)
+    {
+        if (value < 0) {
+            throw new IllegalArgumentException("negative value");
+        }
+        return value;
+    }
+
     private static String readAscii(Vector vector, int position)
     {
         VectorAccess.BinaryRegions values = VectorAccess.binaryRegions(vector);
@@ -450,6 +616,15 @@ final class TestScalarAdapterGenerator
         return new BinaryVector(values.length, offsets, data);
     }
 
+    private static List<String> strings(BinaryVector vector)
+    {
+        java.util.ArrayList<String> result = new java.util.ArrayList<>();
+        for (int position = 0; position < vector.length(); position++) {
+            result.add(new String(vector.data(), vector.startOffset(position), vector.length(position), UTF_8));
+        }
+        return result;
+    }
+
     private static java.lang.invoke.MethodHandle valueReader(String name, Class<?> result)
     {
         try {
@@ -461,6 +636,40 @@ final class TestScalarAdapterGenerator
         catch (ReflectiveOperationException exception) {
             throw new ExceptionInInitializerError(exception);
         }
+    }
+
+    private static ScalarResultWriterFactory resultWriter()
+    {
+        MethodHandle append;
+        try {
+            append = MethodHandles.lookup().findStatic(
+                    TestScalarAdapterGenerator.class,
+                    "appendString",
+                    MethodType.methodType(void.class, ScalarResultWriter.class, int.class, String.class));
+        }
+        catch (ReflectiveOperationException exception) {
+            throw new ExceptionInInitializerError(exception);
+        }
+        MethodHandle target = append;
+        return new ScalarResultWriterFactory()
+        {
+            @Override
+            public ScalarResultWriter createWriter()
+            {
+                return new StringResultWriter();
+            }
+
+            @Override
+            public MethodHandle appendTarget()
+            {
+                return target;
+            }
+        };
+    }
+
+    private static void appendString(ScalarResultWriter writer, int position, String value)
+    {
+        ((StringResultWriter) writer).append(position, value);
     }
 
     private static final class CountingTarget
@@ -503,6 +712,143 @@ final class TestScalarAdapterGenerator
         public TypeOperators operators()
         {
             return TypeOperators.UNSPECIFIED;
+        }
+    }
+
+    private record ResultTypeBinding(TypeIdentity identity, Class<?> carrierType, ScalarResultWriterFactory writerFactory)
+            implements TypeBinding
+    {
+        @Override
+        public Optional<ScalarResultWriterFactory> scalarResultWriterFactory()
+        {
+            return Optional.of(writerFactory);
+        }
+
+        @Override
+        public TypeOperators operators()
+        {
+            return TypeOperators.UNSPECIFIED;
+        }
+    }
+
+    private static final class StringResultWriter
+            implements ScalarResultWriter
+    {
+        private static final byte[] EMPTY = new byte[0];
+
+        private VectorAllocator allocator;
+        private BinaryVector proposed;
+        private BinaryVector output;
+        private Mask active;
+        private int[] activePositions;
+        private int activeIndex;
+        private int nextPosition;
+        private int positionCount;
+        private int bytesUsed;
+
+        @Override
+        public void begin(VectorAllocator allocator, Vector proposed, int positionCount, Mask activeMask)
+        {
+            this.allocator = allocator;
+            this.proposed = proposed instanceof BinaryVector binary ? binary : null;
+            this.positionCount = positionCount;
+            this.active = activeMask;
+            this.activePositions = activeMask.selectedPositions();
+            int proposedBytes = this.proposed == null ? 0 : this.proposed.offsets()[Math.min(positionCount, this.proposed.length())];
+            output = BinaryVector.allocate(allocator, positionCount, Math.max(32, proposedBytes + positionCount * 8));
+        }
+
+        private void append(int position, String value)
+        {
+            fillUntil(position);
+            write(value.getBytes(UTF_8));
+            advanceActive(position);
+        }
+
+        @Override
+        public Vector finish()
+        {
+            fillUntil(positionCount);
+            BinaryVector result = output;
+            if (proposed != null && allocator.owns(proposed)) {
+                allocator.release(proposed);
+            }
+            clear();
+            return result;
+        }
+
+        @Override
+        public void abort()
+        {
+            if (allocator != null && output != null && allocator.owns(output)) {
+                allocator.release(output);
+            }
+            clear();
+        }
+
+        private void fillUntil(int target)
+        {
+            while (nextPosition < target) {
+                if (isActive(nextPosition)) {
+                    write(EMPTY);
+                    advanceActive(nextPosition - 1);
+                }
+                else if (proposed != null && nextPosition < proposed.length()) {
+                    ensureCapacity(proposed.length(nextPosition));
+                    output.setBytes(nextPosition, proposed.data(), proposed.startOffset(nextPosition), proposed.length(nextPosition));
+                    bytesUsed += proposed.length(nextPosition);
+                    nextPosition++;
+                }
+                else {
+                    write(EMPTY);
+                }
+            }
+        }
+
+        private boolean isActive(int position)
+        {
+            return active.all() || (activeIndex < active.count() && activePositions[activeIndex] == position);
+        }
+
+        private void advanceActive(int position)
+        {
+            nextPosition = position + 1;
+            if (!active.all()) {
+                activeIndex++;
+            }
+        }
+
+        private void write(byte[] value)
+        {
+            ensureCapacity(value.length);
+            output.setBytes(nextPosition, value);
+            bytesUsed += value.length;
+            nextPosition++;
+        }
+
+        private void ensureCapacity(int additionalBytes)
+        {
+            if (bytesUsed + additionalBytes <= output.byteCapacity()) {
+                return;
+            }
+            BinaryVector grown = BinaryVector.allocate(allocator, positionCount, Math.max(bytesUsed + additionalBytes, output.byteCapacity() * 2));
+            System.arraycopy(output.offsets(), 0, grown.offsets(), 0, nextPosition + 1);
+            System.arraycopy(output.data(), 0, grown.data(), 0, bytesUsed);
+            allocator.release(output);
+            output = grown;
+        }
+
+        private void clear()
+        {
+            allocator = null;
+            proposed = null;
+            output = null;
+            active = null;
+            activePositions = null;
+            activeIndex = 0;
+            nextPosition = 0;
+            positionCount = 0;
+            bytesUsed = 0;
         }
     }
 }

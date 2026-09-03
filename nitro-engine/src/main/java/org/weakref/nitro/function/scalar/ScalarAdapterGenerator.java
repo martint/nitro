@@ -17,6 +17,8 @@ import org.weakref.nitro.core.function.BoundSignature;
 import org.weakref.nitro.core.function.FunctionCapability;
 import org.weakref.nitro.core.function.FunctionSemantics;
 import org.weakref.nitro.core.function.NullPropagatingScalarInvocationProvider;
+import org.weakref.nitro.core.function.ScalarResultWriter;
+import org.weakref.nitro.core.function.ScalarResultWriterFactory;
 import org.weakref.nitro.core.type.TypeBinding;
 
 import java.lang.classfile.ClassFile;
@@ -43,15 +45,16 @@ import static java.lang.constant.ConstantDescs.CD_void;
 import static java.lang.constant.ConstantDescs.ofCallsiteBootstrap;
 import static java.util.Objects.requireNonNull;
 import static org.weakref.nitro.core.function.FunctionSemantics.ArgumentNullConvention.RETURN_NULL_ON_NULL;
-import static org.weakref.nitro.core.function.FunctionSemantics.FailureConvention.NEVER_FAILS;
 
 /// Classfile API adapter from an exact scalar MethodHandle to Nitro's masked batch convention.
 ///
-/// The generated convention admits strict, non-nullable, non-failing functions with primitive
-/// results. Arguments may use primitive stack carriers or registry-owned reference carriers with
-/// an exact [org.weakref.nitro.core.type.TypeBinding#scalarValueReader()] handle. Carrier combinations
-/// and arity are generator inputs rather than Java interface types, so expanding the convention
-/// does not expand the API or teach Nitro about host carrier classes.
+/// The generated convention admits strict functions whose arguments and results use primitive stack carriers
+/// or registry-owned reference carriers. Reference arguments provide an exact
+/// [org.weakref.nitro.core.type.TypeBinding#scalarValueReader()] handle; reference results provide a
+/// [org.weakref.nitro.core.function.ScalarResultWriterFactory] that copies each result immediately into
+/// allocator-owned vector storage. Carrier combinations and arity are generator inputs rather than Java
+/// interface types, so expanding the convention does not expand the API or teach Nitro about host carrier
+/// classes.
 public final class ScalarAdapterGenerator
 {
     private static final ClassDesc CD_OBJECT = ClassDesc.of("java.lang.Object");
@@ -67,6 +70,7 @@ public final class ScalarAdapterGenerator
     private static final ClassDesc CD_DOUBLE_VALUES = ClassDesc.of("org.weakref.nitro.data.VectorAccess$DoubleValues");
     private static final ClassDesc CD_BOOLEAN_VALUES = ClassDesc.of("org.weakref.nitro.data.VectorAccess$BooleanValues");
     private static final ClassDesc CD_VECTOR = ClassDesc.of("org.weakref.nitro.data.Vector");
+    private static final ClassDesc CD_RESULT_WRITER = ClassDesc.of("org.weakref.nitro.core.function.ScalarResultWriter");
 
     private static final MethodTypeDesc BOOLEAN_VALUE = MethodTypeDesc.of(CD_boolean, CD_int);
     private static final MethodTypeDesc DENSE_FLAT_NULL_FREE = MethodTypeDesc.of(CD_void, CD_OBJECT_ARRAY, CD_OBJECT, CD_int);
@@ -89,8 +93,9 @@ public final class ScalarAdapterGenerator
         requireNonNull(signature, "signature is null");
         requireNonNull(semantics, "semantics is null");
         requireNonNull(target, "target is null");
-        validate(signature, semantics, target.target());
-        return descriptor(name, signature, semantics, target, List.of(target));
+        ScalarResultWriterFactory resultWriterFactory = resultWriterFactory(signature.resultType());
+        validate(signature, semantics, target.target(), resultWriterFactory);
+        return descriptor(name, signature, semantics, target, resultWriterFactory, List.of(target));
     }
 
     /**
@@ -112,14 +117,14 @@ public final class ScalarAdapterGenerator
         requireNonNull(target, "target is null");
         checkArgument(semantics.argumentNullConventions().size() == signature.argumentTypes().size(),
                 "Scalar semantics argument count does not match bound signature");
-        checkArgument(semantics.failureConvention() == NEVER_FAILS,
-                "Framework-managed null-propagating scalar currently requires a non-failing target");
-        validateTarget(signature, target.target());
+        ScalarResultWriterFactory resultWriterFactory = resultWriterFactory(signature.resultType());
+        validateTarget(signature, target.target(), resultWriterFactory);
         return descriptor(
                 name,
                 signature,
                 semantics,
                 target,
+                resultWriterFactory,
                 List.of(new BoundNullPropagatingTarget(signature, target.target())));
     }
 
@@ -128,16 +133,24 @@ public final class ScalarAdapterGenerator
             BoundSignature signature,
             FunctionSemantics semantics,
             ScalarMethodTarget target,
+            ScalarResultWriterFactory resultWriterFactory,
             List<FunctionCapability> capabilities)
     {
         return new ScalarDescriptor(
                 name,
                 semantics.deterministic(),
-                new FrameworkManagedScalarFunction(name, signature, generate(signature, target)),
+                new FrameworkManagedScalarFunction(
+                        name,
+                        signature,
+                        generate(signature, target, resultWriterFactory),
+                        resultWriterFactory),
                 capabilities);
     }
 
-    private GeneratedScalarKernel generate(BoundSignature signature, ScalarMethodTarget target)
+    private GeneratedScalarKernel generate(
+            BoundSignature signature,
+            ScalarMethodTarget target,
+            ScalarResultWriterFactory resultWriterFactory)
     {
         List<TypeBinding> argumentTypes = signature.argumentTypes();
         List<Class<?>> arguments = argumentTypes.stream()
@@ -151,6 +164,7 @@ public final class ScalarAdapterGenerator
                         : type.scalarValueReader().orElseThrow().asType(MethodType.methodType(Object.class, org.weakref.nitro.data.Vector.class, int.class)))
                 .toList();
         Class<?> result = signature.resultType().carrierType();
+        boolean referenceResult = !result.isPrimitive();
         MethodHandles.Lookup definitionLookup = MethodHandles.lookup();
         String packageName = definitionLookup.lookupClass().getPackageName();
         String className = (packageName.isEmpty() ? "" : packageName + ".") + "GeneratedScalarKernel" + nextClassId.incrementAndGet();
@@ -159,10 +173,14 @@ public final class ScalarAdapterGenerator
                 descriptor(result),
                 arguments.stream().map(ScalarAdapterGenerator::descriptor).toArray(ClassDesc[]::new));
         MethodHandle invocationTarget = target.target().asType(MethodType.methodType(
-                result,
+                referenceResult ? Object.class : result,
                 arguments.stream()
                         .map(carrier -> carrier.isPrimitive() ? carrier : Object.class)
                         .toArray(Class<?>[]::new)));
+        MethodHandle resultWriter = referenceResult
+                ? resultWriterFactory.appendTarget().asType(
+                        MethodType.methodType(void.class, ScalarResultWriter.class, int.class, Object.class))
+                : target.target();
         byte[] bytes = ClassFile.of().build(thisClass, builder -> {
             builder.withSuperclass(CD_OBJECT);
             builder.withInterfaceSymbols(CD_KERNEL);
@@ -189,7 +207,7 @@ public final class ScalarAdapterGenerator
         try {
             MethodHandles.Lookup lookup = definitionLookup.defineHiddenClassWithClassData(
                     bytes,
-                    new ScalarAdapterLinkage(invocationTarget, readers),
+                    new ScalarAdapterLinkage(invocationTarget, readers, resultWriter),
                     true,
                     MethodHandles.Lookup.ClassOption.NESTMATE);
             return (GeneratedScalarKernel) lookup.findConstructor(lookup.lookupClass(), MethodType.methodType(void.class)).invoke();
@@ -277,7 +295,7 @@ public final class ScalarAdapterGenerator
         }
 
         code.aload(output);
-        code.checkcast(arrayDescriptor(result));
+        code.checkcast(result.isPrimitive() ? arrayDescriptor(result) : CD_RESULT_WRITER);
         code.iload(position);
         for (int argument = 0; argument < arguments.size(); argument++) {
             Class<?> carrier = arguments.get(argument);
@@ -313,7 +331,15 @@ public final class ScalarAdapterGenerator
             }
         }
         code.invokedynamic(DynamicCallSiteDesc.of(BSM_SCALAR_TARGET, "apply", invocationType));
-        store(code, result);
+        if (result.isPrimitive()) {
+            store(code, result);
+        }
+        else {
+            code.invokedynamic(DynamicCallSiteDesc.of(
+                    BSM_SCALAR_TARGET,
+                    "write",
+                    MethodTypeDesc.of(CD_void, CD_RESULT_WRITER, CD_int, CD_OBJECT)));
+        }
 
         code.labelBinding(next);
         code.iinc(index, 1);
@@ -322,25 +348,55 @@ public final class ScalarAdapterGenerator
         code.return_();
     }
 
-    private static void validate(BoundSignature signature, FunctionSemantics semantics, MethodHandle target)
+    private static void validate(
+            BoundSignature signature,
+            FunctionSemantics semantics,
+            MethodHandle target,
+            ScalarResultWriterFactory resultWriterFactory)
     {
         checkArgument(semantics.argumentNullConventions().size() == signature.argumentTypes().size(),
                 "Scalar semantics argument count does not match bound signature");
         checkArgument(semantics.argumentNullConventions().stream().allMatch(RETURN_NULL_ON_NULL::equals),
                 "Framework-managed scalar currently requires strict arguments");
         checkArgument(!semantics.nullableResult(), "Framework-managed scalar currently requires a non-null result");
-        checkArgument(semantics.failureConvention() == NEVER_FAILS, "Framework-managed scalar currently requires a non-failing target");
-        validateTarget(signature, target);
+        validateTarget(signature, target, resultWriterFactory);
     }
 
-    private static void validateTarget(BoundSignature signature, MethodHandle target)
+    private static void validateTarget(
+            BoundSignature signature,
+            MethodHandle target,
+            ScalarResultWriterFactory resultWriterFactory)
     {
         signature.argumentTypes().forEach(ScalarAdapterGenerator::checkArgumentCarrier);
-        checkPrimitiveCarrier(signature.resultType().carrierType());
+        checkResultCarrier(signature.resultType(), resultWriterFactory);
         MethodType expected = MethodType.methodType(
                 signature.resultType().carrierType(),
                 signature.argumentTypes().stream().map(type -> type.carrierType()).toArray(Class<?>[]::new));
         checkArgument(target.type().equals(expected), "Scalar target type %s does not match bound signature %s", target.type(), expected);
+    }
+
+    private static ScalarResultWriterFactory resultWriterFactory(TypeBinding type)
+    {
+        Class<?> carrier = type.carrierType();
+        if (carrier.isPrimitive()) {
+            checkPrimitiveCarrier(carrier);
+            return null;
+        }
+        ScalarResultWriterFactory factory = type.scalarResultWriterFactory().orElseThrow(() ->
+                new IllegalArgumentException("Reference result carrier %s does not provide a result writer".formatted(carrier.getTypeName())));
+        return factory;
+    }
+
+    private static void checkResultCarrier(TypeBinding type, ScalarResultWriterFactory factory)
+    {
+        Class<?> carrier = type.carrierType();
+        if (carrier.isPrimitive()) {
+            checkArgument(factory == null, "Primitive result carrier has a result writer");
+            return;
+        }
+        requireNonNull(factory, "factory is null");
+        MethodType expected = MethodType.methodType(void.class, ScalarResultWriter.class, int.class, carrier);
+        checkArgument(factory.appendTarget().type().equals(expected), "Result writer type %s does not match %s", factory.appendTarget().type(), expected);
     }
 
     private record BoundNullPropagatingTarget(BoundSignature signature, MethodHandle target)

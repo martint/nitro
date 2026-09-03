@@ -47,6 +47,9 @@ public interface VectorAllocator
 
     <T extends Vector> T transfer(T vector);
 
+    /// Whether this allocation scope owns the vector and may therefore mutate or release it.
+    boolean owns(Vector vector);
+
     void release(Vector vector);
 
     @Override

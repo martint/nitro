@@ -108,6 +108,13 @@ public final class ScopedVectorAllocator
     }
 
     @Override
+    public boolean owns(Vector vector)
+    {
+        checkOpen();
+        return allocator.ownsVector(context, requireNonNull(vector, "vector is null"));
+    }
+
+    @Override
     public void release(Vector vector)
     {
         checkOpen();

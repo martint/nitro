@@ -32,6 +32,9 @@ final class ScalarAdapterBootstrap
         if (name.equals("apply")) {
             target = linkage.target();
         }
+        else if (name.equals("write")) {
+            target = linkage.resultWriter();
+        }
         else if (name.startsWith("read")) {
             int argument = Integer.parseInt(name, "read".length(), name.length(), 10);
             target = linkage.argumentReaders().get(argument);

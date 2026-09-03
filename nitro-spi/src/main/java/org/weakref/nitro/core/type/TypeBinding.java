@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.core.type;
 
+import org.weakref.nitro.core.function.ScalarResultWriterFactory;
 import org.weakref.nitro.data.Vector;
 
 import java.lang.invoke.MethodHandle;
@@ -50,6 +51,12 @@ public interface TypeBinding
     /// comparison kernel contract; a type may support scalar invocation without exposing the
     /// full value/comparison/identity bundle.
     default Optional<MethodHandle> scalarValueReader()
+    {
+        return Optional.empty();
+    }
+
+    /// Provider-owned materialization contract for scalar functions returning a reference carrier.
+    default Optional<ScalarResultWriterFactory> scalarResultWriterFactory()
     {
         return Optional.empty();
     }

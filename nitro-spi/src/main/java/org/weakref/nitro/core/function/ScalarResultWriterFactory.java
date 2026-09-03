@@ -11,19 +11,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.weakref.nitro.function.scalar;
+package org.weakref.nitro.core.function;
 
 import java.lang.invoke.MethodHandle;
-import java.util.List;
 
-import static java.util.Objects.requireNonNull;
-
-record ScalarAdapterLinkage(MethodHandle target, List<MethodHandle> argumentReaders, MethodHandle resultWriter)
+/// Provider-owned bridge from a scalar Java result carrier into allocator-owned Nitro vector storage.
+public interface ScalarResultWriterFactory
 {
-    ScalarAdapterLinkage
-    {
-        target = requireNonNull(target, "target is null");
-        argumentReaders = List.copyOf(requireNonNull(argumentReaders, "argumentReaders is null"));
-        resultWriter = requireNonNull(resultWriter, "resultWriter is null");
-    }
+    ScalarResultWriter createWriter();
+
+    /// Exact provider handle with signature `(ScalarResultWriter, int, carrier) -> void`.
+    /// Generated adapters invoke it immediately after each scalar call and retain no carrier objects.
+    MethodHandle appendTarget();
 }
