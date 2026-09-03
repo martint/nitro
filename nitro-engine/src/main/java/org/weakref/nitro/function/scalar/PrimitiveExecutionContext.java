@@ -24,6 +24,7 @@ import java.util.function.Supplier;
 import static java.util.Objects.requireNonNull;
 
 public final class PrimitiveExecutionContext
+        implements AutoCloseable
 {
     private final Allocator allocator;
     private final Map<String, Allocator.Context> allocationContexts = new HashMap<>();
@@ -61,5 +62,31 @@ public final class PrimitiveExecutionContext
         @SuppressWarnings("unchecked")
         T state = (T) states.computeIfAbsent(key, _ -> requireNonNull(factory.get(), "factory returned null"));
         return state;
+    }
+
+    @Override
+    public void close()
+    {
+        RuntimeException failure = null;
+        for (Object state : states.values()) {
+            if (!(state instanceof AutoCloseable closeable)) {
+                continue;
+            }
+            try {
+                closeable.close();
+            }
+            catch (Exception exception) {
+                if (failure == null) {
+                    failure = new IllegalStateException("Failed to close primitive execution state", exception);
+                }
+                else {
+                    failure.addSuppressed(exception);
+                }
+            }
+        }
+        states.clear();
+        if (failure != null) {
+            throw failure;
+        }
     }
 }

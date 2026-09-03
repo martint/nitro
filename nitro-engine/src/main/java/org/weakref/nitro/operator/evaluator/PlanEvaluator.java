@@ -460,11 +460,16 @@ public final class PlanEvaluator
     /** Releases evaluator-owned cross-batch dictionary domains. */
     public void close()
     {
-        dictionaryDomainCache.clear();
-        cachedDictionaryResults.clear();
-        allocator.releaseIfPresent(dictionaryDomainCacheContext);
-        allocator.primitiveArrays().release(dictionaryDomainSelectionScratch);
-        dictionaryDomainSelectionScratch = new boolean[0];
+        try {
+            executionContext.close();
+        }
+        finally {
+            dictionaryDomainCache.clear();
+            cachedDictionaryResults.clear();
+            allocator.releaseIfPresent(dictionaryDomainCacheContext);
+            allocator.primitiveArrays().release(dictionaryDomainSelectionScratch);
+            dictionaryDomainSelectionScratch = new boolean[0];
+        }
     }
 
     private Streams evaluateUnmemoized(Reference reference, Mask mask, Streams output)

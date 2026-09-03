@@ -198,6 +198,10 @@ Stateful registry implementations may also request a composed key binder. Each b
 and cross-vector identity over positions, allowing retained indexes such as map construction state to span owned
 vector segments. The binder does not prescribe table layout, growth, payload retention, or duplicate policy.
 
+An evaluator owns the mutable state created through its function execution context. State is thread-confined to that
+evaluator, may be reused across its batches, and is closed when the evaluator closes if it implements
+`AutoCloseable`. A resolved function binding remains immutable and must not retain evaluator-local state itself.
+
 Generated adapters are ordinary implementations of the batch convention. They may generate direct invocation bytecode
 around a constant method-handle target, hoist null/error classification, traverse selected positions, and write into
 allocator-owned outputs. Generation does not transfer function semantics into the evaluator.
