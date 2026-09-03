@@ -32,6 +32,7 @@ import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.core.type.TypeIdentity;
 import org.weakref.nitro.core.type.TypeOperators;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.F64Vector;
 import org.weakref.nitro.data.I64Vector;
@@ -47,10 +48,12 @@ import org.weakref.nitro.function.scalar.ScalarAdapterGenerator;
 import org.weakref.nitro.function.scalar.ScalarMethodTarget;
 import org.weakref.nitro.function.scalar.builtin.HandwrittenBigintAdd;
 
+import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.util.Collections;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.SplittableRandom;
 import java.util.concurrent.TimeUnit;
@@ -75,6 +78,10 @@ public class BenchmarkGeneratedScalarAdapters
     static final int POSITION_COUNT = 8192;
     private static final TypeBinding LONG = new BenchmarkTypeBinding("benchmark:long", long.class);
     private static final TypeBinding DOUBLE = new BenchmarkTypeBinding("benchmark:double", double.class);
+    private static final TypeBinding BINARY_REGION = new ReferenceBenchmarkTypeBinding(
+            new TypeIdentity("benchmark:binary-region"),
+            BinaryRegion.class,
+            valueReader());
     private static final Set<Stream> VALUES = Set.of(Stream.VALUES);
 
     @Param({"flat", "dictionary", "rle"})
@@ -91,6 +98,7 @@ public class BenchmarkGeneratedScalarAdapters
     private List<Streams> compositeInputs;
     private List<Streams> materializedAddInputs;
     private List<Streams> unaryInput;
+    private List<Streams> referenceInput;
     private Streams longOutput;
     private Streams doubleOutput;
     private PrimitiveFunction nativeAdd;
@@ -101,6 +109,7 @@ public class BenchmarkGeneratedScalarAdapters
     private PrimitiveFunction generatedMultiply;
     private PrimitiveFunction generatedDirectComposite;
     private PrimitiveFunction generatedComposedComposite;
+    private PrimitiveFunction generatedReferenceLength;
     private Streams intermediateOutput;
 
     @Setup
@@ -129,6 +138,14 @@ public class BenchmarkGeneratedScalarAdapters
         binaryInputs = List.of(Streams.ofValues(leftVector), Streams.ofValues(rightVector));
         compositeInputs = List.of(Streams.ofValues(leftVector), Streams.ofValues(rightVector), Streams.ofValues(offsetVector));
         unaryInput = List.of(Streams.ofValues(leftVector));
+        int[] binaryOffsets = new int[POSITION_COUNT + 1];
+        for (int position = 0; position < POSITION_COUNT; position++) {
+            binaryOffsets[position + 1] = binaryOffsets[position] + 8 + position % 57;
+        }
+        referenceInput = List.of(Streams.ofValues(new BinaryVector(
+                POSITION_COUNT,
+                binaryOffsets,
+                new byte[binaryOffsets[POSITION_COUNT]])));
         longOutput = Streams.ofValues(new I64Vector(POSITION_COUNT));
         intermediateOutput = Streams.ofValues(new I64Vector(POSITION_COUNT));
         materializedAddInputs = List.of(intermediateOutput, Streams.ofValues(offsetVector));
@@ -208,6 +225,15 @@ public class BenchmarkGeneratedScalarAdapters
                                 MethodType.methodType(double.class, long.class))
                         .bindTo(scalarTargets)))
                 .implementation();
+        generatedReferenceLength = generator.adapt(
+                "generated_reference_length",
+                new BoundSignature(LONG, List.of(BINARY_REGION)),
+                strictSemantics(1),
+                new ScalarMethodTarget(MethodHandles.lookup().findStatic(
+                        BenchmarkGeneratedScalarAdapters.class,
+                        "length",
+                        MethodType.methodType(long.class, BinaryRegion.class))))
+                .implementation();
     }
 
     @TearDown
@@ -264,6 +290,53 @@ public class BenchmarkGeneratedScalarAdapters
     {
         generatedMultiply.apply(binaryInputs, mask, VALUES, intermediateOutput, context);
         return generatedAdd.apply(materializedAddInputs, mask, VALUES, longOutput, context);
+    }
+
+    @Benchmark
+    public Streams generatedReferenceLength()
+    {
+        return generatedReferenceLength.apply(referenceInput, mask, VALUES, longOutput, context);
+    }
+
+    @Benchmark
+    public Streams directReferenceLength()
+    {
+        BinaryVector input = (BinaryVector) referenceInput.getFirst().values();
+        long[] result = ((I64Vector) longOutput.values()).values();
+        if (mask.all()) {
+            for (int position = 0; position < POSITION_COUNT; position++) {
+                result[position] = length(readBinaryRegion(input, position));
+            }
+        }
+        else {
+            int[] positions = mask.selectedPositions();
+            for (int index = 0; index < mask.selectedCount(); index++) {
+                int position = positions[index];
+                result[position] = length(readBinaryRegion(input, position));
+            }
+        }
+        return longOutput;
+    }
+
+    @Benchmark
+    public Streams directPhysicalLength()
+    {
+        BinaryVector input = (BinaryVector) referenceInput.getFirst().values();
+        int[] offsets = input.offsets();
+        long[] result = ((I64Vector) longOutput.values()).values();
+        if (mask.all()) {
+            for (int position = 0; position < POSITION_COUNT; position++) {
+                result[position] = offsets[position + 1] - offsets[position];
+            }
+        }
+        else {
+            int[] positions = mask.selectedPositions();
+            for (int index = 0; index < mask.selectedCount(); index++) {
+                int position = positions[index];
+                result[position] = offsets[position + 1] - offsets[position];
+            }
+        }
+        return longOutput;
     }
 
     public static void main(String[] args)
@@ -330,6 +403,31 @@ public class BenchmarkGeneratedScalarAdapters
         return (double) value;
     }
 
+    private static BinaryRegion readBinaryRegion(Vector vector, int position)
+    {
+        BinaryVector values = (BinaryVector) vector;
+        int offset = values.offsets()[position];
+        return new BinaryRegion(values.data(), offset, values.offsets()[position + 1] - offset);
+    }
+
+    private static long length(BinaryRegion value)
+    {
+        return value.length();
+    }
+
+    private static MethodHandle valueReader()
+    {
+        try {
+            return MethodHandles.lookup().findStatic(
+                    BenchmarkGeneratedScalarAdapters.class,
+                    "readBinaryRegion",
+                    MethodType.methodType(BinaryRegion.class, Vector.class, int.class));
+        }
+        catch (ReflectiveOperationException exception) {
+            throw new ExceptionInInitializerError(exception);
+        }
+    }
+
     private static final class ScalarTargets
     {
         public long add(long left, long right)
@@ -357,4 +455,22 @@ public class BenchmarkGeneratedScalarAdapters
             return TypeOperators.UNSPECIFIED;
         }
     }
+
+    private record ReferenceBenchmarkTypeBinding(TypeIdentity identity, Class<?> carrierType, MethodHandle reader)
+            implements TypeBinding
+    {
+        @Override
+        public Optional<MethodHandle> scalarValueReader()
+        {
+            return Optional.of(reader);
+        }
+
+        @Override
+        public TypeOperators operators()
+        {
+            return TypeOperators.UNSPECIFIED;
+        }
+    }
+
+    private record BinaryRegion(byte[] data, int offset, int length) {}
 }
