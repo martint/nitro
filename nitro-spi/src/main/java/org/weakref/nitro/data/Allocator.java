@@ -288,6 +288,28 @@ public class Allocator
         return vector;
     }
 
+    /**
+     * Replaces an owned RLE wrapper while retaining or replacing its physical value domain.
+     *
+     * <p>This lets an encoded producer reuse the prior domain storage without retaining two owners for the same
+     * child. The old wrapper and any superseded child domain are released; the replacement owns the supplied values.
+     */
+    public RleVector replaceRleValues(Context context, RleVector source, int[] counts, int count, Vector values)
+    {
+        requireNonNull(context, "context is null");
+        requireNonNull(source, "source is null");
+        requireNonNull(values, "values is null");
+        checkArgument(ownsVector(context, source), "source RLE vector is not owned by the allocation context");
+
+        Vector previousValues = source.values();
+        RleVector replacement = allocateRle(context, counts, count, values);
+        releaseVector(context, source);
+        if (previousValues != values && ownsVector(context, previousValues)) {
+            releaseVectorTree(context, previousValues);
+        }
+        return replacement;
+    }
+
     public RleVector allocateSingleRunRle(Context context, int count, Vector value)
     {
         if (!policy.directSingleRunRle()) {

@@ -123,31 +123,41 @@ final class FrameworkManagedScalarFunction
             result = result.with(Stream.ERRORS, errors);
         }
         if (requestNulls) {
-            BooleanVector nulls = VectorAccess.writableBooleanVector(
-                    context.allocator(),
-                    allocationContext,
-                    output != null ? output.getOrNull(Stream.NULLS) : null,
-                    requiredLength);
-            combineNulls(state.nulls, mask, nulls.values());
-            result = result.with(Stream.NULLS, nulls);
+            // Do not turn null-free inputs into a logical-position loop merely because a strict function's caller
+            // requested NULLS.  Represent the result with the allocator's immutable all-false vector instead.
+            if (!hasNulls(state.nulls)) {
+                result = result.with(Stream.NULLS, context.allocator().borrowAllFalseBoolean(allocationContext, requiredLength));
+            }
+            else {
+                BooleanVector nulls = VectorAccess.writableBooleanVector(
+                        context.allocator(),
+                        allocationContext,
+                        output != null ? output.getOrNull(Stream.NULLS) : null,
+                        requiredLength);
+                combineNulls(state.nulls, mask, nulls.values());
+                result = result.with(Stream.NULLS, nulls);
+            }
         }
         if (!invokeTarget) {
             return result;
         }
         state.initializeResult(signature, resultWriterFactory, context.allocator(), allocationContext);
 
+        Vector proposedValues = output == null ? null : output.getOrNull(Stream.VALUES);
+        RleVector proposedRle = proposedValues instanceof RleVector rle && state.vectorAllocator.owns(rle) ? rle : null;
         if (!requestErrors && mask.all() &&
-                (output == null || !output.has(Stream.VALUES)) &&
+                (proposedValues == null || proposedRle != null) &&
                 bindRleValuesIfNullFree(inputs, state, mask.size())) {
             int runCount = mergeRuns(inputs, state);
+            Vector proposedRunValues = proposedRle == null ? null : proposedRle.values();
             Vector runValues;
             if (state.resultWriter == null) {
-                runValues = writablePrimitiveResult(context.allocator(), allocationContext, null, runCount);
+                runValues = writablePrimitiveResult(context.allocator(), allocationContext, proposedRunValues, runCount);
                 kernel.applyDenseDictionaryNullFree(state.flatValues, state.rleIds, valueArray(runValues), null, null, runCount);
             }
             else {
                 try {
-                    state.resultWriter.begin(state.vectorAllocator, null, runCount, Mask.all(runCount));
+                    state.resultWriter.begin(state.vectorAllocator, proposedRunValues, runCount, Mask.all(runCount));
                     kernel.applyDenseDictionaryNullFree(state.flatValues, state.rleIds, state.resultWriter, null, null, runCount);
                     runValues = state.resultWriter.finish();
                 }
@@ -156,15 +166,14 @@ final class FrameworkManagedScalarFunction
                     throw failure;
                 }
             }
-            return result.with(Stream.VALUES, context.allocator().allocateRle(
-                    allocationContext,
-                    state.rleCounts,
-                    runCount,
-                    runValues));
+            RleVector rle = proposedRle == null
+                    ? context.allocator().allocateRle(allocationContext, state.rleCounts, runCount, runValues)
+                    : context.allocator().replaceRleValues(allocationContext, proposedRle, state.rleCounts, runCount, runValues);
+            return result.with(Stream.VALUES, rle);
         }
 
         Vector values = state.resultWriter == null
-                ? writablePrimitiveResult(context.allocator(), allocationContext, output, requiredLength)
+                ? writablePrimitiveResult(context.allocator(), allocationContext, proposedValues, requiredLength)
                 : null;
         Object kernelOutput = values == null ? state.resultWriter : valueArray(values);
         try {
@@ -414,9 +423,8 @@ final class FrameworkManagedScalarFunction
         }
     }
 
-    private Vector writablePrimitiveResult(Allocator allocator, Allocator.Context allocationContext, Streams output, int length)
+    private Vector writablePrimitiveResult(Allocator allocator, Allocator.Context allocationContext, Vector proposed, int length)
     {
-        Vector proposed = output != null ? output.getOrNull(Stream.VALUES) : null;
         Class<?> carrier = signature.resultType().carrierType();
         if (carrier == long.class) {
             return allocator.allocateOrGrow(
@@ -496,6 +504,16 @@ final class FrameworkManagedScalarFunction
             }
             output[position] = value;
         }
+    }
+
+    private static boolean hasNulls(Object[] inputs)
+    {
+        for (Object input : inputs) {
+            if (input != null) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static final class InvocationState

@@ -181,6 +181,10 @@ Generated adapters are ordinary implementations of the batch convention. They ma
 around a constant method-handle target, hoist null/error classification, traverse selected positions, and write into
 allocator-owned outputs. Generation does not transfer function semantics into the evaluator.
 
+Known-empty companion streams are physical constants, not row loops. If every strict argument is proven null-free, a
+requested NULLS result uses the allocator's immutable all-false representation; the adapter must not scan logical
+positions to rediscover that fact. The same rule applies to other provably empty companion streams.
+
 Reference-carrier arguments are read through exact handles supplied by the logical type binding. Reference-carrier
 results are appended immediately through a provider-owned result writer into Nitro vectors. Nitro does not retain an
 array of host objects and does not infer logical meaning from `Slice`, `Block`, or another carrier class.
@@ -247,7 +251,8 @@ an ownership protocol.
 
 The steady-state goal is no allocation proportional to row count for streaming scan/filter/project/aggregate shapes.
 Initialization, bounded resizing, state growth, output materialization, and provider-required variable-size results may
-allocate, but repeated batches should reuse their working set.
+allocate, but repeated batches should reuse their working set. Reuse includes encoded results: an owned RLE proposal may
+replace its wrapper while retaining or replacing its physical value-domain storage under one explicit owner.
 
 ## 12. Stateful and extensible operators
 

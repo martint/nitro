@@ -134,6 +134,17 @@ final class TestScalarAdapterGenerator
             RleVector encoded = (RleVector) rle.values();
             assertThat(encoded.counts()).containsExactly(2, 3);
             assertThat(strings((BinaryVector) encoded.values())).containsExactly("v1", "v22");
+
+            Streams reused = function.apply(
+                    List.of(Streams.ofValues(new RleVector(new int[] {2, 3}, new I64Vector(new long[] {333, 1})))),
+                    Mask.all(5),
+                    EnumSet.of(Stream.VALUES),
+                    rle,
+                    context);
+            assertThat(reused.values()).isInstanceOf(RleVector.class);
+            RleVector reusedEncoding = (RleVector) reused.values();
+            assertThat(reusedEncoding.counts()).containsExactly(2, 3);
+            assertThat(strings((BinaryVector) reusedEncoding.values())).containsExactly("v333", "v1");
         }
     }
 
@@ -274,6 +285,7 @@ final class TestScalarAdapterGenerator
 
             assertThat(((F64Vector) result.values()).values()).containsExactly(1, 2.5, -2);
             assertThat(((BooleanVector) result.get(Stream.NULLS)).values()).containsExactly(false, false, false);
+            assertThat(allocator.isSharedAllFalseBoolean(result.get(Stream.NULLS))).isTrue();
         }
     }
 

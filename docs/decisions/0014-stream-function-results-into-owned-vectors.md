@@ -17,6 +17,8 @@ that Nitro core must not acquire.
 Function calls write directly into a caller-proposed or allocator-created Nitro destination. Primitive adapters use
 typed output vectors. Reference-carrier adapters invoke a result writer supplied by the logical type provider, which
 copies or recursively materializes each result immediately. Accepted proposals are writer-owned until finish or abort.
+An encoded result proposal may reuse its physical domain storage; replacing an owned wrapper transfers the child to
+the replacement and releases any superseded domain exactly once.
 
 ## Consequences
 
@@ -24,6 +26,7 @@ copies or recursively materializes each result immediately. Accepted proposals a
 - Provider writers must define proposal acceptance, finish, abort, and retained-state rules.
 - Writers may retain sizing history but not execution resources or host values.
 - VALUES-only calls do not allocate companion streams that were not requested.
+- Proven all-false companion results use the allocator's immutable constant instead of a logical-position loop.
 
 ## Alternatives considered
 
