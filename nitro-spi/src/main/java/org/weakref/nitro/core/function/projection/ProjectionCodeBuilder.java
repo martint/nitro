@@ -51,6 +51,24 @@ public interface ProjectionCodeBuilder
 
     Value equal(Value left, Value right);
 
+    Value unsignedLessThan(Value left, Value right);
+
+    Value unsignedGreaterThan(Value left, Value right);
+
+    Value bitwiseNot(Value value);
+
+    /**
+     * Builds a fixed-width structural value from named primitive components.
+     *
+     * <p>The names and component meanings belong to the provider's physical type binding. Nitro uses them only to
+     * address fields in a {@code StructVector}; it does not assign a logical type or arithmetic meaning to the
+     * structure. Components may be composed at arbitrary arity without adding a carrier-specific engine interface.
+     */
+    Value structure(List<String> fieldNames, List<Value> fields);
+
+    /** Reads one named primitive component from a structural value. */
+    Value field(Value structure, String fieldName, ValueType fieldType);
+
     Value utf8Equal(Value left, Value right);
 
     Value utf8StartsWith(Value value, Value prefix);
@@ -85,6 +103,7 @@ public interface ProjectionCodeBuilder
     enum ValueType
     {
         I64,
+        STRUCT,
         F64,
         BOOLEAN,
         UTF8,

@@ -195,8 +195,16 @@ array of host objects and does not infer logical meaning from `Slice`, `Block`, 
 An exact scalar target is eligible only when adapting its carrier does not introduce row-proportional allocation or
 erase a useful physical representation. A composite host carrier assembled from several vector children is not an
 efficient batch ABI merely because a value reader can construct it. The provider must retain or supply a physical
-batch implementation over those children until a richer generated convention can pass the representation without
-materializing one host object per row.
+batch implementation over those children unless it supplies a physical projection program over a fixed-width
+structural layout. Such a program names primitive vector components of arbitrary arity; generated code holds them in
+locals across adjacent calls and materializes one allocator-owned structural result at the consumer boundary. Field
+names and component meanings belong to the provider's physical type binding. Nitro assigns no logical type or
+function semantics to the structure.
+
+Generated projections use the evaluator's ordinary encoded-domain proof for both scalar and structural inputs. A
+row-aligned structure whose children share a dictionary mapping is peeled once, evaluated over its physical domain,
+and rewrapped with that mapping and its exact frequencies. A second, projection-specific peeling implementation is
+not permitted.
 
 Failure behavior describes the selected implementation, not merely the most conservative declaration in a host
 catalog. A registry may refine a host `MAY_FAIL` declaration to `NEVER_FAILS` only for an exact implementation it owns

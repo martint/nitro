@@ -1769,6 +1769,90 @@ public class TestOperators
     }
 
     @Test
+    void testFusedProjectionExecutesOverRowAlignedStructuralDictionaryDomain()
+    {
+        class StructuralIdentity
+                implements PrimitiveFunction
+        {
+            @Override
+            public Streams apply(List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
+            {
+                throw new UnsupportedOperationException("generated projection was not used");
+            }
+        }
+
+        class StructuralIdentityProjection
+                implements ProjectionCodeProvider
+        {
+            @Override
+            public Optional<ProjectionProgram> generate(ProjectionCodeBuilder builder, List<ProjectionArgument> arguments)
+            {
+                if (arguments.size() != 1) {
+                    return Optional.empty();
+                }
+                var value = builder.argument(0, ProjectionCodeBuilder.ValueType.STRUCT);
+                return Optional.of(builder.program(
+                        List.of(ProjectionCodeBuilder.ValueType.STRUCT),
+                        builder.structure(
+                                List.of("high", "low", "score", "accepted"),
+                                List.of(
+                                        builder.field(value, "high", ProjectionCodeBuilder.ValueType.I64),
+                                        builder.field(value, "low", ProjectionCodeBuilder.ValueType.I64),
+                                        builder.field(value, "score", ProjectionCodeBuilder.ValueType.F64),
+                                        builder.field(value, "accepted", ProjectionCodeBuilder.ValueType.BOOLEAN))),
+                        builder.isNull(0)));
+            }
+        }
+
+        int[] ids = {0, 1, 0, 1, 1, 0, 1, 0};
+        StructVector values = new StructVector(ids.length);
+        values.setField("high", Streams.ofValues(DictionaryVector.wrap(ids, new I64Vector(new long[] {0, -1}))));
+        values.setField("low", Streams.ofValues(DictionaryVector.wrap(ids, new I64Vector(new long[] {10, -20}))));
+        values.setField("score", Streams.ofValues(DictionaryVector.wrap(ids, new F64Vector(new double[] {1.5, 2.5}))));
+        values.setField("accepted", Streams.ofValues(DictionaryVector.wrap(ids, new BooleanVector(new boolean[] {true, false}))));
+        PrimitiveRegistry registry = new PrimitiveRegistry();
+        registry.register("structural_identity", new StructuralIdentity(), new StructuralIdentityProjection());
+        Variable first = new Variable(0);
+        Variable result = new Variable(1);
+        Reference output = new Reference(result, Stream.VALUES);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(first, new Call("structural_identity", List.of(
+                                new Reference(new Input(0), Stream.VALUES))), AllMask.ALL),
+                        new Assignment(result, new Call("structural_identity", List.of(
+                                new Reference(first, Stream.VALUES))), AllMask.ALL)),
+                List.of(output));
+        Map<String, Long> diagnostics = new LinkedHashMap<>();
+
+        try (ProjectOperator operator = new ProjectOperator(
+                allocator,
+                plan,
+                registry,
+                singleBatchOperator(Streams.ofValues(values)),
+                Schema.unspecified(1),
+                EngineResources.from(allocator).operatorResources(),
+                (event, count) -> diagnostics.merge(event, count, Long::sum))) {
+            operator.sourceOutputDemand(Map.of(0, ValueDemand.FULL_WITH_DOMAIN_COUNTS));
+            try (Batch batch = operator.next()) {
+                DictionaryVector projected = (DictionaryVector) batch.output(0).borrow(Stream.VALUES);
+                assertThat(projected.ids()).isSameAs(ids);
+                assertThat(projected.values()).isInstanceOfSatisfying(StructVector.class, domain -> {
+                    assertThat(((I64Vector) domain.fieldValues("high")).values()).containsExactly(0, -1);
+                    assertThat(((I64Vector) domain.fieldValues("low")).values()).containsExactly(10, -20);
+                    assertThat(((F64Vector) domain.fieldValues("score")).values()).containsExactly(1.5, 2.5);
+                    assertThat(((BooleanVector) domain.fieldValues("accepted")).values()).containsExactly(true, false);
+                });
+            }
+        }
+
+        assertThat(diagnostics)
+                .containsEntry(ProjectOperator.GENERATED_SUCCESSES, 1L)
+                .containsEntry(ProjectOperator.GENERATED_SELECTED_POSITIONS, 8L)
+                .containsEntry(ProjectOperator.GENERATED_DICTIONARY_DOMAIN_POSITIONS, 2L)
+                .containsEntry(ProjectOperator.DICTIONARY_FLATTENING_POSITIONS, 0L);
+    }
+
+    @Test
     void testFusedProjectionFlattensDictionaryForOrdinaryFullDemand()
     {
         DictionaryVector values = DictionaryVector.wrap(

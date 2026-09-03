@@ -59,10 +59,10 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | §1–2 Purpose and scope | 0002, 0003, 0005, 0006, 0009, 0024, 0029, 0039, 0044 |
 | §3 Vocabulary | 0003, 0007, 0008, 0012, 0023 |
 | §4 Composition and modules | 0005, 0006, 0048 |
-| §5 Vectors, streams, types | 0006, 0008, 0012, 0021, 0022, 0023 |
+| §5 Vectors, streams, types | 0006, 0008, 0012, 0021, 0022, 0023, 0054 |
 | §6 Masks and conditions | 0008, 0012, 0020, 0034 |
 | §7 Evaluation IR | 0010, 0011, 0012, 0040 |
-| §8 Function conventions | 0006, 0011, 0013–0016, 0037, 0038, 0040, 0049–0053 |
+| §8 Function conventions | 0006, 0011, 0013–0016, 0037, 0038, 0040, 0049–0054 |
 | §9 Operators and islands | 0003, 0010, 0017, 0024, 0044–0047 |
 | §10 Cooperative execution | 0004, 0044, 0045 |
 | §11 Allocation and memory | 0007, 0014, 0017–0019, 0041 |
@@ -70,7 +70,7 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | §13 Joins and dynamic filters | 0006, 0012, 0018, 0025, 0035, 0036 |
 | §14 Sources and Parquet | 0009, 0020–0023, 0031 |
 | §15 Host boundaries | 0003, 0017, 0019, 0024, 0033, 0044, 0046 |
-| §16 Adaptivity and generation | 0011, 0012, 0027, 0032, 0036, 0037 |
+| §16 Adaptivity and generation | 0011, 0012, 0027, 0032, 0036, 0037, 0054 |
 | §17 Correctness and tests | 0026, 0029, 0043, 0047 |
 | §18 Performance evidence | 0026–0028, 0032, 0041, 0042 |
 | §19 Coverage and productization | 0029–0031, 0033–0035, 0042, 0046, 0047 |
@@ -133,3 +133,4 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | [0051](0051-contain-mapped-failures-during-values-evaluation.md) | Contain mapped failures during VALUES-only evaluation | accepted |
 | [0052](0052-gate-scalar-adaptation-on-carrier-materialization.md) | Gate scalar adaptation on carrier materialization | accepted |
 | [0053](0053-refine-failure-semantics-for-exact-bindings.md) | Refine failure semantics for exact registry bindings | accepted |
+| [0054](0054-generate-fixed-width-structural-projections.md) | Generate fixed-width structural projections without carrier-specific engine types | accepted |

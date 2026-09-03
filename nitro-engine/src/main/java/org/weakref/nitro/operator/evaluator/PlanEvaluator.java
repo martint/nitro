@@ -88,6 +88,14 @@ import static java.util.Objects.requireNonNull;
 
 public final class PlanEvaluator
 {
+    @FunctionalInterface
+    public interface DictionaryDomainProjection
+    {
+        Streams[] apply(List<Streams> inputs, Mask mask);
+    }
+
+    public record DictionaryDomainProjectionResult(Streams[] results, int physicalPositionCount) {}
+
     private final Allocator.Context allocationContext;
     private static final Set<Stream> VALUES_ONLY = Set.of(Stream.VALUES);
     private static final Set<Stream> NULLS_ONLY = Set.of(Stream.NULLS);
@@ -911,6 +919,52 @@ public final class PlanEvaluator
                 replaceDictionaryDomainCache(call, cacheKey, baseResult);
             }
             return wrapDictionaryPeeledStreams(peeling.mapping(), peeling.rowCount(), baseResult, false);
+        }
+        finally {
+            allocator.release(allocationContext, peeling.baseMask());
+        }
+    }
+
+    /**
+     * Executes a function-neutral multi-output projection over a shared dictionary domain and restores the original
+     * logical row mapping on every result stream. Row-aligned structural inputs participate through their encoded
+     * children, so a struct whose fields share one mapping is not needlessly expanded to logical-row width.
+     */
+    public DictionaryDomainProjectionResult tryEvaluateDictionaryDomainProjection(
+            List<Streams> inputs,
+            Mask mask,
+            int minimumReduction,
+            DictionaryDomainProjection projection)
+    {
+        requireNonNull(inputs, "inputs is null");
+        requireNonNull(mask, "mask is null");
+        requireNonNull(projection, "projection is null");
+        checkArgument(minimumReduction > 0, "minimumReduction must be positive");
+
+        DictionaryPeeling peeling = tryBuildDictionaryPeeling(inputs, mask);
+        if (peeling == null) {
+            return null;
+        }
+        try {
+            if ((long) peeling.baseMask().size() * minimumReduction > mask.selectedCount()) {
+                return null;
+            }
+            Streams[] domainResults = projection.apply(peeling.inputs(), peeling.baseMask());
+            if (domainResults == null) {
+                return null;
+            }
+            Streams[] results = new Streams[domainResults.length];
+            for (int output = 0; output < domainResults.length; output++) {
+                for (Vector vector : domainResults[output].asMap().values()) {
+                    checkArgument(vector.length() == peeling.baseMask().size(), "Dictionary-domain projection result length differs from domain");
+                }
+                results[output] = wrapDictionaryPeeledStreams(
+                        peeling.mapping(),
+                        peeling.rowCount(),
+                        domainResults[output],
+                        false);
+            }
+            return new DictionaryDomainProjectionResult(results, peeling.baseMask().size());
         }
         finally {
             allocator.release(allocationContext, peeling.baseMask());

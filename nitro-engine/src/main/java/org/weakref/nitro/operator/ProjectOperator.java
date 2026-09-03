@@ -43,10 +43,8 @@ import org.weakref.nitro.operator.evaluator.ir.Reference;
 import org.weakref.nitro.operator.evaluator.ir.ReferenceMask;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.EnumSet;
 import java.util.HashMap;
-import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -661,7 +659,6 @@ public class ProjectOperator
         private Mask mask;
         private Streams[] fusedResults;
         private boolean fusedResultsComputed;
-        private final Set<Vector> borrowedFusedDictionaryResults = Collections.newSetFromMap(new IdentityHashMap<>());
 
         private BatchState(Batch sourceBatch)
         {
@@ -748,88 +745,25 @@ public class ProjectOperator
             if (!fusedDictionaryDomainDemanded || !mask.all()) {
                 return null;
             }
-
-            DictionaryVector mapping = null;
-            List<Streams> domains = new ArrayList<>(inputs.size());
-            for (Streams streams : inputs) {
-                if (!(streams.values() instanceof DictionaryVector dictionary) || dictionary.length() != mask.size()) {
-                    return null;
-                }
-                if (mapping == null) {
-                    mapping = dictionary;
-                    if ((long) dictionary.values().length() * fusedProjection.dictionaryDomainMinimumReduction() > mask.selectedCount()) {
-                        return null;
-                    }
-                }
-                else if (!mapping.hasSameRowMapping(dictionary) || mapping.values().length() != dictionary.values().length()) {
-                    return null;
-                }
-
-                Vector nulls = streams.getOrNull(Stream.NULLS);
-                Vector domainNulls = null;
-                if (!VectorAccess.isAllFalseNulls(nulls)) {
-                    if (!(nulls instanceof DictionaryVector nullDictionary) ||
-                            !mapping.hasSameRowMapping(nullDictionary) ||
-                            nullDictionary.values().length() != dictionary.values().length()) {
-                        return null;
-                    }
-                    domainNulls = nullDictionary.values();
-                }
-                domains.add(domainNulls == null
-                        ? Streams.ofValues(dictionary.values())
-                        : Streams.of(dictionary.values(), domainNulls, null));
-            }
-
-            if (mapping == null) {
+            var evaluation = planEvaluator.tryEvaluateDictionaryDomainProjection(
+                    inputs,
+                    mask,
+                    fusedProjection.dictionaryDomainMinimumReduction(),
+                    (domains, domainMask) -> fusedProjection.kernel().apply(
+                            domains,
+                            domainMask,
+                            EnumSet.of(Stream.VALUES, Stream.NULLS),
+                            executionContext));
+            if (evaluation == null) {
                 return null;
             }
-            Streams[] domainResults = fusedProjection.kernel().apply(
-                    domains,
-                    Mask.all(mapping.values().length()),
-                    EnumSet.of(Stream.VALUES, Stream.NULLS),
-                    executionContext);
-            if (domainResults == null) {
-                return null;
-            }
-
-            generatedDictionaryDomainPositions += mapping.values().length();
-            Streams[] results = new Streams[domainResults.length];
-            for (int output = 0; output < domainResults.length; output++) {
-                Streams.Builder wrapped = Streams.builder();
-                for (Stream stream : domainResults[output].streams()) {
-                    DictionaryVector dictionary = allocator.adopt(
-                            allocationContext,
-                            mapping.sharedMappingWithValues(domainResults[output].get(stream)));
-                    borrowedFusedDictionaryResults.add(dictionary);
-                    wrapped.put(stream, dictionary);
-                }
-                results[output] = wrapped.build();
-            }
-            return results;
+            generatedDictionaryDomainPositions += evaluation.physicalPositionCount();
+            return evaluation.results();
         }
 
         private Vector prepareResultForTransfer(Vector vector)
         {
-            if (!(vector instanceof DictionaryVector dictionary) || !borrowedFusedDictionaryResults.remove(vector)) {
-                return planEvaluator.prepareResultForTransfer(vector);
-            }
-            if (dictionary.hasDomainFrequencies()) {
-                int[] frequencies = new int[dictionary.values().length()];
-                for (int domain = 0; domain < frequencies.length; domain++) {
-                    frequencies[domain] = dictionary.domainFrequency(domain);
-                }
-                return allocator.allocateDictionaryWithDomainFrequencies(
-                        allocationContext,
-                        dictionary.ids(),
-                        dictionary.length(),
-                        dictionary.values(),
-                        frequencies);
-            }
-            return allocator.allocateDictionary(
-                    allocationContext,
-                    dictionary.ids(),
-                    dictionary.length(),
-                    dictionary.values());
+            return planEvaluator.prepareResultForTransfer(vector);
         }
 
         private PlanEvaluator planEvaluator()
@@ -890,7 +824,6 @@ public class ProjectOperator
             }
             evaluatedOutputBundles.clear();
             schemaBundles.clear();
-            borrowedFusedDictionaryResults.clear();
             sourceBatch.close();
         }
 

@@ -21,12 +21,15 @@ import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.jit.ProjectionProgramBuilder.ArgumentNull;
 import org.weakref.nitro.jit.ProjectionProgramBuilder.ArgumentValue;
 import org.weakref.nitro.jit.ProjectionProgramBuilder.Binary;
+import org.weakref.nitro.jit.ProjectionProgramBuilder.BitwiseNot;
 import org.weakref.nitro.jit.ProjectionProgramBuilder.BooleanConstant;
 import org.weakref.nitro.jit.ProjectionProgramBuilder.BooleanNot;
 import org.weakref.nitro.jit.ProjectionProgramBuilder.Conditional;
 import org.weakref.nitro.jit.ProjectionProgramBuilder.Expression;
 import org.weakref.nitro.jit.ProjectionProgramBuilder.LongLiteral;
 import org.weakref.nitro.jit.ProjectionProgramBuilder.Program;
+import org.weakref.nitro.jit.ProjectionProgramBuilder.Structure;
+import org.weakref.nitro.jit.ProjectionProgramBuilder.StructureField;
 import org.weakref.nitro.jit.ProjectionProgramBuilder.Utf8Equal;
 import org.weakref.nitro.jit.ProjectionProgramBuilder.Utf8StartsWith;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
@@ -86,9 +89,9 @@ public final class FusedProjectionCompiler
         this.genericScalarCompiler = new GenericScalarProjectionCompiler(policy.fusedDictionaryDomainMinimumReduction());
     }
 
-    private enum PhysicalType { LONG, DOUBLE, BOOL, UTF8, NULLS_ONLY }
+    private enum PhysicalType { LONG, STRUCT, DOUBLE, BOOL, UTF8, NULLS_ONLY }
 
-    public enum InputPhysicalType { LONG, DOUBLE, BOOLEAN, UTF8, NULLS_ONLY }
+    public enum InputPhysicalType { LONG, STRUCT, DOUBLE, BOOLEAN, UTF8, NULLS_ONLY }
 
     public enum CompilationKind { PHYSICAL_PROGRAM, SCALAR_TARGET }
 
@@ -155,7 +158,7 @@ public final class FusedProjectionCompiler
                 SliceBuilder trial = new SliceBuilder(assignments, primitiveRegistry);
                 Operand root = trial.operand(candidate, null);
                 PhysicalType rootType = operandType(root);
-                if ((rootType == PhysicalType.LONG || rootType == PhysicalType.DOUBLE || rootType == PhysicalType.UTF8) &&
+                if ((rootType == PhysicalType.LONG || rootType == PhysicalType.STRUCT || rootType == PhysicalType.DOUBLE || rootType == PhysicalType.UTF8) &&
                         worthFusing(rootType, trial.steps(), trial.inputTypes())) {
                     fusible.add(candidate);
                 }
@@ -416,6 +419,7 @@ public final class FusedProjectionCompiler
     {
         return switch (type) {
             case I64 -> PhysicalType.LONG;
+            case STRUCT -> PhysicalType.STRUCT;
             case F64 -> PhysicalType.DOUBLE;
             case BOOLEAN -> PhysicalType.BOOL;
             case UTF8 -> PhysicalType.UTF8;
@@ -427,6 +431,7 @@ public final class FusedProjectionCompiler
     {
         return switch (type) {
             case LONG -> InputPhysicalType.LONG;
+            case STRUCT -> InputPhysicalType.STRUCT;
             case DOUBLE -> InputPhysicalType.DOUBLE;
             case UTF8 -> InputPhysicalType.UTF8;
             case NULLS_ONLY -> InputPhysicalType.NULLS_ONLY;
@@ -439,7 +444,7 @@ public final class FusedProjectionCompiler
         return switch (type) {
             case LONG -> true;
             case DOUBLE -> !policy.mappedDictionaryDoubleInputs();
-            case BOOL, UTF8, NULLS_ONLY -> false;
+            case STRUCT, BOOL, UTF8, NULLS_ONLY -> false;
         };
     }
 
@@ -491,13 +496,13 @@ public final class FusedProjectionCompiler
                         : TruthPossibilities.BOTH;
             }
             case BooleanConstant constant -> TruthPossibilities.of(constant.value());
-            case LongLiteral _ -> throw new IllegalArgumentException("numeric expression used as a boolean");
+            case LongLiteral _, BitwiseNot _, Structure _, StructureField _ -> throw new IllegalArgumentException("numeric expression used as a boolean");
             case Binary binary -> switch (binary.operation()) {
                 case BOOLEAN_AND -> truthPossibilities(binary.left(), operands, steps)
                         .and(truthPossibilities(binary.right(), operands, steps));
                 case BOOLEAN_OR -> truthPossibilities(binary.left(), operands, steps)
                         .or(truthPossibilities(binary.right(), operands, steps));
-                case LESS_THAN, GREATER_THAN, LESS_THAN_OR_EQUAL, GREATER_THAN_OR_EQUAL, EQUAL ->
+                case LESS_THAN, GREATER_THAN, LESS_THAN_OR_EQUAL, GREATER_THAN_OR_EQUAL, EQUAL, UNSIGNED_LESS_THAN, UNSIGNED_GREATER_THAN ->
                         TruthPossibilities.BOTH;
                 case ADD, SUBTRACT, MULTIPLY, DIVIDE, REMAINDER ->
                         throw new IllegalArgumentException("numeric expression used as a boolean");
@@ -567,6 +572,7 @@ public final class FusedProjectionCompiler
         out.append("import org.weakref.nitro.data.F64Vector;\n");
         out.append("import org.weakref.nitro.data.I32Vector;\n");
         out.append("import org.weakref.nitro.data.I64Vector;\n");
+        out.append("import org.weakref.nitro.data.StructVector;\n");
         out.append("import org.weakref.nitro.data.Vector;\n");
         out.append("import org.weakref.nitro.data.Streams;\n");
         out.append("import org.weakref.nitro.function.scalar.PrimitiveExecutionContext;\n");
@@ -605,7 +611,8 @@ public final class FusedProjectionCompiler
                         out.append("    F64Vector scratchValues").append(slot).append(" = null;\n");
                     }
                 }
-                else if (slice.inputTypes().get(slot) != PhysicalType.UTF8 &&
+                else if (slice.inputTypes().get(slot) != PhysicalType.STRUCT &&
+                        slice.inputTypes().get(slot) != PhysicalType.UTF8 &&
                         slice.inputTypes().get(slot) != PhysicalType.NULLS_ONLY) {
                     out.append("    I64Vector scratchValues").append(slot).append(" = null;\n");
                 }
@@ -619,6 +626,9 @@ public final class FusedProjectionCompiler
         for (int slot = 0; slot < slice.inputs().size(); slot++) {
             if (slice.inputTypes().get(slot) == PhysicalType.DOUBLE) {
                 appendDoubleColumn(out, slot);
+            }
+            else if (slice.inputTypes().get(slot) == PhysicalType.STRUCT) {
+                appendStructColumn(out, slice, slot);
             }
             else if (slice.inputTypes().get(slot) == PhysicalType.UTF8) {
                 appendUtf8Column(out, slot);
@@ -670,6 +680,23 @@ public final class FusedProjectionCompiler
                         + "outputContext, F64Vector.class, required, F64Vector::new);\n");
                 out.append("    double[] o").append(output).append(" = out").append(output).append(".values();\n");
             }
+            else if (outputType[output] == PhysicalType.STRUCT) {
+                Map<String, Expression> fields = structuralFields(slice.roots().get(output), slice.steps());
+                out.append("    StructVector out").append(output).append(" = context.allocator().allocate("
+                        + "outputContext, StructVector.class, required, StructVector::new);\n");
+                for (Map.Entry<String, Expression> field : fields.entrySet()) {
+                    String suffix = structuralName(field.getKey());
+                    String vectorType = vectorType(field.getValue().type());
+                    String javaType = javaType(field.getValue().type());
+                    out.append("    ").append(vectorType).append(" out").append(output).append("f").append(suffix)
+                            .append(" = context.allocator().allocate(outputContext, ").append(vectorType)
+                            .append(".class, required, ").append(vectorType).append("::new);\n");
+                    out.append("    ").append(javaType).append("[] o").append(output).append("f").append(suffix)
+                            .append(" = out").append(output).append("f").append(suffix).append(".values();\n");
+                    out.append("    out").append(output).append(".setField(\"").append(javaString(field.getKey()))
+                            .append("\", Streams.ofValues(out").append(output).append("f").append(suffix).append("));\n");
+                }
+            }
             else if (outputType[output] == PhysicalType.UTF8) {
                 out.append("    BinaryVector out").append(output).append(" = BinaryVector.allocate("
                         + "context.allocator(), outputContext, required, bytes").append(output).append(");\n");
@@ -715,7 +742,8 @@ public final class FusedProjectionCompiler
         if (policy.pooledDictionaryScratch()) {
             out.append("    } finally {\n");
             for (int slot = 0; slot < slice.inputs().size(); slot++) {
-                if (slice.inputTypes().get(slot) != PhysicalType.UTF8 &&
+                if (slice.inputTypes().get(slot) != PhysicalType.STRUCT &&
+                        slice.inputTypes().get(slot) != PhysicalType.UTF8 &&
                         slice.inputTypes().get(slot) != PhysicalType.NULLS_ONLY) {
                     if (slice.inputTypes().get(slot) == PhysicalType.DOUBLE && policy.mappedDictionaryDoubleInputs()) {
                         out.append("      if (scratchIds").append(slot).append(" != null) { context.allocator().release(scratchContext, scratchIds").append(slot).append("); }\n");
@@ -757,6 +785,155 @@ public final class FusedProjectionCompiler
                 .append("org.weakref.nitro.data.VectorAccess.longValues(vals").append(slot)
                 .append("); for (int j = 0; j < len; j++) { col").append(slot).append("[j] = a.value(j); } }\n");
         out.append("    else { return null; }\n");
+    }
+
+    private static void appendStructColumn(StringBuilder out, Slice slice, int slot)
+    {
+        out.append("    Vector vals").append(slot).append(" = inputs.get(").append(slot).append(").values();\n");
+        out.append("    if (!(vals").append(slot).append(" instanceof StructVector struct").append(slot)
+                .append(")) { return null; }\n");
+        for (Map.Entry<String, ValueType> field : structuralInputFields(slice, slot).entrySet()) {
+            String suffix = structuralName(field.getKey());
+            String vectorType = vectorType(field.getValue());
+            String javaType = javaType(field.getValue());
+            out.append("    if (!(struct").append(slot).append(".field(\"").append(javaString(field.getKey()))
+                    .append("\").values() instanceof ").append(vectorType).append(" field").append(slot).append("f")
+                    .append(suffix).append(")) { return null; }\n");
+            out.append("    ").append(javaType).append("[] col").append(slot).append("f").append(suffix)
+                    .append(" = field").append(slot).append("f").append(suffix).append(".values();\n");
+        }
+    }
+
+    private static Map<String, ValueType> structuralInputFields(Slice slice, int slot)
+    {
+        Map<String, ValueType> fields = new LinkedHashMap<>();
+        for (Step step : slice.steps()) {
+            collectStructuralInputFields(step.program().value(), step.operands(), slot, fields);
+            collectStructuralInputFields(step.program().isNull(), step.operands(), slot, fields);
+            collectStructuralInputFields(step.program().fallback(), step.operands(), slot, fields);
+        }
+        if (fields.isEmpty()) {
+            throw new Unsupported();
+        }
+        return fields;
+    }
+
+    private static void collectStructuralInputFields(
+            Expression expression,
+            List<Operand> operands,
+            int slot,
+            Map<String, ValueType> fields)
+    {
+        switch (expression) {
+            case ArgumentValue _, ArgumentNull _, BooleanConstant _, LongLiteral _ -> {}
+            case Binary binary -> {
+                collectStructuralInputFields(binary.left(), operands, slot, fields);
+                collectStructuralInputFields(binary.right(), operands, slot, fields);
+            }
+            case BooleanNot not -> collectStructuralInputFields(not.value(), operands, slot, fields);
+            case BitwiseNot not -> collectStructuralInputFields(not.value(), operands, slot, fields);
+            case Structure structure -> structure.fields().values()
+                    .forEach(field -> collectStructuralInputFields(field, operands, slot, fields));
+            case StructureField field -> {
+                if (field.structure() instanceof ArgumentValue argument &&
+                        operands.get(argument.index()) instanceof ColumnOperand column &&
+                        column.slot() == slot) {
+                    ValueType previous = fields.putIfAbsent(field.name(), field.type());
+                    if (previous != null && previous != field.type()) {
+                        throw new Unsupported();
+                    }
+                }
+                else {
+                    collectStructuralInputFields(field.structure(), operands, slot, fields);
+                }
+            }
+            case Conditional conditional -> {
+                collectStructuralInputFields(conditional.condition(), operands, slot, fields);
+                collectStructuralInputFields(conditional.whenTrue(), operands, slot, fields);
+                collectStructuralInputFields(conditional.whenFalse(), operands, slot, fields);
+            }
+            case Utf8Equal equal -> {
+                collectStructuralInputFields(equal.left(), operands, slot, fields);
+                collectStructuralInputFields(equal.right(), operands, slot, fields);
+            }
+            case Utf8StartsWith startsWith -> {
+                collectStructuralInputFields(startsWith.value(), operands, slot, fields);
+                collectStructuralInputFields(startsWith.prefix(), operands, slot, fields);
+            }
+        }
+    }
+
+    private static Map<String, Expression> structuralFields(Operand operand, List<Step> steps)
+    {
+        if (!(operand instanceof StepOperand stepOperand)) {
+            throw new Unsupported();
+        }
+        Step step = steps.stream()
+                .filter(candidate -> candidate.id() == stepOperand.stepId())
+                .findFirst()
+                .orElseThrow(Unsupported::new);
+        if (!(step.program().value() instanceof Structure structure)) {
+            throw new Unsupported();
+        }
+        return structure.fields();
+    }
+
+    private static String structuralName(String field)
+    {
+        StringBuilder result = new StringBuilder();
+        for (int index = 0; index < field.length(); index++) {
+            if (index > 0) {
+                result.append('_');
+            }
+            result.append(Integer.toHexString(field.charAt(index)));
+        }
+        return result.toString();
+    }
+
+    private static String javaString(String value)
+    {
+        StringBuilder escaped = new StringBuilder();
+        for (int index = 0; index < value.length(); index++) {
+            char character = value.charAt(index);
+            switch (character) {
+                case '\b' -> escaped.append("\\b");
+                case '\t' -> escaped.append("\\t");
+                case '\n' -> escaped.append("\\n");
+                case '\f' -> escaped.append("\\f");
+                case '\r' -> escaped.append("\\r");
+                case '"' -> escaped.append("\\\"");
+                case '\\' -> escaped.append("\\\\");
+                default -> {
+                    if (character < ' ') {
+                        escaped.append('\\').append(String.format("%03o", (int) character));
+                    }
+                    else {
+                        escaped.append(character);
+                    }
+                }
+            }
+        }
+        return escaped.toString();
+    }
+
+    private static String javaType(ValueType type)
+    {
+        return switch (type) {
+            case I64 -> "long";
+            case F64 -> "double";
+            case BOOLEAN -> "boolean";
+            case STRUCT, UTF8, NULLS_ONLY -> throw new Unsupported();
+        };
+    }
+
+    private static String vectorType(ValueType type)
+    {
+        return switch (type) {
+            case I64 -> "I64Vector";
+            case F64 -> "F64Vector";
+            case BOOLEAN -> "BooleanVector";
+            case STRUCT, UTF8, NULLS_ONLY -> throw new Unsupported();
+        };
     }
 
     private void appendDoubleColumn(StringBuilder out, int slot)
@@ -868,11 +1045,23 @@ public final class FusedProjectionCompiler
                 body.append("        boolean sn").append(step.id()).append(" = ").append(nullExpr(step, utf8Constants)).append(";\n");
                 continue;
             }
+            if (step.type() == PhysicalType.STRUCT) {
+                if (!(step.program().value() instanceof Structure structure)) {
+                    throw new Unsupported();
+                }
+                for (Map.Entry<String, Expression> field : structure.fields().entrySet()) {
+                    body.append("        ").append(javaType(field.getValue().type())).append(" sv")
+                            .append(step.id()).append("f").append(structuralName(field.getKey())).append(" = ")
+                            .append(renderExpression(field.getValue(), step.operands(), utf8Constants)).append(";\n");
+                }
+                body.append("        boolean sn").append(step.id()).append(" = ").append(nullExpr(step, utf8Constants)).append(";\n");
+                continue;
+            }
             String javaType = switch (step.type()) {
                 case LONG -> "long";
                 case DOUBLE -> "double";
                 case BOOL -> "boolean";
-                case UTF8, NULLS_ONLY -> throw new Unsupported();
+                case STRUCT, UTF8, NULLS_ONLY -> throw new Unsupported();
             };
             body.append("        ").append(javaType).append(" sv").append(step.id()).append(" = ").append(valueExpr(step, utf8Constants)).append(";\n");
             // A step's is-null local is only needed when some output (or a downstream step) reads it; the null-free
@@ -902,6 +1091,12 @@ public final class FusedProjectionCompiler
                 body.append("        ob").append(output).append(" += ").append(length).append(";\n");
                 body.append("        oo").append(output).append("[i + 1] = ob").append(output).append(";\n");
                 body.append("        op").append(output).append(" = i + 1;\n");
+            }
+            else if (operandType(root) == PhysicalType.STRUCT) {
+                for (String field : structuralFields(root, slice.steps()).keySet()) {
+                    body.append("        o").append(output).append("f").append(structuralName(field)).append("[i] = ")
+                            .append(structuralComponent(root, field)).append(";\n");
+                }
             }
             else {
                 body.append("        o").append(output).append("[i] = ").append(value(root)).append(";\n");
@@ -949,6 +1144,12 @@ public final class FusedProjectionCompiler
             case Binary binary -> {
                 String left = renderExpression(binary.left(), operands, utf8Constants);
                 String right = renderExpression(binary.right(), operands, utf8Constants);
+                if (binary.operation() == ProjectionProgramBuilder.BinaryOperation.UNSIGNED_LESS_THAN) {
+                    yield "(Long.compareUnsigned(" + left + ", " + right + ") < 0)";
+                }
+                if (binary.operation() == ProjectionProgramBuilder.BinaryOperation.UNSIGNED_GREATER_THAN) {
+                    yield "(Long.compareUnsigned(" + left + ", " + right + ") > 0)";
+                }
                 String operator = switch (binary.operation()) {
                     case ADD -> "+";
                     case SUBTRACT -> "-";
@@ -960,6 +1161,7 @@ public final class FusedProjectionCompiler
                     case LESS_THAN_OR_EQUAL -> "<=";
                     case GREATER_THAN_OR_EQUAL -> ">=";
                     case EQUAL -> "==";
+                    case UNSIGNED_LESS_THAN, UNSIGNED_GREATER_THAN -> throw new AssertionError();
                     case BOOLEAN_AND -> "&&";
                     case BOOLEAN_OR -> "||";
                 };
@@ -967,6 +1169,10 @@ public final class FusedProjectionCompiler
             }
             case BooleanNot not ->
                     "(!" + renderExpression(not.value(), operands, utf8Constants) + ")";
+            case BitwiseNot not ->
+                    "(~" + renderExpression(not.value(), operands, utf8Constants) + ")";
+            case Structure _ -> throw new Unsupported();
+            case StructureField field -> renderStructureField(field, operands, utf8Constants);
             case Conditional conditional ->
                     "(" + renderExpression(conditional.condition(), operands, utf8Constants) +
                             " ? " + renderExpression(conditional.whenTrue(), operands, utf8Constants) +
@@ -980,6 +1186,24 @@ public final class FusedProjectionCompiler
                     resolveOperand(startsWith.prefix(), operands),
                     utf8Constants);
         };
+    }
+
+    private String renderStructureField(
+            StructureField field,
+            List<Operand> operands,
+            Map<String, Integer> utf8Constants)
+    {
+        if (field.structure() instanceof ArgumentValue argument) {
+            return structuralComponent(operands.get(argument.index()), field.name());
+        }
+        if (field.structure() instanceof Structure structure) {
+            Expression component = structure.fields().get(field.name());
+            if (component == null || component.type() != field.type()) {
+                throw new Unsupported();
+            }
+            return renderExpression(component, operands, utf8Constants);
+        }
+        throw new Unsupported();
     }
 
     private String renderUtf8Expression(
@@ -1062,6 +1286,17 @@ public final class FusedProjectionCompiler
         };
     }
 
+    private static String structuralComponent(Operand operand, String field)
+    {
+        return switch (operand) {
+            case ColumnOperand column when column.type() == PhysicalType.STRUCT ->
+                    "col" + column.slot() + "f" + structuralName(field) + "[i]";
+            case StepOperand step when step.type() == PhysicalType.STRUCT ->
+                    "sv" + step.stepId() + "f" + structuralName(field);
+            default -> throw new Unsupported();
+        };
+    }
+
     private static String isNull(Operand operand)
     {
         return switch (operand) {
@@ -1131,6 +1366,10 @@ public final class FusedProjectionCompiler
                 collectUtf8Categories(binary.right(), operands, constants, categories);
             }
             case BooleanNot not -> collectUtf8Categories(not.value(), operands, constants, categories);
+            case BitwiseNot not -> collectUtf8Categories(not.value(), operands, constants, categories);
+            case Structure structure -> structure.fields().values()
+                    .forEach(field -> collectUtf8Categories(field, operands, constants, categories));
+            case StructureField field -> collectUtf8Categories(field.structure(), operands, constants, categories);
             case Conditional conditional -> {
                 collectUtf8Categories(conditional.condition(), operands, constants, categories);
                 collectUtf8Categories(conditional.whenTrue(), operands, constants, categories);

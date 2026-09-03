@@ -16,7 +16,10 @@ package org.weakref.nitro.jit;
 import org.weakref.nitro.core.function.projection.ProjectionCodeBuilder;
 import org.weakref.nitro.core.function.projection.ProjectionProgram;
 
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 import static java.util.Objects.requireNonNull;
 
@@ -126,6 +129,67 @@ final class ProjectionProgramBuilder
     }
 
     @Override
+    public Value unsignedLessThan(Value left, Value right)
+    {
+        return comparison(BinaryOperation.UNSIGNED_LESS_THAN, left, right);
+    }
+
+    @Override
+    public Value unsignedGreaterThan(Value left, Value right)
+    {
+        return comparison(BinaryOperation.UNSIGNED_GREATER_THAN, left, right);
+    }
+
+    @Override
+    public Value bitwiseNot(Value value)
+    {
+        Expression expression = expression(value);
+        requireType(expression, ValueType.I64);
+        return new BitwiseNot(expression);
+    }
+
+    @Override
+    public Value structure(List<String> fieldNames, List<Value> fields)
+    {
+        List<String> names = List.copyOf(requireNonNull(fieldNames, "fieldNames is null"));
+        List<Value> values = List.copyOf(requireNonNull(fields, "fields is null"));
+        if (names.size() != values.size() || names.isEmpty()) {
+            throw new IllegalArgumentException("structural field names and values must have the same non-zero size");
+        }
+        Map<String, Expression> components = new LinkedHashMap<>();
+        for (int index = 0; index < names.size(); index++) {
+            String name = requireNonNull(names.get(index), "field name is null");
+            if (name.isEmpty() || components.putIfAbsent(name, expression(values.get(index))) != null) {
+                throw new IllegalArgumentException("structural field names must be non-empty and unique");
+            }
+            ValueType type = components.get(name).type();
+            if (type == ValueType.STRUCT || type == ValueType.NULLS_ONLY || type == ValueType.UTF8) {
+                throw new IllegalArgumentException("structural components must be fixed-width primitive values");
+            }
+        }
+        return new Structure(Collections.unmodifiableMap(new LinkedHashMap<>(components)));
+    }
+
+    @Override
+    public Value field(Value structure, String fieldName, ValueType fieldType)
+    {
+        Expression expression = expression(structure);
+        requireType(expression, ValueType.STRUCT);
+        String name = requireNonNull(fieldName, "fieldName is null");
+        ValueType type = requireNonNull(fieldType, "fieldType is null");
+        if (name.isEmpty() || type == ValueType.STRUCT || type == ValueType.NULLS_ONLY || type == ValueType.UTF8) {
+            throw new IllegalArgumentException("invalid structural field request");
+        }
+        if (expression instanceof Structure value) {
+            Expression component = value.fields().get(name);
+            if (component == null || component.type() != type) {
+                throw new IllegalArgumentException("structural field does not match requested type");
+            }
+        }
+        return new StructureField(expression, name, type);
+    }
+
+    @Override
     public Value utf8Equal(Value left, Value right)
     {
         Expression leftExpression = expression(left);
@@ -174,6 +238,9 @@ final class ProjectionProgramBuilder
         requireType(conditionExpression, ValueType.BOOLEAN);
         if (trueExpression.type() != falseExpression.type()) {
             throw new IllegalArgumentException("conditional branches have different types");
+        }
+        if (trueExpression.type() == ValueType.STRUCT) {
+            throw new IllegalArgumentException("condition structural components individually");
         }
         return new Conditional(conditionExpression, trueExpression, falseExpression, trueExpression.type());
     }
@@ -271,6 +338,9 @@ final class ProjectionProgramBuilder
                 validateArguments(binary.right(), argumentTypes);
             }
             case BooleanNot not -> validateArguments(not.value(), argumentTypes);
+            case BitwiseNot not -> validateArguments(not.value(), argumentTypes);
+            case Structure structure -> structure.fields().values().forEach(field -> validateArguments(field, argumentTypes));
+            case StructureField field -> validateArguments(field.structure(), argumentTypes);
             case Conditional conditional -> {
                 validateArguments(conditional.condition(), argumentTypes);
                 validateArguments(conditional.whenTrue(), argumentTypes);
@@ -289,7 +359,7 @@ final class ProjectionProgramBuilder
 
     sealed interface Expression
             extends Value
-            permits ArgumentValue, ArgumentNull, BooleanConstant, LongLiteral, Binary, BooleanNot, Conditional, Utf8Equal, Utf8StartsWith {}
+            permits ArgumentValue, ArgumentNull, BooleanConstant, LongLiteral, Binary, BooleanNot, BitwiseNot, Structure, StructureField, Conditional, Utf8Equal, Utf8StartsWith {}
 
     record ArgumentValue(int index, ValueType type)
             implements Expression {}
@@ -341,6 +411,29 @@ final class ProjectionProgramBuilder
         }
     }
 
+    record BitwiseNot(Expression value)
+            implements Expression
+    {
+        @Override
+        public ValueType type()
+        {
+            return ValueType.I64;
+        }
+    }
+
+    record Structure(Map<String, Expression> fields)
+            implements Expression
+    {
+        @Override
+        public ValueType type()
+        {
+            return ValueType.STRUCT;
+        }
+    }
+
+    record StructureField(Expression structure, String name, ValueType type)
+            implements Expression {}
+
     record Conditional(
             Expression condition,
             Expression whenTrue,
@@ -388,6 +481,8 @@ final class ProjectionProgramBuilder
         LESS_THAN_OR_EQUAL,
         GREATER_THAN_OR_EQUAL,
         EQUAL,
+        UNSIGNED_LESS_THAN,
+        UNSIGNED_GREATER_THAN,
         BOOLEAN_AND,
         BOOLEAN_OR
     }
