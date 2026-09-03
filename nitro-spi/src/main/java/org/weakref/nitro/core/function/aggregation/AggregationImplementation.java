@@ -100,6 +100,19 @@ public interface AggregationImplementation
     }
 
     /**
+     * Whether this implementation may consume raw grouped-domain input for a compatible physical batch.
+     *
+     * <p>This shape-independent declaration lets planning retain the exact domain metadata needed to make the later
+     * batch-local capability check meaningful. Returning {@code true} does not admit a batch: the engine must still
+     * call {@link #supportsRawGroupedDomainInput(AggregationInput)} and the row-mapping overload atomically before
+     * mutating state.
+     */
+    default boolean maySupportRawGroupedDomainInput()
+    {
+        return false;
+    }
+
+    /**
      * Whether the raw input can consume a domain formed from this row mapping. This check runs before grouping
      * mutates engine state, allowing the engine to retain its ordinary logical-row path when mappings differ.
      */

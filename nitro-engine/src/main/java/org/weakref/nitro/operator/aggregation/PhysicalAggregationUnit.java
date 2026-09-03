@@ -88,6 +88,12 @@ public interface PhysicalAggregationUnit
         return false;
     }
 
+    /** Whether this unit may consume a compatible grouped domain after batch-local admission. */
+    default boolean maySupportGroupedDomainInput()
+    {
+        return false;
+    }
+
     default boolean supportsGroupedDomainInput(GroupedAggregationDomain domain, StreamAccessor streams)
     {
         return supportsGroupedDomainInput(streams);

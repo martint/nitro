@@ -199,6 +199,12 @@ public class RegisteredAggregationUnit
     }
 
     @Override
+    public boolean maySupportGroupedDomainInput()
+    {
+        return inputMode == InputMode.RAW && implementation.maySupportRawGroupedDomainInput();
+    }
+
+    @Override
     public boolean supportsGroupedDomainInput(GroupedAggregationDomain domain, StreamAccessor streams)
     {
         return inputMode == InputMode.RAW && implementation.supportsRawGroupedDomainInput(domain, input(streams));

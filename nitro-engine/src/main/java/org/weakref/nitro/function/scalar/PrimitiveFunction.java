@@ -63,6 +63,13 @@ public interface PrimitiveFunction
      */
     default ValueDemand requiredInputValueDemand(int inputIndex, ValueDemand requestedOutputDemand)
     {
+        // The evaluator may execute any deterministic row-aligned scalar function once over an encoded physical
+        // domain and restore the input row mapping on its result. Preserve exact mapping metadata requested by a
+        // downstream consumer so that the smaller physical execution remains self-describing across the projection
+        // boundary. Non-deterministic functions execute per logical row and therefore cannot make this promise.
+        if (deterministic() && requestedOutputDemand.compareTo(ValueDemand.FULL) > 0) {
+            return requestedOutputDemand;
+        }
         return ValueDemand.FULL;
     }
 

@@ -97,6 +97,7 @@ class TestRegisteredAggregationUnit
                 new int[] {7, 2},
                 5);
         assertThat(rawIntermediate.filterInputColumn()).isEqualTo(5);
+        assertThat(rawIntermediate.maySupportGroupedDomainInput()).isTrue();
         assertThat(rawIntermediate.inputValueDemands()).containsExactlyInAnyOrderEntriesOf(java.util.Map.of(
                 7, ValueDemand.FULL_WITH_DOMAIN_COUNTS,
                 2, ValueDemand.FULL,
@@ -127,6 +128,7 @@ class TestRegisteredAggregationUnit
                 FINAL,
                 new int[] {2});
         assertThat(intermediateFinal.filterInputColumn()).isEqualTo(-1);
+        assertThat(intermediateFinal.maySupportGroupedDomainInput()).isFalse();
         assertThat(intermediateFinal.inputValueDemands()).containsExactlyEntriesOf(java.util.Map.of(2, ValueDemand.FULL));
         intermediateFinal.accumulate(state, new I64Vector(new long[] {0}), mask, inputs);
         assertThat(implementation.intermediateInput).isTrue();
@@ -208,6 +210,12 @@ class TestRegisteredAggregationUnit
         public ValueDemand rawInputValueDemand(int input)
         {
             return input == 0 ? ValueDemand.FULL_WITH_DOMAIN_COUNTS : ValueDemand.FULL;
+        }
+
+        @Override
+        public boolean maySupportRawGroupedDomainInput()
+        {
+            return true;
         }
 
         @Override

@@ -3170,8 +3170,19 @@ final class GroupingState
                 used += frequency == 0 ? 0 : 1;
             }
         }
+        else if (mask.all()) {
+            for (int position = 0; position < mask.size(); position++) {
+                int domain = OperatorVectorSupport.isNull(nullVector, position) ? domainSize : ids[position];
+                if (counts[domain]++ == 0) {
+                    used++;
+                    representatives[domain] = position;
+                }
+            }
+        }
         else {
-            for (int position : mask) {
+            int[] selectedPositions = mask.selectedPositions();
+            for (int index = 0; index < mask.count(); index++) {
+                int position = selectedPositions[index];
                 int domain = OperatorVectorSupport.isNull(nullVector, position) ? domainSize : ids[position];
                 if (counts[domain]++ == 0) {
                     used++;

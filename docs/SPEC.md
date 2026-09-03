@@ -320,6 +320,14 @@ boundary counts selected rows and resolves grouping identity once per used domai
 elision and one exact constant-linked provider update per used domain value with its logical multiplicity. Physical
 domain positions and logical row positions are distinct kernel contracts; equal domain sizes alone never prove
 alignment.
+Planning must preserve the metadata required by a batch-conditional grouped-domain capability. A provider declares
+that it may support the convention independently of a particular batch; this declaration requests exact grouping
+domain metadata but never admits execution. Runtime still performs the complete value, null, domain-width, and row
+mapping proof atomically before any aggregate state is mutated. Independently decoded mappings may be proven equal by
+an established shared identity or by exact equality of their complete ID sequences.
+Deterministic row-aligned scalar functions propagate requested exact domain metadata to their inputs. This matches
+the evaluator's ability to execute the function over physical values and restore the same logical-row mapping on its
+result. Non-deterministic functions execute per logical row and do not propagate that promise.
 
 Grouping is a physical key-to-group operation. It can select flat, packed, dictionary-domain, generated composite, or
 other general representations based on observed shape and immutable policy. It cannot recognize aggregate functions

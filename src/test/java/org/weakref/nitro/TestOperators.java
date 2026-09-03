@@ -5224,6 +5224,64 @@ public class TestOperators
     }
 
     @Test
+    void testProjectionPropagatesDictionaryDomainCountDemandThroughGenericDeterministicFunction()
+    {
+        PrimitiveRegistry primitiveRegistry = new PrimitiveRegistry();
+        primitiveRegistry.register("identity", new PrimitiveFunction()
+        {
+            @Override
+            public Streams apply(
+                    List<Streams> inputs,
+                    Mask mask,
+                    Set<Stream> requestedStreams,
+                    Streams output,
+                    PrimitiveExecutionContext context)
+            {
+                return Streams.ofValues(inputs.getFirst().values());
+            }
+        });
+        Variable incremented = new Variable(0);
+        EvaluationPlan projectionPlan = new EvaluationPlan(
+                List.of(new Assignment(
+                        incremented,
+                        new Call("identity", List.of(new Reference(new Input(0), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(new Reference(incremented, Stream.VALUES)));
+        DictionaryVector values = DictionaryVector.wrapWithDomainFrequencies(
+                new int[] {0, 1, 0, 2},
+                4,
+                new I64Vector(new long[] {8, 9, 10}),
+                new int[] {2, 1, 1});
+        TableOperator source = new TableOperator(
+                1,
+                List.of(new TableOperator.Page(
+                        4,
+                        new Streams[] {Streams.ofValues(values)},
+                        Mask.all(4))))
+        {
+            @Override
+            public Optional<Map<Integer, ValueDemand>> sourceOutputDemand(Map<Integer, ValueDemand> demandedOutputs)
+            {
+                return Optional.of(Map.copyOf(demandedOutputs));
+            }
+        };
+
+        try (ProjectOperator project = new ProjectOperator(allocator, projectionPlan, primitiveRegistry, source)) {
+            assertThat(project.sourceOutputDemand(Map.of(0, ValueDemand.FULL_WITH_DOMAIN_COUNTS)).orElseThrow())
+                    .containsExactlyEntriesOf(Map.of(0, ValueDemand.FULL_WITH_DOMAIN_COUNTS));
+            try (Batch batch = project.next()) {
+                assertThat(batch.output(0).borrow(Stream.VALUES))
+                        .isInstanceOfSatisfying(DictionaryVector.class, dictionary -> {
+                            assertThat(dictionary.hasDomainFrequencies()).isTrue();
+                            assertThat(dictionary.domainFrequency(0)).isEqualTo(2);
+                            assertThat(dictionary.domainFrequency(1)).isEqualTo(1);
+                            assertThat(dictionary.domainFrequency(2)).isEqualTo(1);
+                        });
+            }
+        }
+    }
+
+    @Test
     void testModuloPreservesDictionaryDomainFrequencies()
     {
         PrimitiveRegistry primitiveRegistry = primitiveRegistry();
