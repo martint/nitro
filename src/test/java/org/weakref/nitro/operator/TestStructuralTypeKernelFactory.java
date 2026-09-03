@@ -14,6 +14,7 @@
 package org.weakref.nitro.operator;
 
 import org.junit.jupiter.api.Test;
+import org.weakref.nitro.core.type.BoundTypeKey;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.core.type.TypeIdentity;
@@ -108,6 +109,12 @@ class TestStructuralTypeKernelFactory
         assertThat(nullsFirst.compare(rows, null, 2, rows, null, 0)).isNegative();
         assertThat(nullsLast.compare(dictionary, null, 1, rows, null, 0)).isZero();
         assertThat(factory.bindIdentity(rowType).identical(dictionary, null, 0, rows, null, 3)).isTrue();
+
+        var keyBinder = factory.bindKey(rowType);
+        BoundTypeKey boundRows = keyBinder.bind(rows);
+        BoundTypeKey boundDictionary = keyBinder.bind(dictionary);
+        assertThat(boundDictionary.identical(0, boundRows, 3)).isTrue();
+        assertThat(boundDictionary.hash(1)).isEqualTo(boundRows.hash(0));
     }
 
     @Test

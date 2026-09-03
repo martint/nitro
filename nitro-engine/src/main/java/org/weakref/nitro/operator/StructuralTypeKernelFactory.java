@@ -53,6 +53,19 @@ import static java.util.Objects.requireNonNull;
 public final class StructuralTypeKernelFactory
 {
     /**
+     * Binds hashing and identity supplied by a type registry to its admitted vector shapes.
+     *
+     * <p>The returned binder can bind independently owned vectors and compare positions across them. Stateful
+     * registry implementations can therefore index retained values without recognizing logical types or physical
+     * vector classes.
+     */
+    public TypeKeyBinder bindKey(TypeBinding type)
+    {
+        StructuralKeyKernel kernel = key(requireNonNull(type, "type is null"));
+        return values -> new PublicBoundKey(kernel, kernel.bind(values));
+    }
+
+    /**
      * Binds the logical identity supplied by a type registry to its admitted vector shapes.
      *
      * <p>Structural recursion remains engine-owned. A registry-bound function can use the returned operation without
@@ -61,6 +74,31 @@ public final class StructuralTypeKernelFactory
     public BoundTypeIdentity bindIdentity(TypeBinding type)
     {
         return identity(requireNonNull(type, "type is null"));
+    }
+
+    private record PublicBoundKey(StructuralKeyKernel kernel, StructuralKeyKernel.Bound key)
+            implements BoundTypeKey
+    {
+        private PublicBoundKey
+        {
+            requireNonNull(kernel, "kernel is null");
+            requireNonNull(key, "key is null");
+        }
+
+        @Override
+        public long hash(int position)
+        {
+            return key.hash(position);
+        }
+
+        @Override
+        public boolean identical(int position, BoundTypeKey other, int otherPosition)
+        {
+            if (!(other instanceof PublicBoundKey right) || kernel != right.kernel) {
+                throw new IllegalArgumentException("bound key was created by a different type binder");
+            }
+            return key.identical(position, right.key, otherPosition);
+        }
     }
 
     /**
