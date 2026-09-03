@@ -21,6 +21,7 @@ import org.weakref.nitro.core.function.ScalarInvocationProvider;
 import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
+import org.weakref.nitro.function.scalar.MaskEvaluablePrimitiveFunction;
 import org.weakref.nitro.function.scalar.PrimitiveFunction;
 import org.weakref.nitro.function.scalar.ScalarAdapterGenerator;
 import org.weakref.nitro.function.scalar.ScalarMethodTarget;
@@ -91,6 +92,9 @@ final class GenericScalarProjectionCompiler
                     continue;
                 }
                 ScalarExpression canonical = canonicalizeLeaves(expression);
+                if (!canonical.deterministic()) {
+                    continue;
+                }
                 BoundSignature signature = new BoundSignature(
                         canonical.resultType(),
                         canonical.leaves().stream().map(Leaf::type).toList());
@@ -124,6 +128,47 @@ final class GenericScalarProjectionCompiler
         return Optional.empty();
     }
 
+    Optional<CompiledScalarPredicate> tryCompilePredicate(
+            EvaluationPlan plan,
+            PrimitiveRegistry primitiveRegistry,
+            Reference output)
+    {
+        Map<Integer, Assignment> assignments = new LinkedHashMap<>();
+        for (Assignment assignment : plan.assignments()) {
+            assignments.put(assignment.output().id(), assignment);
+        }
+        try {
+            ScalarExpression canonical = canonicalizeLeaves(
+                    expression(output, null, assignments, primitiveRegistry, new HashSet<>()));
+            if (canonical.operationCount() < 1 || canonical.resultType().carrierType() != boolean.class) {
+                return Optional.empty();
+            }
+            BoundSignature signature = new BoundSignature(
+                    canonical.resultType(),
+                    canonical.leaves().stream().map(Leaf::type).toList());
+            FunctionSemantics semantics = new FunctionSemantics(
+                    canonical.deterministic(),
+                    canonical.leaves().stream().map(_ -> RETURN_NULL_ON_NULL).toList(),
+                    false,
+                    NEVER_FAILS);
+            PrimitiveFunction function = cache.computeIfAbsent(canonical.key(), _ -> adapterGenerator.adapt(
+                            "fused_scalar_predicate",
+                            signature,
+                            semantics,
+                            new ScalarMethodTarget(canonical.target()))
+                    .implementation());
+            if (!(function instanceof MaskEvaluablePrimitiveFunction maskFunction)) {
+                return Optional.empty();
+            }
+            return Optional.of(new CompiledScalarPredicate(
+                    maskFunction,
+                    canonical.leaves().stream().map(Leaf::reference).toList()));
+        }
+        catch (Unsupported ignored) {
+            return Optional.empty();
+        }
+    }
+
     @Override
     public void close()
     {
@@ -149,6 +194,7 @@ final class GenericScalarProjectionCompiler
                     expectedType,
                     List.of(new Leaf(reference, expectedType)),
                     0,
+                    true,
                     new InputKey(reference, expectedType.carrierType()));
         }
         if (!(reference.producer() instanceof Variable variable)) {
@@ -172,6 +218,7 @@ final class GenericScalarProjectionCompiler
                     expectedType,
                     List.of(),
                     0,
+                    true,
                     new LiteralKey(literal.value(), expectedType.carrierType()));
         }
         if (!(assignment.operation() instanceof Call call) || call.resolvedCall() == null) {
@@ -190,7 +237,6 @@ final class GenericScalarProjectionCompiler
                 ? exactProvider.target()
                 : nullPropagatingProvider == null ? null : nullPropagatingProvider.target(signature).orElse(null);
         if (invocationTarget == null ||
-                !semantics.deterministic() ||
                 semantics.failureConvention() != NEVER_FAILS ||
                 !supportedCarrier(signature.resultType().carrierType()) ||
                 signature.argumentTypes().stream().map(TypeBinding::carrierType).anyMatch(carrier -> !supportedCarrier(carrier)) ||
@@ -221,15 +267,18 @@ final class GenericScalarProjectionCompiler
         }
         List<Leaf> leaves = new ArrayList<>();
         int operationCount = 1;
+        boolean deterministic = semantics.deterministic();
         for (ScalarExpression argument : arguments) {
             leaves.addAll(argument.leaves());
             operationCount += argument.operationCount();
+            deterministic &= argument.deterministic();
         }
         return new ScalarExpression(
                 target,
                 signature.resultType(),
                 List.copyOf(leaves),
                 operationCount,
+                deterministic,
                 new CallKey(invocationTarget, arguments.stream().map(ScalarExpression::key).toList()));
     }
 
@@ -257,7 +306,7 @@ final class GenericScalarProjectionCompiler
         MethodHandle target = Arrays.equals(reorder, identityReorder(reorder.length))
                 ? expression.target()
                 : MethodHandles.permuteArguments(expression.target(), canonicalType, reorder);
-        return new ScalarExpression(target, expression.resultType(), List.copyOf(leaves), expression.operationCount(), expression.key());
+        return new ScalarExpression(target, expression.resultType(), List.copyOf(leaves), expression.operationCount(), expression.deterministic(), expression.key());
     }
 
     private static int[] identityReorder(int size)
@@ -324,7 +373,16 @@ final class GenericScalarProjectionCompiler
             TypeBinding resultType,
             List<Leaf> leaves,
             int operationCount,
+            boolean deterministic,
             ExpressionKey key) {}
+
+    record CompiledScalarPredicate(MaskEvaluablePrimitiveFunction function, List<Reference> inputs)
+    {
+        CompiledScalarPredicate
+        {
+            inputs = List.copyOf(inputs);
+        }
+    }
 
     private static final class Unsupported
             extends RuntimeException

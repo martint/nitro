@@ -15,6 +15,7 @@ package org.weakref.nitro.function.scalar;
 
 import org.weakref.nitro.core.function.ScalarFailureMapper;
 import org.weakref.nitro.data.ErrorVector;
+import org.weakref.nitro.data.Mask;
 
 public interface GeneratedScalarKernel
 {
@@ -29,4 +30,9 @@ public interface GeneratedScalarKernel
     void applyDense(Object[] values, Object[] nulls, Object output, ErrorVector errors, ScalarFailureMapper failureMapper, int count);
 
     void applySparse(Object[] values, Object[] nulls, Object output, ErrorVector errors, ScalarFailureMapper failureMapper, int[] positions, int count);
+
+    default boolean applyMask(Object[] values, Object[] blockers, Mask mask, boolean selectedValue)
+    {
+        return false;
+    }
 }

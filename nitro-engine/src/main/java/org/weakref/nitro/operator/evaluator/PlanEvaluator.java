@@ -355,7 +355,9 @@ public final class PlanEvaluator
                 assignments.size(),
                 sourceMaskOptimizations.size(),
                 preboundMasks.size(),
-                (int) preboundMasks.values().stream().filter(CompiledPreboundMask.class::isInstance).count(),
+                (int) preboundMasks.values().stream()
+                        .filter(mask -> mask instanceof CompiledPreboundMask || mask instanceof ScalarPreboundMask)
+                        .count(),
                 sourceMaskSuccesses,
                 compiledMaskAttempts,
                 compiledMaskSuccesses,
@@ -2576,6 +2578,16 @@ public final class PlanEvaluator
                             assignment.output(),
                             compiledPreboundMask(call.arguments(), compiled, assignments)));
         }
+        for (Assignment assignment : plan.assignments()) {
+            if (!(assignment.operation() instanceof Call) || bindings.containsKey(assignment.output())) {
+                continue;
+            }
+            Reference output = new Reference(assignment.output(), Stream.VALUES);
+            projectionMaskCompiler.tryCompileScalarPredicate(plan, primitiveRegistry, output)
+                    .ifPresent(compiled -> bindings.put(
+                            assignment.output(),
+                            new ScalarPreboundMask(compiled.function(), compiled.inputs())));
+        }
         return Map.copyOf(bindings);
     }
 
@@ -3231,6 +3243,26 @@ public final class PlanEvaluator
             for (Reference component : compiled.excludedComponents()) {
                 excludeComponent(component, mask);
             }
+            return mask;
+        }
+        if (preboundMask instanceof ScalarPreboundMask compiled) {
+            compiledMaskAttempts++;
+            compiled.inputs().clear();
+            for (int index = 0; index < compiled.arguments().size(); index++) {
+                compiled.inputs().add(evaluateArgument(
+                        compiled.arguments().get(index),
+                        mask,
+                        compiled.function().requiredMaskInputStreams(index),
+                        true));
+            }
+            boolean success = selectTrue
+                    ? compiled.function().tryEvaluateTrueMaskInPlace(compiled.inputs(), mask, executionContext)
+                    : compiled.function().tryEvaluateFalseMaskInPlace(compiled.inputs(), mask, executionContext);
+            if (!success) {
+                compiledMaskFallbacks++;
+                return null;
+            }
+            compiledMaskSuccesses++;
             return mask;
         }
         Reference directInput = ((DirectPreboundMask) preboundMask).input();
@@ -4759,10 +4791,40 @@ public final class PlanEvaluator
     private record IndexedTerm(int index, MaskExpression term) {}
 
     private sealed interface PreboundMask
-            permits DirectPreboundMask, CompiledPreboundMask {}
+            permits DirectPreboundMask, CompiledPreboundMask, ScalarPreboundMask {}
 
     private record DirectPreboundMask(Reference input)
             implements PreboundMask {}
+
+    private static final class ScalarPreboundMask
+            implements PreboundMask
+    {
+        private final MaskEvaluablePrimitiveFunction function;
+        private final List<Reference> arguments;
+        private final ArrayList<Streams> inputs;
+
+        private ScalarPreboundMask(MaskEvaluablePrimitiveFunction function, List<Reference> arguments)
+        {
+            this.function = requireNonNull(function, "function is null");
+            this.arguments = List.copyOf(arguments);
+            this.inputs = new ArrayList<>(arguments.size());
+        }
+
+        private MaskEvaluablePrimitiveFunction function()
+        {
+            return function;
+        }
+
+        private List<Reference> arguments()
+        {
+            return arguments;
+        }
+
+        private ArrayList<Streams> inputs()
+        {
+            return inputs;
+        }
+    }
 
     private static final class CompiledPreboundMask
             implements PreboundMask

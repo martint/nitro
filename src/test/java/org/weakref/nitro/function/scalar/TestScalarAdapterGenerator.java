@@ -102,6 +102,97 @@ final class TestScalarAdapterGenerator
     }
 
     @Test
+    void testBooleanTargetNarrowsMaskWithoutMaterializingResult()
+            throws Throwable
+    {
+        PrimitiveFunction function = new ScalarAdapterGenerator().adapt(
+                        "positive",
+                        new BoundSignature(BOOLEAN, List.of(LONG)),
+                        strictSemantics(1),
+                        new ScalarMethodTarget(MethodHandles.lookup().findStatic(
+                                TestScalarAdapterGenerator.class,
+                                "positive",
+                                MethodType.methodType(boolean.class, long.class))))
+                .implementation();
+        assertThat(function).isInstanceOf(MaskEvaluablePrimitiveFunction.class);
+
+        try (Allocator allocator = new Allocator(createDefault())) {
+            PrimitiveExecutionContext context = new PrimitiveExecutionContext(allocator);
+            Mask dense = Mask.all(5);
+            boolean denseResult = ((MaskEvaluablePrimitiveFunction) function).tryEvaluateTrueMaskInPlace(
+                    List.of(Streams.ofValuesAndNulls(
+                            new I64Vector(new long[] {-2, 7, 0, 11, 5}),
+                            new BooleanVector(new boolean[] {false, false, false, true, false}))),
+                    dense,
+                    context);
+            assertThat(denseResult).isTrue();
+            assertThat(dense).containsExactly(1, 4);
+
+            Mask sparse = Mask.sparse(new int[] {0, 1, 3, 4}, 5);
+            boolean sparseResult = ((MaskEvaluablePrimitiveFunction) function).tryEvaluateFalseMaskInPlace(
+                    List.of(Streams.ofValues(new I64Vector(new long[] {-2, 7, 0, 11, -5}))),
+                    sparse,
+                    context);
+            assertThat(sparseResult).isTrue();
+            assertThat(sparse).containsExactly(0, 4);
+        }
+    }
+
+    @Test
+    void testNondeterministicZeroArgumentBooleanTargetRunsOncePerSelectedMaskRow()
+            throws Throwable
+    {
+        CountingBooleanTarget target = new CountingBooleanTarget();
+        PrimitiveFunction function = new ScalarAdapterGenerator().adapt(
+                        "alternating",
+                        new BoundSignature(BOOLEAN, List.of()),
+                        new FunctionSemantics(false, List.of(), false, NEVER_FAILS),
+                        new ScalarMethodTarget(MethodHandles.lookup().findVirtual(
+                                        CountingBooleanTarget.class,
+                                        "nextValue",
+                                        MethodType.methodType(boolean.class))
+                                .bindTo(target)))
+                .implementation();
+
+        Mask mask = Mask.sparse(new int[] {1, 2, 4}, 6);
+        try (Allocator allocator = new Allocator(createDefault())) {
+            assertThat(((MaskEvaluablePrimitiveFunction) function).tryEvaluateTrueMaskInPlace(
+                    List.of(), mask, new PrimitiveExecutionContext(allocator))).isTrue();
+        }
+        assertThat(mask).containsExactly(1, 4);
+        assertThat(target.invocations).isEqualTo(3);
+    }
+
+    @Test
+    void testNondeterministicTargetDoesNotCollapseRleRuns()
+            throws Throwable
+    {
+        CountingTarget target = new CountingTarget();
+        PrimitiveFunction function = new ScalarAdapterGenerator().adapt(
+                        "next_value_with_input",
+                        new BoundSignature(DOUBLE, List.of(LONG)),
+                        new FunctionSemantics(false, List.of(RETURN_NULL_ON_NULL), false, NEVER_FAILS),
+                        new ScalarMethodTarget(MethodHandles.lookup().findVirtual(
+                                        CountingTarget.class,
+                                        "nextValueWithInput",
+                                        MethodType.methodType(double.class, long.class))
+                                .bindTo(target)))
+                .implementation();
+
+        try (Allocator allocator = new Allocator(createDefault())) {
+            Streams result = function.apply(
+                    List.of(Streams.ofValues(new RleVector(new int[] {2, 3}, new I64Vector(new long[] {11, 22})))),
+                    Mask.all(5),
+                    EnumSet.of(Stream.VALUES),
+                    Streams.empty(),
+                    new PrimitiveExecutionContext(allocator));
+            assertThat(result.values()).isInstanceOf(F64Vector.class);
+            assertThat(((F64Vector) result.values()).values()).containsExactly(1, 2, 3, 4, 5);
+        }
+        assertThat(target.invocations).isEqualTo(5);
+    }
+
+    @Test
     void testRegistryOwnedReferenceResultWritesDirectlyToVector()
             throws Throwable
     {
@@ -857,6 +948,11 @@ final class TestScalarAdapterGenerator
         return add ? left + right : left - right;
     }
 
+    private static boolean positive(long value)
+    {
+        return value > 0;
+    }
+
     private static double half(long value)
     {
         return value / 2.0;
@@ -1034,6 +1130,22 @@ final class TestScalarAdapterGenerator
         public double nextValue()
         {
             return ++invocations;
+        }
+
+        public double nextValueWithInput(long ignored)
+        {
+            return ++invocations;
+        }
+    }
+
+    private static final class CountingBooleanTarget
+    {
+        private int invocations;
+
+        private boolean nextValue()
+        {
+            invocations++;
+            return (invocations & 1) != 0;
         }
     }
 

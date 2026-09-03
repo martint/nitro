@@ -16,7 +16,6 @@ package org.weakref.nitro.function.scalar;
 import org.weakref.nitro.core.function.BoundSignature;
 import org.weakref.nitro.core.function.FunctionCapability;
 import org.weakref.nitro.core.function.FunctionSemantics;
-import org.weakref.nitro.core.function.NullPropagatingScalarInvocationProvider;
 import org.weakref.nitro.core.function.ScalarFailureMapper;
 import org.weakref.nitro.core.function.ScalarResultWriter;
 import org.weakref.nitro.core.function.ScalarResultWriterFactory;
@@ -33,7 +32,6 @@ import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.util.List;
-import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static com.google.common.base.Preconditions.checkArgument;
@@ -76,6 +74,7 @@ public final class ScalarAdapterGenerator
     private static final ClassDesc CD_ERROR_VALUE = ClassDesc.of("org.weakref.nitro.data.ErrorValue");
     private static final ClassDesc CD_FAILURE_MAPPER = ClassDesc.of("org.weakref.nitro.core.function.ScalarFailureMapper");
     private static final ClassDesc CD_RESULT_WRITER = ClassDesc.of("org.weakref.nitro.core.function.ScalarResultWriter");
+    private static final ClassDesc CD_MASK = ClassDesc.of("org.weakref.nitro.data.Mask");
     private static final ClassDesc CD_THROWABLE = ClassDesc.of("java.lang.Throwable");
 
     private static final MethodTypeDesc BOOLEAN_VALUE = MethodTypeDesc.of(CD_boolean, CD_int);
@@ -87,6 +86,11 @@ public final class ScalarAdapterGenerator
     private static final MethodTypeDesc SPARSE_DICTIONARY_NULL_FREE = MethodTypeDesc.of(CD_void, CD_OBJECT_ARRAY, CD_INT_ARRAY_ARRAY, CD_OBJECT, CD_ERROR_VECTOR, CD_FAILURE_MAPPER, CD_INT_ARRAY, CD_int);
     private static final MethodTypeDesc DENSE = MethodTypeDesc.of(CD_void, CD_OBJECT_ARRAY, CD_OBJECT_ARRAY, CD_OBJECT, CD_ERROR_VECTOR, CD_FAILURE_MAPPER, CD_int);
     private static final MethodTypeDesc SPARSE = MethodTypeDesc.of(CD_void, CD_OBJECT_ARRAY, CD_OBJECT_ARRAY, CD_OBJECT, CD_ERROR_VECTOR, CD_FAILURE_MAPPER, CD_INT_ARRAY, CD_int);
+    private static final MethodTypeDesc APPLY_MASK = MethodTypeDesc.of(CD_boolean, CD_OBJECT_ARRAY, CD_OBJECT_ARRAY, CD_MASK, CD_boolean);
+    private static final MethodTypeDesc MASK_COUNT = MethodTypeDesc.of(CD_int);
+    private static final MethodTypeDesc MASK_SELECTED_POSITIONS = MethodTypeDesc.of(CD_INT_ARRAY);
+    private static final MethodTypeDesc MASK_POSITIONS_FOR_OVERWRITE = MethodTypeDesc.of(CD_INT_ARRAY, CD_int);
+    private static final MethodTypeDesc MASK_FINISH_RETAIN = MethodTypeDesc.of(CD_void, CD_int);
     private static final DirectMethodHandleDesc BSM_SCALAR_TARGET = ofCallsiteBootstrap(CD_BOOTSTRAP, "bootstrap", CD_CallSite);
 
     private final AtomicInteger nextClassId = new AtomicInteger();
@@ -133,7 +137,7 @@ public final class ScalarAdapterGenerator
                 semantics,
                 target,
                 resultWriterFactory,
-                List.of(new BoundNullPropagatingTarget(signature, target.target())));
+                List.of(new NullPropagatingScalarMethodTarget(signature, target.target())));
     }
 
     private ScalarDescriptor descriptor(
@@ -217,6 +221,10 @@ public final class ScalarAdapterGenerator
                     code -> emitLoop(code, arguments, result, invocationType, false, InputForm.ACCESSOR, capturesFailures));
             builder.withMethodBody("applySparse", SPARSE, ClassFile.ACC_PUBLIC,
                     code -> emitLoop(code, arguments, result, invocationType, true, InputForm.ACCESSOR, capturesFailures));
+            if (result == boolean.class && !capturesFailures) {
+                builder.withMethodBody("applyMask", APPLY_MASK, ClassFile.ACC_PUBLIC,
+                        code -> emitMaskLoop(code, arguments, invocationType));
+            }
         });
 
         try {
@@ -230,6 +238,129 @@ public final class ScalarAdapterGenerator
         catch (Throwable throwable) {
             throw new IllegalStateException("Failed to generate scalar adapter for " + target.target().type(), throwable);
         }
+    }
+
+    private static void emitMaskLoop(CodeBuilder code, List<Class<?>> arguments, MethodTypeDesc invocationType)
+    {
+        int values = 1;
+        int blockers = 2;
+        int mask = 3;
+        int selectedValue = 4;
+        int count = 5;
+        int positions = 6;
+        int dense = 7;
+        int index = 8;
+        int retained = 9;
+        int position = 10;
+        int valueAccessors = 11;
+        int blockerAccessors = valueAccessors + arguments.size();
+
+        for (int argument = 0; argument < arguments.size(); argument++) {
+            Class<?> carrier = arguments.get(argument);
+            code.aload(values);
+            code.loadConstant(argument);
+            code.aaload();
+            code.checkcast(carrier.isPrimitive() ? accessorDescriptor(carrier) : CD_VECTOR);
+            code.astore(valueAccessors + argument);
+            code.aload(blockers);
+            code.loadConstant(argument);
+            code.aaload();
+            code.checkcast(CD_BOOLEAN_VALUES);
+            code.astore(blockerAccessors + argument);
+        }
+
+        code.aload(mask);
+        code.invokevirtual(CD_MASK, "count", MASK_COUNT);
+        code.istore(count);
+        code.aload(mask);
+        code.invokevirtual(CD_MASK, "selectedPositions", MASK_SELECTED_POSITIONS);
+        code.astore(positions);
+        code.aload(positions);
+        Label sparse = code.newLabel();
+        Label positionsReady = code.newLabel();
+        code.ifnonnull(sparse);
+        code.loadConstant(1);
+        code.istore(dense);
+        code.aload(mask);
+        code.iload(count);
+        code.invokevirtual(CD_MASK, "positionsArrayForOverwrite", MASK_POSITIONS_FOR_OVERWRITE);
+        code.astore(positions);
+        code.goto_(positionsReady);
+        code.labelBinding(sparse);
+        code.loadConstant(0);
+        code.istore(dense);
+        code.labelBinding(positionsReady);
+
+        code.loadConstant(0);
+        code.istore(index);
+        code.loadConstant(0);
+        code.istore(retained);
+        Label loop = code.newLabel();
+        Label next = code.newLabel();
+        Label done = code.newLabel();
+        code.labelBinding(loop);
+        code.iload(index);
+        code.iload(count);
+        code.if_icmpge(done);
+        code.iload(dense);
+        Label loadSparsePosition = code.newLabel();
+        Label positionReady = code.newLabel();
+        code.ifeq(loadSparsePosition);
+        code.iload(index);
+        code.goto_(positionReady);
+        code.labelBinding(loadSparsePosition);
+        code.aload(positions);
+        code.iload(index);
+        code.iaload();
+        code.labelBinding(positionReady);
+        code.istore(position);
+
+        for (int argument = 0; argument < arguments.size(); argument++) {
+            Label unblocked = code.newLabel();
+            code.aload(blockerAccessors + argument);
+            code.ifnull(unblocked);
+            code.aload(blockerAccessors + argument);
+            code.iload(position);
+            code.invokeinterface(CD_BOOLEAN_VALUES, "value", BOOLEAN_VALUE);
+            code.ifne(next);
+            code.labelBinding(unblocked);
+        }
+        for (int argument = 0; argument < arguments.size(); argument++) {
+            Class<?> carrier = arguments.get(argument);
+            code.aload(valueAccessors + argument);
+            if (carrier.isPrimitive()) {
+                code.iload(position);
+                code.invokeinterface(accessorDescriptor(carrier), "value", MethodTypeDesc.of(descriptor(carrier), CD_int));
+            }
+            else {
+                code.iload(position);
+                code.invokedynamic(DynamicCallSiteDesc.of(
+                        BSM_SCALAR_TARGET,
+                        "read" + argument,
+                        MethodTypeDesc.of(descriptor(carrier), CD_VECTOR, CD_int)));
+            }
+        }
+        code.aload(positions);
+        code.iload(retained);
+        code.iload(position);
+        code.iastore();
+        code.invokedynamic(DynamicCallSiteDesc.of(BSM_SCALAR_TARGET, "apply", invocationType));
+        code.iload(selectedValue);
+        code.ixor();
+        code.loadConstant(1);
+        code.ixor();
+        code.iload(retained);
+        code.iadd();
+        code.istore(retained);
+        code.labelBinding(next);
+        code.iinc(index, 1);
+        code.goto_(loop);
+        code.labelBinding(done);
+        code.aload(mask);
+        code.iload(retained);
+        code.invokevirtual(CD_MASK, "finishRetain", MASK_FINISH_RETAIN);
+        code.loadConstant(1);
+        code.ireturn();
     }
 
     private static void emitLoop(
@@ -443,22 +574,6 @@ public final class ScalarAdapterGenerator
         requireNonNull(factory, "factory is null");
         MethodType expected = MethodType.methodType(void.class, ScalarResultWriter.class, int.class, carrier);
         checkArgument(factory.appendTarget().type().equals(expected), "Result writer type %s does not match %s", factory.appendTarget().type(), expected);
-    }
-
-    private record BoundNullPropagatingTarget(BoundSignature signature, MethodHandle target)
-            implements NullPropagatingScalarInvocationProvider
-    {
-        private BoundNullPropagatingTarget
-        {
-            requireNonNull(signature, "signature is null");
-            requireNonNull(target, "target is null");
-        }
-
-        @Override
-        public Optional<MethodHandle> target(BoundSignature requestedSignature)
-        {
-            return signature.equals(requestedSignature) ? Optional.of(target) : Optional.empty();
-        }
     }
 
     private static void checkArgumentCarrier(TypeBinding type)

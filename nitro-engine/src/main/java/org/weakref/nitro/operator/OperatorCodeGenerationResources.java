@@ -131,6 +131,7 @@ public final class OperatorCodeGenerationResources
         }
         closed = true;
         fusedProjection.close();
+        projectionMask.close();
         fusedGrouping.close();
         dictionaryDomainGrouping.close();
         multiLongGrouping.close();

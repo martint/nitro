@@ -38,8 +38,10 @@ import org.weakref.nitro.function.scalar.ScalarDescriptor;
 import org.weakref.nitro.function.scalar.ScalarMethodTarget;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.ConstantTableOperator;
+import org.weakref.nitro.operator.EvaluationOperatorPolicy;
 import org.weakref.nitro.operator.ProjectOperator;
 import org.weakref.nitro.operator.TableOperator;
+import org.weakref.nitro.operator.evaluator.PlanEvaluator;
 import org.weakref.nitro.operator.evaluator.PrimitiveInvocationBinding;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 import org.weakref.nitro.operator.evaluator.ir.AllMask;
@@ -49,6 +51,7 @@ import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
 import org.weakref.nitro.operator.evaluator.ir.Input;
 import org.weakref.nitro.operator.evaluator.ir.Literal;
 import org.weakref.nitro.operator.evaluator.ir.Reference;
+import org.weakref.nitro.operator.evaluator.ir.ReferenceMask;
 import org.weakref.nitro.operator.evaluator.ir.Variable;
 
 import java.lang.invoke.MethodHandle;
@@ -70,6 +73,7 @@ final class TestGenericScalarProjectionCompiler
 {
     private static final TypeBinding LONG = new TestingTypeBinding(new TypeIdentity("test-long"), long.class);
     private static final TypeBinding DOUBLE = new TestingTypeBinding(new TypeIdentity("test-double"), double.class);
+    private static final TypeBinding BOOLEAN = new TestingTypeBinding(new TypeIdentity("test-boolean"), boolean.class);
     private static final PrimitiveFunction UNUSED_VECTOR_IMPLEMENTATION = (_, _, _, _, _) -> {
         throw new AssertionError("generic fused projection used the vector fallback");
     };
@@ -115,6 +119,71 @@ final class TestGenericScalarProjectionCompiler
 
             assertThat(((I64Vector) results[0].values()).values()).containsExactly(21, 0, 0, 204);
             assertThat(((BooleanVector) results[0].get(Stream.NULLS)).values()).containsExactly(false, true, false, false);
+        }
+    }
+
+    @Test
+    void testNondeterministicScalarPredicateNarrowsMaskInOneGeneratedLoop()
+            throws Throwable
+    {
+        AlternatingDouble target = new AlternatingDouble();
+        FunctionSemantics nondeterministic = new FunctionSemantics(false, List.of(), false, NEVER_FAILS);
+        ScalarDescriptor descriptor = new ScalarAdapterGenerator().adapt(
+                "dynamic_value",
+                new BoundSignature(DOUBLE, List.of()),
+                nondeterministic,
+                new ScalarMethodTarget(MethodHandles.lookup().findVirtual(
+                                AlternatingDouble.class,
+                                "nextValue",
+                                MethodType.methodType(double.class))
+                        .bindTo(target)));
+        ResolvedCall value = new ResolvedCall(
+                new FunctionIdentity("dynamic_value"),
+                new BoundSignature(DOUBLE, List.of()),
+                nondeterministic,
+                List.of(),
+                new PrimitiveInvocationBinding(
+                        descriptor.implementation(),
+                        descriptor.capabilities()));
+        ResolvedCall lessThan = resolvedCall(
+                "dynamic_less_than",
+                BOOLEAN,
+                List.of(DOUBLE, DOUBLE),
+                MethodHandles.lookup().findStatic(
+                        TestGenericScalarProjectionCompiler.class,
+                        "lessThan",
+                        MethodType.methodType(boolean.class, double.class, double.class)));
+
+        Variable generated = new Variable(0);
+        Variable limit = new Variable(1);
+        Variable predicate = new Variable(2);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(generated, new Call(value, List.of()), AllMask.ALL),
+                        new Assignment(limit, new Literal(0.5, DOUBLE), AllMask.ALL),
+                        new Assignment(predicate, new Call(lessThan, List.of(
+                                new Reference(generated, Stream.VALUES),
+                                new Reference(limit, Stream.VALUES))), AllMask.ALL)),
+                List.of());
+
+        try (Allocator allocator = new Allocator(createDefault());
+                ProjectionMaskCompiler maskCompiler = new ProjectionMaskCompiler()) {
+            PlanEvaluator evaluator = new PlanEvaluator(
+                    plan,
+                    new PrimitiveRegistry(),
+                    (_, _) -> {
+                        throw new AssertionError("predicate has no source inputs");
+                    },
+                    allocator,
+                    maskCompiler,
+                    EvaluationOperatorPolicy.defaults());
+            Mask mask = Mask.sparse(new int[] {1, 2, 4}, 6);
+            assertThat(evaluator.evaluateInPlace(
+                    new ReferenceMask(new Reference(predicate, Stream.VALUES)), mask)).isSameAs(mask);
+            assertThat(mask).containsExactly(1, 4);
+            assertThat(target.invocations).isEqualTo(3);
+            assertThat(evaluator.maskExecutionDiagnostics().compiledMaskSuccesses()).isEqualTo(1);
+            assertThat(evaluator.maskExecutionDiagnostics().materializedMaskFallbacks()).isZero();
         }
     }
 
@@ -455,9 +524,25 @@ final class TestGenericScalarProjectionCompiler
         return left + right;
     }
 
+    private static boolean lessThan(double left, double right)
+    {
+        return left < right;
+    }
+
     private static long negate(long value)
     {
         return -value;
+    }
+
+    private static final class AlternatingDouble
+    {
+        private int invocations;
+
+        private double nextValue()
+        {
+            invocations++;
+            return (invocations & 1) != 0 ? 0.25 : 0.75;
+        }
     }
 
     private record TestingTypeBinding(TypeIdentity identity, Class<?> carrierType)

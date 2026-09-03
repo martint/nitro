@@ -19,6 +19,7 @@ import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
+import org.weakref.nitro.function.scalar.MaskEvaluablePrimitiveFunction;
 import org.weakref.nitro.function.scalar.MaskOutcome;
 import org.weakref.nitro.function.scalar.PrimitiveExecutionContext;
 import org.weakref.nitro.jit.ProjectionProgramBuilder.ArgumentNull;
@@ -28,6 +29,9 @@ import org.weakref.nitro.jit.ProjectionProgramBuilder.BinaryOperation;
 import org.weakref.nitro.jit.ProjectionProgramBuilder.BooleanConstant;
 import org.weakref.nitro.jit.ProjectionProgramBuilder.Program;
 import org.weakref.nitro.jit.ProjectionProgramBuilder.Utf8Equal;
+import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
+import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
+import org.weakref.nitro.operator.evaluator.ir.Reference;
 
 import java.util.List;
 import java.util.Optional;
@@ -44,11 +48,13 @@ import static java.util.Objects.requireNonNull;
  * visible to the evaluator.
  */
 public final class ProjectionMaskCompiler
+        implements AutoCloseable
 {
     private final DynamicKernelFactory dynamicKernelFactory;
     private final boolean returnedConstantComparisonMasks;
     private final int dictionaryEqualityMinimumReuse;
     private volatile Utf8DynamicMaskKernel utf8DynamicKernel;
+    private final GenericScalarProjectionCompiler genericScalarCompiler;
 
     public ProjectionMaskCompiler()
     {
@@ -71,6 +77,31 @@ public final class ProjectionMaskCompiler
         this.returnedConstantComparisonMasks =
                 requireNonNull(policy, "policy is null").returnedConstantComparisonMasks();
         this.dictionaryEqualityMinimumReuse = policy.dictionaryEqualityMinimumReuse();
+        this.genericScalarCompiler = new GenericScalarProjectionCompiler(policy.fusedDictionaryDomainMinimumReduction());
+    }
+
+    public Optional<CompiledScalarPredicate> tryCompileScalarPredicate(
+            EvaluationPlan plan,
+            PrimitiveRegistry primitiveRegistry,
+            Reference output)
+    {
+        return genericScalarCompiler.tryCompilePredicate(plan, primitiveRegistry, output)
+                .map(compiled -> new CompiledScalarPredicate(compiled.function(), compiled.inputs()));
+    }
+
+    public record CompiledScalarPredicate(MaskEvaluablePrimitiveFunction function, List<Reference> inputs)
+    {
+        public CompiledScalarPredicate
+        {
+            function = requireNonNull(function, "function is null");
+            inputs = List.copyOf(inputs);
+        }
+    }
+
+    @Override
+    public void close()
+    {
+        genericScalarCompiler.close();
     }
 
     public Optional<CompiledMask> tryCompile(

@@ -41,7 +41,7 @@ import static com.google.common.base.Preconditions.checkArgument;
 import static java.util.Objects.requireNonNull;
 
 final class FrameworkManagedScalarFunction
-        implements PrimitiveFunction
+        implements MaskEvaluablePrimitiveFunction
 {
     private final String name;
     private final BoundSignature signature;
@@ -93,6 +93,43 @@ final class FrameworkManagedScalarFunction
     public boolean propagatesNulls()
     {
         return true;
+    }
+
+    @Override
+    public Set<Stream> requiredMaskInputStreams(int inputIndex)
+    {
+        return ALL_INPUT_STREAMS;
+    }
+
+    @Override
+    public boolean requiresCompletedInputCompanionStreamsForMask()
+    {
+        return false;
+    }
+
+    @Override
+    public boolean tryEvaluateTrueMaskInPlace(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
+    {
+        return tryEvaluateMaskInPlace(inputs, mask, true, context);
+    }
+
+    @Override
+    public boolean tryEvaluateFalseMaskInPlace(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
+    {
+        return tryEvaluateMaskInPlace(inputs, mask, false, context);
+    }
+
+    private boolean tryEvaluateMaskInPlace(List<Streams> inputs, Mask mask, boolean selectedValue, PrimitiveExecutionContext context)
+    {
+        if (signature.resultType().carrierType() != boolean.class || mayFail) {
+            return false;
+        }
+        checkArgument(inputs.size() == signature.argumentTypes().size(), "Unexpected argument count for %s", name);
+        InvocationState state = context.state(this, () -> new InvocationState(inputs.size()));
+        bindNulls(inputs, state, true);
+        bindExecutionBlockers(inputs, state);
+        bindValues(inputs, state);
+        return kernel.applyMask(state.values, state.executionBlockers, mask, selectedValue);
     }
 
     @Override
@@ -161,7 +198,7 @@ final class FrameworkManagedScalarFunction
 
         Vector proposedValues = output == null ? null : output.getOrNull(Stream.VALUES);
         RleVector proposedRle = proposedValues instanceof RleVector rle && state.vectorAllocator.owns(rle) ? rle : null;
-        if (!mayFail && !requestErrors && mask.all() &&
+        if (deterministic && !mayFail && !requestErrors && mask.all() &&
                 (proposedValues == null || proposedRle != null) &&
                 bindRleValuesIfNullFree(inputs, state, mask.size())) {
             int runCount = mergeRuns(inputs, state);

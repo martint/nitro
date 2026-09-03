@@ -187,6 +187,12 @@ Generated adapters are ordinary implementations of the batch convention. They ma
 around a constant method-handle target, hoist null/error classification, traverse selected positions, and write into
 allocator-owned outputs. Generation does not transfer function semantics into the evaluator.
 
+When the result carrier is Boolean, the same generated adapter may implement the mask convention directly: evaluate
+the composed scalar target only at active logical positions and compact the caller-owned mask in the same loop. This
+form must preserve strict null/error exclusion and exact invocation counts. In particular, a nondeterministic target
+is invoked once per selected logical row and is never collapsed over dictionary entries or RLE runs. Predicate
+composition is admitted from resolved scalar capabilities and physical carriers, never from function identity.
+
 Known-empty companion streams are physical constants, not row loops. If every strict argument is proven null-free, a
 requested NULLS result uses the allocator's immutable all-false representation; the adapter must not scan logical
 positions to rediscover that fact. The same rule applies to other provably empty companion streams.
