@@ -202,6 +202,14 @@ An evaluator owns the mutable state created through its function execution conte
 evaluator, may be reused across its batches, and is closed when the evaluator closes if it implements
 `AutoCloseable`. A resolved function binding remains immutable and must not retain evaluator-local state itself.
 
+Higher-order function providers bind container arguments, captured outer expressions, and one or more nested
+expressions. The host compiler lowers each nested expression through the same normalized, mask-aware evaluation IR as
+an outer expression, with lambda parameters represented as ordinary nested-domain inputs. At execution, the provider
+maps selected container entries and captures into that domain, invokes the nested plan under the derived mask, and
+constructs the function result. The provider owns container semantics; neither the compiler nor evaluator recognizes
+specific higher-order functions. Parent null, error, and inactive positions contribute no nested positions, while
+recursive vector structure and encoded child streams remain available to the nested evaluator.
+
 Generated adapters are ordinary implementations of the batch convention. They may generate direct invocation bytecode
 around a constant method-handle target, hoist null/error classification, traverse selected positions, and write into
 allocator-owned outputs. Generation does not transfer function semantics into the evaluator.

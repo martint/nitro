@@ -61,8 +61,8 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | §4 Composition and modules | 0005, 0006, 0048 |
 | §5 Vectors, streams, types | 0006, 0008, 0012, 0021, 0022, 0023, 0054, 0064 |
 | §6 Masks and conditions | 0008, 0012, 0020, 0034, 0064 |
-| §7 Evaluation IR | 0010, 0011, 0012, 0040 |
-| §8 Function conventions | 0006, 0011, 0013–0016, 0037, 0038, 0040, 0049–0054, 0062, 0063, 0066 |
+| §7 Evaluation IR | 0010, 0011, 0012, 0040, 0067 |
+| §8 Function conventions | 0006, 0011, 0013–0016, 0037, 0038, 0040, 0049–0054, 0062, 0063, 0066, 0067 |
 | §9 Operators and islands | 0003, 0010, 0017, 0024, 0044–0047 |
 | §10 Cooperative execution | 0004, 0044, 0045 |
 | §11 Allocation and memory | 0007, 0014, 0017–0019, 0041, 0066 |
@@ -146,3 +146,4 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | [0064](0064-count-independent-encoded-domains.md) | Count independent encoded domains under a mask | accepted |
 | [0065](0065-reuse-domain-counts-after-equivalent-mapping-proof.md) | Reuse domain counts after an equivalent-mapping proof | accepted |
 | [0066](0066-close-evaluator-local-function-state.md) | Close evaluator-local function state with its evaluator | accepted |
+| [0067](0067-bind-higher-order-functions-as-nested-plans.md) | Bind higher-order functions as provider-owned nested plans | accepted |
