@@ -25,18 +25,24 @@ public record GroupedAggregationUpdateTemplate(List<Contribution> contributions,
     public sealed interface Contribution
             permits InputValue, Constant {}
 
-    public record InputValue(int argument, PrimitiveContributionCarrier carrier)
+    public record InputValue(int argument, List<String> fieldPath, PrimitiveContributionCarrier carrier)
             implements Contribution
     {
         public InputValue
         {
             requireArgument(argument);
+            fieldPath = copyFieldPath(fieldPath);
             carrier = requireNonNull(carrier, "carrier is null");
         }
 
         public InputValue(int argument)
         {
-            this(argument, PrimitiveContributionCarrier.LONG);
+            this(argument, List.of(), PrimitiveContributionCarrier.LONG);
+        }
+
+        public InputValue(int argument, PrimitiveContributionCarrier carrier)
+        {
+            this(argument, List.of(), carrier);
         }
     }
 
@@ -105,6 +111,16 @@ public record GroupedAggregationUpdateTemplate(List<Contribution> contributions,
         return new GroupedAggregationUpdateTemplate(new InputValue(argument, carrier), target);
     }
 
+    public static InputValue inputField(int argument, String field, PrimitiveContributionCarrier carrier)
+    {
+        return new InputValue(argument, List.of(requireNonNull(field, "field is null")), carrier);
+    }
+
+    public static InputValue inputPath(int argument, List<String> fieldPath, PrimitiveContributionCarrier carrier)
+    {
+        return new InputValue(argument, fieldPath, carrier);
+    }
+
     public static GroupedAggregationUpdateTemplate constant(long value, GroupedAggregationUpdateTarget target)
     {
         return new GroupedAggregationUpdateTemplate(new Constant(value, -1), target);
@@ -129,7 +145,10 @@ public record GroupedAggregationUpdateTemplate(List<Contribution> contributions,
     private static GroupedAggregationUpdate.Contribution bind(Contribution contribution, List<AggregationArgumentBinding> arguments)
     {
         return switch (contribution) {
-            case InputValue input -> new GroupedAggregationUpdate.InputValue(inputColumn(arguments, input.argument()), input.carrier());
+            case InputValue input -> new GroupedAggregationUpdate.InputValue(
+                    inputColumn(arguments, input.argument()),
+                    input.fieldPath(),
+                    input.carrier());
             case Constant constant when constant.nullCheckArgument() >= 0 ->
                     new GroupedAggregationUpdate.Constant(constant.value(), inputColumn(arguments, constant.nullCheckArgument()));
             case Constant constant -> new GroupedAggregationUpdate.Constant(constant.value(), -1);
@@ -154,6 +173,15 @@ public record GroupedAggregationUpdateTemplate(List<Contribution> contributions,
         if (argument < 0) {
             throw new IllegalArgumentException("argument is negative");
         }
+    }
+
+    private static List<String> copyFieldPath(List<String> fieldPath)
+    {
+        fieldPath = List.copyOf(requireNonNull(fieldPath, "fieldPath is null"));
+        if (fieldPath.stream().anyMatch(field -> field == null || field.isEmpty())) {
+            throw new IllegalArgumentException("fieldPath contains a null or empty field");
+        }
+        return fieldPath;
     }
 
     private static PrimitiveContributionCarrier carrier(Contribution contribution)

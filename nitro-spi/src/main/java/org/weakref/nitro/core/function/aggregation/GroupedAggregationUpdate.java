@@ -31,7 +31,7 @@ public record GroupedAggregationUpdate(List<Contribution> contributions, Grouped
     public sealed interface Contribution
             permits InputValue, Constant {}
 
-    public record InputValue(int inputColumn, PrimitiveContributionCarrier carrier)
+    public record InputValue(int inputColumn, List<String> fieldPath, PrimitiveContributionCarrier carrier)
             implements Contribution
     {
         public InputValue
@@ -39,12 +39,18 @@ public record GroupedAggregationUpdate(List<Contribution> contributions, Grouped
             if (inputColumn < 0) {
                 throw new IllegalArgumentException("inputColumn is negative");
             }
+            fieldPath = copyFieldPath(fieldPath);
             carrier = requireNonNull(carrier, "carrier is null");
         }
 
         public InputValue(int inputColumn)
         {
-            this(inputColumn, PrimitiveContributionCarrier.LONG);
+            this(inputColumn, List.of(), PrimitiveContributionCarrier.LONG);
+        }
+
+        public InputValue(int inputColumn, PrimitiveContributionCarrier carrier)
+        {
+            this(inputColumn, List.of(), carrier);
         }
     }
 
@@ -180,12 +186,29 @@ public record GroupedAggregationUpdate(List<Contribution> contributions, Grouped
         return carrier(contributions.get(contribution));
     }
 
+    public List<String> fieldPath(int contribution)
+    {
+        return switch (contributions.get(contribution)) {
+            case InputValue input -> input.fieldPath();
+            case Constant _ -> List.of();
+        };
+    }
+
     private static PrimitiveContributionCarrier carrier(Contribution contribution)
     {
         return switch (contribution) {
             case InputValue input -> input.carrier();
             case Constant _ -> PrimitiveContributionCarrier.LONG;
         };
+    }
+
+    private static List<String> copyFieldPath(List<String> fieldPath)
+    {
+        fieldPath = List.copyOf(requireNonNull(fieldPath, "fieldPath is null"));
+        if (fieldPath.stream().anyMatch(field -> field == null || field.isEmpty())) {
+            throw new IllegalArgumentException("fieldPath contains a null or empty field");
+        }
+        return fieldPath;
     }
 
     public long constantValue()

@@ -1842,6 +1842,20 @@ public class GroupedAggregationOperator
                 }
                 Output valueOutput = batch.output(spec.inputColumn(contribution));
                 Vector values = spec.readsValue(contribution) ? valueOutput.borrow(Stream.VALUES) : null;
+                if (values != null && !spec.fieldPath(contribution).isEmpty()) {
+                    try {
+                        for (String field : spec.fieldPath(contribution)) {
+                            Streams component = VectorAccess.structField(values, field);
+                            if (!VectorAccess.isAllFalseNulls(component.getOrNull(Stream.NULLS))) {
+                                return false;
+                            }
+                            values = component.values();
+                        }
+                    }
+                    catch (IllegalArgumentException _) {
+                        return false;
+                    }
+                }
                 if (!fusedBindings.bindInput(
                         input,
                         values,

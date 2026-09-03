@@ -383,6 +383,24 @@ class TestCoreIntegrationSlice
     }
 
     @Test
+    void testGroupedAggregationCapabilityBindsStructuralComponentPath()
+    {
+        GroupedAggregationUpdateTemplate template = new GroupedAggregationUpdateTemplate(
+                GroupedAggregationUpdateTemplate.inputPath(
+                        0,
+                        List.of("outer", "value"),
+                        org.weakref.nitro.core.function.aggregation.PrimitiveContributionCarrier.LONG),
+                IsolatedGroupedAggregationUpdateProvider.UPDATE);
+
+        GroupedAggregationUpdate update = template.bind(List.of(AggregationArgumentBinding.input(7)));
+
+        assertThat(update.contribution()).isEqualTo(new GroupedAggregationUpdate.InputValue(
+                7,
+                List.of("outer", "value"),
+                org.weakref.nitro.core.function.aggregation.PrimitiveContributionCarrier.LONG));
+    }
+
+    @Test
     void testAggregationImplementationResolvesAcrossIsolatedClassLoader()
             throws ReflectiveOperationException, IOException
     {

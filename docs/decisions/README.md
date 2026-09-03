@@ -137,3 +137,4 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | [0055](0055-link-generated-aggregation-targets-as-constants.md) | Link generated aggregation targets as constants | accepted |
 | [0056](0056-allow-generated-aggregation-updates-to-consume-tuples.md) | Allow generated aggregation updates to consume primitive tuples | accepted |
 | [0057](0057-describe-aggregation-inputs-by-primitive-carrier.md) | Describe generated aggregation inputs by primitive carrier | accepted |
+| [0058](0058-select-structural-components-in-generated-aggregation-updates.md) | Let providers select structural components for generated aggregation updates | accepted |

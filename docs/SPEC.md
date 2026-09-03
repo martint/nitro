@@ -301,6 +301,12 @@ carrier-tagged input descriptor is extended when another primitive carrier is ad
 or contribution classes for every carrier or tuple shape. Generated kernels flatten the tuple into specialized
 physical bindings, enforce the combined null convention, and link the target as a constant without naming the
 provider class or allocating a row argument tuple.
+An input contribution may select a provider-declared path of named fields through a structural physical value before
+loading its primitive carrier. An empty path selects the argument value itself. The engine interprets the path only
+as recursive vector structure: it preserves outer dictionary, RLE, and region mappings and never assigns logical-type
+or function meaning to field names. Logical nullness remains attached to the complete argument; component nullness is
+not silently discarded, and an exact generated path is declined if a selected physical component is independently
+nullable.
 The target identity is part of the generated-kernel cache key. A provider may additionally supply a repeated-update
 target that consumes the complete contribution tuple plus an encoded-domain multiplicity; absent that capability, the engine preserves semantics by
 invoking the single update once per logical occurrence. This contract supports multiple updates and mixed primitive
