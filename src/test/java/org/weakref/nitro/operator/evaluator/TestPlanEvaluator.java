@@ -1954,6 +1954,32 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testMapKeysPreservesDictionaryMapping()
+    {
+        PrimitiveFunction mapKeys = primitiveRegistry().get("map_keys");
+        DictionaryVector maps = DictionaryVector.wrap(new int[] {3, 0, 1, 3}, createUtf8I64MapVector());
+
+        Streams result = mapKeys.apply(
+                List.of(Streams.ofValues(maps)),
+                Mask.all(maps.length()),
+                Set.of(Stream.VALUES),
+                null,
+                new PrimitiveExecutionContext(new Allocator(EngineResources.createDefault())));
+
+        assertThat(result.values()).isInstanceOf(DictionaryVector.class);
+        DictionaryVector dictionary = (DictionaryVector) result.values();
+        assertThat(dictionary.ids()).containsExactly(3, 0, 1, 3);
+        assertThat(dictionary.hasOwnedMapping()).isTrue();
+        assertThat(dictionary.values()).isInstanceOf(ArrayVector.class);
+
+        ArrayVector arrays = (ArrayVector) dictionary.values();
+        assertThat(arrays.offsets()).containsExactly(0, 2, 3, 3, 5);
+        BinaryVector keys = (BinaryVector) arrays.elementValues();
+        assertThat(utf8(keys, 0)).isEqualTo("alpha");
+        assertThat(utf8(keys, 4)).isEqualTo("epsilon");
+    }
+
+    @Test
     void testMapKeysDoesNotReuseNestedOutputForSparseMasks()
     {
         PrimitiveFunction mapKeys = primitiveRegistry().get("map_keys");

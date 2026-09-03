@@ -60,8 +60,7 @@ import org.weakref.nitro.function.scalar.builtin.LessThanUtf8;
 import org.weakref.nitro.function.scalar.builtin.LikeUtf8;
 import org.weakref.nitro.function.scalar.builtin.LikeUtf8Policy;
 import org.weakref.nitro.function.scalar.builtin.MapContainsKeyUtf8;
-import org.weakref.nitro.function.scalar.builtin.MapKeys;
-import org.weakref.nitro.function.scalar.builtin.MapValues;
+import org.weakref.nitro.function.scalar.builtin.MapEntries;
 import org.weakref.nitro.function.scalar.builtin.MaterializeLongCarrier;
 import org.weakref.nitro.function.scalar.builtin.MultiplyF64Optimization;
 import org.weakref.nitro.function.scalar.builtin.MultiplyI64Optimization;
@@ -127,8 +126,6 @@ public final class TestPrimitiveFunctions
                 LessThanUtf8.class,
                 LengthUtf8.class,
                 MapContainsKeyUtf8.class,
-                MapKeys.class,
-                MapValues.class,
                 NullI64.class,
                 BigintAddExact.class,
                 BigintSubtractExact.class,
@@ -145,6 +142,8 @@ public final class TestPrimitiveFunctions
                 UpperUtf8.class)) {
             primitiveRegistry.register(load(scalarLoader, functionClass, utf8Policy));
         }
+        primitiveRegistry.register("map_keys", new MapEntries(MapEntries.Entry.KEY));
+        primitiveRegistry.register("map_values", new MapEntries(MapEntries.Entry.VALUE));
         TypeBinding bigint = new TestingTypeBinding(new TypeIdentity("test-bigint"), long.class);
         TypeBinding doubleType = new TestingTypeBinding(new TypeIdentity("test-double"), double.class);
         primitiveRegistry.register(generatedBinary("add", "addBigint", bigint, new AddI64Optimization()));

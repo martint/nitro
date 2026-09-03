@@ -17,6 +17,7 @@ import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.ArrayVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.MapVector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
@@ -25,18 +26,30 @@ import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.function.scalar.PrimitiveExecutionContext;
 import org.weakref.nitro.function.scalar.PrimitiveFunction;
-import org.weakref.nitro.function.scalar.ScalarFunction;
 
 import java.util.List;
 import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import static java.util.Objects.requireNonNull;
 
-@ScalarFunction(name = "map_values")
-public final class MapValues
+public final class MapEntries
         implements PrimitiveFunction
 {
-    private final Allocator.Context allocationContext = new Allocator.Context("MapValues");
+    public enum Entry
+    {
+        KEY,
+        VALUE,
+    }
+
+    private final Entry entry;
+    private final Allocator.Context allocationContext;
+
+    public MapEntries(Entry entry)
+    {
+        this.entry = requireNonNull(entry, "entry is null");
+        this.allocationContext = new Allocator.Context("MapEntries." + entry);
+    }
 
     @Override
     public Set<Allocator.Context> allocationContexts()
@@ -53,7 +66,7 @@ public final class MapValues
     @Override
     public Streams apply(List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
     {
-        checkArgument(inputs.size() == 1, "Unexpected argument count for map_values");
+        checkArgument(inputs.size() == 1, "Unexpected argument count for map entries");
         if (!requestedStreams.contains(Stream.VALUES) && !requestedStreams.contains(Stream.NULLS)) {
             return Streams.empty();
         }
@@ -66,7 +79,7 @@ public final class MapValues
         Streams evaluationOutput = reuseOutput ? output : null;
 
         if (requestedStreams.contains(Stream.VALUES)) {
-            result = result.with(Stream.VALUES, mapValues(input, evaluationOutput, context, mask, requiredLength));
+            result = result.with(Stream.VALUES, mapEntries(input, evaluationOutput, context, mask, requiredLength));
         }
         if (requestedStreams.contains(Stream.NULLS) && inputNulls != null) {
             result = result.with(Stream.NULLS, copyNulls(inputNulls, evaluationOutput, context, mask, requiredLength));
@@ -74,27 +87,34 @@ public final class MapValues
         return result;
     }
 
-    private DictionaryVector dictionaryValues(DictionaryVector dictionary, MapVector maps, Streams output, PrimitiveExecutionContext context, Mask mask, int requiredLength)
+    private DictionaryVector dictionaryValues(DictionaryVector dictionary, MapVector maps, PrimitiveExecutionContext context, Mask mask, int requiredLength)
     {
         if (!mask.all()) {
             return null;
         }
-        DictionaryVector existing = output != null && output.has(Stream.VALUES) && output.values() instanceof DictionaryVector vector ? vector : null;
-        int[] ids = existing != null ? existing.ids() : new int[requiredLength];
-        System.arraycopy(dictionary.ids(), 0, ids, 0, dictionary.length());
+        I32Vector ids = I32Vector.allocate(context.allocator(), allocationContext, requiredLength);
+        System.arraycopy(dictionary.ids(), 0, ids.values(), 0, dictionary.length());
         Mask allEntries = context.allocator().allocateAllMask(allocationContext, maps.length());
         try {
-            return context.allocator().allocateDictionary(allocationContext, ids, arrayValues(maps, null, context, allEntries, maps.length()));
+            return context.allocator().adopt(
+                    allocationContext,
+                    DictionaryVector.wrapOwnedIds(ids, dictionary.length(), arrayEntries(maps, null, context, allEntries, maps.length())));
         }
         finally {
             context.allocator().release(allocationContext, allEntries);
         }
     }
 
-    private ArrayVector arrayValues(MapVector maps, Streams output, PrimitiveExecutionContext context, Mask mask, int requiredLength)
+    private ArrayVector arrayEntries(MapVector maps, Streams output, PrimitiveExecutionContext context, Mask mask, int requiredLength)
     {
         if (!mask.all()) {
-            return selectedArray(maps, context, mask, requiredLength, selectedPositions(mask), maps.values());
+            int[] positions = selectedPositions(context, mask);
+            try {
+                return selectedArray(maps, context, mask, requiredLength, positions, entries(maps));
+            }
+            finally {
+                context.allocator().primitiveArrays().release(positions);
+            }
         }
         ArrayVector arrays = context.allocator().allocateOrGrow(
                 allocationContext,
@@ -103,29 +123,43 @@ public final class MapValues
                 requiredLength,
                 ArrayVector::new);
         System.arraycopy(maps.offsets(), 0, arrays.offsets(), 0, maps.length() + 1);
-        arrays.setElements(context.allocator().copyStreams(allocationContext, maps.values()));
+        arrays.setElements(context.allocator().copyStreams(allocationContext, entries(maps)));
         return arrays;
     }
 
-    private Vector mapValues(Vector input, Streams output, PrimitiveExecutionContext context, Mask mask, int requiredLength)
+    private Vector mapEntries(Vector input, Streams output, PrimitiveExecutionContext context, Mask mask, int requiredLength)
     {
         if (input instanceof MapVector maps) {
-            return arrayValues(maps, output, context, mask, requiredLength);
+            return arrayEntries(maps, output, context, mask, requiredLength);
         }
         if (input instanceof DictionaryVector dictionary) {
-            checkArgument(dictionary.values() instanceof MapVector, "map_values requires MapVector dictionary values");
+            checkArgument(dictionary.values() instanceof MapVector, "map entries require MapVector dictionary values");
             if (mask.all()) {
-                return dictionaryValues(dictionary, (MapVector) dictionary.values(), output, context, mask, requiredLength);
+                return dictionaryValues(dictionary, (MapVector) dictionary.values(), context, mask, requiredLength);
             }
-            return selectedArray(
-                    (MapVector) dictionary.values(),
-                    context,
-                    mask,
-                    requiredLength,
-                    selectedDictionaryPositions(dictionary, mask),
-                    ((MapVector) dictionary.values()).values());
+            int[] positions = selectedDictionaryPositions(context, dictionary, mask);
+            try {
+                return selectedArray(
+                        (MapVector) dictionary.values(),
+                        context,
+                        mask,
+                        requiredLength,
+                        positions,
+                        entries((MapVector) dictionary.values()));
+            }
+            finally {
+                context.allocator().primitiveArrays().release(positions);
+            }
         }
-        throw new IllegalArgumentException("map_values requires MapVector input");
+        throw new IllegalArgumentException("map entries require MapVector input");
+    }
+
+    private Streams entries(MapVector maps)
+    {
+        return switch (entry) {
+            case KEY -> maps.keys();
+            case VALUE -> maps.values();
+        };
     }
 
     private ArrayVector selectedArray(MapVector maps, PrimitiveExecutionContext context, Mask mask, int requiredLength, int[] mapPositions, Streams elements)
@@ -140,31 +174,37 @@ public final class MapValues
             }
             arrays.offsets()[position + 1] = currentOffset;
         }
-        arrays.setElements(context.allocator().copyStreams(allocationContext, elements, nestedPositions(maps.offsets(), mapPositions, currentOffset)));
+        int[] entryPositions = nestedPositions(context, maps.offsets(), mapPositions, currentOffset);
+        try {
+            arrays.setElements(context.allocator().copyStreams(allocationContext, elements, entryPositions));
+        }
+        finally {
+            context.allocator().primitiveArrays().release(entryPositions);
+        }
         return arrays;
     }
 
-    private static int[] selectedPositions(Mask mask)
+    private static int[] selectedPositions(PrimitiveExecutionContext context, Mask mask)
     {
-        int[] positions = new int[mask.selectedCount()];
-        for (int index = 0; index < positions.length; index++) {
+        int[] positions = context.allocator().primitiveArrays().borrowInts(mask.selectedCount());
+        for (int index = 0; index < mask.selectedCount(); index++) {
             positions[index] = mask.position(index);
         }
         return positions;
     }
 
-    private static int[] selectedDictionaryPositions(DictionaryVector dictionary, Mask mask)
+    private static int[] selectedDictionaryPositions(PrimitiveExecutionContext context, DictionaryVector dictionary, Mask mask)
     {
-        int[] positions = new int[mask.selectedCount()];
-        for (int index = 0; index < positions.length; index++) {
+        int[] positions = context.allocator().primitiveArrays().borrowInts(mask.selectedCount());
+        for (int index = 0; index < mask.selectedCount(); index++) {
             positions[index] = dictionary.ids()[mask.position(index)];
         }
         return positions;
     }
 
-    private static int[] nestedPositions(int[] offsets, int[] positions, int totalEntries)
+    private static int[] nestedPositions(PrimitiveExecutionContext context, int[] offsets, int[] positions, int totalEntries)
     {
-        int[] entryPositions = new int[totalEntries];
+        int[] entryPositions = context.allocator().primitiveArrays().borrowInts(totalEntries);
         int next = 0;
         for (int position : positions) {
             for (int entry = offsets[position]; entry < offsets[position + 1]; entry++) {
