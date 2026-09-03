@@ -18,6 +18,7 @@ import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.F64Vector;
+import org.weakref.nitro.data.FlatVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.RleVector;
@@ -156,6 +157,9 @@ final class FrameworkManagedScalarFunction
             else if (carrier == boolean.class && values instanceof BooleanVector vector) {
                 state.flatValues[index] = vector.values();
             }
+            else if (!carrier.isPrimitive() && values instanceof FlatVector) {
+                state.flatValues[index] = values;
+            }
             else {
                 return false;
             }
@@ -174,7 +178,7 @@ final class FrameworkManagedScalarFunction
                     rle.length() != logicalLength) {
                 return false;
             }
-            Object values = primitiveArray(signature.argumentTypes().get(index).carrierType(), rle.values());
+            Object values = physicalInput(signature.argumentTypes().get(index).carrierType(), rle.values());
             if (values == null) {
                 return false;
             }
@@ -243,6 +247,9 @@ final class FrameworkManagedScalarFunction
             else if (carrier == boolean.class && values instanceof BooleanVector vector) {
                 state.flatValues[index] = vector.values();
             }
+            else if (!carrier.isPrimitive() && values instanceof FlatVector) {
+                state.flatValues[index] = values;
+            }
             else {
                 return false;
             }
@@ -308,10 +315,13 @@ final class FrameworkManagedScalarFunction
         if (carrier == boolean.class) {
             return VectorAccess.booleanValues(values);
         }
+        if (!carrier.isPrimitive()) {
+            return values;
+        }
         throw new IllegalArgumentException("Unsupported framework-managed argument carrier: " + carrier.getTypeName());
     }
 
-    private static Object primitiveArray(Class<?> carrier, Vector values)
+    private static Object physicalInput(Class<?> carrier, Vector values)
     {
         if (carrier == long.class && values instanceof I64Vector vector) {
             return vector.values();
@@ -321,6 +331,9 @@ final class FrameworkManagedScalarFunction
         }
         if (carrier == boolean.class && values instanceof BooleanVector vector) {
             return vector.values();
+        }
+        if (!carrier.isPrimitive() && values instanceof FlatVector) {
+            return values;
         }
         return null;
     }

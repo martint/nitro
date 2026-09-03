@@ -15,6 +15,7 @@ package org.weakref.nitro.core.type;
 
 import org.weakref.nitro.data.Vector;
 
+import java.lang.invoke.MethodHandle;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -41,6 +42,17 @@ public interface TypeBinding
     Class<?> carrierType();
 
     TypeOperators operators();
+
+    /// Provider-owned scalar carrier reader with exact signature `(Vector, int) -> carrier`.
+    ///
+    /// Generated scalar adapters use this only for non-primitive stack carriers. It is separate
+    /// from [TypeOperators#valueRead()] because that method participates in the structural
+    /// comparison kernel contract; a type may support scalar invocation without exposing the
+    /// full value/comparison/identity bundle.
+    default Optional<MethodHandle> scalarValueReader()
+    {
+        return Optional.empty();
+    }
 
     /// Optional batch-bound key operations for physical representations whose access path is
     /// expensive to rediscover for every logical row.

@@ -21,6 +21,7 @@ import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.core.type.TypeIdentity;
 import org.weakref.nitro.core.type.TypeOperators;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.F64Vector;
@@ -29,12 +30,15 @@ import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
+import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.data.VectorAccess;
 
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.util.Collections;
 import java.util.EnumSet;
 import java.util.List;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -48,6 +52,85 @@ final class TestScalarAdapterGenerator
     private static final TypeBinding LONG = new TestingTypeBinding(new TypeIdentity("test-long"), long.class);
     private static final TypeBinding DOUBLE = new TestingTypeBinding(new TypeIdentity("test-double"), double.class);
     private static final TypeBinding BOOLEAN = new TestingTypeBinding(new TypeIdentity("test-boolean"), boolean.class);
+    private static final TypeBinding STRING = new ReferenceTypeBinding(
+            new TypeIdentity("test-string"),
+            String.class,
+            valueReader("readAscii", String.class));
+
+    @Test
+    void testRegistryOwnedReferenceCarrierAcrossPhysicalEncodings()
+            throws Throwable
+    {
+        PrimitiveFunction function = new ScalarAdapterGenerator().adapt(
+                "string_length",
+                new BoundSignature(LONG, List.of(STRING)),
+                strictSemantics(1),
+                new ScalarMethodTarget(MethodHandles.lookup().findStatic(
+                        TestScalarAdapterGenerator.class,
+                        "stringLength",
+                        MethodType.methodType(long.class, String.class))))
+                .implementation();
+
+        BinaryVector flat = binary("one", "twelve", "xx");
+        try (Allocator allocator = new Allocator(createDefault())) {
+            Streams dense = function.apply(
+                    List.of(Streams.ofValues(flat)),
+                    Mask.all(3),
+                    EnumSet.of(Stream.VALUES),
+                    Streams.empty(),
+                    new PrimitiveExecutionContext(allocator));
+            assertThat(((I64Vector) dense.values()).values()).containsExactly(3, 6, 2);
+
+            Streams dictionary = function.apply(
+                    List.of(Streams.ofValues(new DictionaryVector(new int[] {1, 0, 1, 2}, flat))),
+                    Mask.sparse(new int[] {0, 2, 3}, 4),
+                    EnumSet.of(Stream.VALUES),
+                    Streams.empty(),
+                    new PrimitiveExecutionContext(allocator));
+            assertThat(((I64Vector) dictionary.values()).values()).containsExactly(6, 0, 6, 2);
+
+            Streams nullable = function.apply(
+                    List.of(Streams.ofValuesAndNulls(
+                            new DictionaryVector(new int[] {1, 0, 2}, flat),
+                            new BooleanVector(new boolean[] {false, true, false}))),
+                    Mask.all(3),
+                    EnumSet.of(Stream.VALUES, Stream.NULLS),
+                    Streams.empty(),
+                    new PrimitiveExecutionContext(allocator));
+            assertThat(((I64Vector) nullable.values()).values()).containsExactly(6, 0, 2);
+            assertThat(((BooleanVector) nullable.get(Stream.NULLS)).values()).containsExactly(false, true, false);
+
+            Streams rle = function.apply(
+                    List.of(Streams.ofValues(new RleVector(new int[] {2, 3}, binary("one", "twelve")))),
+                    Mask.all(5),
+                    EnumSet.of(Stream.VALUES),
+                    Streams.empty(),
+                    new PrimitiveExecutionContext(allocator));
+            assertThat(rle.values()).isInstanceOf(RleVector.class);
+            RleVector encoded = (RleVector) rle.values();
+            assertThat(encoded.counts()).containsExactly(2, 3);
+            assertThat(((I64Vector) encoded.values()).values()).containsExactly(3, 6);
+        }
+    }
+
+    @Test
+    void testReferenceCarrierRequiresExactRegistryReader()
+            throws Throwable
+    {
+        TypeBinding missingReader = new TestingTypeBinding(new TypeIdentity("missing-reader"), String.class);
+        ScalarMethodTarget target = new ScalarMethodTarget(MethodHandles.lookup().findStatic(
+                TestScalarAdapterGenerator.class,
+                "stringLength",
+                MethodType.methodType(long.class, String.class)));
+
+        assertThatThrownBy(() -> new ScalarAdapterGenerator().adapt(
+                "string_length",
+                new BoundSignature(LONG, List.of(missingReader)),
+                strictSemantics(1),
+                target))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("does not provide a value reader");
+    }
 
     @Test
     void testArbitraryCarrierTupleAndArityWithEncodedInputs()
@@ -338,6 +421,48 @@ final class TestScalarAdapterGenerator
         return Math.max(first, Math.max(second, third));
     }
 
+    private static long stringLength(String value)
+    {
+        return value.length();
+    }
+
+    private static String readAscii(Vector vector, int position)
+    {
+        VectorAccess.BinaryRegions values = VectorAccess.binaryRegions(vector);
+        return new String(values.data(position), values.offset(position), values.length(position), java.nio.charset.StandardCharsets.US_ASCII);
+    }
+
+    private static BinaryVector binary(String... values)
+    {
+        int[] offsets = new int[values.length + 1];
+        int bytes = 0;
+        for (int index = 0; index < values.length; index++) {
+            bytes += values[index].length();
+            offsets[index + 1] = bytes;
+        }
+        byte[] data = new byte[bytes];
+        int offset = 0;
+        for (String value : values) {
+            byte[] encoded = value.getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+            System.arraycopy(encoded, 0, data, offset, encoded.length);
+            offset += encoded.length;
+        }
+        return new BinaryVector(values.length, offsets, data);
+    }
+
+    private static java.lang.invoke.MethodHandle valueReader(String name, Class<?> result)
+    {
+        try {
+            return MethodHandles.lookup().findStatic(
+                    TestScalarAdapterGenerator.class,
+                    name,
+                    MethodType.methodType(result, Vector.class, int.class));
+        }
+        catch (ReflectiveOperationException exception) {
+            throw new ExceptionInInitializerError(exception);
+        }
+    }
+
     private static final class CountingTarget
     {
         private int invocations;
@@ -358,6 +483,22 @@ final class TestScalarAdapterGenerator
     private record TestingTypeBinding(TypeIdentity identity, Class<?> carrierType)
             implements TypeBinding
     {
+        @Override
+        public TypeOperators operators()
+        {
+            return TypeOperators.UNSPECIFIED;
+        }
+    }
+
+    private record ReferenceTypeBinding(TypeIdentity identity, Class<?> carrierType, java.lang.invoke.MethodHandle reader)
+            implements TypeBinding
+    {
+        @Override
+        public Optional<java.lang.invoke.MethodHandle> scalarValueReader()
+        {
+            return Optional.of(reader);
+        }
+
         @Override
         public TypeOperators operators()
         {

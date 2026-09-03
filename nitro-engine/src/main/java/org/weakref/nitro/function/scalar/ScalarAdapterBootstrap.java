@@ -27,9 +27,20 @@ final class ScalarAdapterBootstrap
     static CallSite bootstrap(MethodHandles.Lookup lookup, String name, MethodType type)
             throws IllegalAccessException
     {
-        MethodHandle target = MethodHandles.classData(lookup, "_", MethodHandle.class);
+        ScalarAdapterLinkage linkage = MethodHandles.classData(lookup, "_", ScalarAdapterLinkage.class);
+        MethodHandle target;
+        if (name.equals("apply")) {
+            target = linkage.target();
+        }
+        else if (name.startsWith("read")) {
+            int argument = Integer.parseInt(name, "read".length(), name.length(), 10);
+            target = linkage.argumentReaders().get(argument);
+        }
+        else {
+            throw new IllegalArgumentException("Unknown scalar adapter linkage: " + name);
+        }
         if (!target.type().equals(type)) {
-            throw new WrongMethodTypeException("Scalar target type %s does not match call site type %s".formatted(target.type(), type));
+            throw new WrongMethodTypeException("Scalar linkage %s type %s does not match call site type %s".formatted(name, target.type(), type));
         }
         return new ConstantCallSite(target);
     }
