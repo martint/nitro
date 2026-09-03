@@ -14,6 +14,7 @@
 package org.weakref.nitro.operator;
 
 import org.weakref.nitro.core.function.aggregation.GroupedAggregationUpdate;
+import org.weakref.nitro.core.function.aggregation.PrimitiveContributionCarrier;
 
 import java.lang.classfile.ClassFile;
 import java.lang.classfile.CodeBuilder;
@@ -31,6 +32,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static java.lang.constant.ConstantDescs.CD_CallSite;
 import static java.lang.constant.ConstantDescs.CD_Object;
+import static java.lang.constant.ConstantDescs.CD_boolean;
 import static java.lang.constant.ConstantDescs.CD_double;
 import static java.lang.constant.ConstantDescs.CD_int;
 import static java.lang.constant.ConstantDescs.CD_long;
@@ -56,6 +58,7 @@ final class FusedGroupingAggregationKernelGenerator
     private static final ClassDesc CD_INT_ARRAY = CD_int.arrayType();
     private static final ClassDesc CD_LONG_ARRAY = CD_long.arrayType();
     private static final ClassDesc CD_DOUBLE_ARRAY = CD_double.arrayType();
+    private static final ClassDesc CD_BOOLEAN_ARRAY = CD_boolean.arrayType();
     private static final ClassDesc CD_INT_ARRAY_2D = ClassDesc.ofDescriptor("[[I");
     private static final ClassDesc CD_BOOLEAN_ARRAY_2D = ClassDesc.ofDescriptor("[[Z");
     private static final ClassDesc CD_OBJECT_ARRAY = CD_Object.arrayType();
@@ -115,7 +118,7 @@ final class FusedGroupingAggregationKernelGenerator
             boolean idIndexedGrouping,
             boolean keyOffsetInput,
             boolean[] intInputs,
-            boolean[] doubleInputs,
+            PrimitiveContributionCarrier[] inputCarriers,
             boolean[] mappedInputs,
             boolean[] mappedInputNulls,
             boolean[] inputUsesKeyIds,
@@ -124,10 +127,10 @@ final class FusedGroupingAggregationKernelGenerator
             boolean[] offsetInputNulls)
     {
         checkOpen();
-        String physicalShape = (intKey ? "i" : "l") + ":km=" + keyMapped + ":ko=" + keyOffsetInput + ":resolved=" + preResolvedKeyDomain + ":runs=" + runCache + ":constantRuns=" + constantRuns + ":direct=" + directGrouping + ":idIndexed=" + idIndexedGrouping + Arrays.toString(intInputs) + Arrays.toString(doubleInputs) + Arrays.toString(mappedInputs) + Arrays.toString(mappedInputNulls) + Arrays.toString(inputUsesKeyIds) + Arrays.toString(inputNullUsesKeyIds) + Arrays.toString(offsetInputs) + Arrays.toString(offsetInputNulls);
+        String physicalShape = (intKey ? "i" : "l") + ":km=" + keyMapped + ":ko=" + keyOffsetInput + ":resolved=" + preResolvedKeyDomain + ":runs=" + runCache + ":constantRuns=" + constantRuns + ":direct=" + directGrouping + ":idIndexed=" + idIndexedGrouping + Arrays.toString(intInputs) + Arrays.toString(inputCarriers) + Arrays.toString(mappedInputs) + Arrays.toString(mappedInputNulls) + Arrays.toString(inputUsesKeyIds) + Arrays.toString(inputNullUsesKeyIds) + Arrays.toString(offsetInputs) + Arrays.toString(offsetInputNulls);
         return kernels.computeIfAbsent(
                 new KernelKey(List.copyOf(specs), writeGroups, physicalShape),
-                key -> generate(specs, writeGroups, intKey, keyMapped, preResolvedKeyDomain, runCache, constantRuns, directGrouping, idIndexedGrouping, keyOffsetInput, intInputs, doubleInputs, mappedInputs, mappedInputNulls, inputUsesKeyIds, inputNullUsesKeyIds, offsetInputs, offsetInputNulls));
+                key -> generate(specs, writeGroups, intKey, keyMapped, preResolvedKeyDomain, runCache, constantRuns, directGrouping, idIndexedGrouping, keyOffsetInput, intInputs, inputCarriers, mappedInputs, mappedInputNulls, inputUsesKeyIds, inputNullUsesKeyIds, offsetInputs, offsetInputNulls));
     }
 
     private FusedGroupingKernel generate(
@@ -142,7 +145,7 @@ final class FusedGroupingAggregationKernelGenerator
             boolean idIndexedGrouping,
             boolean keyOffsetInput,
             boolean[] intInputs,
-            boolean[] doubleInputs,
+            PrimitiveContributionCarrier[] inputCarriers,
             boolean[] mappedInputs,
             boolean[] mappedInputNulls,
             boolean[] inputUsesKeyIds,
@@ -170,7 +173,7 @@ final class FusedGroupingAggregationKernelGenerator
             });
 
             builder.withMethodBody("accumulate", accumulateType, ClassFile.ACC_PUBLIC,
-                    code -> emitAccumulate(code, specs, writeGroups, intKey, keyMapped, preResolvedKeyDomain, runCache, constantRuns, directGrouping, idIndexedGrouping, keyOffsetInput, intInputs, doubleInputs, mappedInputs, mappedInputNulls, inputUsesKeyIds, inputNullUsesKeyIds, offsetInputs, offsetInputNulls));
+                    code -> emitAccumulate(code, specs, writeGroups, intKey, keyMapped, preResolvedKeyDomain, runCache, constantRuns, directGrouping, idIndexedGrouping, keyOffsetInput, intInputs, inputCarriers, mappedInputs, mappedInputNulls, inputUsesKeyIds, inputNullUsesKeyIds, offsetInputs, offsetInputNulls));
         });
 
         try {
@@ -217,7 +220,7 @@ final class FusedGroupingAggregationKernelGenerator
             boolean idIndexedGrouping,
             boolean keyOffsetInput,
             boolean[] intInputs,
-            boolean[] doubleInputs,
+            PrimitiveContributionCarrier[] inputCarriers,
             boolean[] mappedInputs,
             boolean[] mappedInputNulls,
             boolean[] inputUsesKeyIds,
@@ -239,7 +242,11 @@ final class FusedGroupingAggregationKernelGenerator
                 code.aload(INPUTS);
                 code.loadConstant(input);
                 code.aaload();
-                code.checkcast(doubleInputs[input] ? CD_DOUBLE_ARRAY : intInputs[input] ? CD_INT_ARRAY : CD_LONG_ARRAY);
+                code.checkcast(switch (inputCarriers[input]) {
+                    case DOUBLE -> CD_DOUBLE_ARRAY;
+                    case BOOLEAN -> CD_BOOLEAN_ARRAY;
+                    case LONG -> intInputs[input] ? CD_INT_ARRAY : CD_LONG_ARRAY;
+                });
                 code.astore(INPUT_ARRAY_BASE + input);
             }
         }
@@ -269,11 +276,11 @@ final class FusedGroupingAggregationKernelGenerator
         code.aload(POSITIONS);
         code.ifnonnull(sparse);
 
-        emitLoop(code, specs, false, writeGroups, intKey, keyMapped, preResolvedKeyDomain, runCache, constantRuns, directGrouping, idIndexedGrouping, keyOffsetInput, intInputs, doubleInputs, mappedInputs, mappedInputNulls, inputUsesKeyIds, inputNullUsesKeyIds, offsetInputs, offsetInputNulls);
+        emitLoop(code, specs, false, writeGroups, intKey, keyMapped, preResolvedKeyDomain, runCache, constantRuns, directGrouping, idIndexedGrouping, keyOffsetInput, intInputs, inputCarriers, mappedInputs, mappedInputNulls, inputUsesKeyIds, inputNullUsesKeyIds, offsetInputs, offsetInputNulls);
         code.goto_(end);
 
         code.labelBinding(sparse);
-        emitLoop(code, specs, true, writeGroups, intKey, keyMapped, preResolvedKeyDomain, runCache, constantRuns, directGrouping, idIndexedGrouping, keyOffsetInput, intInputs, doubleInputs, mappedInputs, mappedInputNulls, inputUsesKeyIds, inputNullUsesKeyIds, offsetInputs, offsetInputNulls);
+        emitLoop(code, specs, true, writeGroups, intKey, keyMapped, preResolvedKeyDomain, runCache, constantRuns, directGrouping, idIndexedGrouping, keyOffsetInput, intInputs, inputCarriers, mappedInputs, mappedInputNulls, inputUsesKeyIds, inputNullUsesKeyIds, offsetInputs, offsetInputNulls);
 
         code.labelBinding(end);
         code.lload(NEXT_ID);
@@ -281,7 +288,7 @@ final class FusedGroupingAggregationKernelGenerator
     }
 
     // for (int index = 0; index < count; index++) { position = sparse ? positions[index] : index; <body> }
-    private static void emitLoop(CodeBuilder code, List<GroupedAggregationUpdate> specs, boolean sparse, boolean writeGroups, boolean intKey, boolean keyMapped, boolean preResolvedKeyDomain, boolean runCache, boolean constantRuns, boolean directGrouping, boolean idIndexedGrouping, boolean keyOffsetInput, boolean[] intInputs, boolean[] doubleInputs, boolean[] mappedInputs, boolean[] mappedInputNulls, boolean[] inputUsesKeyIds, boolean[] inputNullUsesKeyIds, boolean[] offsetInputs, boolean[] offsetInputNulls)
+    private static void emitLoop(CodeBuilder code, List<GroupedAggregationUpdate> specs, boolean sparse, boolean writeGroups, boolean intKey, boolean keyMapped, boolean preResolvedKeyDomain, boolean runCache, boolean constantRuns, boolean directGrouping, boolean idIndexedGrouping, boolean keyOffsetInput, boolean[] intInputs, PrimitiveContributionCarrier[] inputCarriers, boolean[] mappedInputs, boolean[] mappedInputNulls, boolean[] inputUsesKeyIds, boolean[] inputNullUsesKeyIds, boolean[] offsetInputs, boolean[] offsetInputNulls)
     {
         code.loadConstant(0);
         code.istore(INDEX);
@@ -305,7 +312,7 @@ final class FusedGroupingAggregationKernelGenerator
         }
 
         boolean batchConstantRuns = batchesConstantRuns(specs, constantRuns);
-        emitProbeAndAccumulate(code, specs, writeGroups, intKey, keyMapped, preResolvedKeyDomain, runCache, batchConstantRuns, directGrouping, idIndexedGrouping, keyOffsetInput, intInputs, doubleInputs, mappedInputs, mappedInputNulls, inputUsesKeyIds, inputNullUsesKeyIds, offsetInputs, offsetInputNulls);
+        emitProbeAndAccumulate(code, specs, writeGroups, intKey, keyMapped, preResolvedKeyDomain, runCache, batchConstantRuns, directGrouping, idIndexedGrouping, keyOffsetInput, intInputs, inputCarriers, mappedInputs, mappedInputNulls, inputUsesKeyIds, inputNullUsesKeyIds, offsetInputs, offsetInputNulls);
 
         code.iinc(INDEX, 1);
         code.goto_(top);
@@ -315,7 +322,7 @@ final class FusedGroupingAggregationKernelGenerator
         }
     }
 
-    private static void emitProbeAndAccumulate(CodeBuilder code, List<GroupedAggregationUpdate> specs, boolean writeGroups, boolean intKey, boolean keyMapped, boolean preResolvedKeyDomain, boolean runCache, boolean batchConstantRuns, boolean directGrouping, boolean idIndexedGrouping, boolean keyOffsetInput, boolean[] intInputs, boolean[] doubleInputs, boolean[] mappedInputs, boolean[] mappedInputNulls, boolean[] inputUsesKeyIds, boolean[] inputNullUsesKeyIds, boolean[] offsetInputs, boolean[] offsetInputNulls)
+    private static void emitProbeAndAccumulate(CodeBuilder code, List<GroupedAggregationUpdate> specs, boolean writeGroups, boolean intKey, boolean keyMapped, boolean preResolvedKeyDomain, boolean runCache, boolean batchConstantRuns, boolean directGrouping, boolean idIndexedGrouping, boolean keyOffsetInput, boolean[] intInputs, PrimitiveContributionCarrier[] inputCarriers, boolean[] mappedInputs, boolean[] mappedInputNulls, boolean[] inputUsesKeyIds, boolean[] inputNullUsesKeyIds, boolean[] offsetInputs, boolean[] offsetInputNulls)
     {
         // long key = keys[position];
         code.aload(KEYS);
@@ -564,7 +571,7 @@ final class FusedGroupingAggregationKernelGenerator
                         accumulator,
                         inputOffset(specs, accumulator),
                         intInputs,
-                        doubleInputs,
+                        inputCarriers,
                         mappedInputs,
                         mappedInputNulls,
                         inputUsesKeyIds,
@@ -576,7 +583,7 @@ final class FusedGroupingAggregationKernelGenerator
             }
             if (!spec.readsInput()) {
                 if (!batchConstantRuns) {
-                    emitIncrement(code, spec, accumulator, inputOffset(specs, accumulator), intInputs, doubleInputs, mappedInputs, inputUsesKeyIds, offsetInputs);
+                    emitIncrement(code, spec, accumulator, inputOffset(specs, accumulator), intInputs, inputCarriers, mappedInputs, inputUsesKeyIds, offsetInputs);
                 }
                 emitted[accumulator] = true;
                 continue;
@@ -622,7 +629,7 @@ final class FusedGroupingAggregationKernelGenerator
                         && candidateSpec.contributions().size() == 1
                         && candidateSpec.readsInput()
                         && candidateSpec.inputColumn() == spec.inputColumn()) {
-                    emitIncrement(code, candidateSpec, candidate, inputOffset(specs, candidate), intInputs, doubleInputs, mappedInputs, inputUsesKeyIds, offsetInputs);
+                    emitIncrement(code, candidateSpec, candidate, inputOffset(specs, candidate), intInputs, inputCarriers, mappedInputs, inputUsesKeyIds, offsetInputs);
                     emitted[candidate] = true;
                 }
             }
@@ -724,7 +731,7 @@ final class FusedGroupingAggregationKernelGenerator
             int accumulator,
             int inputOffset,
             boolean[] intInputs,
-            boolean[] doubleInputs,
+            PrimitiveContributionCarrier[] inputCarriers,
             boolean[] mappedInputs,
             boolean[] inputUsesKeyIds,
             boolean[] offsetInputs)
@@ -756,15 +763,18 @@ final class FusedGroupingAggregationKernelGenerator
                     code.iaload();
                     code.iadd();
                 }
-                if (doubleInputs[input]) {
-                    code.daload();
-                }
-                else if (intInputs[input]) {
-                    code.iaload();
-                    code.i2l();
-                }
-                else {
-                    code.laload();
+                switch (inputCarriers[input]) {
+                    case DOUBLE -> code.daload();
+                    case BOOLEAN -> code.baload();
+                    case LONG -> {
+                        if (intInputs[input]) {
+                            code.iaload();
+                            code.i2l();
+                        }
+                        else {
+                            code.laload();
+                        }
+                    }
                 }
             }
             else {
@@ -780,7 +790,7 @@ final class FusedGroupingAggregationKernelGenerator
             int accumulator,
             int inputOffset,
             boolean[] intInputs,
-            boolean[] doubleInputs,
+            PrimitiveContributionCarrier[] inputCarriers,
             boolean[] mappedInputs,
             boolean[] mappedInputNulls,
             boolean[] inputUsesKeyIds,
@@ -825,7 +835,7 @@ final class FusedGroupingAggregationKernelGenerator
             code.ifne(next);
             code.labelBinding(noNullVector);
         }
-        emitIncrement(code, spec, accumulator, inputOffset, intInputs, doubleInputs, mappedInputs, inputUsesKeyIds, offsetInputs);
+        emitIncrement(code, spec, accumulator, inputOffset, intInputs, inputCarriers, mappedInputs, inputUsesKeyIds, offsetInputs);
         code.labelBinding(next);
     }
 
@@ -834,8 +844,12 @@ final class FusedGroupingAggregationKernelGenerator
         List<ClassDesc> parameters = new ArrayList<>();
         parameters.add(CD_Object);
         parameters.add(CD_int);
-        for (GroupedAggregationUpdate.Contribution contribution : spec.contributions()) {
-            parameters.add(contribution instanceof GroupedAggregationUpdate.DoubleInputValue ? CD_double : CD_long);
+        for (int contribution = 0; contribution < spec.contributions().size(); contribution++) {
+            parameters.add(switch (spec.carrier(contribution)) {
+                case LONG -> CD_long;
+                case DOUBLE -> CD_double;
+                case BOOLEAN -> CD_boolean;
+            });
         }
         if (repeated) {
             parameters.add(CD_int);

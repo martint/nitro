@@ -79,7 +79,9 @@ public record GroupedAggregationUpdateTarget(MethodHandle update, Optional<Metho
         }
         int contributionLimit = type.parameterCount() - (repeated ? 1 : 0);
         for (int parameter = 2; parameter < contributionLimit; parameter++) {
-            if (type.parameterType(parameter) != long.class && type.parameterType(parameter) != double.class) {
+            if (type.parameterType(parameter) != long.class &&
+                    type.parameterType(parameter) != double.class &&
+                    type.parameterType(parameter) != boolean.class) {
                 throw new IllegalArgumentException("invalid grouped update target type: " + type);
             }
         }

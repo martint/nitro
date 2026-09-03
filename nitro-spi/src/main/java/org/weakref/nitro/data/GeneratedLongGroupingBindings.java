@@ -13,6 +13,8 @@
  */
 package org.weakref.nitro.data;
 
+import org.weakref.nitro.core.function.aggregation.PrimitiveContributionCarrier;
+
 import java.util.Arrays;
 
 /**
@@ -34,7 +36,7 @@ public final class GeneratedLongGroupingBindings
     private final boolean[] readsInput;
     private final boolean[] readsValue;
     private final boolean[] intInputs;
-    private final boolean[] doubleInputs;
+    private final PrimitiveContributionCarrier[] inputCarriers;
     private final boolean[] mappedInputs;
     private final boolean[] mappedInputNulls;
     private final boolean[] inputUsesKeyIds;
@@ -64,7 +66,7 @@ public final class GeneratedLongGroupingBindings
         readsInput = new boolean[inputCount];
         readsValue = new boolean[inputCount];
         intInputs = new boolean[inputCount];
-        doubleInputs = new boolean[inputCount];
+        inputCarriers = new PrimitiveContributionCarrier[inputCount];
         mappedInputs = new boolean[inputCount];
         mappedInputNulls = new boolean[inputCount];
         inputUsesKeyIds = new boolean[inputCount];
@@ -116,11 +118,17 @@ public final class GeneratedLongGroupingBindings
         return false;
     }
 
-    public boolean bindInput(int index, Vector values, Vector nulls, boolean valueRequired, boolean doubleValue)
+    public boolean bindInput(
+            int index,
+            Vector values,
+            Vector nulls,
+            boolean valueRequired,
+            PrimitiveContributionCarrier carrier)
     {
         clearInput(index);
         readsInput[index] = true;
         readsValue[index] = valueRequired;
+        inputCarriers[index] = carrier;
 
         if (valueRequired) {
             if (values instanceof DictionaryVector dictionary && dictionary.dictionaryDepth() == 1) {
@@ -136,14 +144,16 @@ public final class GeneratedLongGroupingBindings
                 offsetInputs[index] = region.offset() != 0;
                 values = region.values();
             }
-            if (doubleValue && values instanceof F64Vector doubles) {
+            if (carrier == PrimitiveContributionCarrier.DOUBLE && values instanceof F64Vector doubles) {
                 inputs[index] = doubles.values();
-                doubleInputs[index] = true;
             }
-            else if (!doubleValue && values instanceof I64Vector longs) {
+            else if (carrier == PrimitiveContributionCarrier.BOOLEAN && values instanceof BooleanVector booleans) {
+                inputs[index] = booleans.values();
+            }
+            else if (carrier == PrimitiveContributionCarrier.LONG && values instanceof I64Vector longs) {
                 inputs[index] = longs.values();
             }
-            else if (!doubleValue && values instanceof I32Vector ints) {
+            else if (carrier == PrimitiveContributionCarrier.LONG && values instanceof I32Vector ints) {
                 inputs[index] = ints.values();
                 intInputs[index] = true;
             }
@@ -186,7 +196,7 @@ public final class GeneratedLongGroupingBindings
         readsInput[index] = false;
         readsValue[index] = false;
         intInputs[index] = false;
-        doubleInputs[index] = false;
+        inputCarriers[index] = null;
         mappedInputs[index] = false;
         mappedInputNulls[index] = false;
         inputUsesKeyIds[index] = false;
@@ -211,7 +221,7 @@ public final class GeneratedLongGroupingBindings
         for (int index = 0; index < inputs.length; index++) {
             if (readsValue[index]) {
                 shape = shape * 31 + (intInputs[index] ? 1 : 0);
-                shape = shape * 31 + (doubleInputs[index] ? 1 : 0);
+                shape = shape * 31 + inputCarriers[index].ordinal();
                 shape = shape * 31 + (mappedInputs[index] ? 1 : 0);
                 shape = shape * 31 + (inputUsesKeyIds[index] ? 1 : 0);
                 shape = shape * 31 + (offsetInputs[index] ? 1 : 0);
@@ -361,9 +371,9 @@ public final class GeneratedLongGroupingBindings
         return intInputs;
     }
 
-    public boolean[] doubleInputs()
+    public PrimitiveContributionCarrier[] inputCarriers()
     {
-        return doubleInputs;
+        return inputCarriers;
     }
 
     public boolean[] mappedInputs()

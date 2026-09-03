@@ -295,9 +295,12 @@ Function-specific aggregation-state vector types belong with function implementa
 vocabulary.
 
 A provider may describe each generated grouped update as an ordered, non-empty tuple of primitive contributions and
-an exact method handle over its opaque state, group id, and those carriers. Generated kernels flatten the tuple into
-specialized physical bindings, enforce the combined null convention, and link the target as a constant without naming
-the provider class or allocating a row argument tuple.
+an exact method handle over its opaque state, group id, and those carriers. Each input contribution declares one JVM
+carrier independently of its logical type; the initial portable set is `long`, `double`, and `boolean`. A single
+carrier-tagged input descriptor is extended when another primitive carrier is admitted, rather than adding interfaces
+or contribution classes for every carrier or tuple shape. Generated kernels flatten the tuple into specialized
+physical bindings, enforce the combined null convention, and link the target as a constant without naming the
+provider class or allocating a row argument tuple.
 The target identity is part of the generated-kernel cache key. A provider may additionally supply a repeated-update
 target that consumes the complete contribution tuple plus an encoded-domain multiplicity; absent that capability, the engine preserves semantics by
 invoking the single update once per logical occurrence. This contract supports multiple updates and mixed primitive

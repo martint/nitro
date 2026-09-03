@@ -1847,7 +1847,7 @@ public class GroupedAggregationOperator
                         values,
                         valueOutput.borrowOrNull(Stream.NULLS),
                         spec.readsValue(contribution),
-                        spec.readsDoubleValue(contribution))) {
+                        spec.carrier(contribution))) {
                     return false;
                 }
             }
@@ -1888,7 +1888,7 @@ public class GroupedAggregationOperator
                     idIndexedGrouping,
                     fusedBindings.keyOffsetInput(),
                     fusedBindings.intInputs(),
-                    fusedBindings.doubleInputs(),
+                    fusedBindings.inputCarriers(),
                     fusedBindings.mappedInputs(),
                     fusedBindings.mappedInputNulls(),
                     fusedBindings.inputUsesKeyIds(),

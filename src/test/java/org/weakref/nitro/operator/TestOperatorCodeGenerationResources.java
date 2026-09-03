@@ -17,6 +17,7 @@ import org.junit.jupiter.api.Test;
 import org.weakref.nitro.TestPrimitiveFunctions;
 import org.weakref.nitro.core.function.aggregation.GroupedAggregationUpdate;
 import org.weakref.nitro.core.function.aggregation.GroupedAggregationUpdateTarget;
+import org.weakref.nitro.core.function.aggregation.PrimitiveContributionCarrier;
 import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.VectorAccess;
@@ -39,6 +40,9 @@ import static java.lang.invoke.MethodHandles.lookup;
 import static java.lang.invoke.MethodType.methodType;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.weakref.nitro.core.function.aggregation.PrimitiveContributionCarrier.BOOLEAN;
+import static org.weakref.nitro.core.function.aggregation.PrimitiveContributionCarrier.DOUBLE;
+import static org.weakref.nitro.core.function.aggregation.PrimitiveContributionCarrier.LONG;
 
 class TestOperatorCodeGenerationResources
 {
@@ -46,6 +50,7 @@ class TestOperatorCodeGenerationResources
     private static final GroupedAggregationUpdateTarget WEIGHTED_LONG_TARGET = longTarget(WeightedState.class);
     private static final GroupedAggregationUpdateTarget ORDERED_LONG_TARGET = longTarget(OrderedState.class);
     private static final GroupedAggregationUpdateTarget DOUBLE_SUM_TARGET = doubleTarget(DoubleSumState.class);
+    private static final GroupedAggregationUpdateTarget BOOLEAN_COUNT_TARGET = booleanTarget();
     private static final GroupedAggregationUpdateTarget MIXED_TARGET = mixedTarget();
 
     @Test
@@ -258,7 +263,7 @@ class TestOperatorCodeGenerationResources
                     false,
                     false,
                     new boolean[] {false},
-                    new boolean[] {false},
+                    new PrimitiveContributionCarrier[] {LONG},
                     new boolean[] {false},
                     new boolean[] {false},
                     new boolean[] {false},
@@ -310,7 +315,7 @@ class TestOperatorCodeGenerationResources
                     false,
                     false,
                     new boolean[] {false},
-                    new boolean[] {true},
+                    new PrimitiveContributionCarrier[] {DOUBLE},
                     new boolean[] {false},
                     new boolean[] {false},
                     new boolean[] {false},
@@ -347,6 +352,50 @@ class TestOperatorCodeGenerationResources
     }
 
     @Test
+    void testGeneratedGroupingUsesTypedBooleanContribution()
+    {
+        try (OperatorCodeGenerationResources resources = new OperatorCodeGenerationResources()) {
+            FusedGroupingKernel kernel = resources.fusedGrouping().create(
+                    List.of(GroupedAggregationUpdate.booleanInputValue(0, BOOLEAN_COUNT_TARGET)),
+                    false, false, false, false, false, false, false, false, false,
+                    new boolean[] {false},
+                    new PrimitiveContributionCarrier[] {BOOLEAN},
+                    new boolean[] {false},
+                    new boolean[] {false},
+                    new boolean[] {false},
+                    new boolean[] {false},
+                    new boolean[] {false},
+                    new boolean[] {false});
+            int[] tableIds = new int[8];
+            Arrays.fill(tableIds, -1);
+            BooleanCountState state = new BooleanCountState(2);
+
+            long nextGroup = kernel.accumulate(
+                    null,
+                    3,
+                    new long[] {1, 1, 2},
+                    null,
+                    0,
+                    new long[8],
+                    tableIds,
+                    7,
+                    new long[2],
+                    0,
+                    null,
+                    new Object[] {new boolean[] {true, false, true}},
+                    new int[1][],
+                    new int[1],
+                    new boolean[1][],
+                    new int[1][],
+                    new int[1],
+                    new Object[] {state});
+
+            assertThat(nextGroup).isEqualTo(2);
+            assertThat(state.values).containsExactly(1, 1);
+        }
+    }
+
+    @Test
     void testGeneratedGroupingUsesMixedContributionsAndCombinedNullConvention()
     {
         try (OperatorCodeGenerationResources resources = new OperatorCodeGenerationResources()) {
@@ -354,11 +403,11 @@ class TestOperatorCodeGenerationResources
                     List.of(GroupedAggregationUpdate.inputs(
                             List.of(
                                     new GroupedAggregationUpdate.InputValue(0),
-                                    new GroupedAggregationUpdate.DoubleInputValue(1)),
+                                    new GroupedAggregationUpdate.InputValue(1, DOUBLE)),
                             MIXED_TARGET)),
                     false, false, false, false, false, false, false, false, false,
                     new boolean[] {false, false},
-                    new boolean[] {false, true},
+                    new PrimitiveContributionCarrier[] {LONG, DOUBLE},
                     new boolean[] {false, false},
                     new boolean[] {false, false},
                     new boolean[] {false, false},
@@ -401,12 +450,12 @@ class TestOperatorCodeGenerationResources
             FusedGroupingKernel unweighted = resources.fusedGrouping().create(
                     List.of(GroupedAggregationUpdate.constant(2, SCALED_LONG_TARGET)),
                     false, false, false, false, false, false, false, false, false,
-                    new boolean[] {false}, new boolean[] {false}, new boolean[] {false}, new boolean[] {false},
+                    new boolean[] {false}, new PrimitiveContributionCarrier[] {LONG}, new boolean[] {false}, new boolean[] {false},
                     new boolean[] {false}, new boolean[] {false}, new boolean[] {false}, new boolean[] {false});
             FusedGroupingKernel weighted = resources.fusedGrouping().create(
                     List.of(GroupedAggregationUpdate.constant(2, WEIGHTED_LONG_TARGET)),
                     false, false, false, false, false, false, false, false, false,
-                    new boolean[] {false}, new boolean[] {false}, new boolean[] {false}, new boolean[] {false},
+                    new boolean[] {false}, new PrimitiveContributionCarrier[] {LONG}, new boolean[] {false}, new boolean[] {false},
                     new boolean[] {false}, new boolean[] {false}, new boolean[] {false}, new boolean[] {false});
 
             assertThat(weighted).isNotSameAs(unweighted);
@@ -427,7 +476,7 @@ class TestOperatorCodeGenerationResources
             FusedGroupingKernel kernel = resources.fusedGrouping().create(
                     List.of(GroupedAggregationUpdate.constant(2, ORDERED_LONG_TARGET)),
                     false, false, false, false, true, true, false, false, false,
-                    new boolean[] {false}, new boolean[] {false}, new boolean[] {false}, new boolean[] {false},
+                    new boolean[] {false}, new PrimitiveContributionCarrier[] {LONG}, new boolean[] {false}, new boolean[] {false},
                     new boolean[] {false}, new boolean[] {false}, new boolean[] {false}, new boolean[] {false});
             OrderedState state = new OrderedState(1);
 
@@ -453,7 +502,7 @@ class TestOperatorCodeGenerationResources
                     false,
                     false,
                     new boolean[] {false},
-                    new boolean[] {false},
+                    new PrimitiveContributionCarrier[] {LONG},
                     new boolean[] {true},
                     new boolean[] {false},
                     new boolean[] {false},
@@ -503,7 +552,7 @@ class TestOperatorCodeGenerationResources
                     false,
                     true,
                     new boolean[] {false},
-                    new boolean[] {false},
+                    new PrimitiveContributionCarrier[] {LONG},
                     new boolean[] {false},
                     new boolean[] {false},
                     new boolean[] {false},
@@ -553,7 +602,7 @@ class TestOperatorCodeGenerationResources
                 false,
                 false,
                 new boolean[] {false},
-                new boolean[] {false},
+                new PrimitiveContributionCarrier[] {LONG},
                 new boolean[] {false},
                 new boolean[] {false},
                 new boolean[] {false},
@@ -623,6 +672,36 @@ class TestOperatorCodeGenerationResources
         }
         catch (ReflectiveOperationException e) {
             throw new ExceptionInInitializerError(e);
+        }
+    }
+
+    private static GroupedAggregationUpdateTarget booleanTarget()
+    {
+        try {
+            return new GroupedAggregationUpdateTarget(lookup().findVirtual(
+                    BooleanCountState.class,
+                    "update",
+                    methodType(void.class, int.class, boolean.class)));
+        }
+        catch (ReflectiveOperationException e) {
+            throw new ExceptionInInitializerError(e);
+        }
+    }
+
+    private static final class BooleanCountState
+    {
+        private final long[] values;
+
+        private BooleanCountState(int size)
+        {
+            values = new long[size];
+        }
+
+        public void update(int group, boolean value)
+        {
+            if (value) {
+                values[group]++;
+            }
         }
     }
 

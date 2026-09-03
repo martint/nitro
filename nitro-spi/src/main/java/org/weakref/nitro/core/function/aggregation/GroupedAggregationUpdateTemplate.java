@@ -23,23 +23,20 @@ import static java.util.Objects.requireNonNull;
 public record GroupedAggregationUpdateTemplate(List<Contribution> contributions, GroupedAggregationUpdateTarget target)
 {
     public sealed interface Contribution
-            permits InputValue, DoubleInputValue, Constant {}
+            permits InputValue, Constant {}
 
-    public record InputValue(int argument)
+    public record InputValue(int argument, PrimitiveContributionCarrier carrier)
             implements Contribution
     {
         public InputValue
         {
             requireArgument(argument);
+            carrier = requireNonNull(carrier, "carrier is null");
         }
-    }
 
-    public record DoubleInputValue(int argument)
-            implements Contribution
-    {
-        public DoubleInputValue
+        public InputValue(int argument)
         {
-            requireArgument(argument);
+            this(argument, PrimitiveContributionCarrier.LONG);
         }
     }
 
@@ -66,7 +63,7 @@ public record GroupedAggregationUpdateTemplate(List<Contribution> contributions,
                     .formatted(target.contributionCarriers().size(), contributions.size()));
         }
         for (int index = 0; index < contributions.size(); index++) {
-            Class<?> expectedCarrier = contributions.get(index) instanceof DoubleInputValue ? double.class : long.class;
+            Class<?> expectedCarrier = carrier(contributions.get(index)).javaType();
             Class<?> actualCarrier = target.contributionCarriers().get(index);
             if (actualCarrier != expectedCarrier) {
                 throw new IllegalArgumentException("contribution %s requires %s but target accepts %s"
@@ -87,12 +84,25 @@ public record GroupedAggregationUpdateTemplate(List<Contribution> contributions,
 
     public static GroupedAggregationUpdateTemplate inputValue(int argument, GroupedAggregationUpdateTarget target)
     {
-        return new GroupedAggregationUpdateTemplate(new InputValue(argument), target);
+        return inputValue(argument, PrimitiveContributionCarrier.LONG, target);
     }
 
     public static GroupedAggregationUpdateTemplate doubleInputValue(int argument, GroupedAggregationUpdateTarget target)
     {
-        return new GroupedAggregationUpdateTemplate(new DoubleInputValue(argument), target);
+        return inputValue(argument, PrimitiveContributionCarrier.DOUBLE, target);
+    }
+
+    public static GroupedAggregationUpdateTemplate booleanInputValue(int argument, GroupedAggregationUpdateTarget target)
+    {
+        return inputValue(argument, PrimitiveContributionCarrier.BOOLEAN, target);
+    }
+
+    public static GroupedAggregationUpdateTemplate inputValue(
+            int argument,
+            PrimitiveContributionCarrier carrier,
+            GroupedAggregationUpdateTarget target)
+    {
+        return new GroupedAggregationUpdateTemplate(new InputValue(argument, carrier), target);
     }
 
     public static GroupedAggregationUpdateTemplate constant(long value, GroupedAggregationUpdateTarget target)
@@ -119,8 +129,7 @@ public record GroupedAggregationUpdateTemplate(List<Contribution> contributions,
     private static GroupedAggregationUpdate.Contribution bind(Contribution contribution, List<AggregationArgumentBinding> arguments)
     {
         return switch (contribution) {
-            case InputValue input -> new GroupedAggregationUpdate.InputValue(inputColumn(arguments, input.argument()));
-            case DoubleInputValue input -> new GroupedAggregationUpdate.DoubleInputValue(inputColumn(arguments, input.argument()));
+            case InputValue input -> new GroupedAggregationUpdate.InputValue(inputColumn(arguments, input.argument()), input.carrier());
             case Constant constant when constant.nullCheckArgument() >= 0 ->
                     new GroupedAggregationUpdate.Constant(constant.value(), inputColumn(arguments, constant.nullCheckArgument()));
             case Constant constant -> new GroupedAggregationUpdate.Constant(constant.value(), -1);
@@ -145,5 +154,13 @@ public record GroupedAggregationUpdateTemplate(List<Contribution> contributions,
         if (argument < 0) {
             throw new IllegalArgumentException("argument is negative");
         }
+    }
+
+    private static PrimitiveContributionCarrier carrier(Contribution contribution)
+    {
+        return switch (contribution) {
+            case InputValue input -> input.carrier();
+            case Constant _ -> PrimitiveContributionCarrier.LONG;
+        };
     }
 }
