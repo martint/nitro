@@ -40,8 +40,10 @@ interface FusedGroupingKernel
      * @param tableMask {@code capacity - 1} bitmask for the table
      * @param keysByGroup reverse map: key by group id
      * @param startNextId the next group id to assign
-     * @param inputs primitive base value columns flattened in accumulator/contribution order
-     *        ({@code int[]}, {@code long[]}, or {@code double[]}); an entry is null for a constant contribution
+     * @param inputs physical base value columns flattened in accumulator/contribution order
+     *        ({@code int[]}, {@code long[]}, {@code double[]}, or {@code byte[]}); an entry is null for a constant
+     *        contribution
+     * @param inputValueOffsets variable-width region offsets by contribution; null for fixed-width contributions
      * @param inputIds optional per-contribution dictionary ids mapping logical positions into {@code inputs}
      * @param inputOffsets physical base offsets added after optional dictionary mapping
      * @param inputNulls per-contribution null base column, or {@code null} when that input is known null-free
@@ -63,6 +65,7 @@ interface FusedGroupingKernel
             long startNextId,
             long[] outputGroups,
             Object[] inputs,
+            int[][] inputValueOffsets,
             int[][] inputIds,
             int[] inputOffsets,
             boolean[][] inputNulls,

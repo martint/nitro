@@ -37,12 +37,12 @@ public record GroupedAggregationUpdateTarget(MethodHandle update, Optional<Metho
         validate(update, false);
         repeatedUpdate.ifPresent(target -> validate(target, true));
         Class<?> stateType = update.type().parameterType(0);
-        List<Class<?>> contributionCarriers = contributionCarriers(update, false);
+        List<Class<?>> contributionParameterTypes = contributionParameterTypes(update, false);
         repeatedUpdate.ifPresent(target -> {
             if (target.type().parameterType(0) != stateType) {
                 throw new IllegalArgumentException("update and repeated update have different state types");
             }
-            if (!contributionCarriers(target, true).equals(contributionCarriers)) {
+            if (!contributionParameterTypes(target, true).equals(contributionParameterTypes)) {
                 throw new IllegalArgumentException("update and repeated update have different contribution carriers");
             }
         });
@@ -53,17 +53,9 @@ public record GroupedAggregationUpdateTarget(MethodHandle update, Optional<Metho
         this(update, Optional.empty());
     }
 
-    public List<Class<?>> contributionCarriers()
+    public List<Class<?>> contributionParameterTypes()
     {
-        return contributionCarriers(update, false);
-    }
-
-    public Class<?> contributionCarrier()
-    {
-        if (contributionCarriers().size() != 1) {
-            throw new IllegalStateException("target has multiple contribution carriers");
-        }
-        return contributionCarriers().getFirst();
+        return contributionParameterTypes(update, false);
     }
 
     private static void validate(MethodHandle target, boolean repeated)
@@ -81,13 +73,15 @@ public record GroupedAggregationUpdateTarget(MethodHandle update, Optional<Metho
         for (int parameter = 2; parameter < contributionLimit; parameter++) {
             if (type.parameterType(parameter) != long.class &&
                     type.parameterType(parameter) != double.class &&
-                    type.parameterType(parameter) != boolean.class) {
+                    type.parameterType(parameter) != boolean.class &&
+                    type.parameterType(parameter) != byte[].class &&
+                    type.parameterType(parameter) != int.class) {
                 throw new IllegalArgumentException("invalid grouped update target type: " + type);
             }
         }
     }
 
-    private static List<Class<?>> contributionCarriers(MethodHandle target, boolean repeated)
+    private static List<Class<?>> contributionParameterTypes(MethodHandle target, boolean repeated)
     {
         MethodType type = target.type();
         return type.parameterList().subList(2, type.parameterCount() - (repeated ? 1 : 0));

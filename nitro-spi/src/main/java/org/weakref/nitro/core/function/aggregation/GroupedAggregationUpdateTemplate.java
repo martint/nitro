@@ -25,7 +25,7 @@ public record GroupedAggregationUpdateTemplate(List<Contribution> contributions,
     public sealed interface Contribution
             permits InputValue, Constant {}
 
-    public record InputValue(int argument, List<String> fieldPath, PrimitiveContributionCarrier carrier)
+    public record InputValue(int argument, List<String> fieldPath, ContributionCarrier carrier)
             implements Contribution
     {
         public InputValue
@@ -37,10 +37,10 @@ public record GroupedAggregationUpdateTemplate(List<Contribution> contributions,
 
         public InputValue(int argument)
         {
-            this(argument, List.of(), PrimitiveContributionCarrier.LONG);
+            this(argument, List.of(), ContributionCarrier.LONG);
         }
 
-        public InputValue(int argument, PrimitiveContributionCarrier carrier)
+        public InputValue(int argument, ContributionCarrier carrier)
         {
             this(argument, List.of(), carrier);
         }
@@ -64,17 +64,12 @@ public record GroupedAggregationUpdateTemplate(List<Contribution> contributions,
             throw new IllegalArgumentException("contributions is empty");
         }
         target = requireNonNull(target, "target is null");
-        if (target.contributionCarriers().size() != contributions.size()) {
-            throw new IllegalArgumentException("target accepts %s contributions but template declares %s"
-                    .formatted(target.contributionCarriers().size(), contributions.size()));
-        }
-        for (int index = 0; index < contributions.size(); index++) {
-            Class<?> expectedCarrier = carrier(contributions.get(index)).javaType();
-            Class<?> actualCarrier = target.contributionCarriers().get(index);
-            if (actualCarrier != expectedCarrier) {
-                throw new IllegalArgumentException("contribution %s requires %s but target accepts %s"
-                        .formatted(index, expectedCarrier, actualCarrier));
-            }
+        List<Class<?>> expectedParameters = contributions.stream()
+                .flatMap(contribution -> carrier(contribution).parameterTypes().stream())
+                .toList();
+        if (!target.contributionParameterTypes().equals(expectedParameters)) {
+            throw new IllegalArgumentException("contributions require %s but target accepts %s"
+                    .formatted(expectedParameters, target.contributionParameterTypes()));
         }
     }
 
@@ -90,33 +85,33 @@ public record GroupedAggregationUpdateTemplate(List<Contribution> contributions,
 
     public static GroupedAggregationUpdateTemplate inputValue(int argument, GroupedAggregationUpdateTarget target)
     {
-        return inputValue(argument, PrimitiveContributionCarrier.LONG, target);
+        return inputValue(argument, ContributionCarrier.LONG, target);
     }
 
     public static GroupedAggregationUpdateTemplate doubleInputValue(int argument, GroupedAggregationUpdateTarget target)
     {
-        return inputValue(argument, PrimitiveContributionCarrier.DOUBLE, target);
+        return inputValue(argument, ContributionCarrier.DOUBLE, target);
     }
 
     public static GroupedAggregationUpdateTemplate booleanInputValue(int argument, GroupedAggregationUpdateTarget target)
     {
-        return inputValue(argument, PrimitiveContributionCarrier.BOOLEAN, target);
+        return inputValue(argument, ContributionCarrier.BOOLEAN, target);
     }
 
     public static GroupedAggregationUpdateTemplate inputValue(
             int argument,
-            PrimitiveContributionCarrier carrier,
+            ContributionCarrier carrier,
             GroupedAggregationUpdateTarget target)
     {
         return new GroupedAggregationUpdateTemplate(new InputValue(argument, carrier), target);
     }
 
-    public static InputValue inputField(int argument, String field, PrimitiveContributionCarrier carrier)
+    public static InputValue inputField(int argument, String field, ContributionCarrier carrier)
     {
         return new InputValue(argument, List.of(requireNonNull(field, "field is null")), carrier);
     }
 
-    public static InputValue inputPath(int argument, List<String> fieldPath, PrimitiveContributionCarrier carrier)
+    public static InputValue inputPath(int argument, List<String> fieldPath, ContributionCarrier carrier)
     {
         return new InputValue(argument, fieldPath, carrier);
     }
@@ -184,11 +179,11 @@ public record GroupedAggregationUpdateTemplate(List<Contribution> contributions,
         return fieldPath;
     }
 
-    private static PrimitiveContributionCarrier carrier(Contribution contribution)
+    private static ContributionCarrier carrier(Contribution contribution)
     {
         return switch (contribution) {
             case InputValue input -> input.carrier();
-            case Constant _ -> PrimitiveContributionCarrier.LONG;
+            case Constant _ -> ContributionCarrier.LONG;
         };
     }
 }

@@ -1945,6 +1945,7 @@ public class GroupedAggregationOperator
                 inlineGroupingState.nextGroupId,
                 filteredAggregationIndexes.length == 0 && distinctAggregationGroups.length == 0 ? null : reusableGroups.values(),
                 fusedBindings.inputs(),
+                fusedBindings.inputValueOffsets(),
                 fusedBindings.inputIds(),
                 fusedBindings.inputOffsets(),
                 fusedBindings.inputNulls(),

@@ -16,9 +16,10 @@ package org.weakref.nitro.data;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.weakref.nitro.core.function.aggregation.PrimitiveContributionCarrier.BOOLEAN;
-import static org.weakref.nitro.core.function.aggregation.PrimitiveContributionCarrier.DOUBLE;
-import static org.weakref.nitro.core.function.aggregation.PrimitiveContributionCarrier.LONG;
+import static org.weakref.nitro.core.function.aggregation.ContributionCarrier.BINARY_REGION;
+import static org.weakref.nitro.core.function.aggregation.ContributionCarrier.BOOLEAN;
+import static org.weakref.nitro.core.function.aggregation.ContributionCarrier.DOUBLE;
+import static org.weakref.nitro.core.function.aggregation.ContributionCarrier.LONG;
 
 class TestGeneratedLongGroupingBindings
 {
@@ -70,6 +71,22 @@ class TestGeneratedLongGroupingBindings
         assertThat(bindings.inputNullUsesKeyIds()).containsExactly(true);
         assertThat(bindings.additionalGroupUpperBound(4)).isEqualTo(2);
         assertThat(bindings.sampleKeyRuns(Mask.all(4))).isEqualTo((3L << 32) | 2);
+    }
+
+    @Test
+    void testBindsBinaryRegionWithoutPerPositionCarrierObjects()
+    {
+        GeneratedLongGroupingBindings bindings = new GeneratedLongGroupingBindings(1, true);
+        BinaryVector binary = new BinaryVector(3, new int[] {0, 2, 3, 6}, new byte[] {1, 2, 3, 4, 5, 6});
+        DictionaryVector values = DictionaryVector.wrap(new int[] {2, 0, 2}, binary);
+
+        assertThat(bindings.bindInput(0, values, null, true, BINARY_REGION)).isTrue();
+        bindings.finish();
+
+        assertThat(bindings.inputs()[0]).isSameAs(binary.data());
+        assertThat(bindings.inputValueOffsets()[0]).isSameAs(binary.offsets());
+        assertThat(bindings.inputIds()[0]).containsExactly(2, 0, 2);
+        assertThat(bindings.inputCarriers()).containsExactly(BINARY_REGION);
     }
 
     @Test

@@ -31,7 +31,7 @@ public record GroupedAggregationUpdate(List<Contribution> contributions, Grouped
     public sealed interface Contribution
             permits InputValue, Constant {}
 
-    public record InputValue(int inputColumn, List<String> fieldPath, PrimitiveContributionCarrier carrier)
+    public record InputValue(int inputColumn, List<String> fieldPath, ContributionCarrier carrier)
             implements Contribution
     {
         public InputValue
@@ -45,10 +45,10 @@ public record GroupedAggregationUpdate(List<Contribution> contributions, Grouped
 
         public InputValue(int inputColumn)
         {
-            this(inputColumn, List.of(), PrimitiveContributionCarrier.LONG);
+            this(inputColumn, List.of(), ContributionCarrier.LONG);
         }
 
-        public InputValue(int inputColumn, PrimitiveContributionCarrier carrier)
+        public InputValue(int inputColumn, ContributionCarrier carrier)
         {
             this(inputColumn, List.of(), carrier);
         }
@@ -72,17 +72,12 @@ public record GroupedAggregationUpdate(List<Contribution> contributions, Grouped
             throw new IllegalArgumentException("contributions is empty");
         }
         requireNonNull(target, "target is null");
-        if (target.contributionCarriers().size() != contributions.size()) {
-            throw new IllegalArgumentException("target accepts %s contributions but update declares %s"
-                    .formatted(target.contributionCarriers().size(), contributions.size()));
-        }
-        for (int index = 0; index < contributions.size(); index++) {
-            Class<?> expectedCarrier = carrier(contributions.get(index)).javaType();
-            Class<?> actualCarrier = target.contributionCarriers().get(index);
-            if (actualCarrier != expectedCarrier) {
-                throw new IllegalArgumentException("contribution %s requires %s but target accepts %s"
-                        .formatted(index, expectedCarrier, actualCarrier));
-            }
+        List<Class<?>> expectedParameters = contributions.stream()
+                .flatMap(contribution -> carrier(contribution).parameterTypes().stream())
+                .toList();
+        if (!target.contributionParameterTypes().equals(expectedParameters)) {
+            throw new IllegalArgumentException("contributions require %s but target accepts %s"
+                    .formatted(expectedParameters, target.contributionParameterTypes()));
         }
     }
 
@@ -106,22 +101,22 @@ public record GroupedAggregationUpdate(List<Contribution> contributions, Grouped
 
     public static GroupedAggregationUpdate inputValue(int inputColumn, GroupedAggregationUpdateTarget target)
     {
-        return inputValue(inputColumn, PrimitiveContributionCarrier.LONG, target);
+        return inputValue(inputColumn, ContributionCarrier.LONG, target);
     }
 
     public static GroupedAggregationUpdate doubleInputValue(int inputColumn, GroupedAggregationUpdateTarget target)
     {
-        return inputValue(inputColumn, PrimitiveContributionCarrier.DOUBLE, target);
+        return inputValue(inputColumn, ContributionCarrier.DOUBLE, target);
     }
 
     public static GroupedAggregationUpdate booleanInputValue(int inputColumn, GroupedAggregationUpdateTarget target)
     {
-        return inputValue(inputColumn, PrimitiveContributionCarrier.BOOLEAN, target);
+        return inputValue(inputColumn, ContributionCarrier.BOOLEAN, target);
     }
 
     public static GroupedAggregationUpdate inputValue(
             int inputColumn,
-            PrimitiveContributionCarrier carrier,
+            ContributionCarrier carrier,
             GroupedAggregationUpdateTarget target)
     {
         return new GroupedAggregationUpdate(new InputValue(inputColumn, carrier), target);
@@ -173,15 +168,15 @@ public record GroupedAggregationUpdate(List<Contribution> contributions, Grouped
 
     public boolean readsDoubleValue()
     {
-        return contributions.stream().anyMatch(contribution -> contribution instanceof InputValue input && input.carrier() == PrimitiveContributionCarrier.DOUBLE);
+        return contributions.stream().anyMatch(contribution -> contribution instanceof InputValue input && input.carrier() == ContributionCarrier.DOUBLE);
     }
 
     public boolean readsDoubleValue(int contribution)
     {
-        return carrier(contribution) == PrimitiveContributionCarrier.DOUBLE;
+        return carrier(contribution) == ContributionCarrier.DOUBLE;
     }
 
-    public PrimitiveContributionCarrier carrier(int contribution)
+    public ContributionCarrier carrier(int contribution)
     {
         return carrier(contributions.get(contribution));
     }
@@ -194,11 +189,11 @@ public record GroupedAggregationUpdate(List<Contribution> contributions, Grouped
         };
     }
 
-    private static PrimitiveContributionCarrier carrier(Contribution contribution)
+    private static ContributionCarrier carrier(Contribution contribution)
     {
         return switch (contribution) {
             case InputValue input -> input.carrier();
-            case Constant _ -> PrimitiveContributionCarrier.LONG;
+            case Constant _ -> ContributionCarrier.LONG;
         };
     }
 

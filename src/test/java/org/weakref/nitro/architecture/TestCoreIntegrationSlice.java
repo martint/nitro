@@ -371,7 +371,7 @@ class TestCoreIntegrationSlice
                 .resolve(resolvedCall, List.of(AggregationArgumentBinding.input(7)))
                 .orElseThrow();
         assertThat(update.contribution()).isEqualTo(new GroupedAggregationUpdate.InputValue(7));
-        assertThat(update.target().contributionCarrier()).isEqualTo(long.class);
+        assertThat(update.target().contributionParameterTypes()).containsExactly(long.class);
         assertThat(new GroupedAggregationUpdateResolver()
                 .resolve(resolvedCall, List.of(AggregationArgumentBinding.computed())))
                 .isEmpty();
@@ -389,7 +389,7 @@ class TestCoreIntegrationSlice
                 GroupedAggregationUpdateTemplate.inputPath(
                         0,
                         List.of("outer", "value"),
-                        org.weakref.nitro.core.function.aggregation.PrimitiveContributionCarrier.LONG),
+                        org.weakref.nitro.core.function.aggregation.ContributionCarrier.LONG),
                 IsolatedGroupedAggregationUpdateProvider.UPDATE);
 
         GroupedAggregationUpdate update = template.bind(List.of(AggregationArgumentBinding.input(7)));
@@ -397,7 +397,7 @@ class TestCoreIntegrationSlice
         assertThat(update.contribution()).isEqualTo(new GroupedAggregationUpdate.InputValue(
                 7,
                 List.of("outer", "value"),
-                org.weakref.nitro.core.function.aggregation.PrimitiveContributionCarrier.LONG));
+                org.weakref.nitro.core.function.aggregation.ContributionCarrier.LONG));
     }
 
     @Test

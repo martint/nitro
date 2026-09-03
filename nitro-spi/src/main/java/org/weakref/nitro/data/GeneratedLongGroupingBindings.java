@@ -13,7 +13,7 @@
  */
 package org.weakref.nitro.data;
 
-import org.weakref.nitro.core.function.aggregation.PrimitiveContributionCarrier;
+import org.weakref.nitro.core.function.aggregation.ContributionCarrier;
 
 import java.util.Arrays;
 
@@ -28,6 +28,7 @@ public final class GeneratedLongGroupingBindings
 {
     private final boolean dictionaryInput;
     private final Object[] inputs;
+    private final int[][] inputValueOffsets;
     private final int[][] inputIds;
     private final int[] inputOffsets;
     private final boolean[][] inputNulls;
@@ -36,7 +37,7 @@ public final class GeneratedLongGroupingBindings
     private final boolean[] readsInput;
     private final boolean[] readsValue;
     private final boolean[] intInputs;
-    private final PrimitiveContributionCarrier[] inputCarriers;
+    private final ContributionCarrier[] inputCarriers;
     private final boolean[] mappedInputs;
     private final boolean[] mappedInputNulls;
     private final boolean[] inputUsesKeyIds;
@@ -58,6 +59,7 @@ public final class GeneratedLongGroupingBindings
         }
         this.dictionaryInput = dictionaryInput;
         inputs = new Object[inputCount];
+        inputValueOffsets = new int[inputCount][];
         inputIds = new int[inputCount][];
         inputOffsets = new int[inputCount];
         inputNulls = new boolean[inputCount][];
@@ -66,7 +68,7 @@ public final class GeneratedLongGroupingBindings
         readsInput = new boolean[inputCount];
         readsValue = new boolean[inputCount];
         intInputs = new boolean[inputCount];
-        inputCarriers = new PrimitiveContributionCarrier[inputCount];
+        inputCarriers = new ContributionCarrier[inputCount];
         mappedInputs = new boolean[inputCount];
         mappedInputNulls = new boolean[inputCount];
         inputUsesKeyIds = new boolean[inputCount];
@@ -123,7 +125,7 @@ public final class GeneratedLongGroupingBindings
             Vector values,
             Vector nulls,
             boolean valueRequired,
-            PrimitiveContributionCarrier carrier)
+            ContributionCarrier carrier)
     {
         clearInput(index);
         readsInput[index] = true;
@@ -144,18 +146,22 @@ public final class GeneratedLongGroupingBindings
                 offsetInputs[index] = region.offset() != 0;
                 values = region.values();
             }
-            if (carrier == PrimitiveContributionCarrier.DOUBLE && values instanceof F64Vector doubles) {
+            if (carrier == ContributionCarrier.DOUBLE && values instanceof F64Vector doubles) {
                 inputs[index] = doubles.values();
             }
-            else if (carrier == PrimitiveContributionCarrier.BOOLEAN && values instanceof BooleanVector booleans) {
+            else if (carrier == ContributionCarrier.BOOLEAN && values instanceof BooleanVector booleans) {
                 inputs[index] = booleans.values();
             }
-            else if (carrier == PrimitiveContributionCarrier.LONG && values instanceof I64Vector longs) {
+            else if (carrier == ContributionCarrier.LONG && values instanceof I64Vector longs) {
                 inputs[index] = longs.values();
             }
-            else if (carrier == PrimitiveContributionCarrier.LONG && values instanceof I32Vector ints) {
+            else if (carrier == ContributionCarrier.LONG && values instanceof I32Vector ints) {
                 inputs[index] = ints.values();
                 intInputs[index] = true;
+            }
+            else if (carrier == ContributionCarrier.BINARY_REGION && values instanceof BinaryVector binary) {
+                inputs[index] = binary.data();
+                inputValueOffsets[index] = binary.offsets();
             }
             else {
                 return false;
@@ -188,6 +194,7 @@ public final class GeneratedLongGroupingBindings
     public void clearInput(int index)
     {
         inputs[index] = null;
+        inputValueOffsets[index] = null;
         inputIds[index] = null;
         inputOffsets[index] = 0;
         inputNulls[index] = null;
@@ -371,9 +378,14 @@ public final class GeneratedLongGroupingBindings
         return intInputs;
     }
 
-    public PrimitiveContributionCarrier[] inputCarriers()
+    public ContributionCarrier[] inputCarriers()
     {
         return inputCarriers;
+    }
+
+    public int[][] inputValueOffsets()
+    {
+        return inputValueOffsets;
     }
 
     public boolean[] mappedInputs()

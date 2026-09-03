@@ -15,9 +15,9 @@ package org.weakref.nitro.operator;
 
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.TestPrimitiveFunctions;
+import org.weakref.nitro.core.function.aggregation.ContributionCarrier;
 import org.weakref.nitro.core.function.aggregation.GroupedAggregationUpdate;
 import org.weakref.nitro.core.function.aggregation.GroupedAggregationUpdateTarget;
-import org.weakref.nitro.core.function.aggregation.PrimitiveContributionCarrier;
 import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.VectorAccess;
@@ -40,9 +40,10 @@ import static java.lang.invoke.MethodHandles.lookup;
 import static java.lang.invoke.MethodType.methodType;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.weakref.nitro.core.function.aggregation.PrimitiveContributionCarrier.BOOLEAN;
-import static org.weakref.nitro.core.function.aggregation.PrimitiveContributionCarrier.DOUBLE;
-import static org.weakref.nitro.core.function.aggregation.PrimitiveContributionCarrier.LONG;
+import static org.weakref.nitro.core.function.aggregation.ContributionCarrier.BINARY_REGION;
+import static org.weakref.nitro.core.function.aggregation.ContributionCarrier.BOOLEAN;
+import static org.weakref.nitro.core.function.aggregation.ContributionCarrier.DOUBLE;
+import static org.weakref.nitro.core.function.aggregation.ContributionCarrier.LONG;
 
 class TestOperatorCodeGenerationResources
 {
@@ -51,6 +52,7 @@ class TestOperatorCodeGenerationResources
     private static final GroupedAggregationUpdateTarget ORDERED_LONG_TARGET = longTarget(OrderedState.class);
     private static final GroupedAggregationUpdateTarget DOUBLE_SUM_TARGET = doubleTarget(DoubleSumState.class);
     private static final GroupedAggregationUpdateTarget BOOLEAN_COUNT_TARGET = booleanTarget();
+    private static final GroupedAggregationUpdateTarget BINARY_REGION_TARGET = binaryRegionTarget();
     private static final GroupedAggregationUpdateTarget MIXED_TARGET = mixedTarget();
 
     @Test
@@ -263,7 +265,7 @@ class TestOperatorCodeGenerationResources
                     false,
                     false,
                     new boolean[] {false},
-                    new PrimitiveContributionCarrier[] {LONG},
+                    new ContributionCarrier[] {LONG},
                     new boolean[] {false},
                     new boolean[] {false},
                     new boolean[] {false},
@@ -287,6 +289,7 @@ class TestOperatorCodeGenerationResources
                     0,
                     null,
                     new Object[] {null},
+                    new int[1][],
                     new int[1][],
                     new int[1],
                     new boolean[1][],
@@ -315,7 +318,7 @@ class TestOperatorCodeGenerationResources
                     false,
                     false,
                     new boolean[] {false},
-                    new PrimitiveContributionCarrier[] {DOUBLE},
+                    new ContributionCarrier[] {DOUBLE},
                     new boolean[] {false},
                     new boolean[] {false},
                     new boolean[] {false},
@@ -340,6 +343,7 @@ class TestOperatorCodeGenerationResources
                     null,
                     new Object[] {new double[] {1.25, 2.75, -3.5}},
                     new int[1][],
+                    new int[1][],
                     new int[1],
                     new boolean[1][],
                     new int[1][],
@@ -359,7 +363,7 @@ class TestOperatorCodeGenerationResources
                     List.of(GroupedAggregationUpdate.booleanInputValue(0, BOOLEAN_COUNT_TARGET)),
                     false, false, false, false, false, false, false, false, false,
                     new boolean[] {false},
-                    new PrimitiveContributionCarrier[] {BOOLEAN},
+                    new ContributionCarrier[] {BOOLEAN},
                     new boolean[] {false},
                     new boolean[] {false},
                     new boolean[] {false},
@@ -384,6 +388,7 @@ class TestOperatorCodeGenerationResources
                     null,
                     new Object[] {new boolean[] {true, false, true}},
                     new int[1][],
+                    new int[1][],
                     new int[1],
                     new boolean[1][],
                     new int[1][],
@@ -392,6 +397,51 @@ class TestOperatorCodeGenerationResources
 
             assertThat(nextGroup).isEqualTo(2);
             assertThat(state.values).containsExactly(1, 1);
+        }
+    }
+
+    @Test
+    void testGeneratedGroupingUsesAllocationFreeBinaryRegionContribution()
+    {
+        try (OperatorCodeGenerationResources resources = new OperatorCodeGenerationResources()) {
+            FusedGroupingKernel kernel = resources.fusedGrouping().create(
+                    List.of(GroupedAggregationUpdate.inputValue(0, BINARY_REGION, BINARY_REGION_TARGET)),
+                    false, false, false, false, false, false, false, false, false,
+                    new boolean[] {false},
+                    new ContributionCarrier[] {BINARY_REGION},
+                    new boolean[] {false},
+                    new boolean[] {false},
+                    new boolean[] {false},
+                    new boolean[] {false},
+                    new boolean[] {false},
+                    new boolean[] {false});
+            int[] tableIds = new int[8];
+            Arrays.fill(tableIds, -1);
+            BinaryRegionState state = new BinaryRegionState(2);
+
+            long nextGroup = kernel.accumulate(
+                    null,
+                    3,
+                    new long[] {1, 1, 2},
+                    null,
+                    0,
+                    new long[8],
+                    tableIds,
+                    7,
+                    new long[2],
+                    0,
+                    null,
+                    new Object[] {new byte[] {9, 10, 11, 20, 21, 30}},
+                    new int[][] {new int[] {0, 3, 5, 6}},
+                    new int[1][],
+                    new int[1],
+                    new boolean[1][],
+                    new int[1][],
+                    new int[1],
+                    new Object[] {state});
+
+            assertThat(nextGroup).isEqualTo(2);
+            assertThat(state.values).containsExactly(529, 130);
         }
     }
 
@@ -407,7 +457,7 @@ class TestOperatorCodeGenerationResources
                             MIXED_TARGET)),
                     false, false, false, false, false, false, false, false, false,
                     new boolean[] {false, false},
-                    new PrimitiveContributionCarrier[] {LONG, DOUBLE},
+                    new ContributionCarrier[] {LONG, DOUBLE},
                     new boolean[] {false, false},
                     new boolean[] {false, false},
                     new boolean[] {false, false},
@@ -432,6 +482,7 @@ class TestOperatorCodeGenerationResources
                     null,
                     new Object[] {new long[] {2, 4, 8}, new double[] {0.5, 1.5, 3.0}},
                     new int[2][],
+                    new int[2][],
                     new int[2],
                     new boolean[][] {null, new boolean[] {false, true, false}},
                     new int[2][],
@@ -450,12 +501,12 @@ class TestOperatorCodeGenerationResources
             FusedGroupingKernel unweighted = resources.fusedGrouping().create(
                     List.of(GroupedAggregationUpdate.constant(2, SCALED_LONG_TARGET)),
                     false, false, false, false, false, false, false, false, false,
-                    new boolean[] {false}, new PrimitiveContributionCarrier[] {LONG}, new boolean[] {false}, new boolean[] {false},
+                    new boolean[] {false}, new ContributionCarrier[] {LONG}, new boolean[] {false}, new boolean[] {false},
                     new boolean[] {false}, new boolean[] {false}, new boolean[] {false}, new boolean[] {false});
             FusedGroupingKernel weighted = resources.fusedGrouping().create(
                     List.of(GroupedAggregationUpdate.constant(2, WEIGHTED_LONG_TARGET)),
                     false, false, false, false, false, false, false, false, false,
-                    new boolean[] {false}, new PrimitiveContributionCarrier[] {LONG}, new boolean[] {false}, new boolean[] {false},
+                    new boolean[] {false}, new ContributionCarrier[] {LONG}, new boolean[] {false}, new boolean[] {false},
                     new boolean[] {false}, new boolean[] {false}, new boolean[] {false}, new boolean[] {false});
 
             assertThat(weighted).isNotSameAs(unweighted);
@@ -476,7 +527,7 @@ class TestOperatorCodeGenerationResources
             FusedGroupingKernel kernel = resources.fusedGrouping().create(
                     List.of(GroupedAggregationUpdate.constant(2, ORDERED_LONG_TARGET)),
                     false, false, false, false, true, true, false, false, false,
-                    new boolean[] {false}, new PrimitiveContributionCarrier[] {LONG}, new boolean[] {false}, new boolean[] {false},
+                    new boolean[] {false}, new ContributionCarrier[] {LONG}, new boolean[] {false}, new boolean[] {false},
                     new boolean[] {false}, new boolean[] {false}, new boolean[] {false}, new boolean[] {false});
             OrderedState state = new OrderedState(1);
 
@@ -502,7 +553,7 @@ class TestOperatorCodeGenerationResources
                     false,
                     false,
                     new boolean[] {false},
-                    new PrimitiveContributionCarrier[] {LONG},
+                    new ContributionCarrier[] {LONG},
                     new boolean[] {true},
                     new boolean[] {false},
                     new boolean[] {false},
@@ -524,6 +575,7 @@ class TestOperatorCodeGenerationResources
                     2,
                     null,
                     new Object[] {new long[] {1, 2, 4, 8}},
+                    new int[1][],
                     new int[][] {new int[] {0, 1, 2, 3}},
                     new int[1],
                     new boolean[1][],
@@ -552,7 +604,7 @@ class TestOperatorCodeGenerationResources
                     false,
                     true,
                     new boolean[] {false},
-                    new PrimitiveContributionCarrier[] {LONG},
+                    new ContributionCarrier[] {LONG},
                     new boolean[] {false},
                     new boolean[] {false},
                     new boolean[] {false},
@@ -576,6 +628,7 @@ class TestOperatorCodeGenerationResources
                     0,
                     null,
                     new Object[] {new long[] {99, 10, 20, 30}},
+                    new int[1][],
                     new int[1][],
                     new int[] {1},
                     new boolean[][] {new boolean[] {true, false, false, false}},
@@ -602,7 +655,7 @@ class TestOperatorCodeGenerationResources
                 false,
                 false,
                 new boolean[] {false},
-                new PrimitiveContributionCarrier[] {LONG},
+                new ContributionCarrier[] {LONG},
                 new boolean[] {false},
                 new boolean[] {false},
                 new boolean[] {false},
@@ -628,6 +681,7 @@ class TestOperatorCodeGenerationResources
                 0,
                 null,
                 new Object[] {null},
+                new int[1][],
                 new int[1][],
                 new int[1],
                 new boolean[1][],
@@ -685,6 +739,34 @@ class TestOperatorCodeGenerationResources
         }
         catch (ReflectiveOperationException e) {
             throw new ExceptionInInitializerError(e);
+        }
+    }
+
+    private static GroupedAggregationUpdateTarget binaryRegionTarget()
+    {
+        try {
+            return new GroupedAggregationUpdateTarget(lookup().findVirtual(
+                    BinaryRegionState.class,
+                    "update",
+                    methodType(void.class, int.class, byte[].class, int.class, int.class)));
+        }
+        catch (ReflectiveOperationException e) {
+            throw new ExceptionInInitializerError(e);
+        }
+    }
+
+    private static final class BinaryRegionState
+    {
+        private final long[] values;
+
+        private BinaryRegionState(int size)
+        {
+            values = new long[size];
+        }
+
+        public void update(int group, byte[] data, int offset, int length)
+        {
+            values[group] += length * 100L + data[offset];
         }
     }
 

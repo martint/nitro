@@ -66,11 +66,11 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | §9 Operators and islands | 0003, 0010, 0017, 0024, 0044–0047 |
 | §10 Cooperative execution | 0004, 0044, 0045 |
 | §11 Allocation and memory | 0007, 0014, 0017–0019, 0041 |
-| §12 Aggregation, windows, patterns, table functions | 0011–0013, 0015, 0016, 0022, 0036, 0045, 0046, 0055–0057 |
+| §12 Aggregation, windows, patterns, table functions | 0011–0013, 0015, 0016, 0022, 0036, 0045, 0046, 0055–0059 |
 | §13 Joins and dynamic filters | 0006, 0012, 0018, 0025, 0035, 0036 |
 | §14 Sources and Parquet | 0009, 0020–0023, 0031 |
 | §15 Host boundaries | 0003, 0017, 0019, 0024, 0033, 0044, 0046 |
-| §16 Adaptivity and generation | 0011, 0012, 0027, 0032, 0036, 0037, 0054–0057 |
+| §16 Adaptivity and generation | 0011, 0012, 0027, 0032, 0036, 0037, 0054–0059 |
 | §17 Correctness and tests | 0026, 0029, 0043, 0047 |
 | §18 Performance evidence | 0026–0028, 0032, 0041, 0042 |
 | §19 Coverage and productization | 0029–0031, 0033–0035, 0042, 0046, 0047 |
@@ -138,3 +138,4 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | [0056](0056-allow-generated-aggregation-updates-to-consume-tuples.md) | Allow generated aggregation updates to consume primitive tuples | accepted |
 | [0057](0057-describe-aggregation-inputs-by-primitive-carrier.md) | Describe generated aggregation inputs by primitive carrier | accepted |
 | [0058](0058-select-structural-components-in-generated-aggregation-updates.md) | Let providers select structural components for generated aggregation updates | accepted |
+| [0059](0059-pass-variable-width-contributions-as-binary-regions.md) | Pass variable-width generated aggregation contributions as binary regions | accepted |
