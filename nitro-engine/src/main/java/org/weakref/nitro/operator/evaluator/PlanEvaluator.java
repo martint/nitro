@@ -1994,8 +1994,7 @@ public final class PlanEvaluator
     private Streams evaluateStructField(Set<Stream> requestedStreams, StructField field, Mask mask, Streams output)
     {
         Streams sourceStreams = evaluateArgument(field.source(), mask);
-        StructVector sourceValues = (StructVector) sourceStreams.values();
-        Streams fieldStreams = sourceValues.field(field.field());
+        Streams fieldStreams = VectorAccess.structField(sourceStreams.values(), field.field());
 
         Streams.Builder result = Streams.builder();
         if (requestedStreams.contains(Stream.VALUES) && fieldStreams.has(Stream.VALUES)) {

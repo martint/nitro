@@ -1720,6 +1720,50 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testStructFieldPreservesEncodedParentMapping()
+    {
+        Variable field = new Variable(0);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(
+                        field,
+                        new StructField(new Reference(new Input(0), Stream.VALUES), 0),
+                        AllMask.ALL)),
+                List.of(
+                        new Reference(field, Stream.VALUES),
+                        new Reference(field, Stream.NULLS)));
+
+        StructVector rows = new StructVector(2);
+        rows.setField("value", Streams.of(
+                new I64Vector(new long[] {10, 20}),
+                new BooleanVector(new boolean[] {false, true}),
+                null));
+        DictionaryVector encodedRows = DictionaryVector.wrap(new int[] {1, 0, 1, 0}, rows);
+        BooleanVector parentNulls = new BooleanVector(new boolean[] {false, false, true, false});
+
+        PlanEvaluator evaluator = planEvaluator(
+                plan,
+                primitiveRegistry(),
+                inputResolver(Map.of(
+                        new Reference(new Input(0), Stream.VALUES), encodedRows,
+                        new Reference(new Input(0), Stream.NULLS), parentNulls)),
+                new Allocator(EngineResources.createDefault()));
+
+        Mask mask = Mask.sparse(new int[] {0, 2, 3}, 4);
+        Streams result = evaluator.evaluate(new Reference(field, Stream.VALUES), mask);
+
+        assertThat(result.values()).isInstanceOf(DictionaryVector.class);
+        assertThat(((DictionaryVector) result.values()).ids()).isSameAs(encodedRows.ids());
+        VectorAccess.LongValues values = VectorAccess.longValues(result.values());
+        assertThat(values.value(0)).isEqualTo(20);
+        assertThat(values.value(2)).isEqualTo(20);
+        assertThat(values.value(3)).isEqualTo(10);
+        VectorAccess.BooleanValues nulls = VectorAccess.booleanValues(result.get(Stream.NULLS));
+        assertThat(nulls.value(0)).isTrue();
+        assertThat(nulls.value(2)).isTrue();
+        assertThat(nulls.value(3)).isFalse();
+    }
+
+    @Test
     void testMapLookupCombinesMapKeyAndEntryNulls()
     {
         Variable lookup = new Variable(0);
