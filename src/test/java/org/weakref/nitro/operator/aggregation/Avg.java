@@ -43,7 +43,9 @@ public class Avg
     @Override
     public GroupedAggregationUpdate generatedGroupedUpdate()
     {
-        return GroupedAggregationUpdate.inputValue(inputColumn);
+        return GroupedAggregationUpdate.inputValue(
+                inputColumn,
+                GeneratedGroupedAccumulator.longUpdateTarget(AvgStateVector.class));
     }
 
     @Override

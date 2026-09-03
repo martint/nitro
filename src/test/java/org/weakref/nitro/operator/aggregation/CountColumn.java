@@ -45,7 +45,10 @@ public class CountColumn
     @Override
     public GroupedAggregationUpdate generatedGroupedUpdate()
     {
-        return GroupedAggregationUpdate.constantWhenNotNull(1, inputColumn);
+        return GroupedAggregationUpdate.constantWhenNotNull(
+                1,
+                inputColumn,
+                GeneratedGroupedAccumulator.longUpdateTarget(I64Vector.class));
     }
 
     @Override

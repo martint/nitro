@@ -19,7 +19,7 @@ import org.weakref.nitro.core.function.aggregation.AggregationImplementation;
 import org.weakref.nitro.core.function.aggregation.AggregationInput;
 import org.weakref.nitro.core.function.aggregation.GroupedAggregationDomain;
 import org.weakref.nitro.core.function.aggregation.GroupedAggregationUpdate;
-import org.weakref.nitro.core.function.aggregation.LongStateUpdate;
+import org.weakref.nitro.core.function.aggregation.GroupedAggregationUpdateTarget;
 import org.weakref.nitro.core.type.Field;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
@@ -47,6 +47,8 @@ import org.weakref.nitro.operator.aggregation.RegisteredAggregationUnit;
 import org.weakref.nitro.operator.aggregation.StreamAccessor;
 import org.weakref.nitro.operator.aggregation.Sum;
 
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -1331,7 +1333,7 @@ class TestFusedGroupedAggregation
                         FINAL,
                         new int[] {1},
                         -1,
-                        GroupedAggregationUpdate.inputValue(1)));
+                        GroupedAggregationUpdate.inputValue(1, encodedGeneratedSumTarget())));
 
         Allocator allocator = new Allocator(EngineResources.createDefault());
         Operator operator = new GroupedAggregationOperator(
@@ -1868,8 +1870,20 @@ class TestFusedGroupedAggregation
         }
     }
 
+    private static GroupedAggregationUpdateTarget encodedGeneratedSumTarget()
+    {
+        try {
+            return new GroupedAggregationUpdateTarget(MethodHandles.lookup().findVirtual(
+                    EncodedGeneratedSumState.class,
+                    "update",
+                    MethodType.methodType(void.class, int.class, long.class)));
+        }
+        catch (ReflectiveOperationException e) {
+            throw new ExceptionInInitializerError(e);
+        }
+    }
+
     private static final class EncodedGeneratedSumState
-            implements LongStateUpdate
     {
         private final long[] sums;
 
@@ -1883,7 +1897,6 @@ class TestFusedGroupedAggregation
             this.sums = sums;
         }
 
-        @Override
         public void update(int group, long value)
         {
             sums[group] += value;

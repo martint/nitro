@@ -18,8 +18,7 @@ import org.weakref.nitro.core.function.aggregation.AggregationExecution;
 import org.weakref.nitro.core.function.aggregation.AggregationImplementation;
 import org.weakref.nitro.core.function.aggregation.AggregationInput;
 import org.weakref.nitro.core.function.aggregation.GroupedAggregationUpdate;
-import org.weakref.nitro.core.function.aggregation.GroupedStateUpdate;
-import org.weakref.nitro.core.function.aggregation.LongStateUpdate;
+import org.weakref.nitro.core.function.aggregation.GroupedAggregationUpdateTarget;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
@@ -27,6 +26,9 @@ import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.ValueDemand;
 import org.weakref.nitro.data.Vector;
+
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.weakref.nitro.operator.aggregation.RegisteredAggregationUnit.InputMode.RAW;
@@ -37,11 +39,11 @@ class TestRegisteredAggregationUnit
     @Test
     void testBindsProviderDeclaredGeneratedUpdateToOpaqueState()
     {
-        GroupedAggregationUpdate update = GroupedAggregationUpdate.inputValue(7);
+        GroupedAggregationUpdate update = GroupedAggregationUpdate.inputValue(7, noopTarget());
         GeneratedRegisteredAggregationUnit unit = new GeneratedRegisteredAggregationUnit(
                 new TrackingImplementation(), RAW, FINAL, new int[] {7}, -1, update);
-        LongStateUpdate state = (_, _) -> {};
-        GroupedStateUpdate[] targets = new GroupedStateUpdate[1];
+        Object state = new Object();
+        Object[] targets = new Object[1];
 
         unit.bindGeneratedGroupedState(state, targets, 0);
 
@@ -58,6 +60,21 @@ class TestRegisteredAggregationUnit
                 update);
         assertThat(intermediateUnit.mergesIntermediateInput()).isTrue();
     }
+
+    private static GroupedAggregationUpdateTarget noopTarget()
+    {
+        try {
+            return new GroupedAggregationUpdateTarget(MethodHandles.lookup().findStatic(
+                    TestRegisteredAggregationUnit.class,
+                    "noopUpdate",
+                    MethodType.methodType(void.class, Object.class, int.class, long.class)));
+        }
+        catch (ReflectiveOperationException e) {
+            throw new ExceptionInInitializerError(e);
+        }
+    }
+
+    private static void noopUpdate(Object state, int group, long value) {}
 
     @Test
     void testPhysicalModesAndInputMappingArePlanOwned()

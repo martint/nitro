@@ -14,24 +14,17 @@
 package org.weakref.nitro.operator.aggregation;
 
 import org.weakref.nitro.core.function.aggregation.GroupedAggregationUpdate;
-import org.weakref.nitro.core.function.aggregation.GroupedStateUpdate;
-import org.weakref.nitro.core.function.aggregation.LongStateUpdate;
+import org.weakref.nitro.core.function.aggregation.GroupedAggregationUpdateTarget;
 import org.weakref.nitro.data.Streams;
 
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 import java.util.List;
 
-/**
- * Marks an {@link Accumulator} whose state implements the long-update SPI and whose provider declares
- * its per-row contribution, so it can participate in the generated single-long-key grouped-aggregation kernel — one
- * inlined pass that probes the group table and accumulates with no group-id vector and no per-row
- * accumulator dispatch.
- */
-public interface GeneratedGroupedAccumulator
+/** Test fixture for the legacy accumulator API; production providers use registry-bound aggregation units. */
+interface GeneratedGroupedAccumulator
         extends Accumulator, GeneratedGroupedAggregationUnit
 {
-    /**
-     * Declares the provider-supplied physical update that a generated grouping loop executes.
-     */
     GroupedAggregationUpdate generatedGroupedUpdate();
 
     @Override
@@ -41,8 +34,21 @@ public interface GeneratedGroupedAccumulator
     }
 
     @Override
-    default void bindGeneratedGroupedState(Object state, GroupedStateUpdate[] targets, int offset)
+    default void bindGeneratedGroupedState(Object state, Object[] targets, int offset)
     {
-        targets[offset] = (LongStateUpdate) ((Streams) state).values();
+        targets[offset] = ((Streams) state).values();
+    }
+
+    static GroupedAggregationUpdateTarget longUpdateTarget(Class<?> stateType)
+    {
+        try {
+            return new GroupedAggregationUpdateTarget(MethodHandles.publicLookup().findVirtual(
+                    stateType,
+                    "update",
+                    MethodType.methodType(void.class, int.class, long.class)));
+        }
+        catch (ReflectiveOperationException e) {
+            throw new ExceptionInInitializerError(e);
+        }
     }
 }

@@ -13,7 +13,6 @@
  */
 package org.weakref.nitro.operator.aggregation;
 
-import org.weakref.nitro.core.function.aggregation.LongStateUpdate;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.FlatVector;
@@ -24,7 +23,7 @@ import org.weakref.nitro.data.VectorPoolRetentionClass;
 import java.util.Arrays;
 
 public final class SumStateVector
-        implements FlatVector, LongStateUpdate
+        implements FlatVector
 {
     private static final int CHUNK_SHIFT = 10;
     private static final int CHUNK_SIZE = 1 << CHUNK_SHIFT;
@@ -215,7 +214,6 @@ public final class SumStateVector
         }
     }
 
-    @Override
     public void update(int group, long value)
     {
         increment(group, value);

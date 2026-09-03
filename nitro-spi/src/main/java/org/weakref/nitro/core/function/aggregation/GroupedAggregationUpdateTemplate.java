@@ -20,7 +20,7 @@ import static java.util.Objects.requireNonNull;
 /**
  * Provider-authored grouped-update description in function-argument coordinates.
  */
-public record GroupedAggregationUpdateTemplate(Contribution contribution)
+public record GroupedAggregationUpdateTemplate(Contribution contribution, GroupedAggregationUpdateTarget target)
 {
     public sealed interface Contribution
             permits InputValue, DoubleInputValue, Constant {}
@@ -57,38 +57,39 @@ public record GroupedAggregationUpdateTemplate(Contribution contribution)
     public GroupedAggregationUpdateTemplate
     {
         contribution = requireNonNull(contribution, "contribution is null");
+        target = requireNonNull(target, "target is null");
     }
 
-    public static GroupedAggregationUpdateTemplate inputValue(int argument)
+    public static GroupedAggregationUpdateTemplate inputValue(int argument, GroupedAggregationUpdateTarget target)
     {
-        return new GroupedAggregationUpdateTemplate(new InputValue(argument));
+        return new GroupedAggregationUpdateTemplate(new InputValue(argument), target);
     }
 
-    public static GroupedAggregationUpdateTemplate doubleInputValue(int argument)
+    public static GroupedAggregationUpdateTemplate doubleInputValue(int argument, GroupedAggregationUpdateTarget target)
     {
-        return new GroupedAggregationUpdateTemplate(new DoubleInputValue(argument));
+        return new GroupedAggregationUpdateTemplate(new DoubleInputValue(argument), target);
     }
 
-    public static GroupedAggregationUpdateTemplate constant(long value)
+    public static GroupedAggregationUpdateTemplate constant(long value, GroupedAggregationUpdateTarget target)
     {
-        return new GroupedAggregationUpdateTemplate(new Constant(value, -1));
+        return new GroupedAggregationUpdateTemplate(new Constant(value, -1), target);
     }
 
-    public static GroupedAggregationUpdateTemplate constantWhenNotNull(long value, int argument)
+    public static GroupedAggregationUpdateTemplate constantWhenNotNull(long value, int argument, GroupedAggregationUpdateTarget target)
     {
         requireArgument(argument);
-        return new GroupedAggregationUpdateTemplate(new Constant(value, argument));
+        return new GroupedAggregationUpdateTemplate(new Constant(value, argument), target);
     }
 
     public GroupedAggregationUpdate bind(List<AggregationArgumentBinding> arguments)
     {
         requireNonNull(arguments, "arguments is null");
         return switch (contribution) {
-            case InputValue input -> GroupedAggregationUpdate.inputValue(inputColumn(arguments, input.argument()));
-            case DoubleInputValue input -> GroupedAggregationUpdate.doubleInputValue(inputColumn(arguments, input.argument()));
+            case InputValue input -> GroupedAggregationUpdate.inputValue(inputColumn(arguments, input.argument()), target);
+            case DoubleInputValue input -> GroupedAggregationUpdate.doubleInputValue(inputColumn(arguments, input.argument()), target);
             case Constant constant when constant.nullCheckArgument() >= 0 ->
-                    GroupedAggregationUpdate.constantWhenNotNull(constant.value(), inputColumn(arguments, constant.nullCheckArgument()));
-            case Constant constant -> GroupedAggregationUpdate.constant(constant.value());
+                    GroupedAggregationUpdate.constantWhenNotNull(constant.value(), inputColumn(arguments, constant.nullCheckArgument()), target);
+            case Constant constant -> GroupedAggregationUpdate.constant(constant.value(), target);
         };
     }
 

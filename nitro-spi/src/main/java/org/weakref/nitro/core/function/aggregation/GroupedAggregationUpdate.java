@@ -24,7 +24,7 @@ import static java.util.Objects.requireNonNull;
  *
  * @param contribution the physical long contribution and optional input null check
  */
-public record GroupedAggregationUpdate(Contribution contribution)
+public record GroupedAggregationUpdate(Contribution contribution, GroupedAggregationUpdateTarget target)
 {
     public sealed interface Contribution
             permits InputValue, DoubleInputValue, Constant {}
@@ -65,26 +65,32 @@ public record GroupedAggregationUpdate(Contribution contribution)
     public GroupedAggregationUpdate
     {
         requireNonNull(contribution, "contribution is null");
+        requireNonNull(target, "target is null");
+        Class<?> expectedCarrier = contribution instanceof DoubleInputValue ? double.class : long.class;
+        if (target.contributionCarrier() != expectedCarrier) {
+            throw new IllegalArgumentException("contribution requires %s but target accepts %s"
+                    .formatted(expectedCarrier, target.contributionCarrier()));
+        }
     }
 
-    public static GroupedAggregationUpdate inputValue(int inputColumn)
+    public static GroupedAggregationUpdate inputValue(int inputColumn, GroupedAggregationUpdateTarget target)
     {
-        return new GroupedAggregationUpdate(new InputValue(inputColumn));
+        return new GroupedAggregationUpdate(new InputValue(inputColumn), target);
     }
 
-    public static GroupedAggregationUpdate doubleInputValue(int inputColumn)
+    public static GroupedAggregationUpdate doubleInputValue(int inputColumn, GroupedAggregationUpdateTarget target)
     {
-        return new GroupedAggregationUpdate(new DoubleInputValue(inputColumn));
+        return new GroupedAggregationUpdate(new DoubleInputValue(inputColumn), target);
     }
 
-    public static GroupedAggregationUpdate constant(long value)
+    public static GroupedAggregationUpdate constant(long value, GroupedAggregationUpdateTarget target)
     {
-        return new GroupedAggregationUpdate(new Constant(value, -1));
+        return new GroupedAggregationUpdate(new Constant(value, -1), target);
     }
 
-    public static GroupedAggregationUpdate constantWhenNotNull(long value, int inputColumn)
+    public static GroupedAggregationUpdate constantWhenNotNull(long value, int inputColumn, GroupedAggregationUpdateTarget target)
     {
-        return new GroupedAggregationUpdate(new Constant(value, inputColumn));
+        return new GroupedAggregationUpdate(new Constant(value, inputColumn), target);
     }
 
     public int inputColumn()

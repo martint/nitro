@@ -15,10 +15,8 @@ package org.weakref.nitro.operator;
 
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.TestPrimitiveFunctions;
-import org.weakref.nitro.core.function.aggregation.DoubleStateUpdate;
 import org.weakref.nitro.core.function.aggregation.GroupedAggregationUpdate;
-import org.weakref.nitro.core.function.aggregation.GroupedStateUpdate;
-import org.weakref.nitro.core.function.aggregation.LongStateUpdate;
+import org.weakref.nitro.core.function.aggregation.GroupedAggregationUpdateTarget;
 import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.VectorAccess;
@@ -37,11 +35,18 @@ import org.weakref.nitro.operator.evaluator.ir.Variable;
 import java.util.Arrays;
 import java.util.List;
 
+import static java.lang.invoke.MethodHandles.lookup;
+import static java.lang.invoke.MethodType.methodType;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class TestOperatorCodeGenerationResources
 {
+    private static final GroupedAggregationUpdateTarget SCALED_LONG_TARGET = longTarget(ScaledState.class);
+    private static final GroupedAggregationUpdateTarget WEIGHTED_LONG_TARGET = longTarget(WeightedState.class);
+    private static final GroupedAggregationUpdateTarget ORDERED_LONG_TARGET = longTarget(OrderedState.class);
+    private static final GroupedAggregationUpdateTarget DOUBLE_SUM_TARGET = doubleTarget(DoubleSumState.class);
+
     @Test
     void testGeneratedPhysicalHashSupportsBooleanAccessors()
     {
@@ -241,7 +246,7 @@ class TestOperatorCodeGenerationResources
     {
         try (OperatorCodeGenerationResources resources = new OperatorCodeGenerationResources()) {
             FusedGroupingKernel kernel = resources.fusedGrouping().create(
-                    List.of(GroupedAggregationUpdate.constant(3)),
+                    List.of(GroupedAggregationUpdate.constant(3, SCALED_LONG_TARGET)),
                     false,
                     false,
                     false,
@@ -281,7 +286,7 @@ class TestOperatorCodeGenerationResources
                     new boolean[1][],
                     new int[1][],
                     new int[1],
-                    new GroupedStateUpdate[] {state});
+                    new Object[] {state});
 
             assertThat(nextGroup).isEqualTo(2);
             assertThat(state.values).containsExactly(6, 3);
@@ -293,7 +298,7 @@ class TestOperatorCodeGenerationResources
     {
         try (OperatorCodeGenerationResources resources = new OperatorCodeGenerationResources()) {
             FusedGroupingKernel kernel = resources.fusedGrouping().create(
-                    List.of(GroupedAggregationUpdate.doubleInputValue(0)),
+                    List.of(GroupedAggregationUpdate.doubleInputValue(0, DOUBLE_SUM_TARGET)),
                     false,
                     false,
                     false,
@@ -333,10 +338,53 @@ class TestOperatorCodeGenerationResources
                     new boolean[1][],
                     new int[1][],
                     new int[1],
-                    new GroupedStateUpdate[] {state});
+                    new Object[] {state});
 
             assertThat(nextGroup).isEqualTo(2);
             assertThat(state.values).containsExactly(4, -3.5);
+        }
+    }
+
+    @Test
+    void testGeneratedGroupingCacheSeparatesFunctionTargetsWithTheSamePhysicalShape()
+    {
+        try (OperatorCodeGenerationResources resources = new OperatorCodeGenerationResources()) {
+            FusedGroupingKernel unweighted = resources.fusedGrouping().create(
+                    List.of(GroupedAggregationUpdate.constant(2, SCALED_LONG_TARGET)),
+                    false, false, false, false, false, false, false, false, false,
+                    new boolean[] {false}, new boolean[] {false}, new boolean[] {false}, new boolean[] {false},
+                    new boolean[] {false}, new boolean[] {false}, new boolean[] {false}, new boolean[] {false});
+            FusedGroupingKernel weighted = resources.fusedGrouping().create(
+                    List.of(GroupedAggregationUpdate.constant(2, WEIGHTED_LONG_TARGET)),
+                    false, false, false, false, false, false, false, false, false,
+                    new boolean[] {false}, new boolean[] {false}, new boolean[] {false}, new boolean[] {false},
+                    new boolean[] {false}, new boolean[] {false}, new boolean[] {false}, new boolean[] {false});
+
+            assertThat(weighted).isNotSameAs(unweighted);
+
+            ScaledState unweightedState = new ScaledState(1);
+            WeightedState weightedState = new WeightedState(1);
+            accumulateSingleGroup(unweighted, unweightedState);
+            accumulateSingleGroup(weighted, weightedState);
+            assertThat(unweightedState.values).containsExactly(4);
+            assertThat(weightedState.values).containsExactly(20);
+        }
+    }
+
+    @Test
+    void testConstantRunsRequireProviderDeclaredRepeatedSemantics()
+    {
+        try (OperatorCodeGenerationResources resources = new OperatorCodeGenerationResources()) {
+            FusedGroupingKernel kernel = resources.fusedGrouping().create(
+                    List.of(GroupedAggregationUpdate.constant(2, ORDERED_LONG_TARGET)),
+                    false, false, false, false, true, true, false, false, false,
+                    new boolean[] {false}, new boolean[] {false}, new boolean[] {false}, new boolean[] {false},
+                    new boolean[] {false}, new boolean[] {false}, new boolean[] {false}, new boolean[] {false});
+            OrderedState state = new OrderedState(1);
+
+            accumulateSingleGroup(kernel, state);
+
+            assertThat(state.values).containsExactly(22);
         }
     }
 
@@ -345,7 +393,7 @@ class TestOperatorCodeGenerationResources
     {
         try (OperatorCodeGenerationResources resources = new OperatorCodeGenerationResources()) {
             FusedGroupingKernel kernel = resources.fusedGrouping().create(
-                    List.of(GroupedAggregationUpdate.inputValue(0)),
+                    List.of(GroupedAggregationUpdate.inputValue(0, SCALED_LONG_TARGET)),
                     false,
                     false,
                     true,
@@ -383,7 +431,7 @@ class TestOperatorCodeGenerationResources
                     new boolean[1][],
                     new int[1][],
                     new int[1],
-                    new GroupedStateUpdate[] {state});
+                    new Object[] {state});
 
             assertThat(nextGroup).isEqualTo(2);
             assertThat(state.values).containsExactly(10, 5);
@@ -395,7 +443,7 @@ class TestOperatorCodeGenerationResources
     {
         try (OperatorCodeGenerationResources resources = new OperatorCodeGenerationResources()) {
             FusedGroupingKernel kernel = resources.fusedGrouping().create(
-                    List.of(GroupedAggregationUpdate.inputValue(0)),
+                    List.of(GroupedAggregationUpdate.inputValue(0, SCALED_LONG_TARGET)),
                     false,
                     false,
                     false,
@@ -435,7 +483,7 @@ class TestOperatorCodeGenerationResources
                     new boolean[][] {new boolean[] {true, false, false, false}},
                     new int[1][],
                     new int[] {1},
-                    new GroupedStateUpdate[] {state});
+                    new Object[] {state});
 
             assertThat(nextGroup).isEqualTo(2);
             assertThat(state.values).containsExactly(30, 30);
@@ -445,7 +493,7 @@ class TestOperatorCodeGenerationResources
     private static FusedGroupingKernel createCountKernel(FusedGroupingAggregationKernelGenerator generator)
     {
         return generator.create(
-                List.of(GroupedAggregationUpdate.constant(1)),
+                List.of(GroupedAggregationUpdate.constant(1, SCALED_LONG_TARGET)),
                 false,
                 false,
                 false,
@@ -465,8 +513,58 @@ class TestOperatorCodeGenerationResources
                 new boolean[] {false});
     }
 
+    private static void accumulateSingleGroup(FusedGroupingKernel kernel, Object state)
+    {
+        int[] tableIds = new int[8];
+        Arrays.fill(tableIds, -1);
+        kernel.accumulate(
+                null,
+                2,
+                new long[] {7, 7},
+                null,
+                0,
+                new long[8],
+                tableIds,
+                7,
+                new long[1],
+                0,
+                null,
+                new Object[] {null},
+                new int[1][],
+                new int[1],
+                new boolean[1][],
+                new int[1][],
+                new int[1],
+                new Object[] {state});
+    }
+
+    private static GroupedAggregationUpdateTarget longTarget(Class<?> stateType)
+    {
+        try {
+            return new GroupedAggregationUpdateTarget(lookup().findVirtual(
+                    stateType,
+                    "update",
+                    methodType(void.class, int.class, long.class)));
+        }
+        catch (ReflectiveOperationException e) {
+            throw new ExceptionInInitializerError(e);
+        }
+    }
+
+    private static GroupedAggregationUpdateTarget doubleTarget(Class<?> stateType)
+    {
+        try {
+            return new GroupedAggregationUpdateTarget(lookup().findVirtual(
+                    stateType,
+                    "update",
+                    methodType(void.class, int.class, double.class)));
+        }
+        catch (ReflectiveOperationException e) {
+            throw new ExceptionInInitializerError(e);
+        }
+    }
+
     private static final class DoubleSumState
-            implements DoubleStateUpdate
     {
         private final double[] values;
 
@@ -475,7 +573,6 @@ class TestOperatorCodeGenerationResources
             values = new double[size];
         }
 
-        @Override
         public void update(int group, double value)
         {
             values[group] += value;
@@ -483,7 +580,6 @@ class TestOperatorCodeGenerationResources
     }
 
     public static final class ScaledState
-            implements LongStateUpdate
     {
         private final long[] values;
 
@@ -492,10 +588,39 @@ class TestOperatorCodeGenerationResources
             values = new long[size];
         }
 
-        @Override
         public void update(int group, long value)
         {
             values[group] += value;
+        }
+    }
+
+    public static final class WeightedState
+    {
+        private final long[] values;
+
+        public WeightedState(int size)
+        {
+            values = new long[size];
+        }
+
+        public void update(int group, long value)
+        {
+            values[group] += value * 5;
+        }
+    }
+
+    public static final class OrderedState
+    {
+        private final long[] values;
+
+        public OrderedState(int size)
+        {
+            values = new long[size];
+        }
+
+        public void update(int group, long value)
+        {
+            values[group] = values[group] * 10 + value;
         }
     }
 }

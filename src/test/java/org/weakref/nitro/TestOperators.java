@@ -20,8 +20,7 @@ import org.junit.jupiter.api.parallel.Execution;
 import org.junit.jupiter.api.parallel.ExecutionMode;
 import org.weakref.nitro.core.execution.ExecutionSuspension;
 import org.weakref.nitro.core.function.aggregation.GroupedAggregationUpdate;
-import org.weakref.nitro.core.function.aggregation.GroupedStateUpdate;
-import org.weakref.nitro.core.function.aggregation.LongStateUpdate;
+import org.weakref.nitro.core.function.aggregation.GroupedAggregationUpdateTarget;
 import org.weakref.nitro.core.function.projection.ProjectionArgument;
 import org.weakref.nitro.core.function.projection.ProjectionCodeBuilder;
 import org.weakref.nitro.core.function.projection.ProjectionCodeProvider;
@@ -8876,6 +8875,9 @@ public class TestOperators
     private static final class SumAndCountUnit
             implements GeneratedGroupedAggregationUnit
     {
+        private static final GroupedAggregationUpdateTarget SUM_UPDATE = updateTarget("updateSum");
+        private static final GroupedAggregationUpdateTarget COUNT_UPDATE = updateTarget("updateCount");
+
         private final int inputColumn;
         private int accumulationCalls;
 
@@ -8894,16 +8896,38 @@ public class TestOperators
         public List<GroupedAggregationUpdate> generatedGroupedUpdates()
         {
             return List.of(
-                    GroupedAggregationUpdate.inputValue(inputColumn),
-                    GroupedAggregationUpdate.constant(1));
+                    GroupedAggregationUpdate.inputValue(inputColumn, SUM_UPDATE),
+                    GroupedAggregationUpdate.constant(1, COUNT_UPDATE));
         }
 
         @Override
-        public void bindGeneratedGroupedState(Object state, GroupedStateUpdate[] targets, int offset)
+        public void bindGeneratedGroupedState(Object state, Object[] targets, int offset)
         {
-            State current = (State) state;
-            targets[offset] = (LongStateUpdate) (group, value) -> current.sums[group] += value;
-            targets[offset + 1] = (LongStateUpdate) (group, value) -> current.counts[group] += value;
+            targets[offset] = state;
+            targets[offset + 1] = state;
+        }
+
+        private static GroupedAggregationUpdateTarget updateTarget(String name)
+        {
+            try {
+                return new GroupedAggregationUpdateTarget(MethodHandles.lookup().findStatic(
+                        SumAndCountUnit.class,
+                        name,
+                        MethodType.methodType(void.class, State.class, int.class, long.class)));
+            }
+            catch (ReflectiveOperationException e) {
+                throw new ExceptionInInitializerError(e);
+            }
+        }
+
+        private static void updateSum(State state, int group, long value)
+        {
+            state.sums[group] += value;
+        }
+
+        private static void updateCount(State state, int group, long value)
+        {
+            state.counts[group] += value;
         }
 
         @Override

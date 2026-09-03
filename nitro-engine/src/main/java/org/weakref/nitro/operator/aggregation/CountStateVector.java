@@ -13,7 +13,6 @@
  */
 package org.weakref.nitro.operator.aggregation;
 
-import org.weakref.nitro.core.function.aggregation.LongStateUpdate;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.DynamicRetainedBytesVector;
 import org.weakref.nitro.data.FlatVector;
@@ -23,7 +22,7 @@ import org.weakref.nitro.data.Vector;
 import static java.util.Objects.requireNonNull;
 
 public final class CountStateVector
-        implements FlatVector, LongStateUpdate, DynamicRetainedBytesVector
+        implements FlatVector, DynamicRetainedBytesVector
 {
     private static final int CHUNK_SHIFT = 12;
     private static final int CHUNK_SIZE = 1 << CHUNK_SHIFT;
@@ -154,7 +153,6 @@ public final class CountStateVector
         wideChunks[chunkIndex][chunkOffset] = updated;
     }
 
-    @Override
     public void update(int group, long value)
     {
         increment(group, value);

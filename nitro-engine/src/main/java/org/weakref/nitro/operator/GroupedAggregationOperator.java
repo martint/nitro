@@ -15,8 +15,6 @@ package org.weakref.nitro.operator;
 
 import org.weakref.nitro.core.function.aggregation.GroupedAggregationDomain;
 import org.weakref.nitro.core.function.aggregation.GroupedAggregationUpdate;
-import org.weakref.nitro.core.function.aggregation.GroupedStateUpdate;
-import org.weakref.nitro.core.function.aggregation.LongStateUpdate;
 import org.weakref.nitro.core.type.Field;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.core.type.TypeBinding;
@@ -38,6 +36,8 @@ import org.weakref.nitro.operator.aggregation.PhysicalAggregationProgram;
 import org.weakref.nitro.operator.aggregation.PhysicalAggregationUnit;
 import org.weakref.nitro.operator.aggregation.StreamAccessors;
 
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodType;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.EnumSet;
@@ -120,7 +120,7 @@ public class GroupedAggregationOperator
     private int[] fusedAggregationIndexes;
     private int[] fusedStateOffsets;
     private GeneratedLongGroupingBindings fusedBindings;
-    private GroupedStateUpdate[] fusedStateVectors;
+    private Object[] fusedStateVectors;
     private boolean fusedStateVectorsBound;
     private int fusedPhysicalShape = -1;
     private boolean debugFusedLimitPrinted;
@@ -1039,7 +1039,7 @@ public class GroupedAggregationOperator
                     .mergesIntermediateInput();
         }
         fusedBindings = new GeneratedLongGroupingBindings(fusedSpecs.length, fusedDictionaryInput);
-        fusedStateVectors = new GroupedStateUpdate[fusedSpecs.length];
+        fusedStateVectors = new Object[fusedSpecs.length];
     }
 
     /**
@@ -1176,7 +1176,6 @@ public class GroupedAggregationOperator
                     refreshFusedStateVectors();
                 }
                 for (int update = 0; update < fusedSpecs.length; update++) {
-                    LongStateUpdate state = (LongStateUpdate) fusedStateVectors[update];
                     GroupedAggregationUpdate spec = fusedSpecs[update];
                     int[] frequencies = dictionaryDomainInputCounts[update] == null
                             ? dictionaryDomainCounts
@@ -1185,7 +1184,9 @@ public class GroupedAggregationOperator
                         int frequency = frequencies[domain];
                         if (frequency != 0) {
                             if (spec.readsValue()) {
-                                state.updateRepeated(
+                                invokeRepeatedLongUpdate(
+                                        spec,
+                                        fusedStateVectors[update],
                                         dictionaryDomainGroups[domain],
                                         dictionaryDomainInputValues[update].value(domain),
                                         frequency);
@@ -1193,7 +1194,11 @@ public class GroupedAggregationOperator
                             else {
                                 // Constant contributions are declared as additive deltas by the existing generated
                                 // update convention (COUNT and null-aware COUNT). Preserve that contract directly.
-                                state.update(dictionaryDomainGroups[domain], spec.constantValue() * frequency);
+                                invokeLongUpdate(
+                                        spec,
+                                        fusedStateVectors[update],
+                                        dictionaryDomainGroups[domain],
+                                        spec.constantValue() * frequency);
                             }
                         }
                     }
@@ -1959,16 +1964,76 @@ public class GroupedAggregationOperator
         ensureFusedStateCapacity(toIntExact(inlineGroupingState.groupCount()));
 
         for (int update = 0; update < fusedSpecs.length; update++) {
-            LongStateUpdate state = (LongStateUpdate) fusedStateVectors[update];
             long constant = fusedSpecs[update].constantValue();
             for (int domain = 0; domain < domainSize; domain++) {
                 int frequency = dictionaryDomainCounts[domain];
                 if (frequency != 0) {
-                    state.update(dictionaryDomainGroups[domain], constant * frequency);
+                    invokeRepeatedLongUpdate(
+                            fusedSpecs[update],
+                            fusedStateVectors[update],
+                            dictionaryDomainGroups[domain],
+                            constant,
+                            frequency);
                 }
             }
         }
         return true;
+    }
+
+    private static void invokeLongUpdate(GroupedAggregationUpdate update, Object state, int group, long value)
+    {
+        MethodHandle target = update.target().update().asType(MethodType.methodType(
+                void.class,
+                Object.class,
+                int.class,
+                long.class));
+        try {
+            target.invokeExact(state, group, value);
+        }
+        catch (Throwable failure) {
+            throw propagate(failure);
+        }
+    }
+
+    private static void invokeRepeatedLongUpdate(
+            GroupedAggregationUpdate update,
+            Object state,
+            int group,
+            long value,
+            int count)
+    {
+        MethodHandle repeated = update.target().repeatedUpdate()
+                .map(target -> target.asType(MethodType.methodType(
+                        void.class,
+                        Object.class,
+                        int.class,
+                        long.class,
+                        int.class)))
+                .orElse(null);
+        try {
+            if (repeated != null) {
+                repeated.invokeExact(state, group, value, count);
+                return;
+            }
+            MethodHandle target = update.target().update().asType(MethodType.methodType(
+                    void.class,
+                    Object.class,
+                    int.class,
+                    long.class));
+            for (int repetition = 0; repetition < count; repetition++) {
+                target.invokeExact(state, group, value);
+            }
+        }
+        catch (Throwable failure) {
+            throw propagate(failure);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <E extends Throwable> RuntimeException propagate(Throwable failure)
+            throws E
+    {
+        throw (E) failure;
     }
 
     private void ensureDictionaryDomainScratchCapacity(int requiredSize)

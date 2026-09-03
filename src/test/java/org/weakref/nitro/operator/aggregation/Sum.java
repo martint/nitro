@@ -47,7 +47,9 @@ public class Sum
     @Override
     public GroupedAggregationUpdate generatedGroupedUpdate()
     {
-        return GroupedAggregationUpdate.inputValue(inputColumn);
+        return GroupedAggregationUpdate.inputValue(
+                inputColumn,
+                GeneratedGroupedAccumulator.longUpdateTarget(SumStateVector.class));
     }
 
     @Override

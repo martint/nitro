@@ -33,6 +33,7 @@ import org.weakref.nitro.core.function.aggregation.AggregationInput;
 import org.weakref.nitro.core.function.aggregation.GroupedAggregationUpdate;
 import org.weakref.nitro.core.function.aggregation.GroupedAggregationUpdateProvider;
 import org.weakref.nitro.core.function.aggregation.GroupedAggregationUpdateResolver;
+import org.weakref.nitro.core.function.aggregation.GroupedAggregationUpdateTarget;
 import org.weakref.nitro.core.function.aggregation.GroupedAggregationUpdateTemplate;
 import org.weakref.nitro.core.function.aggregation.ResolvedAggregation;
 import org.weakref.nitro.core.function.mask.DirectMaskInputProvider;
@@ -75,6 +76,8 @@ import org.weakref.nitro.operator.source.compatibility.NativeSourceOperatorIngre
 import org.weakref.nitro.operator.source.compatibility.OperatorBatchSource;
 
 import java.io.IOException;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -367,13 +370,16 @@ class TestCoreIntegrationSlice
         GroupedAggregationUpdate update = new GroupedAggregationUpdateResolver()
                 .resolve(resolvedCall, List.of(AggregationArgumentBinding.input(7)))
                 .orElseThrow();
-        assertThat(update).isEqualTo(GroupedAggregationUpdate.inputValue(7));
+        assertThat(update.contribution()).isEqualTo(new GroupedAggregationUpdate.InputValue(7));
+        assertThat(update.target().contributionCarrier()).isEqualTo(long.class);
         assertThat(new GroupedAggregationUpdateResolver()
                 .resolve(resolvedCall, List.of(AggregationArgumentBinding.computed())))
                 .isEmpty();
         assertThat(new GroupedAggregationUpdateResolver()
                 .resolveIntermediate(resolvedCall, AggregationArgumentBinding.input(9)))
-                .contains(GroupedAggregationUpdate.inputValue(9));
+                .get()
+                .extracting(GroupedAggregationUpdate::contribution)
+                .isEqualTo(new GroupedAggregationUpdate.InputValue(9));
     }
 
     @Test
@@ -628,19 +634,34 @@ class TestCoreIntegrationSlice
     public static final class IsolatedGroupedAggregationUpdateProvider
             implements GroupedAggregationUpdateProvider
     {
+        private static final GroupedAggregationUpdateTarget UPDATE = updateTarget();
+
         @Override
         public java.util.Optional<GroupedAggregationUpdateTemplate> update(List<AggregationArgument> arguments)
         {
             if (arguments.size() != 1 || arguments.getFirst().kind() != AggregationArgument.Kind.INPUT) {
                 return java.util.Optional.empty();
             }
-            return java.util.Optional.of(GroupedAggregationUpdateTemplate.inputValue(0));
+            return java.util.Optional.of(GroupedAggregationUpdateTemplate.inputValue(0, UPDATE));
         }
 
         @Override
         public java.util.Optional<GroupedAggregationUpdateTemplate> intermediateUpdate()
         {
-            return java.util.Optional.of(GroupedAggregationUpdateTemplate.inputValue(0));
+            return java.util.Optional.of(GroupedAggregationUpdateTemplate.inputValue(0, UPDATE));
+        }
+
+        private static GroupedAggregationUpdateTarget updateTarget()
+        {
+            try {
+                return new GroupedAggregationUpdateTarget(MethodHandles.publicLookup().findVirtual(
+                        I64Vector.class,
+                        "update",
+                        MethodType.methodType(void.class, int.class, long.class)));
+            }
+            catch (ReflectiveOperationException e) {
+                throw new ExceptionInInitializerError(e);
+            }
         }
     }
 

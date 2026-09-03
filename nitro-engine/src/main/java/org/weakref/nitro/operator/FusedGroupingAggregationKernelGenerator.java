@@ -19,6 +19,8 @@ import java.lang.classfile.ClassFile;
 import java.lang.classfile.CodeBuilder;
 import java.lang.classfile.Label;
 import java.lang.constant.ClassDesc;
+import java.lang.constant.DirectMethodHandleDesc;
+import java.lang.constant.DynamicCallSiteDesc;
 import java.lang.constant.MethodTypeDesc;
 import java.lang.invoke.MethodHandles;
 import java.util.Arrays;
@@ -26,17 +28,20 @@ import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import static java.lang.constant.ConstantDescs.CD_CallSite;
 import static java.lang.constant.ConstantDescs.CD_Object;
 import static java.lang.constant.ConstantDescs.CD_double;
 import static java.lang.constant.ConstantDescs.CD_int;
 import static java.lang.constant.ConstantDescs.CD_long;
 import static java.lang.constant.ConstantDescs.CD_void;
+import static java.lang.constant.DirectMethodHandleDesc.Kind.STATIC;
+import static java.lang.constant.MethodHandleDesc.ofMethod;
 
 /**
  * Generates, once per accumulator-set shape and resource owner, a {@link FusedGroupingKernel} whose hot loop is emitted
  * as JVM bytecode with the {@code java.lang.classfile} API. The generated {@code accumulate} inlines
- * the single-long open-addressed probe and, per accumulator, a single state update through the
- * classloader-safe long-state invocation convention — so there is no group-id vector round-trip.
+ * the single-long open-addressed probe and, per accumulator, a constant-linked provider state update — so there is
+ * no group-id vector round-trip.
  * The generator hard-codes no aggregate function or provider state class: it emits exactly the contribution each
  * {@link GroupedAggregationUpdate} declares, and unsupported invocation conventions retain the ordinary
  * accumulator fallback.
@@ -46,18 +51,18 @@ final class FusedGroupingAggregationKernelGenerator
 {
     private static final ClassDesc CD_KERNEL = ClassDesc.of("org.weakref.nitro.operator.FusedGroupingKernel");
     private static final ClassDesc CD_GROUPING_STATE = ClassDesc.of("org.weakref.nitro.operator.GroupingState");
-    private static final ClassDesc CD_LONG_STATE_UPDATE = ClassDesc.of("org.weakref.nitro.core.function.aggregation.LongStateUpdate");
-    private static final ClassDesc CD_DOUBLE_STATE_UPDATE = ClassDesc.of("org.weakref.nitro.core.function.aggregation.DoubleStateUpdate");
-    private static final ClassDesc CD_GROUPED_STATE_UPDATE = ClassDesc.of("org.weakref.nitro.core.function.aggregation.GroupedStateUpdate");
+    private static final ClassDesc CD_BOOTSTRAP = ClassDesc.of("org.weakref.nitro.operator.FusedAggregationUpdateBootstrap");
     private static final ClassDesc CD_INT_ARRAY = CD_int.arrayType();
     private static final ClassDesc CD_LONG_ARRAY = CD_long.arrayType();
     private static final ClassDesc CD_DOUBLE_ARRAY = CD_double.arrayType();
     private static final ClassDesc CD_INT_ARRAY_2D = ClassDesc.ofDescriptor("[[I");
     private static final ClassDesc CD_BOOLEAN_ARRAY_2D = ClassDesc.ofDescriptor("[[Z");
     private static final ClassDesc CD_OBJECT_ARRAY = CD_Object.arrayType();
-    private static final ClassDesc CD_GROUPED_STATE_UPDATE_ARRAY = CD_GROUPED_STATE_UPDATE.arrayType();
-    private static final MethodTypeDesc LONG_STATE_UPDATE_TYPE = MethodTypeDesc.of(CD_void, CD_int, CD_long);
-    private static final MethodTypeDesc DOUBLE_STATE_UPDATE_TYPE = MethodTypeDesc.of(CD_void, CD_int, CD_double);
+    private static final DirectMethodHandleDesc BSM_UPDATE = ofMethod(
+            STATIC,
+            CD_BOOTSTRAP,
+            "bootstrap",
+            MethodTypeDesc.of(CD_CallSite, ClassDesc.of("java.lang.invoke.MethodHandles$Lookup"), ClassDesc.of("java.lang.String"), ClassDesc.of("java.lang.invoke.MethodType")));
 
     // Parameter slots of FusedGroupingKernel.accumulate.
     private static final int POSITIONS = 1;
@@ -93,7 +98,7 @@ final class FusedGroupingAggregationKernelGenerator
     private static final int INPUT_ARRAY_BASE = 34;
     private static final int ID_INDEXED_GROUP_MASK = 0x03FF_FFFF;
 
-    private final ConcurrentHashMap<String, FusedGroupingKernel> kernels = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<KernelKey, FusedGroupingKernel> kernels = new ConcurrentHashMap<>();
     private final AtomicInteger nextClassId = new AtomicInteger();
     private boolean closed;
 
@@ -120,17 +125,8 @@ final class FusedGroupingAggregationKernelGenerator
         checkOpen();
         String physicalShape = (intKey ? "i" : "l") + ":km=" + keyMapped + ":ko=" + keyOffsetInput + ":resolved=" + preResolvedKeyDomain + ":runs=" + runCache + ":constantRuns=" + constantRuns + ":direct=" + directGrouping + ":idIndexed=" + idIndexedGrouping + Arrays.toString(intInputs) + Arrays.toString(doubleInputs) + Arrays.toString(mappedInputs) + Arrays.toString(mappedInputNulls) + Arrays.toString(inputUsesKeyIds) + Arrays.toString(inputNullUsesKeyIds) + Arrays.toString(offsetInputs) + Arrays.toString(offsetInputNulls);
         return kernels.computeIfAbsent(
-                cacheKey(specs) + ":groups=" + writeGroups + ":physical=" + physicalShape,
+                new KernelKey(List.copyOf(specs), writeGroups, physicalShape),
                 key -> generate(specs, writeGroups, intKey, keyMapped, preResolvedKeyDomain, runCache, constantRuns, directGrouping, idIndexedGrouping, keyOffsetInput, intInputs, doubleInputs, mappedInputs, mappedInputNulls, inputUsesKeyIds, inputNullUsesKeyIds, offsetInputs, offsetInputNulls));
-    }
-
-    private static String cacheKey(List<GroupedAggregationUpdate> specs)
-    {
-        StringBuilder key = new StringBuilder();
-        for (GroupedAggregationUpdate spec : specs) {
-            key.append(spec.contribution()).append('|');
-        }
-        return key.toString();
     }
 
     private FusedGroupingKernel generate(
@@ -159,7 +155,7 @@ final class FusedGroupingAggregationKernelGenerator
                 CD_INT_ARRAY, CD_int, CD_Object, CD_INT_ARRAY, CD_int,
                 CD_LONG_ARRAY, CD_INT_ARRAY, CD_int, CD_LONG_ARRAY,
                 CD_long, CD_LONG_ARRAY, CD_OBJECT_ARRAY, CD_INT_ARRAY_2D, CD_INT_ARRAY,
-                CD_BOOLEAN_ARRAY_2D, CD_INT_ARRAY_2D, CD_INT_ARRAY, CD_GROUPED_STATE_UPDATE_ARRAY);
+                CD_BOOLEAN_ARRAY_2D, CD_INT_ARRAY_2D, CD_INT_ARRAY, CD_OBJECT_ARRAY);
 
         byte[] bytes = ClassFile.of().build(thisClass, builder -> {
             builder.withSuperclass(CD_Object);
@@ -178,7 +174,11 @@ final class FusedGroupingAggregationKernelGenerator
 
         try {
             MethodHandles.Lookup lookup = MethodHandles.lookup()
-                    .defineHiddenClass(bytes, true, MethodHandles.Lookup.ClassOption.NESTMATE);
+                    .defineHiddenClassWithClassData(
+                            bytes,
+                            specs.stream().map(GroupedAggregationUpdate::target).toList(),
+                            true,
+                            MethodHandles.Lookup.ClassOption.NESTMATE);
             return (FusedGroupingKernel) lookup.findConstructor(lookup.lookupClass(), java.lang.invoke.MethodType.methodType(void.class))
                     .invoke();
         }
@@ -200,6 +200,8 @@ final class FusedGroupingAggregationKernelGenerator
             throw new IllegalStateException("Fused grouping kernel generator is closed");
         }
     }
+
+    private record KernelKey(List<GroupedAggregationUpdate> updates, boolean writeGroups, String physicalShape) {}
 
     private static void emitAccumulate(
             CodeBuilder code,
@@ -614,6 +616,11 @@ final class FusedGroupingAggregationKernelGenerator
         for (GroupedAggregationUpdate spec : specs) {
             if (!spec.readsInput()) {
                 hasInputIndependent = true;
+                if (spec.target().repeatedUpdate().isEmpty()) {
+                    // Coalescing changes the call sequence. Only a provider-declared repeated update can preserve
+                    // general aggregation semantics over the run's logical multiplicity.
+                    return false;
+                }
             }
             else {
                 // Keep this representation coherent: a constant-only kernel can advance all state once per
@@ -652,15 +659,10 @@ final class FusedGroupingAggregationKernelGenerator
             code.aload(STATES);
             code.loadConstant(accumulator);
             code.aaload();
-            code.checkcast(CD_LONG_STATE_UPDATE);
             code.iload(runGroup);
+            code.loadConstant(spec.constantValue());
             code.iload(runCount);
-            code.i2l();
-            if (spec.constantValue() != 1) {
-                code.loadConstant(spec.constantValue());
-                code.lmul();
-            }
-            code.invokeinterface(CD_LONG_STATE_UPDATE, "update", LONG_STATE_UPDATE_TYPE);
+            emitUpdateInvocation(code, specs.get(accumulator), accumulator, true);
         }
     }
 
@@ -690,7 +692,6 @@ final class FusedGroupingAggregationKernelGenerator
         code.aload(STATES);
         code.loadConstant(accumulator);
         code.aaload();
-        code.checkcast(spec.readsDoubleValue() ? CD_DOUBLE_STATE_UPDATE : CD_LONG_STATE_UPDATE);
         code.iload(GROUP);
         if (spec.readsValue()) {
             code.aload(INPUT_ARRAY_BASE + accumulator);
@@ -727,11 +728,18 @@ final class FusedGroupingAggregationKernelGenerator
         else {
             code.loadConstant(spec.constantValue());
         }
-        if (spec.readsDoubleValue()) {
-            code.invokeinterface(CD_DOUBLE_STATE_UPDATE, "update", DOUBLE_STATE_UPDATE_TYPE);
-        }
-        else {
-            code.invokeinterface(CD_LONG_STATE_UPDATE, "update", LONG_STATE_UPDATE_TYPE);
-        }
+        emitUpdateInvocation(code, spec, accumulator, false);
+    }
+
+    private static void emitUpdateInvocation(CodeBuilder code, GroupedAggregationUpdate spec, int accumulator, boolean repeated)
+    {
+        ClassDesc contribution = spec.readsDoubleValue() ? CD_double : CD_long;
+        MethodTypeDesc type = repeated
+                ? MethodTypeDesc.of(CD_void, CD_Object, CD_int, contribution, CD_int)
+                : MethodTypeDesc.of(CD_void, CD_Object, CD_int, contribution);
+        code.invokedynamic(DynamicCallSiteDesc.of(
+                BSM_UPDATE,
+                (repeated ? "repeated" : "update") + accumulator,
+                type));
     }
 }

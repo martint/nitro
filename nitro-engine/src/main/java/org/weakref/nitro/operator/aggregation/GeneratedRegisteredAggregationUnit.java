@@ -15,7 +15,6 @@ package org.weakref.nitro.operator.aggregation;
 
 import org.weakref.nitro.core.function.aggregation.AggregationImplementation;
 import org.weakref.nitro.core.function.aggregation.GroupedAggregationUpdate;
-import org.weakref.nitro.core.function.aggregation.GroupedStateUpdate;
 
 import java.util.List;
 
@@ -64,9 +63,9 @@ public final class GeneratedRegisteredAggregationUnit
     }
 
     @Override
-    public void bindGeneratedGroupedState(Object state, GroupedStateUpdate[] targets, int offset)
+    public void bindGeneratedGroupedState(Object state, Object[] targets, int offset)
     {
-        targets[offset] = (GroupedStateUpdate) state;
+        targets[offset] = state;
     }
 
     @Override

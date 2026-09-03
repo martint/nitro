@@ -14,6 +14,7 @@
 package org.weakref.nitro.operator.aggregation;
 
 import org.weakref.nitro.core.function.aggregation.GroupedAggregationUpdate;
+import org.weakref.nitro.core.function.aggregation.GroupedAggregationUpdateTarget;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.I64Vector;
@@ -24,16 +25,43 @@ import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
 
 import java.util.Arrays;
+import java.util.Optional;
 
 import static java.lang.Math.toIntExact;
+import static java.lang.invoke.MethodHandles.lookup;
+import static java.lang.invoke.MethodType.methodType;
 
 public class CountAll
         implements GeneratedGroupedAccumulator
 {
+    private static final GroupedAggregationUpdateTarget GROUPED_UPDATE = groupedUpdate();
+
     @Override
     public GroupedAggregationUpdate generatedGroupedUpdate()
     {
-        return GroupedAggregationUpdate.constant(1);
+        return GroupedAggregationUpdate.constant(
+                1,
+                GROUPED_UPDATE);
+    }
+
+    private static GroupedAggregationUpdateTarget groupedUpdate()
+    {
+        try {
+            return new GroupedAggregationUpdateTarget(
+                    lookup().findVirtual(CountStateVector.class, "update", methodType(void.class, int.class, long.class)),
+                    Optional.of(lookup().findStatic(
+                            CountAll.class,
+                            "updateRepeated",
+                            methodType(void.class, CountStateVector.class, int.class, long.class, int.class))));
+        }
+        catch (ReflectiveOperationException e) {
+            throw new ExceptionInInitializerError(e);
+        }
+    }
+
+    private static void updateRepeated(CountStateVector state, int group, long contribution, int count)
+    {
+        state.increment(group, contribution * count);
     }
 
     @Override

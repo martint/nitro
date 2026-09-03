@@ -13,8 +13,6 @@
  */
 package org.weakref.nitro.operator;
 
-import org.weakref.nitro.core.function.aggregation.GroupedStateUpdate;
-
 /**
  * One fused pass over a batch for single-long-key grouped aggregation: probe the open-addressed
  * group table and accumulate every selected accumulator's state in the same loop, with no group-id
@@ -22,7 +20,7 @@ import org.weakref.nitro.core.function.aggregation.GroupedStateUpdate;
  * <p>
  * Implementations are generated per accumulator-set shape by
  * {@link FusedGroupingAggregationKernelGenerator}; the body is emitted as bytecode so each
- * state-update call site uses an engine-owned SPI that provider state objects may implement across classloaders.
+ * state-update call site links an exact provider handle without naming the provider state class.
  */
 interface FusedGroupingKernel
 {
@@ -72,5 +70,5 @@ interface FusedGroupingKernel
             boolean[][] inputNulls,
             int[][] inputNullIds,
             int[] inputNullOffsets,
-            GroupedStateUpdate[] states);
+            Object[] states);
 }

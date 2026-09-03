@@ -294,6 +294,13 @@ State is allocator-owned and may use fixed-width, segmented, recursive, dictiona
 Function-specific aggregation-state vector types belong with function implementations, not in the core vector
 vocabulary.
 
+A provider may describe each generated grouped contribution with an exact update method handle over its opaque state,
+group id, and primitive carrier. Generated kernels link that target as a constant without naming the provider class.
+The target identity is part of the generated-kernel cache key. A provider may additionally supply a repeated-update
+target that consumes an encoded-domain multiplicity; absent that capability, the engine preserves semantics by
+invoking the single update once per logical occurrence. This contract supports multiple updates and mixed primitive
+carriers without one engine interface for every carrier or state layout.
+
 Grouping is a physical key-to-group operation. It can select flat, packed, dictionary-domain, generated composite, or
 other general representations based on observed shape and immutable policy. It cannot recognize aggregate functions
 or SQL types. Partial aggregation considers retained work, cardinality, state size, and reduction.
