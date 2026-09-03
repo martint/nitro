@@ -189,6 +189,12 @@ Reference-carrier arguments are read through exact handles supplied by the logic
 results are appended immediately through a provider-owned result writer into Nitro vectors. Nitro does not retain an
 array of host objects and does not infer logical meaning from `Slice`, `Block`, or another carrier class.
 
+An exact scalar target is eligible only when adapting its carrier does not introduce row-proportional allocation or
+erase a useful physical representation. A composite host carrier assembled from several vector children is not an
+efficient batch ABI merely because a value reader can construct it. The provider must retain or supply a physical
+batch implementation over those children until a richer generated convention can pass the representation without
+materializing one host object per row.
+
 A VALUES-only request ordinarily does not force NULLS or ERRORS materialization. Values beneath an unrequested
 semantic null are unspecified. A framework-managed adapter for a fallible strict scalar is the exception: it must
 request NULLS and ERRORS needed to prove which active rows may invoke the target. Requested companion streams preserve
