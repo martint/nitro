@@ -69,7 +69,7 @@ class TestStructuralTypeKernelFactory
         StructVector rows = new StructVector(2);
         rows.setField("value", Streams.ofValues(new I64Vector(new long[] {1, 3})));
 
-        assertThat(new StructuralTypeKernelFactory().identity(rowType)
+        assertThat(new StructuralTypeKernelFactory().bindIdentity(rowType)
                 .identical(rows, null, 0, rows, null, 1))
                 .isTrue();
         assertThat(invocations).hasValue(1);
@@ -107,7 +107,7 @@ class TestStructuralTypeKernelFactory
         assertThat(nullsLast.compare(rows, null, 2, rows, null, 0)).isPositive();
         assertThat(nullsFirst.compare(rows, null, 2, rows, null, 0)).isNegative();
         assertThat(nullsLast.compare(dictionary, null, 1, rows, null, 0)).isZero();
-        assertThat(factory.identity(rowType).identical(dictionary, null, 0, rows, null, 3)).isTrue();
+        assertThat(factory.bindIdentity(rowType).identical(dictionary, null, 0, rows, null, 3)).isTrue();
     }
 
     @Test
@@ -139,7 +139,7 @@ class TestStructuralTypeKernelFactory
         assertThat(nullsLast.compare(arrays, null, 0, arrays, null, 1)).isZero();
         assertThat(nullsLast.compare(arrays, null, 2, arrays, null, 0)).isPositive();
         assertThat(nullsFirst.compare(arrays, null, 2, arrays, null, 0)).isNegative();
-        assertThat(factory.identity(arrayType).identical(rle, null, 1, arrays, null, 2)).isTrue();
+        assertThat(factory.bindIdentity(arrayType).identical(rle, null, 1, arrays, null, 2)).isTrue();
     }
 
     @Test

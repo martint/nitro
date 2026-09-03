@@ -14,6 +14,7 @@
 package org.weakref.nitro.operator;
 
 import org.weakref.nitro.core.type.BoundTypeComparison;
+import org.weakref.nitro.core.type.BoundTypeIdentity;
 import org.weakref.nitro.core.type.BoundTypeKey;
 import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.core.type.TypeKeyBinder;
@@ -51,6 +52,17 @@ import static java.util.Objects.requireNonNull;
  */
 public final class StructuralTypeKernelFactory
 {
+    /**
+     * Binds the logical identity supplied by a type registry to its admitted vector shapes.
+     *
+     * <p>Structural recursion remains engine-owned. A registry-bound function can use the returned operation without
+     * recognizing either the logical type or its physical vector representation.
+     */
+    public BoundTypeIdentity bindIdentity(TypeBinding type)
+    {
+        return identity(requireNonNull(type, "type is null"));
+    }
+
     /**
      * Binds the logical ordering supplied by a type registry to its admitted vector shapes.
      *

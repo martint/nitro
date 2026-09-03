@@ -13,15 +13,9 @@
  */
 package org.weakref.nitro.operator;
 
-import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.core.type.BoundTypeIdentity;
 
 interface StructuralIdentityKernel
+        extends BoundTypeIdentity
 {
-    boolean identical(
-            Vector leftValues,
-            Vector leftNulls,
-            int leftPosition,
-            Vector rightValues,
-            Vector rightNulls,
-            int rightPosition);
 }

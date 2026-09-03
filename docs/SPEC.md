@@ -183,6 +183,12 @@ One resolved binding may expose several of these capabilities for the same autho
 provider-owned batch implementation may, for example, also expose its exact scalar target so the compiler can compose
 adjacent eligible calls into one generated loop without materializing intermediate vectors.
 
+Registry-bound batch functions may request identity or ordering already composed from a logical type binding. The
+returned operation works over the type's admitted vectors and their null streams, so functions such as structural
+lookup do not materialize host carriers or reproduce type-specific equality. The engine composes physical traversal;
+the type provider remains authoritative for leaf semantics, and the function provider remains authoritative for the
+operation that consumes them.
+
 Generated adapters are ordinary implementations of the batch convention. They may generate direct invocation bytecode
 around a constant method-handle target, hoist null/error classification, traverse selected positions, and write into
 allocator-owned outputs. Generation does not transfer function semantics into the evaluator.
