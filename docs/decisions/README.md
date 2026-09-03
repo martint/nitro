@@ -62,7 +62,7 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | §5 Vectors, streams, types | 0006, 0008, 0012, 0021, 0022, 0023 |
 | §6 Masks and conditions | 0008, 0012, 0020, 0034 |
 | §7 Evaluation IR | 0010, 0011, 0012, 0040 |
-| §8 Function conventions | 0006, 0011, 0013–0016, 0037, 0038, 0040, 0049–0052 |
+| §8 Function conventions | 0006, 0011, 0013–0016, 0037, 0038, 0040, 0049–0053 |
 | §9 Operators and islands | 0003, 0010, 0017, 0024, 0044–0047 |
 | §10 Cooperative execution | 0004, 0044, 0045 |
 | §11 Allocation and memory | 0007, 0014, 0017–0019, 0041 |
@@ -132,3 +132,4 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | [0050](0050-map-declared-scalar-failures-at-the-provider-boundary.md) | Map declared scalar failures at the provider boundary | accepted |
 | [0051](0051-contain-mapped-failures-during-values-evaluation.md) | Contain mapped failures during VALUES-only evaluation | accepted |
 | [0052](0052-gate-scalar-adaptation-on-carrier-materialization.md) | Gate scalar adaptation on carrier materialization | accepted |
+| [0053](0053-refine-failure-semantics-for-exact-bindings.md) | Refine failure semantics for exact registry bindings | accepted |

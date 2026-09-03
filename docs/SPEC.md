@@ -176,6 +176,9 @@ allocation, null propagation, error handling, or encoding traversal, but they lo
 
 A provider can supply a general batch implementation, an encoded-domain implementation, an exact scalar target for
 generated adaptation, a provider-authored physical kernel, or aggregation/window state and update capabilities.
+One resolved binding may expose several of these capabilities for the same authoritative implementation. A
+provider-owned batch implementation may, for example, also expose its exact scalar target so the compiler can compose
+adjacent eligible calls into one generated loop without materializing intermediate vectors.
 
 Generated adapters are ordinary implementations of the batch convention. They may generate direct invocation bytecode
 around a constant method-handle target, hoist null/error classification, traverse selected positions, and write into
@@ -194,6 +197,12 @@ erase a useful physical representation. A composite host carrier assembled from 
 efficient batch ABI merely because a value reader can construct it. The provider must retain or supply a physical
 batch implementation over those children until a richer generated convention can pass the representation without
 materializing one host object per row.
+
+Failure behavior describes the selected implementation, not merely the most conservative declaration in a host
+catalog. A registry may refine a host `MAY_FAIL` declaration to `NEVER_FAILS` only for an exact implementation it owns
+and can prove infallible for every value admitted by the bound signature. The proof cannot depend on observed data,
+query identity, or an optimizer assumption. A genuinely fallible sibling operation remains `MAY_FAIL` and is excluded
+from infallible expression-slice fusion.
 
 A VALUES-only request ordinarily does not force NULLS or ERRORS materialization. Values beneath an unrequested
 semantic null are unspecified. A framework-managed adapter for a fallible strict scalar is the exception: it must
