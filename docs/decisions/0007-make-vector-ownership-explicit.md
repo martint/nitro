@@ -4,6 +4,7 @@
 - **Date:** 2026-09-03 (retrospective)
 - **Spec:** §3, §11, §15
 - **Depends on:** [ADR-0003](0003-compose-indivisible-pull-islands.md)
+- **Historical evidence:** `2026-08-20-steady-state-allocation-audit.md`; `2026-08-29-async-exchange-retained-leases.md`
 
 ## Context
 

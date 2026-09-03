@@ -3,6 +3,7 @@
 - **Status:** accepted
 - **Date:** 2026-09-03 (retrospective)
 - **Spec:** §14, §15
+- **Historical evidence:** reconciliation entries for native Parquet coverage and mapped reads behind connector authority
 
 ## Context
 

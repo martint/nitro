@@ -4,6 +4,7 @@
 - **Date:** 2026-09-03 (retrospective)
 - **Spec:** §10
 - **Depends on:** [ADR-0003](0003-compose-indivisible-pull-islands.md)
+- **Historical evidence:** `2026-08-17-batch-pull-execution-and-spilling.md`; reconciliation entries for 2026-08-27–28
 
 ## Context
 

@@ -12,6 +12,7 @@ tree of Trino operators.
 
 ## Architecture specification and decisions
 
+- `~/notes/specification-decision-record-practice.md` defines the reusable maintenance and correlation protocol.
 - `docs/SPEC.md` is the normative architecture contract for Nitro and its Cork/Trino integration. Read the relevant
   section before architecture work. A contradiction is either an implementation defect or a deliberate spec change.
 - `docs/decisions/` records why consequential choices were made. Add a numbered decision record when a change selects
@@ -20,6 +21,24 @@ tree of Trino operators.
   the index.
 - A consequential architecture change updates the spec and decision record in the same Nitro commit. A paired Cork
   integration commit cites the Nitro ADR number. Do not leave the current contract only in a dated campaign note.
+
+### Required architecture correlation
+
+Before making a material change to architecture, behavior, physical policy, or a cross-engine boundary:
+
+1. Read and cite the applicable sections of `docs/SPEC.md`, `docs/decisions/`, and
+   `~/notes/nitro/design-principles.md`.
+2. State whether the change conforms to them, fills an unspecified gap, or contradicts/reverses an existing contract
+   or principle. Also inspect proposed ADRs so work does not accidentally implement or foreclose an open decision.
+3. Treat contradiction and backtracking as legitimate design outcomes, but never implicit ones. Discuss the conflict
+   and make the choice explicitly before implementation. A reversal or correction creates a new ADR that supersedes or
+   amends the old record and updates both records plus the index.
+4. Land the implementation, spec update, ADR, and any revised empirical principle as one coherent change whenever they
+   describe the same decision. A paired Cork commit cites the ADR and must not precede the explicit decision.
+
+Material means more than public API changes: it includes defaults and admission rules that alter which physical path
+runs, ownership/lifetime changes, scheduler behavior, function/type semantics, connector or Page/Block boundaries,
+and benchmark methodology changes that alter what published results mean.
 
 ## Design knowledge base — `~/notes/nitro/`
 

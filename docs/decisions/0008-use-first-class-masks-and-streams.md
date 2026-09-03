@@ -3,6 +3,7 @@
 - **Status:** accepted
 - **Date:** 2026-09-03 (retrospective)
 - **Spec:** §3, §5, §6, §7, §8
+- **Historical evidence:** `docs/architecture-target-contracts.md`; `2026-08-28-optional-function-output-streams.md`
 
 ## Context
 

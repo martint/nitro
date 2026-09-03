@@ -3,6 +3,7 @@
 - **Status:** accepted
 - **Date:** 2026-09-03 (retrospective)
 - **Spec:** §3, §9, §15
+- **Historical evidence:** `2026-07-24-design-reconciliation.md`, “make physical Nitro islands indivisible”
 
 ## Context
 

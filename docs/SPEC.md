@@ -109,6 +109,15 @@ query identity, table, column combination, function name, or benchmark to select
 Registries are dynamically supplied and classloader-neutral at the Nitro boundary. A registry lookup returns SPI
 capabilities or method handles whose declaring implementation remains owned by the provider classloader.
 
+### 4.1 Module dependency direction
+
+`nitro-spi` contains the classloader-neutral vectors, ownership, source, type, function, and provider contracts and
+depends on no engine or connector implementation. `nitro-engine` implements evaluation and operators over the SPI.
+`nitro-parquet` implements a source over the SPI without depending on the engine. `nitro-connector-loader` loads
+providers while depending only on the SPI. Host/legacy compatibility belongs in explicit compatibility modules, and
+tests/benchmarks may depend on all layers. Dependencies do not point from SPI or reusable providers up into engine,
+host integration, tests, or benchmarks.
+
 ## 5. Vectors, streams, and logical types
 
 Vectors represent physical storage. Logical meaning comes from type bindings.
@@ -230,7 +239,9 @@ The steady-state goal is no allocation proportional to row count for streaming s
 Initialization, bounded resizing, state growth, output materialization, and provider-required variable-size results may
 allocate, but repeated batches should reuse their working set.
 
-## 12. Aggregation and window functions
+## 12. Stateful and extensible operators
+
+### 12.1 Aggregation and window functions
 
 Aggregation and window operators drive provider-supplied functions. Function state, intermediate representation, null
 semantics, ordering, and final materialization belong to the registered implementation or type capabilities, not to
@@ -243,6 +254,24 @@ vocabulary.
 Grouping is a physical key-to-group operation. It can select flat, packed, dictionary-domain, generated composite, or
 other general representations based on observed shape and immutable policy. It cannot recognize aggregate functions
 or SQL types. Partial aggregation considers retained work, cardinality, state size, and reduction.
+
+### 12.2 Pattern recognition
+
+Pattern recognition is an engine-owned Nitro operator, not a host Page operator embedded inside an island. Planning
+lowers the resolved row pattern, labels, navigation, skip, output, ordering, and partition semantics into immutable
+engine-neutral descriptors. A restartable matcher operates on allocator-owned state and registry-bound definition,
+measure, and match-local aggregate callbacks. Buffered rows preserve encodings when their source lifetime allows it and
+otherwise transfer into owned storage.
+
+### 12.3 Table functions
+
+Table-function providers use a classloader-neutral Nitro batch SPI with explicit masks, input consumption, output
+demand, allocator context, blocking, and owned/transfer output. Partitioning, ordering, markers, and pass-through row
+identity are planned descriptors rather than hidden host Page channels.
+
+Provider admission has three visible levels: host compatibility outside a Nitro island, generated/materializing
+compatibility at a declared boundary, and Nitro-native batch execution inside a zero-adaptation island. Planning never
+reports a compatibility provider as native.
 
 ## 13. Joins and dynamic filters
 
@@ -307,9 +336,10 @@ arities. Adaptive mechanisms report admission, strategy, transitions, and achiev
 Correctness includes values, nulls, errors, ordering, multiplicity, physical position counts, ownership, memory
 accounting, cancellation, and restart after cooperative checkpoints.
 
-Architectural tests cover representative island compositions and corpus-wide non-decomposition; vector lifecycle and
-cancellation order; branch-mask error isolation; encoding and companion-stream composition; equal-work counters;
-calling-convention conformance; native Parquet type/encoding coverage; and scheduler restart under time sharing.
+Architectural tests cover representative island compositions and corpus-wide non-decomposition; structured semantic
+admission and rejection causes; vector lifecycle and cancellation order; branch-mask error isolation; encoding and
+companion-stream composition; equal-work counters; calling-convention conformance; native Parquet type/encoding
+coverage; and scheduler restart under time sharing.
 
 Tests assert capabilities and observable invariants. They must not infer architecture from package or class names.
 

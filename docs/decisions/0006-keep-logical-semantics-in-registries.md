@@ -3,6 +3,7 @@
 - **Status:** accepted
 - **Date:** 2026-09-03 (retrospective)
 - **Spec:** §4, §5, §7, §8, §12, §13
+- **Historical evidence:** `2026-07-23-architecture-review-and-trino-integration-boundary.md`; `2026-08-18-registry-owned-function-optimization.md`
 
 ## Context
 
