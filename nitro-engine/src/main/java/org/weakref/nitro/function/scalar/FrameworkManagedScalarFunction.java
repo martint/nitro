@@ -43,17 +43,20 @@ final class FrameworkManagedScalarFunction
     private final BoundSignature signature;
     private final GeneratedScalarKernel kernel;
     private final ScalarResultWriterFactory resultWriterFactory;
+    private final boolean mayFail;
 
     FrameworkManagedScalarFunction(
             String name,
             BoundSignature signature,
             GeneratedScalarKernel kernel,
-            ScalarResultWriterFactory resultWriterFactory)
+            ScalarResultWriterFactory resultWriterFactory,
+            boolean mayFail)
     {
         this.name = requireNonNull(name, "name is null");
         this.signature = requireNonNull(signature, "signature is null");
         this.kernel = requireNonNull(kernel, "kernel is null");
         this.resultWriterFactory = resultWriterFactory;
+        this.mayFail = mayFail;
     }
 
     @Override
@@ -62,8 +65,9 @@ final class FrameworkManagedScalarFunction
         checkArgument(inputIndex >= 0 && inputIndex < signature.argumentTypes().size(), "Unexpected argument index: %s", inputIndex);
         return PrimitiveFunction.inputStreams(
                 requestedOutputStreams.contains(Stream.VALUES),
-                requestedOutputStreams.contains(Stream.NULLS),
-                false);
+                requestedOutputStreams.contains(Stream.NULLS) ||
+                        (mayFail && requestedOutputStreams.contains(Stream.VALUES)),
+                mayFail && requestedOutputStreams.contains(Stream.VALUES));
     }
 
     @Override
@@ -90,7 +94,8 @@ final class FrameworkManagedScalarFunction
         }
         Allocator.Context allocationContext = context.allocationContext(name);
         InvocationState state = context.state(this, () -> new InvocationState(inputs.size()));
-        bindNulls(inputs, state, requestNulls);
+        bindNulls(inputs, state, requestNulls || mayFail);
+        bindExecutionBlockers(inputs, state);
 
         Streams result = Streams.empty();
         if (requestNulls) {
@@ -179,10 +184,10 @@ final class FrameworkManagedScalarFunction
         else {
             bindValues(inputs, state);
             if (positions == null) {
-                kernel.applyDense(state.values, state.nulls, output, mask.count());
+                kernel.applyDense(state.values, state.executionBlockers, output, mask.count());
             }
             else {
-                kernel.applySparse(state.values, state.nulls, output, positions, mask.count());
+                kernel.applySparse(state.values, state.executionBlockers, output, positions, mask.count());
             }
         }
     }
@@ -190,7 +195,7 @@ final class FrameworkManagedScalarFunction
     private boolean bindFlatValuesIfNullFree(List<Streams> inputs, InvocationState state)
     {
         for (int index = 0; index < inputs.size(); index++) {
-            if (state.nulls[index] != null) {
+            if (state.executionBlockers[index] != null) {
                 return false;
             }
             Vector values = inputs.get(index).values();
@@ -220,7 +225,7 @@ final class FrameworkManagedScalarFunction
             return false;
         }
         for (int index = 0; index < inputs.size(); index++) {
-            if (state.nulls[index] != null ||
+            if (state.executionBlockers[index] != null ||
                     !(inputs.get(index).values() instanceof RleVector rle) ||
                     rle.length() != logicalLength) {
                 return false;
@@ -280,7 +285,7 @@ final class FrameworkManagedScalarFunction
     private boolean bindDictionaryValuesIfNullFree(List<Streams> inputs, InvocationState state)
     {
         for (int index = 0; index < inputs.size(); index++) {
-            if (state.nulls[index] != null || !(inputs.get(index).values() instanceof DictionaryVector dictionary)) {
+            if (state.executionBlockers[index] != null || !(inputs.get(index).values() instanceof DictionaryVector dictionary)) {
                 return false;
             }
             Vector values = dictionary.values();
@@ -312,16 +317,34 @@ final class FrameworkManagedScalarFunction
         }
     }
 
-    private static void bindNulls(List<Streams> inputs, InvocationState state, boolean requested)
+    private static void bindNulls(List<Streams> inputs, InvocationState state, boolean required)
     {
         for (int index = 0; index < inputs.size(); index++) {
-            if (!requested) {
+            if (!required) {
                 state.nulls[index] = null;
                 continue;
             }
             Streams input = inputs.get(index);
             Vector nulls = input.getOrNull(Stream.NULLS);
             state.nulls[index] = VectorAccess.isAllFalseNulls(nulls) ? null : VectorAccess.booleanValues(nulls);
+        }
+    }
+
+    private static void bindExecutionBlockers(List<Streams> inputs, InvocationState state)
+    {
+        for (int index = 0; index < inputs.size(); index++) {
+            Vector errors = inputs.get(index).getOrNull(Stream.ERRORS);
+            VectorAccess.BooleanValues errorValues = VectorAccess.isAllFalseNulls(errors)
+                    ? null
+                    : VectorAccess.booleanValues(errors);
+            VectorAccess.BooleanValues nullValues = (VectorAccess.BooleanValues) state.nulls[index];
+            if (nullValues == null && errorValues == null) {
+                state.executionBlockers[index] = null;
+                continue;
+            }
+            InputBlocker blocker = state.inputBlockers[index];
+            blocker.bind(nullValues, errorValues);
+            state.executionBlockers[index] = blocker;
         }
     }
 
@@ -415,6 +438,8 @@ final class FrameworkManagedScalarFunction
         private final Object[] flatValues;
         private final int[][] dictionaryIds;
         private final Object[] nulls;
+        private final Object[] executionBlockers;
+        private final InputBlocker[] inputBlockers;
         private final int[] rleRunIndices;
         private final int[] rleRemaining;
         private int[] rleCounts = new int[0];
@@ -428,6 +453,11 @@ final class FrameworkManagedScalarFunction
             flatValues = new Object[arity];
             dictionaryIds = new int[arity][];
             nulls = new Object[arity];
+            executionBlockers = new Object[arity];
+            inputBlockers = new InputBlocker[arity];
+            for (int index = 0; index < arity; index++) {
+                inputBlockers[index] = new InputBlocker();
+            }
             rleRunIndices = new int[arity];
             rleRemaining = new int[arity];
             rleIds = new int[arity][];
@@ -458,6 +488,26 @@ final class FrameworkManagedScalarFunction
                 rleRunIndices[argument] = 0;
                 rleRemaining[argument] = 0;
             }
+        }
+    }
+
+    private static final class InputBlocker
+            implements VectorAccess.BooleanValues
+    {
+        private VectorAccess.BooleanValues nulls;
+        private VectorAccess.BooleanValues errors;
+
+        private void bind(VectorAccess.BooleanValues nulls, VectorAccess.BooleanValues errors)
+        {
+            this.nulls = nulls;
+            this.errors = errors;
+        }
+
+        @Override
+        public boolean value(int position)
+        {
+            return (nulls != null && nulls.value(position)) ||
+                    (errors != null && errors.value(position));
         }
     }
 }

@@ -62,7 +62,7 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | §5 Vectors, streams, types | 0006, 0008, 0012, 0021, 0022, 0023 |
 | §6 Masks and conditions | 0008, 0012, 0020, 0034 |
 | §7 Evaluation IR | 0010, 0011, 0012, 0040 |
-| §8 Function conventions | 0006, 0011, 0013–0016, 0037, 0038, 0040 |
+| §8 Function conventions | 0006, 0011, 0013–0016, 0037, 0038, 0040, 0049 |
 | §9 Operators and islands | 0003, 0010, 0017, 0024, 0044–0047 |
 | §10 Cooperative execution | 0004, 0044, 0045 |
 | §11 Allocation and memory | 0007, 0014, 0017–0019, 0041 |
@@ -128,3 +128,4 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | [0046](0046-use-a-native-batch-spi-for-table-functions.md) | Use a Nitro-native batch SPI for table functions | accepted |
 | [0047](0047-report-structured-island-admission.md) | Report island admission and rejection through semantic categories | accepted |
 | [0048](0048-enforce-one-way-module-dependencies.md) | Enforce one-way dependencies between SPI, engine, providers, compatibility, and tests | accepted |
+| [0049](0049-exclude-invalid-rows-from-fallible-scalars.md) | Exclude null and errored rows from fallible strict scalar targets | accepted |

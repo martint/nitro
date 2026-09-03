@@ -504,6 +504,62 @@ final class TestScalarAdapterGenerator
     }
 
     @Test
+    void testFallibleTargetDoesNotObserveNullWhenOnlyValuesRequested()
+            throws Throwable
+    {
+        PrimitiveFunction function = requireNonNegativeFunction();
+
+        assertThat(function.requiredInputStreams(0, EnumSet.of(Stream.VALUES)))
+                .containsExactlyInAnyOrder(Stream.VALUES, Stream.NULLS, Stream.ERRORS);
+
+        try (Allocator allocator = new Allocator(createDefault())) {
+            Streams result = function.apply(
+                    List.of(Streams.ofValuesAndNulls(
+                            new I64Vector(new long[] {-1, 7}),
+                            new BooleanVector(new boolean[] {true, false}))),
+                    Mask.all(2),
+                    EnumSet.of(Stream.VALUES),
+                    Streams.empty(),
+                    new PrimitiveExecutionContext(allocator));
+
+            assertThat(((I64Vector) result.values()).values()).containsExactly(0, 7);
+        }
+    }
+
+    @Test
+    void testFallibleTargetDoesNotObserveInputError()
+            throws Throwable
+    {
+        PrimitiveFunction function = requireNonNegativeFunction();
+
+        try (Allocator allocator = new Allocator(createDefault())) {
+            Streams result = function.apply(
+                    List.of(Streams.ofValues(new I64Vector(new long[] {-1, 7}))
+                            .with(Stream.ERRORS, new BooleanVector(new boolean[] {true, false}))),
+                    Mask.all(2),
+                    EnumSet.of(Stream.VALUES),
+                    Streams.empty(),
+                    new PrimitiveExecutionContext(allocator));
+
+            assertThat(((I64Vector) result.values()).values()).containsExactly(0, 7);
+        }
+    }
+
+    private static PrimitiveFunction requireNonNegativeFunction()
+            throws ReflectiveOperationException
+    {
+        return new ScalarAdapterGenerator().adapt(
+                "require_non_negative",
+                new BoundSignature(LONG, List.of(LONG)),
+                new FunctionSemantics(true, List.of(RETURN_NULL_ON_NULL), false, MAY_FAIL),
+                new ScalarMethodTarget(MethodHandles.lookup().findStatic(
+                        TestScalarAdapterGenerator.class,
+                        "requireNonNegative",
+                        MethodType.methodType(long.class, long.class))))
+                .implementation();
+    }
+
+    @Test
     void testReferenceResultWriterRecoversAfterTargetFailure()
             throws Throwable
     {

@@ -185,8 +185,10 @@ Reference-carrier arguments are read through exact handles supplied by the logic
 results are appended immediately through a provider-owned result writer into Nitro vectors. Nitro does not retain an
 array of host objects and does not infer logical meaning from `Slice`, `Block`, or another carrier class.
 
-A VALUES-only request does not force NULLS or ERRORS materialization. Values beneath an unrequested semantic null are
-unspecified. Requested companion streams preserve exact semantics.
+A VALUES-only request ordinarily does not force NULLS or ERRORS materialization. Values beneath an unrequested
+semantic null are unspecified. A framework-managed adapter for a fallible strict scalar is the exception: it must
+request NULLS and ERRORS needed to prove which active rows may invoke the target. Requested companion streams preserve
+exact semantics.
 
 ## 9. Operators and islands
 

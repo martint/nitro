@@ -45,6 +45,7 @@ import static java.lang.constant.ConstantDescs.CD_void;
 import static java.lang.constant.ConstantDescs.ofCallsiteBootstrap;
 import static java.util.Objects.requireNonNull;
 import static org.weakref.nitro.core.function.FunctionSemantics.ArgumentNullConvention.RETURN_NULL_ON_NULL;
+import static org.weakref.nitro.core.function.FunctionSemantics.FailureConvention.MAY_FAIL;
 
 /// Classfile API adapter from an exact scalar MethodHandle to Nitro's masked batch convention.
 ///
@@ -143,7 +144,8 @@ public final class ScalarAdapterGenerator
                         name,
                         signature,
                         generate(signature, target, resultWriterFactory),
-                        resultWriterFactory),
+                        resultWriterFactory,
+                        semantics.failureConvention() == MAY_FAIL),
                 capabilities);
     }
 
