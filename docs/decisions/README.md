@@ -129,3 +129,4 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | [0047](0047-report-structured-island-admission.md) | Report island admission and rejection through semantic categories | accepted |
 | [0048](0048-enforce-one-way-module-dependencies.md) | Enforce one-way dependencies between SPI, engine, providers, compatibility, and tests | accepted |
 | [0049](0049-exclude-invalid-rows-from-fallible-scalars.md) | Exclude null and errored rows from fallible strict scalar targets | accepted |
+| [0050](0050-map-declared-scalar-failures-at-the-provider-boundary.md) | Map declared scalar failures at the provider boundary | accepted |

@@ -13,9 +13,11 @@
  */
 package org.weakref.nitro.function.scalar;
 
+import org.weakref.nitro.core.function.ScalarFailureMapper;
 import org.weakref.nitro.core.function.ScalarInvocationProvider;
 
 import java.lang.invoke.MethodHandle;
+import java.util.Optional;
 
 import static java.util.Objects.requireNonNull;
 
@@ -27,15 +29,27 @@ public final class ScalarMethodTarget
         implements ScalarInvocationProvider
 {
     private final MethodHandle handle;
+    private final ScalarFailureMapper failureMapper;
 
     public ScalarMethodTarget(MethodHandle handle)
     {
+        this(handle, null);
+    }
+
+    public ScalarMethodTarget(MethodHandle handle, ScalarFailureMapper failureMapper)
+    {
         this.handle = requireNonNull(handle, "handle is null");
+        this.failureMapper = failureMapper;
     }
 
     @Override
     public MethodHandle target()
     {
         return handle;
+    }
+
+    public Optional<ScalarFailureMapper> failureMapper()
+    {
+        return Optional.ofNullable(failureMapper);
     }
 }

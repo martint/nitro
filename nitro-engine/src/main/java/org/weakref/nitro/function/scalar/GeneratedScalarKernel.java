@@ -13,17 +13,20 @@
  */
 package org.weakref.nitro.function.scalar;
 
+import org.weakref.nitro.core.function.ScalarFailureMapper;
+import org.weakref.nitro.data.ErrorVector;
+
 public interface GeneratedScalarKernel
 {
-    void applyDenseFlatNullFree(Object[] values, Object output, int count);
+    void applyDenseFlatNullFree(Object[] values, Object output, ErrorVector errors, ScalarFailureMapper failureMapper, int count);
 
-    void applySparseFlatNullFree(Object[] values, Object output, int[] positions, int count);
+    void applySparseFlatNullFree(Object[] values, Object output, ErrorVector errors, ScalarFailureMapper failureMapper, int[] positions, int count);
 
-    void applyDenseDictionaryNullFree(Object[] values, int[][] ids, Object output, int count);
+    void applyDenseDictionaryNullFree(Object[] values, int[][] ids, Object output, ErrorVector errors, ScalarFailureMapper failureMapper, int count);
 
-    void applySparseDictionaryNullFree(Object[] values, int[][] ids, Object output, int[] positions, int count);
+    void applySparseDictionaryNullFree(Object[] values, int[][] ids, Object output, ErrorVector errors, ScalarFailureMapper failureMapper, int[] positions, int count);
 
-    void applyDense(Object[] values, Object[] nulls, Object output, int count);
+    void applyDense(Object[] values, Object[] nulls, Object output, ErrorVector errors, ScalarFailureMapper failureMapper, int count);
 
-    void applySparse(Object[] values, Object[] nulls, Object output, int[] positions, int count);
+    void applySparse(Object[] values, Object[] nulls, Object output, ErrorVector errors, ScalarFailureMapper failureMapper, int[] positions, int count);
 }

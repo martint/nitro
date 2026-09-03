@@ -190,6 +190,14 @@ semantic null are unspecified. A framework-managed adapter for a fallible strict
 request NULLS and ERRORS needed to prove which active rows may invoke the target. Requested companion streams preserve
 exact semantics.
 
+A provider may attach a failure mapper to a fallible scalar target. The generated adapter catches failures only
+around invocation of that target. The mapper converts declared row failures to classloader-neutral `ErrorValue`
+records and must rethrow cancellation, linkage, virtual-machine, and other non-row failures. The adapter writes
+mapped failures to the requested ERRORS stream, continues with later selected rows, and propagates pre-existing input
+diagnostics without invoking the target for those rows. Carrier readers and result writers remain outside the catch
+region. Without a mapper, a target failure retains ordinary query-failure behavior. A mapper attached to a target
+declared infallible is ignored and adds no generated exception path.
+
 ## 9. Operators and islands
 
 Nitro operators form batch-pull graphs. A downstream operator asks upstream for the next batch or required state.

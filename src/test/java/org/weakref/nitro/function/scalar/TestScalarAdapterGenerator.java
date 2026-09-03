@@ -26,6 +26,8 @@ import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.ErrorValue;
+import org.weakref.nitro.data.ErrorVector;
 import org.weakref.nitro.data.F64Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
@@ -55,6 +57,7 @@ import static org.weakref.nitro.execution.EngineResources.createDefault;
 
 final class TestScalarAdapterGenerator
 {
+    private static final ErrorValue NEGATIVE_VALUE = new ErrorValue("test", 1, "NEGATIVE_VALUE", "USER_ERROR", "negative value");
     private static final TypeBinding LONG = new TestingTypeBinding(new TypeIdentity("test-long"), long.class);
     private static final TypeBinding DOUBLE = new TestingTypeBinding(new TypeIdentity("test-double"), double.class);
     private static final TypeBinding BOOLEAN = new TestingTypeBinding(new TypeIdentity("test-boolean"), boolean.class);
@@ -545,6 +548,169 @@ final class TestScalarAdapterGenerator
         }
     }
 
+    @Test
+    void testDeclaredTargetFailuresBecomeRowLocalErrors()
+            throws Throwable
+    {
+        PrimitiveFunction function = requireNonNegativeFunctionWithFailureMapping();
+
+        try (Allocator allocator = new Allocator(createDefault())) {
+            ErrorVector upstreamErrors = new ErrorVector(4);
+            ErrorValue upstream = new ErrorValue("test", 2, "UPSTREAM", "USER_ERROR", "upstream failure");
+            upstreamErrors.setError(2, upstream);
+            Streams result = function.apply(
+                    List.of(Streams.ofValues(new I64Vector(new long[] {-1, 7, -2, -3}))
+                            .with(Stream.ERRORS, upstreamErrors)),
+                    Mask.all(4),
+                    EnumSet.of(Stream.VALUES, Stream.ERRORS),
+                    Streams.empty(),
+                    new PrimitiveExecutionContext(allocator));
+
+            assertThat(((I64Vector) result.values()).values()).containsExactly(0, 7, 0, 0);
+            ErrorVector errors = (ErrorVector) result.get(Stream.ERRORS);
+            assertThat(errors.values()).containsExactly(true, false, true, true);
+            assertThat(errors.error(0)).isEqualTo(NEGATIVE_VALUE);
+            assertThat(errors.error(1)).isNull();
+            assertThat(errors.error(2)).isEqualTo(upstream);
+            assertThat(errors.error(3)).isEqualTo(NEGATIVE_VALUE);
+        }
+    }
+
+    @Test
+    void testErrorOnlyDemandInvokesOnlyFallibleTargets()
+            throws Throwable
+    {
+        PrimitiveFunction fallible = requireNonNegativeFunctionWithFailureMapping();
+        assertThat(fallible.requiredInputStreams(0, EnumSet.of(Stream.ERRORS)))
+                .containsExactlyInAnyOrder(Stream.VALUES, Stream.NULLS, Stream.ERRORS);
+
+        CountingTarget target = new CountingTarget();
+        PrimitiveFunction infallible = new ScalarAdapterGenerator().adapt(
+                "counting",
+                new BoundSignature(LONG, List.of(LONG)),
+                strictSemantics(1),
+                new ScalarMethodTarget(MethodHandles.lookup().findVirtual(
+                                CountingTarget.class,
+                                "apply",
+                                MethodType.methodType(long.class, long.class))
+                        .bindTo(target)))
+                .implementation();
+        assertThat(infallible.requiredInputStreams(0, EnumSet.of(Stream.ERRORS))).containsExactly(Stream.ERRORS);
+
+        try (Allocator allocator = new Allocator(createDefault())) {
+            Streams failures = fallible.apply(
+                    List.of(Streams.ofValues(new I64Vector(new long[] {-1, 7}))),
+                    Mask.all(2),
+                    EnumSet.of(Stream.ERRORS),
+                    Streams.empty(),
+                    new PrimitiveExecutionContext(allocator));
+            assertThat(((ErrorVector) failures.get(Stream.ERRORS)).values()).containsExactly(true, false);
+
+            ErrorVector upstream = new ErrorVector(2);
+            upstream.setError(1, NEGATIVE_VALUE);
+            Streams propagated = infallible.apply(
+                    List.of(Streams.of(Stream.ERRORS, upstream)),
+                    Mask.all(2),
+                    EnumSet.of(Stream.ERRORS),
+                    Streams.empty(),
+                    new PrimitiveExecutionContext(allocator));
+            assertThat(((ErrorVector) propagated.get(Stream.ERRORS)).values()).containsExactly(false, true);
+            assertThat(target.invocations).isZero();
+        }
+    }
+
+    @Test
+    void testReferenceResultWriterContinuesAfterMappedTargetFailure()
+            throws Throwable
+    {
+        PrimitiveFunction function = new ScalarAdapterGenerator().adapt(
+                "render_non_negative",
+                new BoundSignature(STRING_RESULT, List.of(LONG)),
+                new FunctionSemantics(true, List.of(RETURN_NULL_ON_NULL), false, MAY_FAIL),
+                new ScalarMethodTarget(
+                        MethodHandles.lookup().findStatic(
+                                TestScalarAdapterGenerator.class,
+                                "renderNonNegative",
+                                MethodType.methodType(String.class, long.class)),
+                        TestScalarAdapterGenerator::mapNegativeValue))
+                .implementation();
+
+        try (Allocator allocator = new Allocator(createDefault())) {
+            Streams result = function.apply(
+                    List.of(Streams.ofValues(new I64Vector(new long[] {-1, 7, -2}))),
+                    Mask.all(3),
+                    EnumSet.of(Stream.VALUES, Stream.ERRORS),
+                    Streams.empty(),
+                    new PrimitiveExecutionContext(allocator));
+
+            assertThat(strings((BinaryVector) result.values())).containsExactly("", "v7", "");
+            ErrorVector errors = (ErrorVector) result.get(Stream.ERRORS);
+            assertThat(errors.values()).containsExactly(true, false, true);
+            assertThat(errors.error(0)).isEqualTo(NEGATIVE_VALUE);
+            assertThat(errors.error(2)).isEqualTo(NEGATIVE_VALUE);
+        }
+    }
+
+    @Test
+    void testFailureMapperDoesNotClassifyResultWriterFailures()
+            throws Throwable
+    {
+        TypeBinding failingResult = new ResultTypeBinding(
+                new TypeIdentity("failing-result"),
+                String.class,
+                failingResultWriter());
+        PrimitiveFunction function = new ScalarAdapterGenerator().adapt(
+                "render_long",
+                new BoundSignature(failingResult, List.of(LONG)),
+                new FunctionSemantics(true, List.of(RETURN_NULL_ON_NULL), false, MAY_FAIL),
+                new ScalarMethodTarget(
+                        MethodHandles.lookup().findStatic(
+                                TestScalarAdapterGenerator.class,
+                                "renderLong",
+                                MethodType.methodType(String.class, long.class)),
+                        _ -> NEGATIVE_VALUE))
+                .implementation();
+
+        try (Allocator allocator = new Allocator(createDefault())) {
+            assertThatThrownBy(() -> function.apply(
+                    List.of(Streams.ofValues(new I64Vector(new long[] {7}))),
+                    Mask.all(1),
+                    EnumSet.of(Stream.VALUES, Stream.ERRORS),
+                    Streams.empty(),
+                    new PrimitiveExecutionContext(allocator)))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessage("writer failure");
+        }
+    }
+
+    @Test
+    void testFailureMapperIsIgnoredForInfallibleSemantics()
+            throws Throwable
+    {
+        PrimitiveFunction function = new ScalarAdapterGenerator().adapt(
+                "require_non_negative",
+                new BoundSignature(LONG, List.of(LONG)),
+                strictSemantics(1),
+                new ScalarMethodTarget(
+                        MethodHandles.lookup().findStatic(
+                                TestScalarAdapterGenerator.class,
+                                "requireNonNegative",
+                                MethodType.methodType(long.class, long.class)),
+                        _ -> NEGATIVE_VALUE))
+                .implementation();
+
+        try (Allocator allocator = new Allocator(createDefault())) {
+            assertThatThrownBy(() -> function.apply(
+                    List.of(Streams.ofValues(new I64Vector(new long[] {-1}))),
+                    Mask.all(1),
+                    EnumSet.of(Stream.VALUES, Stream.ERRORS),
+                    Streams.empty(),
+                    new PrimitiveExecutionContext(allocator)))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessage("negative value");
+        }
+    }
+
     private static PrimitiveFunction requireNonNegativeFunction()
             throws ReflectiveOperationException
     {
@@ -557,6 +723,31 @@ final class TestScalarAdapterGenerator
                         "requireNonNegative",
                         MethodType.methodType(long.class, long.class))))
                 .implementation();
+    }
+
+    private static PrimitiveFunction requireNonNegativeFunctionWithFailureMapping()
+            throws ReflectiveOperationException
+    {
+        return new ScalarAdapterGenerator().adapt(
+                "require_non_negative",
+                new BoundSignature(LONG, List.of(LONG)),
+                new FunctionSemantics(true, List.of(RETURN_NULL_ON_NULL), false, MAY_FAIL),
+                new ScalarMethodTarget(
+                        MethodHandles.lookup().findStatic(
+                                TestScalarAdapterGenerator.class,
+                                "requireNonNegative",
+                                MethodType.methodType(long.class, long.class)),
+                        TestScalarAdapterGenerator::mapNegativeValue))
+                .implementation();
+    }
+
+    private static ErrorValue mapNegativeValue(Throwable failure)
+            throws Throwable
+    {
+        if (failure instanceof IllegalArgumentException) {
+            return NEGATIVE_VALUE;
+        }
+        throw failure;
     }
 
     @Test
@@ -721,6 +912,40 @@ final class TestScalarAdapterGenerator
                 return target;
             }
         };
+    }
+
+    private static ScalarResultWriterFactory failingResultWriter()
+    {
+        MethodHandle append;
+        try {
+            append = MethodHandles.lookup().findStatic(
+                    TestScalarAdapterGenerator.class,
+                    "failAppend",
+                    MethodType.methodType(void.class, ScalarResultWriter.class, int.class, String.class));
+        }
+        catch (ReflectiveOperationException exception) {
+            throw new ExceptionInInitializerError(exception);
+        }
+        MethodHandle target = append;
+        return new ScalarResultWriterFactory()
+        {
+            @Override
+            public ScalarResultWriter createWriter()
+            {
+                return new StringResultWriter();
+            }
+
+            @Override
+            public MethodHandle appendTarget()
+            {
+                return target;
+            }
+        };
+    }
+
+    private static void failAppend(ScalarResultWriter writer, int position, String value)
+    {
+        throw new IllegalStateException("writer failure");
     }
 
     private static void appendString(ScalarResultWriter writer, int position, String value)

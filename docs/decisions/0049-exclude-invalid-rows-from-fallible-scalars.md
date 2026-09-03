@@ -27,7 +27,8 @@ their outputs require them.
 - Fallible VALUES-only calls may demand companion work that infallible calls avoid.
 - Flat, dictionary, and RLE null-free fast paths remain available when the requested companions are absent or proven
   all false.
-- Capturing failures raised by the target into a row-local ERRORS result remains a separate calling-convention layer.
+- Capturing failures raised by the target into a row-local ERRORS result is the separate provider-owned layer defined
+  by [ADR-0050](0050-map-declared-scalar-failures-at-the-provider-boundary.md).
 
 ## Alternatives considered
 

@@ -17,6 +17,7 @@ import org.weakref.nitro.core.function.BoundSignature;
 import org.weakref.nitro.core.function.FunctionCapability;
 import org.weakref.nitro.core.function.FunctionSemantics;
 import org.weakref.nitro.core.function.NullPropagatingScalarInvocationProvider;
+import org.weakref.nitro.core.function.ScalarFailureMapper;
 import org.weakref.nitro.core.function.ScalarResultWriter;
 import org.weakref.nitro.core.function.ScalarResultWriterFactory;
 import org.weakref.nitro.core.type.TypeBinding;
@@ -71,15 +72,21 @@ public final class ScalarAdapterGenerator
     private static final ClassDesc CD_DOUBLE_VALUES = ClassDesc.of("org.weakref.nitro.data.VectorAccess$DoubleValues");
     private static final ClassDesc CD_BOOLEAN_VALUES = ClassDesc.of("org.weakref.nitro.data.VectorAccess$BooleanValues");
     private static final ClassDesc CD_VECTOR = ClassDesc.of("org.weakref.nitro.data.Vector");
+    private static final ClassDesc CD_ERROR_VECTOR = ClassDesc.of("org.weakref.nitro.data.ErrorVector");
+    private static final ClassDesc CD_ERROR_VALUE = ClassDesc.of("org.weakref.nitro.data.ErrorValue");
+    private static final ClassDesc CD_FAILURE_MAPPER = ClassDesc.of("org.weakref.nitro.core.function.ScalarFailureMapper");
     private static final ClassDesc CD_RESULT_WRITER = ClassDesc.of("org.weakref.nitro.core.function.ScalarResultWriter");
+    private static final ClassDesc CD_THROWABLE = ClassDesc.of("java.lang.Throwable");
 
     private static final MethodTypeDesc BOOLEAN_VALUE = MethodTypeDesc.of(CD_boolean, CD_int);
-    private static final MethodTypeDesc DENSE_FLAT_NULL_FREE = MethodTypeDesc.of(CD_void, CD_OBJECT_ARRAY, CD_OBJECT, CD_int);
-    private static final MethodTypeDesc SPARSE_FLAT_NULL_FREE = MethodTypeDesc.of(CD_void, CD_OBJECT_ARRAY, CD_OBJECT, CD_INT_ARRAY, CD_int);
-    private static final MethodTypeDesc DENSE_DICTIONARY_NULL_FREE = MethodTypeDesc.of(CD_void, CD_OBJECT_ARRAY, CD_INT_ARRAY_ARRAY, CD_OBJECT, CD_int);
-    private static final MethodTypeDesc SPARSE_DICTIONARY_NULL_FREE = MethodTypeDesc.of(CD_void, CD_OBJECT_ARRAY, CD_INT_ARRAY_ARRAY, CD_OBJECT, CD_INT_ARRAY, CD_int);
-    private static final MethodTypeDesc DENSE = MethodTypeDesc.of(CD_void, CD_OBJECT_ARRAY, CD_OBJECT_ARRAY, CD_OBJECT, CD_int);
-    private static final MethodTypeDesc SPARSE = MethodTypeDesc.of(CD_void, CD_OBJECT_ARRAY, CD_OBJECT_ARRAY, CD_OBJECT, CD_INT_ARRAY, CD_int);
+    private static final MethodTypeDesc MAP_FAILURE = MethodTypeDesc.of(CD_ERROR_VALUE, CD_THROWABLE);
+    private static final MethodTypeDesc SET_ERROR = MethodTypeDesc.of(CD_void, CD_int, CD_ERROR_VALUE);
+    private static final MethodTypeDesc DENSE_FLAT_NULL_FREE = MethodTypeDesc.of(CD_void, CD_OBJECT_ARRAY, CD_OBJECT, CD_ERROR_VECTOR, CD_FAILURE_MAPPER, CD_int);
+    private static final MethodTypeDesc SPARSE_FLAT_NULL_FREE = MethodTypeDesc.of(CD_void, CD_OBJECT_ARRAY, CD_OBJECT, CD_ERROR_VECTOR, CD_FAILURE_MAPPER, CD_INT_ARRAY, CD_int);
+    private static final MethodTypeDesc DENSE_DICTIONARY_NULL_FREE = MethodTypeDesc.of(CD_void, CD_OBJECT_ARRAY, CD_INT_ARRAY_ARRAY, CD_OBJECT, CD_ERROR_VECTOR, CD_FAILURE_MAPPER, CD_int);
+    private static final MethodTypeDesc SPARSE_DICTIONARY_NULL_FREE = MethodTypeDesc.of(CD_void, CD_OBJECT_ARRAY, CD_INT_ARRAY_ARRAY, CD_OBJECT, CD_ERROR_VECTOR, CD_FAILURE_MAPPER, CD_INT_ARRAY, CD_int);
+    private static final MethodTypeDesc DENSE = MethodTypeDesc.of(CD_void, CD_OBJECT_ARRAY, CD_OBJECT_ARRAY, CD_OBJECT, CD_ERROR_VECTOR, CD_FAILURE_MAPPER, CD_int);
+    private static final MethodTypeDesc SPARSE = MethodTypeDesc.of(CD_void, CD_OBJECT_ARRAY, CD_OBJECT_ARRAY, CD_OBJECT, CD_ERROR_VECTOR, CD_FAILURE_MAPPER, CD_INT_ARRAY, CD_int);
     private static final DirectMethodHandleDesc BSM_SCALAR_TARGET = ofCallsiteBootstrap(CD_BOOTSTRAP, "bootstrap", CD_CallSite);
 
     private final AtomicInteger nextClassId = new AtomicInteger();
@@ -137,22 +144,26 @@ public final class ScalarAdapterGenerator
             ScalarResultWriterFactory resultWriterFactory,
             List<FunctionCapability> capabilities)
     {
+        boolean mayFail = semantics.failureConvention() == MAY_FAIL;
+        ScalarFailureMapper failureMapper = mayFail ? target.failureMapper().orElse(null) : null;
         return new ScalarDescriptor(
                 name,
                 semantics.deterministic(),
                 new FrameworkManagedScalarFunction(
                         name,
                         signature,
-                        generate(signature, target, resultWriterFactory),
+                        generate(signature, target, resultWriterFactory, mayFail),
                         resultWriterFactory,
-                        semantics.failureConvention() == MAY_FAIL),
+                        mayFail,
+                        failureMapper),
                 capabilities);
     }
 
     private GeneratedScalarKernel generate(
             BoundSignature signature,
             ScalarMethodTarget target,
-            ScalarResultWriterFactory resultWriterFactory)
+            ScalarResultWriterFactory resultWriterFactory,
+            boolean mayFail)
     {
         List<TypeBinding> argumentTypes = signature.argumentTypes();
         List<Class<?>> arguments = argumentTypes.stream()
@@ -167,6 +178,7 @@ public final class ScalarAdapterGenerator
                 .toList();
         Class<?> result = signature.resultType().carrierType();
         boolean referenceResult = !result.isPrimitive();
+        boolean capturesFailures = mayFail && target.failureMapper().isPresent();
         MethodHandles.Lookup definitionLookup = MethodHandles.lookup();
         String packageName = definitionLookup.lookupClass().getPackageName();
         String className = (packageName.isEmpty() ? "" : packageName + ".") + "GeneratedScalarKernel" + nextClassId.incrementAndGet();
@@ -193,17 +205,17 @@ public final class ScalarAdapterGenerator
                 code.return_();
             });
             builder.withMethodBody("applyDenseFlatNullFree", DENSE_FLAT_NULL_FREE, ClassFile.ACC_PUBLIC,
-                    code -> emitLoop(code, arguments, result, invocationType, false, InputForm.FLAT));
+                    code -> emitLoop(code, arguments, result, invocationType, false, InputForm.FLAT, capturesFailures));
             builder.withMethodBody("applySparseFlatNullFree", SPARSE_FLAT_NULL_FREE, ClassFile.ACC_PUBLIC,
-                    code -> emitLoop(code, arguments, result, invocationType, true, InputForm.FLAT));
+                    code -> emitLoop(code, arguments, result, invocationType, true, InputForm.FLAT, capturesFailures));
             builder.withMethodBody("applyDenseDictionaryNullFree", DENSE_DICTIONARY_NULL_FREE, ClassFile.ACC_PUBLIC,
-                    code -> emitLoop(code, arguments, result, invocationType, false, InputForm.DICTIONARY));
+                    code -> emitLoop(code, arguments, result, invocationType, false, InputForm.DICTIONARY, capturesFailures));
             builder.withMethodBody("applySparseDictionaryNullFree", SPARSE_DICTIONARY_NULL_FREE, ClassFile.ACC_PUBLIC,
-                    code -> emitLoop(code, arguments, result, invocationType, true, InputForm.DICTIONARY));
+                    code -> emitLoop(code, arguments, result, invocationType, true, InputForm.DICTIONARY, capturesFailures));
             builder.withMethodBody("applyDense", DENSE, ClassFile.ACC_PUBLIC,
-                    code -> emitLoop(code, arguments, result, invocationType, false, InputForm.ACCESSOR));
+                    code -> emitLoop(code, arguments, result, invocationType, false, InputForm.ACCESSOR, capturesFailures));
             builder.withMethodBody("applySparse", SPARSE, ClassFile.ACC_PUBLIC,
-                    code -> emitLoop(code, arguments, result, invocationType, true, InputForm.ACCESSOR));
+                    code -> emitLoop(code, arguments, result, invocationType, true, InputForm.ACCESSOR, capturesFailures));
         });
 
         try {
@@ -225,19 +237,23 @@ public final class ScalarAdapterGenerator
             Class<?> result,
             MethodTypeDesc invocationType,
             boolean sparse,
-            InputForm inputForm)
+            InputForm inputForm,
+            boolean capturesFailures)
     {
         int values = 1;
         boolean checkNulls = inputForm == InputForm.ACCESSOR;
         int nulls = checkNulls ? 2 : -1;
         int ids = inputForm == InputForm.DICTIONARY ? 2 : -1;
         int output = inputForm == InputForm.FLAT ? 2 : 3;
-        int positions = sparse ? output + 1 : -1;
-        int count = sparse ? output + 2 : output + 1;
+        int errors = output + 1;
+        int failureMapper = output + 2;
+        int positions = sparse ? output + 3 : -1;
+        int count = sparse ? output + 4 : output + 3;
         int index = count + 1;
         int position = index + 1;
         int valueAccessors = position + 1;
         int secondaryAccessors = valueAccessors + arguments.size();
+        int failure = secondaryAccessors + arguments.size();
 
         for (int argument = 0; argument < arguments.size(); argument++) {
             Class<?> carrier = arguments.get(argument);
@@ -332,7 +348,16 @@ public final class ScalarAdapterGenerator
                 code.invokeinterface(accessorDescriptor(carrier), "value", MethodTypeDesc.of(descriptor(carrier), CD_int));
             }
         }
+        Label invocationStart = capturesFailures ? code.newLabel() : null;
+        Label invocationEnd = capturesFailures ? code.newLabel() : null;
+        Label failureHandler = capturesFailures ? code.newLabel() : null;
+        if (capturesFailures) {
+            code.labelBinding(invocationStart);
+        }
         code.invokedynamic(DynamicCallSiteDesc.of(BSM_SCALAR_TARGET, "apply", invocationType));
+        if (capturesFailures) {
+            code.labelBinding(invocationEnd);
+        }
         if (result.isPrimitive()) {
             store(code, result);
         }
@@ -348,6 +373,24 @@ public final class ScalarAdapterGenerator
         code.goto_(loop);
         code.labelBinding(done);
         code.return_();
+        if (capturesFailures) {
+            code.labelBinding(failureHandler);
+            code.astore(failure);
+            code.aload(errors);
+            Label rethrow = code.newLabel();
+            code.ifnull(rethrow);
+            code.aload(errors);
+            code.iload(position);
+            code.aload(failureMapper);
+            code.aload(failure);
+            code.invokeinterface(CD_FAILURE_MAPPER, "map", MAP_FAILURE);
+            code.invokevirtual(CD_ERROR_VECTOR, "setError", SET_ERROR);
+            code.goto_(next);
+            code.labelBinding(rethrow);
+            code.aload(failure);
+            code.athrow();
+            code.exceptionCatch(invocationStart, invocationEnd, failureHandler, CD_THROWABLE);
+        }
     }
 
     private static void validate(
