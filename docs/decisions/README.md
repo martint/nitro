@@ -59,14 +59,14 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | §1–2 Purpose and scope | 0002, 0003, 0005, 0006, 0009, 0024, 0029, 0039, 0044 |
 | §3 Vocabulary | 0003, 0007, 0008, 0012, 0023 |
 | §4 Composition and modules | 0005, 0006, 0048 |
-| §5 Vectors, streams, types | 0006, 0008, 0012, 0021, 0022, 0023, 0054 |
-| §6 Masks and conditions | 0008, 0012, 0020, 0034 |
+| §5 Vectors, streams, types | 0006, 0008, 0012, 0021, 0022, 0023, 0054, 0064 |
+| §6 Masks and conditions | 0008, 0012, 0020, 0034, 0064 |
 | §7 Evaluation IR | 0010, 0011, 0012, 0040 |
 | §8 Function conventions | 0006, 0011, 0013–0016, 0037, 0038, 0040, 0049–0054, 0062, 0063 |
 | §9 Operators and islands | 0003, 0010, 0017, 0024, 0044–0047 |
 | §10 Cooperative execution | 0004, 0044, 0045 |
 | §11 Allocation and memory | 0007, 0014, 0017–0019, 0041 |
-| §12 Aggregation, windows, patterns, table functions | 0011–0013, 0015, 0016, 0022, 0036, 0045, 0046, 0055–0061 |
+| §12 Aggregation, windows, patterns, table functions | 0011–0013, 0015, 0016, 0022, 0036, 0045, 0046, 0055–0061, 0064 |
 | §13 Joins and dynamic filters | 0006, 0012, 0018, 0025, 0035, 0036 |
 | §14 Sources and Parquet | 0009, 0020–0023, 0031 |
 | §15 Host boundaries | 0003, 0017, 0019, 0024, 0033, 0044, 0046 |
@@ -143,3 +143,4 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | [0061](0061-preserve-metadata-for-conditional-grouped-domains.md) | Preserve metadata for conditional grouped-domain admission | accepted |
 | [0062](0062-expose-composed-type-identity-to-functions.md) | Expose composed type identity to registry-bound functions | accepted |
 | [0063](0063-expose-composed-key-binding-to-stateful-functions.md) | Expose composed key binding to stateful registry functions | accepted |
+| [0064](0064-count-independent-encoded-domains.md) | Count independent encoded domains under a mask | accepted |

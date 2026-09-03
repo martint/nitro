@@ -155,6 +155,11 @@ Nested conditions repeat this rule recursively.
 Masks can propagate toward a source to defer or skip payload decoding. A narrower downstream mask constrains only the
 batch and generation from which it was derived; mask ownership cannot outlive that batch.
 
+When a mask and an encoded value stream have different row-to-domain mappings, equal domain sizes do not establish
+alignment. A consumer that can apply exact multiplicities may ask the encoded vector to count its selected domain
+under the mask into caller-owned reusable scratch. The framework derives only physical frequencies; the registered
+function decides whether weighted processing preserves its semantics.
+
 ## 7. Evaluation IR
 
 The evaluation IR is a function-neutral dataflow graph. It represents inputs, literals, calls, references, copies,
@@ -312,6 +317,10 @@ operator conditionals.
 State is allocator-owned and may use fixed-width, segmented, recursive, dictionary-domain, or generated layouts.
 Function-specific aggregation-state vector types belong with function implementations, not in the core vector
 vocabulary.
+
+An aggregation implementation that accepts exact multiplicities may consume an independently encoded input by first
+counting selected row ids into allocator-owned reusable domain scratch. Mapping identity remains required for direct
+zero-pass domain reuse; the exact counting fallback does not permit the engine to infer function semantics.
 
 A provider may describe each generated grouped update as an ordered, non-empty tuple of physical contributions and
 an exact method handle over its opaque state, group id, and those carriers. Each input contribution declares one

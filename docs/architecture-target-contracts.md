@@ -2208,6 +2208,12 @@ merge-style rewrites semantically valid.
 Operations should be vector-type aware. They should inspect physical encodings
 and pick specialized paths when possible.
 
+An independently derived mask does not erase the value of a dictionary encoding. When mappings do not align, a
+weighted consumer can populate reusable domain-frequency scratch with one exact pass over the selected ids, then do
+value-level work once per populated entry. Aligned masks may reuse their existing counts directly. This physical
+mechanism is function-neutral; each registered implementation still decides whether multiplicities preserve its
+semantics.
+
 Examples:
 
 - constant plus constant should remain constant

@@ -289,6 +289,56 @@ public final class DictionaryVector
         return domainFrequencies[dictionaryId];
     }
 
+    /**
+     * Writes the exact selected logical-row frequency of every dictionary entry into caller-owned scratch.
+     *
+     * <p>This is the general counterpart to {@link Mask#dictionaryDomainSelection(DictionaryVector)}: an unrelated
+     * predicate can select an arbitrary subset of the rows represented by each entry, so a compact domain bit set is
+     * insufficient. The caller supplies reusable storage to keep the operation allocation-free in steady state. The
+     * return value is the number of entries whose selected frequency is non-zero.
+     */
+    public int populateSelectedDomainFrequencies(Mask mask, int[] frequencies)
+    {
+        requireNonNull(mask, "mask is null");
+        requireNonNull(frequencies, "frequencies is null");
+        checkArgument(mask.size() == length, "Mask and dictionary lengths differ");
+        int domainSize = values.length();
+        checkArgument(frequencies.length >= domainSize, "Frequency scratch is smaller than dictionary domain");
+        Arrays.fill(frequencies, 0, domainSize, 0);
+
+        Mask.DictionaryDomainSelection selection = mask.dictionaryDomainSelection(this);
+        if (selection != null) {
+            int populated = 0;
+            for (int dictionaryId = 0; dictionaryId < domainSize; dictionaryId++) {
+                int frequency = selection.selects(dictionaryId)
+                        ? mask.dictionaryDomainFrequency(selection, dictionaryId)
+                        : 0;
+                frequencies[dictionaryId] = frequency;
+                populated += frequency == 0 ? 0 : 1;
+            }
+            return populated;
+        }
+        if (mask.none()) {
+            return 0;
+        }
+        if (mask.all() && domainFrequencies != null) {
+            int populated = 0;
+            for (int dictionaryId = 0; dictionaryId < domainSize; dictionaryId++) {
+                int frequency = domainFrequencies[dictionaryId];
+                frequencies[dictionaryId] = frequency;
+                populated += frequency == 0 ? 0 : 1;
+            }
+            return populated;
+        }
+
+        int populated = 0;
+        for (int position : mask) {
+            int dictionaryId = ids[position];
+            populated += frequencies[dictionaryId]++ == 0 ? 1 : 0;
+        }
+        return populated;
+    }
+
     /** Returns whether every represented dictionary entry satisfies the predicate, or false without exact metadata. */
     public boolean allPresentDomainEntriesMatch(IntPredicate predicate)
     {

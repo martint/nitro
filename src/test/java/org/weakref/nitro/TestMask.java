@@ -254,6 +254,43 @@ class TestMask
     }
 
     @Test
+    void countsIndependentDictionaryDomainUnderArbitrarySelection()
+    {
+        DictionaryVector dictionary = DictionaryVector.wrapWithDomainFrequencies(
+                new int[] {0, 1, 0, 2, 1, 2, 0},
+                7,
+                new I64Vector(new long[] {10, 20, 30}),
+                new int[] {3, 2, 2});
+        int[] frequencies = {99, 99, 99, 99};
+
+        int populated = dictionary.populateSelectedDomainFrequencies(
+                Mask.sparse(new int[] {1, 2, 5, 6}, 7),
+                frequencies);
+
+        assertThat(populated).isEqualTo(3);
+        assertThat(frequencies).containsExactly(2, 1, 1, 99);
+    }
+
+    @Test
+    void reusesAlignedDictionaryDomainCountsWithoutLogicalExpansion()
+    {
+        int[] ids = {0, 1, 0, 2, 1, 2};
+        DictionaryVector dictionary = DictionaryVector.wrapWithDomainFrequencies(
+                ids,
+                ids.length,
+                new I64Vector(new long[] {10, 20, 30}),
+                new int[] {2, 2, 2});
+        Mask mask = Mask.all(ids.length);
+        mask.retainDictionaryComparison(dictionary, new boolean[] {false, true, true});
+        int[] frequencies = new int[3];
+
+        int populated = dictionary.populateSelectedDomainFrequencies(mask, frequencies);
+
+        assertThat(populated).isEqualTo(2);
+        assertThat(frequencies).containsExactly(0, 2, 2);
+    }
+
+    @Test
     void declinesDomainVisitWithoutExactMetadata()
     {
         DictionaryVector dictionary = DictionaryVector.wrap(
