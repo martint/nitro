@@ -330,7 +330,9 @@ mapping proof atomically before any aggregate state is mutated. Independently de
 an established shared identity or by exact equality of their complete ID sequences.
 Deterministic row-aligned scalar functions propagate requested exact domain metadata to their inputs. This matches
 the evaluator's ability to execute the function over physical values and restore the same logical-row mapping on its
-result. Non-deterministic functions execute per logical row and do not propagate that promise.
+result. Non-deterministic functions execute per logical row and do not propagate that promise. A generated adapter's
+descriptor and executable implementation must report the same determinism; retaining the flag only in registry
+metadata is insufficient because physical admission consults the executable capability.
 
 Grouping is a physical key-to-group operation. It can select flat, packed, dictionary-domain, generated composite, or
 other general representations based on observed shape and immutable policy. It cannot recognize aggregate functions

@@ -152,6 +152,7 @@ public final class ScalarAdapterGenerator
                 new FrameworkManagedScalarFunction(
                         name,
                         signature,
+                        semantics.deterministic(),
                         generate(signature, target, resultWriterFactory, mayFail),
                         resultWriterFactory,
                         mayFail,

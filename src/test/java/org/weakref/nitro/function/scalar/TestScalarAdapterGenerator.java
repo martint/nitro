@@ -71,6 +71,37 @@ final class TestScalarAdapterGenerator
             resultWriter());
 
     @Test
+    void testNondeterministicZeroArgumentTargetRunsOncePerSelectedLogicalRow()
+            throws Throwable
+    {
+        CountingTarget target = new CountingTarget();
+        FunctionSemantics semantics = new FunctionSemantics(false, List.of(), false, NEVER_FAILS);
+        ScalarDescriptor descriptor = new ScalarAdapterGenerator().adapt(
+                "next_value",
+                new BoundSignature(DOUBLE, List.of()),
+                semantics,
+                new ScalarMethodTarget(MethodHandles.lookup().findVirtual(
+                                CountingTarget.class,
+                                "nextValue",
+                                MethodType.methodType(double.class))
+                        .bindTo(target)));
+
+        assertThat(descriptor.deterministic()).isFalse();
+        assertThat(descriptor.implementation().deterministic()).isFalse();
+        try (Allocator allocator = new Allocator(createDefault())) {
+            Streams result = descriptor.implementation().apply(
+                    List.of(),
+                    Mask.sparse(new int[] {1, 3}, 5),
+                    EnumSet.of(Stream.VALUES),
+                    Streams.empty(),
+                    new PrimitiveExecutionContext(allocator));
+
+            assertThat(((F64Vector) result.values()).values()).containsExactly(0, 1, 0, 2, 0);
+            assertThat(target.invocations).isEqualTo(2);
+        }
+    }
+
+    @Test
     void testRegistryOwnedReferenceResultWritesDirectlyToVector()
             throws Throwable
     {
@@ -998,6 +1029,11 @@ final class TestScalarAdapterGenerator
         {
             invocations++;
             return Math.max(left, right);
+        }
+
+        public double nextValue()
+        {
+            return ++invocations;
         }
     }
 

@@ -45,6 +45,7 @@ final class FrameworkManagedScalarFunction
 {
     private final String name;
     private final BoundSignature signature;
+    private final boolean deterministic;
     private final GeneratedScalarKernel kernel;
     private final ScalarResultWriterFactory resultWriterFactory;
     private final boolean mayFail;
@@ -53,6 +54,7 @@ final class FrameworkManagedScalarFunction
     FrameworkManagedScalarFunction(
             String name,
             BoundSignature signature,
+            boolean deterministic,
             GeneratedScalarKernel kernel,
             ScalarResultWriterFactory resultWriterFactory,
             boolean mayFail,
@@ -60,10 +62,17 @@ final class FrameworkManagedScalarFunction
     {
         this.name = requireNonNull(name, "name is null");
         this.signature = requireNonNull(signature, "signature is null");
+        this.deterministic = deterministic;
         this.kernel = requireNonNull(kernel, "kernel is null");
         this.resultWriterFactory = resultWriterFactory;
         this.mayFail = mayFail;
         this.failureMapper = failureMapper;
+    }
+
+    @Override
+    public boolean deterministic()
+    {
+        return deterministic;
     }
 
     @Override
