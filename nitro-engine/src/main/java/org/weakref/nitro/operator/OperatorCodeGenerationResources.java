@@ -29,6 +29,7 @@ public final class OperatorCodeGenerationResources
     private final FusedProjectionCompiler fusedProjection;
     private final ProjectionMaskCompiler projectionMask;
     private final FusedGroupingAggregationKernelGenerator fusedGrouping = new FusedGroupingAggregationKernelGenerator();
+    private final DictionaryDomainGroupingKernelGenerator dictionaryDomainGrouping = new DictionaryDomainGroupingKernelGenerator();
     private final MultiLongGroupingTableGenerator multiLongGrouping = new MultiLongGroupingTableGenerator();
     private final AdaptiveLongGroupingTableGenerator adaptiveLongGrouping = new AdaptiveLongGroupingTableGenerator();
     private final DictionaryHashBatchKernelGenerator dictionaryHash = new DictionaryHashBatchKernelGenerator();
@@ -66,6 +67,12 @@ public final class OperatorCodeGenerationResources
     {
         checkOpen();
         return fusedGrouping;
+    }
+
+    DictionaryDomainGroupingKernelGenerator dictionaryDomainGrouping()
+    {
+        checkOpen();
+        return dictionaryDomainGrouping;
     }
 
     MultiLongGroupingTableGenerator multiLongGrouping()
@@ -125,6 +132,7 @@ public final class OperatorCodeGenerationResources
         closed = true;
         fusedProjection.close();
         fusedGrouping.close();
+        dictionaryDomainGrouping.close();
         multiLongGrouping.close();
         adaptiveLongGrouping.close();
         dictionaryHash.close();

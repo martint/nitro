@@ -314,6 +314,12 @@ invoking the single update once per logical occurrence. This contract supports m
 carriers without one engine interface for every carrier or state layout. A multi-input encoded-domain shortcut is
 admitted only when every value and null mapping is proven to share the same physical domain; otherwise the generated
 logical-row loop remains valid.
+When that alignment is proven, every update supplies repeated semantics, no filter or distinct stage needs logical
+row identity, and the physical reduction is large enough, Nitro may generate a separate domain kernel. The batch
+boundary counts selected rows and resolves grouping identity once per used domain value. Generated code performs null
+elision and one exact constant-linked provider update per used domain value with its logical multiplicity. Physical
+domain positions and logical row positions are distinct kernel contracts; equal domain sizes alone never prove
+alignment.
 
 Grouping is a physical key-to-group operation. It can select flat, packed, dictionary-domain, generated composite, or
 other general representations based on observed shape and immutable policy. It cannot recognize aggregate functions

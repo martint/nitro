@@ -21,6 +21,7 @@ import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.GeneratedAggregationDomainBindings;
 import org.weakref.nitro.data.GeneratedLongGroupingBindings;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
@@ -121,6 +122,9 @@ public class GroupedAggregationOperator
     private int[] fusedAggregationIndexes;
     private int[] fusedStateOffsets;
     private GeneratedLongGroupingBindings fusedBindings;
+    private GeneratedAggregationDomainBindings fusedDomainBindings;
+    private DictionaryDomainGroupingKernel fusedDomainKernel;
+    private int fusedDomainPhysicalShape = -1;
     private Object[] fusedStateVectors;
     private boolean fusedStateVectorsBound;
     private int fusedPhysicalShape = -1;
@@ -134,9 +138,6 @@ public class GroupedAggregationOperator
     private Mask reusableDictionaryDomainMask;
     private Vector[] dictionaryDomainKeyValues = new Vector[0];
     private Vector[] dictionaryDomainKeyNulls = new Vector[0];
-    private VectorAccess.LongValues[] dictionaryDomainInputValues = new VectorAccess.LongValues[0];
-    private VectorAccess.BooleanValues[] dictionaryDomainInputNulls = new VectorAccess.BooleanValues[0];
-    private int[][] dictionaryDomainInputCounts = new int[0][];
     private int nextSessionOutputPosition;
     private int releasedSessionOutputPosition;
 
@@ -1044,6 +1045,7 @@ public class GroupedAggregationOperator
                     .mergesIntermediateInput();
         }
         fusedBindings = new GeneratedLongGroupingBindings(fusedInputOffsets[fusedSpecs.length], fusedDictionaryInput);
+        fusedDomainBindings = new GeneratedAggregationDomainBindings(fusedInputOffsets[fusedSpecs.length]);
         fusedStateVectors = new Object[fusedSpecs.length];
     }
 
@@ -1064,11 +1066,6 @@ public class GroupedAggregationOperator
                 (!generatedUpdates && !groupedDomainInput && !encodedGroupedInput && !filteredEncodedGroupedInput) ||
                 (filteredAggregationIndexes.length != 0 && !filteredEncodedGroupedInput) ||
                 distinctAggregationGroups.length != 0) {
-            return false;
-        }
-        if (generatedUpdates && Arrays.stream(fusedSpecs).anyMatch(spec -> spec.contributions().size() != 1)) {
-            // Multi-input domain execution additionally requires proof that every value and null mapping shares
-            // one physical domain. Keep it on the generated logical-row path until that proof is represented.
             return false;
         }
         if (groupByColumns.length != 1) {
@@ -1107,7 +1104,9 @@ public class GroupedAggregationOperator
         if (authoritativeHashes != null && !VectorAccess.isAllFalseNulls(keyNulls)) {
             return false;
         }
-        if (generatedUpdates && !bindDictionaryDomainInputs(batch, dictionary, keyNulls, mask, slots)) {
+        if (generatedUpdates && (!VectorAccess.isAllFalseNulls(keyNulls) ||
+                Arrays.stream(fusedSpecs).anyMatch(spec -> spec.target().repeatedUpdate().isEmpty()) ||
+                !bindDictionaryDomainInputs(batch, dictionary))) {
             generatedUpdates = false;
         }
         if ((groupedDomainInput || encodedGroupedInput || filteredEncodedGroupedInput) &&
@@ -1185,34 +1184,27 @@ public class GroupedAggregationOperator
                 if (!fusedStateVectorsBound) {
                     refreshFusedStateVectors();
                 }
-                for (int update = 0; update < fusedSpecs.length; update++) {
-                    GroupedAggregationUpdate spec = fusedSpecs[update];
-                    int[] frequencies = dictionaryDomainInputCounts[update] == null
-                            ? dictionaryDomainCounts
-                            : dictionaryDomainInputCounts[update];
-                    for (int domain = 0; domain < domainSlots; domain++) {
-                        int frequency = frequencies[domain];
-                        if (frequency != 0) {
-                            if (spec.readsValue()) {
-                                invokeRepeatedLongUpdate(
-                                        spec,
-                                        fusedStateVectors[update],
-                                        dictionaryDomainGroups[domain],
-                                        dictionaryDomainInputValues[update].value(domain),
-                                        frequency);
-                            }
-                            else {
-                                // Constant contributions are declared as additive deltas by the existing generated
-                                // update convention (COUNT and null-aware COUNT). Preserve that contract directly.
-                                invokeLongUpdate(
-                                        spec,
-                                        fusedStateVectors[update],
-                                        dictionaryDomainGroups[domain],
-                                        spec.constantValue() * frequency);
-                            }
-                        }
-                    }
+                int physicalShape = fusedDomainBindings.physicalShape();
+                if (physicalShape != fusedDomainPhysicalShape) {
+                    fusedDomainKernel = operatorResources.codeGeneration().dictionaryDomainGrouping().create(
+                            List.of(fusedSpecs),
+                            fusedDomainBindings.intInputs(),
+                            fusedDomainBindings.inputCarriers(),
+                            fusedDomainBindings.allNullInputs(),
+                            fusedDomainBindings.offsetInputs(),
+                            fusedDomainBindings.offsetInputNulls());
+                    fusedDomainPhysicalShape = physicalShape;
                 }
+                fusedDomainKernel.accumulate(
+                        domainSize,
+                        dictionaryDomainCounts,
+                        dictionaryDomainGroups,
+                        fusedDomainBindings.inputs(),
+                        fusedDomainBindings.inputValueOffsets(),
+                        fusedDomainBindings.inputOffsets(),
+                        fusedDomainBindings.inputNulls(),
+                        fusedDomainBindings.inputNullOffsets(),
+                        fusedStateVectors);
             }
             else if (groupedDomainInput) {
                 GroupedAggregationDomain domain = new GroupedAggregationDomain(
@@ -1635,100 +1627,45 @@ public class GroupedAggregationOperator
     }
 
     /**
-     * Resolves accumulator inputs against a shared encoded row mapping and, when nulls vary logically, counts only
-     * the contributing rows per key-domain position. No type or function identity is involved: the provider's
-     * generated update declares the physical contribution, while vectors declare whether their mappings align.
+     * Resolves every generated contribution against one exact encoded row mapping. A varying null stream must share
+     * that mapping too; otherwise its contributing multiplicity is not constant within a physical domain value and
+     * this shortcut is declined. No type or function identity participates in the proof.
      */
-    private boolean bindDictionaryDomainInputs(
-            Batch batch,
-            DictionaryVector keyDictionary,
-            Vector keyNulls,
-            Mask mask,
-            int slots)
+    private boolean bindDictionaryDomainInputs(Batch batch, DictionaryVector keyDictionary)
     {
-        if (dictionaryDomainInputValues.length != fusedSpecs.length) {
-            dictionaryDomainInputValues = new VectorAccess.LongValues[fusedSpecs.length];
-            dictionaryDomainInputNulls = new VectorAccess.BooleanValues[fusedSpecs.length];
-            dictionaryDomainInputCounts = new int[fusedSpecs.length][];
-        }
-        Arrays.fill(dictionaryDomainInputValues, null);
-        Arrays.fill(dictionaryDomainInputNulls, null);
-
-        int domainSize = keyDictionary.values().length();
-        int[] keyIds = keyDictionary.ids();
+        int inputIndex = 0;
         for (int update = 0; update < fusedSpecs.length; update++) {
             GroupedAggregationUpdate spec = fusedSpecs[update];
-            dictionaryDomainInputCounts[update] = null;
-            if (!spec.readsInput()) {
-                continue;
-            }
-            // Floating-point reduction order is observable. Keep it on the ordinary row path until its update SPI
-            // exposes an explicit repeated-contribution convention with the desired numerical semantics.
-            if (spec.readsDoubleValue()) {
-                return false;
-            }
-
-            Output input = batch.output(spec.inputColumn());
-            if (spec.readsValue()) {
-                Vector inputValues = input.borrow(Stream.VALUES);
-                if (!(inputValues instanceof DictionaryVector inputDictionary)) {
-                    return false;
-                }
-                if (!keyDictionary.hasSameRowMapping(inputDictionary)) {
-                    return false;
-                }
-                if (inputDictionary.values().length() != domainSize) {
-                    return false;
-                }
-                try {
-                    dictionaryDomainInputValues[update] = VectorAccess.longValues(inputDictionary.values());
-                }
-                catch (IllegalArgumentException _) {
-                    return false;
-                }
-            }
-
-            Vector inputNulls = input.borrowOrNull(Stream.NULLS);
-            if (VectorAccess.isAllTrueNulls(inputNulls)) {
-                int[] frequencies = dictionaryDomainInputCounts[update];
-                if (frequencies == null || frequencies.length < slots) {
-                    frequencies = new int[Allocator.computeCapacity(slots)];
-                    dictionaryDomainInputCounts[update] = frequencies;
-                }
-                Arrays.fill(frequencies, 0, slots, 0);
-                continue;
-            }
-            if (!VectorAccess.isAllFalseNulls(inputNulls)) {
-                try {
-                    dictionaryDomainInputNulls[update] = VectorAccess.booleanValues(inputNulls);
-                }
-                catch (IllegalArgumentException _) {
-                    return false;
-                }
-            }
-
-            VectorAccess.BooleanValues nulls = dictionaryDomainInputNulls[update];
-            boolean keyCanBeNull = !VectorAccess.isAllFalseNulls(keyNulls);
-            if (nulls == null && !keyCanBeNull) {
-                continue;
-            }
-            int[] frequencies = dictionaryDomainInputCounts[update];
-            if (frequencies == null || frequencies.length < slots) {
-                frequencies = new int[Allocator.computeCapacity(slots)];
-                dictionaryDomainInputCounts[update] = frequencies;
-            }
-            Arrays.fill(frequencies, 0, slots, 0);
-            for (int position : mask) {
-                if (nulls != null && nulls.value(position)) {
+            for (int contribution = 0; contribution < spec.contributions().size(); contribution++, inputIndex++) {
+                if (!spec.readsInput(contribution)) {
+                    fusedDomainBindings.clearInput(inputIndex);
                     continue;
                 }
-                boolean keyIsNull = OperatorVectorSupport.isNull(keyNulls, position);
-                if (keyIsNull && spec.readsValue()) {
-                    // A null key collapses every dictionary id to one SQL group, so its input value is not
-                    // necessarily constant. The ordinary path is required unless those rows are input-null.
+                Output input = batch.output(spec.inputColumn(contribution));
+                Vector values = spec.readsValue(contribution) ? input.borrow(Stream.VALUES) : null;
+                if (values != null && !spec.fieldPath(contribution).isEmpty()) {
+                    try {
+                        for (String field : spec.fieldPath(contribution)) {
+                            Streams component = VectorAccess.structField(values, field);
+                            if (!VectorAccess.isAllFalseNulls(component.getOrNull(Stream.NULLS))) {
+                                return false;
+                            }
+                            values = component.values();
+                        }
+                    }
+                    catch (IllegalArgumentException _) {
+                        return false;
+                    }
+                }
+                if (!fusedDomainBindings.bindInput(
+                        inputIndex,
+                        keyDictionary,
+                        values,
+                        input.borrowOrNull(Stream.NULLS),
+                        spec.readsValue(contribution),
+                        spec.carrier(contribution))) {
                     return false;
                 }
-                frequencies[keyIsNull ? domainSize : keyIds[position]]++;
             }
         }
         return true;
@@ -2011,21 +1948,6 @@ public class GroupedAggregationOperator
             }
         }
         return true;
-    }
-
-    private static void invokeLongUpdate(GroupedAggregationUpdate update, Object state, int group, long value)
-    {
-        MethodHandle target = update.target().update().asType(MethodType.methodType(
-                void.class,
-                Object.class,
-                int.class,
-                long.class));
-        try {
-            target.invokeExact(state, group, value);
-        }
-        catch (Throwable failure) {
-            throw propagate(failure);
-        }
     }
 
     private static void invokeRepeatedLongUpdate(
