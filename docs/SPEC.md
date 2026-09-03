@@ -202,6 +202,11 @@ diagnostics without invoking the target for those rows. Carrier readers and resu
 region. Without a mapper, a target failure retains ordinary query-failure behavior. A mapper attached to a target
 declared infallible is ignored and adds no generated exception path.
 
+VALUES and ERRORS may be evaluated in separate invocations. When a fallible target has a failure mapper, a
+VALUES-only invocation must therefore contain mapped target failures in invocation-local scratch even though it does
+not publish an ERRORS stream. A later ERRORS invocation publishes the diagnostic. This rule also permits an encoded
+physical domain to contain inactive logical values without turning an unobserved failure into a query failure.
+
 ## 9. Operators and islands
 
 Nitro operators form batch-pull graphs. A downstream operator asks upstream for the next batch or required state.

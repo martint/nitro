@@ -110,16 +110,23 @@ final class FrameworkManagedScalarFunction
         bindExecutionBlockers(inputs, state);
 
         Streams result = Streams.empty();
-        ErrorVector errors = requestErrors
+        // VALUES and ERRORS can be evaluated independently.  A mapped, row-local target failure must therefore not
+        // escape merely because this invocation is producing VALUES only; the ERRORS invocation will publish it.
+        // This also keeps encoded-domain evaluation safe when the physical domain contains values outside the
+        // current logical selection.
+        boolean transientErrors = mayFail && invokeTarget && !requestErrors;
+        ErrorVector errors = requestErrors || transientErrors
                 ? context.allocator().allocateOrGrow(
                         allocationContext,
-                        output != null && output.getOrNull(Stream.ERRORS) instanceof ErrorVector existing ? existing : null,
+                        requestErrors && output != null && output.getOrNull(Stream.ERRORS) instanceof ErrorVector existing ? existing : null,
                         ErrorVector.class,
                         requiredLength,
                         ErrorVector::new)
                 : null;
         if (errors != null) {
             propagateInputErrors(state, mask, errors);
+        }
+        if (requestErrors) {
             result = result.with(Stream.ERRORS, errors);
         }
         if (requestNulls) {
@@ -145,7 +152,7 @@ final class FrameworkManagedScalarFunction
 
         Vector proposedValues = output == null ? null : output.getOrNull(Stream.VALUES);
         RleVector proposedRle = proposedValues instanceof RleVector rle && state.vectorAllocator.owns(rle) ? rle : null;
-        if (!requestErrors && mask.all() &&
+        if (!mayFail && !requestErrors && mask.all() &&
                 (proposedValues == null || proposedRle != null) &&
                 bindRleValuesIfNullFree(inputs, state, mask.size())) {
             int runCount = mergeRuns(inputs, state);
@@ -190,11 +197,20 @@ final class FrameworkManagedScalarFunction
             if (state.resultWriter != null) {
                 state.resultWriter.abort();
             }
+            if (transientErrors) {
+                context.allocator().release(allocationContext, errors);
+            }
             throw failure;
         }
         if (!requestValues) {
             context.allocator().release(allocationContext, values);
+            if (transientErrors) {
+                context.allocator().release(allocationContext, errors);
+            }
             return result;
+        }
+        if (transientErrors) {
+            context.allocator().release(allocationContext, errors);
         }
         return result.with(Stream.VALUES, values);
     }

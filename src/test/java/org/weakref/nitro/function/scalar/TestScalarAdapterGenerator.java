@@ -589,6 +589,25 @@ final class TestScalarAdapterGenerator
     }
 
     @Test
+    void testMappedTargetFailureDoesNotEscapeValuesOnlyEvaluation()
+            throws Throwable
+    {
+        PrimitiveFunction function = requireNonNegativeFunctionWithFailureMapping();
+
+        try (Allocator allocator = new Allocator(createDefault())) {
+            Streams result = function.apply(
+                    List.of(Streams.ofValues(new I64Vector(new long[] {-1, 7}))),
+                    Mask.all(2),
+                    EnumSet.of(Stream.VALUES),
+                    Streams.empty(),
+                    new PrimitiveExecutionContext(allocator));
+
+            assertThat(((I64Vector) result.values()).values()).containsExactly(0, 7);
+            assertThat(result.has(Stream.ERRORS)).isFalse();
+        }
+    }
+
+    @Test
     void testErrorOnlyDemandInvokesOnlyFallibleTargets()
             throws Throwable
     {
