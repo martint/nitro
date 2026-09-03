@@ -135,3 +135,4 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | [0053](0053-refine-failure-semantics-for-exact-bindings.md) | Refine failure semantics for exact registry bindings | accepted |
 | [0054](0054-generate-fixed-width-structural-projections.md) | Generate fixed-width structural projections without carrier-specific engine types | accepted |
 | [0055](0055-link-generated-aggregation-targets-as-constants.md) | Link generated aggregation targets as constants | accepted |
+| [0056](0056-allow-generated-aggregation-updates-to-consume-tuples.md) | Allow generated aggregation updates to consume primitive tuples | accepted |

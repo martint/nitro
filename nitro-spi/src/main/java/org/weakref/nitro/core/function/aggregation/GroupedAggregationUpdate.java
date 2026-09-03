@@ -13,18 +13,20 @@
  */
 package org.weakref.nitro.core.function.aggregation;
 
+import java.util.List;
+
 import static java.util.Objects.requireNonNull;
 
 /**
- * Classloader-neutral description of one long contribution to grouped aggregation state.
+ * Classloader-neutral description of one primitive contribution tuple to grouped aggregation state.
  * <p>
  * This is provider metadata, not an executable operator contract. A physical lowering step may
  * combine these descriptions and generate an engine-owned grouping kernel without recognizing a
  * function identity or provider implementation class.
  *
- * @param contribution the physical long contribution and optional input null check
+ * @param contributions ordered primitive contributions and optional input null checks
  */
-public record GroupedAggregationUpdate(Contribution contribution, GroupedAggregationUpdateTarget target)
+public record GroupedAggregationUpdate(List<Contribution> contributions, GroupedAggregationUpdateTarget target)
 {
     public sealed interface Contribution
             permits InputValue, DoubleInputValue, Constant {}
@@ -64,13 +66,41 @@ public record GroupedAggregationUpdate(Contribution contribution, GroupedAggrega
 
     public GroupedAggregationUpdate
     {
-        requireNonNull(contribution, "contribution is null");
-        requireNonNull(target, "target is null");
-        Class<?> expectedCarrier = contribution instanceof DoubleInputValue ? double.class : long.class;
-        if (target.contributionCarrier() != expectedCarrier) {
-            throw new IllegalArgumentException("contribution requires %s but target accepts %s"
-                    .formatted(expectedCarrier, target.contributionCarrier()));
+        contributions = List.copyOf(requireNonNull(contributions, "contributions is null"));
+        if (contributions.isEmpty()) {
+            throw new IllegalArgumentException("contributions is empty");
         }
+        requireNonNull(target, "target is null");
+        if (target.contributionCarriers().size() != contributions.size()) {
+            throw new IllegalArgumentException("target accepts %s contributions but update declares %s"
+                    .formatted(target.contributionCarriers().size(), contributions.size()));
+        }
+        for (int index = 0; index < contributions.size(); index++) {
+            Class<?> expectedCarrier = contributions.get(index) instanceof DoubleInputValue ? double.class : long.class;
+            Class<?> actualCarrier = target.contributionCarriers().get(index);
+            if (actualCarrier != expectedCarrier) {
+                throw new IllegalArgumentException("contribution %s requires %s but target accepts %s"
+                        .formatted(index, expectedCarrier, actualCarrier));
+            }
+        }
+    }
+
+    public GroupedAggregationUpdate(Contribution contribution, GroupedAggregationUpdateTarget target)
+    {
+        this(List.of(requireNonNull(contribution, "contribution is null")), target);
+    }
+
+    public Contribution contribution()
+    {
+        if (contributions.size() != 1) {
+            throw new IllegalStateException("update has multiple contributions");
+        }
+        return contributions.getFirst();
+    }
+
+    public static GroupedAggregationUpdate inputs(List<Contribution> contributions, GroupedAggregationUpdateTarget target)
+    {
+        return new GroupedAggregationUpdate(contributions, target);
     }
 
     public static GroupedAggregationUpdate inputValue(int inputColumn, GroupedAggregationUpdateTarget target)
@@ -95,7 +125,12 @@ public record GroupedAggregationUpdate(Contribution contribution, GroupedAggrega
 
     public int inputColumn()
     {
-        return switch (contribution) {
+        return inputColumn(0);
+    }
+
+    public int inputColumn(int contribution)
+    {
+        return switch (contributions.get(contribution)) {
             case InputValue input -> input.inputColumn();
             case DoubleInputValue input -> input.inputColumn();
             case Constant constant -> constant.nullCheckInputColumn();
@@ -104,21 +139,42 @@ public record GroupedAggregationUpdate(Contribution contribution, GroupedAggrega
 
     public boolean readsInput()
     {
-        return inputColumn() >= 0;
+        return java.util.stream.IntStream.range(0, contributions.size()).anyMatch(this::readsInput);
+    }
+
+    public boolean readsInput(int contribution)
+    {
+        return inputColumn(contribution) >= 0;
     }
 
     public boolean readsValue()
     {
-        return contribution instanceof InputValue || contribution instanceof DoubleInputValue;
+        return java.util.stream.IntStream.range(0, contributions.size()).anyMatch(this::readsValue);
+    }
+
+    public boolean readsValue(int contribution)
+    {
+        Contribution value = contributions.get(contribution);
+        return value instanceof InputValue || value instanceof DoubleInputValue;
     }
 
     public boolean readsDoubleValue()
     {
-        return contribution instanceof DoubleInputValue;
+        return contributions.stream().anyMatch(DoubleInputValue.class::isInstance);
+    }
+
+    public boolean readsDoubleValue(int contribution)
+    {
+        return contributions.get(contribution) instanceof DoubleInputValue;
     }
 
     public long constantValue()
     {
-        return ((Constant) contribution).value();
+        return constantValue(0);
+    }
+
+    public long constantValue(int contribution)
+    {
+        return ((Constant) contributions.get(contribution)).value();
     }
 }

@@ -23,6 +23,7 @@ import java.lang.constant.DirectMethodHandleDesc;
 import java.lang.constant.DynamicCallSiteDesc;
 import java.lang.constant.MethodTypeDesc;
 import java.lang.invoke.MethodHandles;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
@@ -229,15 +230,18 @@ final class FusedGroupingAggregationKernelGenerator
         code.aload(KEYS);
         code.checkcast(intKey ? CD_INT_ARRAY : CD_LONG_ARRAY);
         code.astore(KEYS);
-        for (int accumulator = 0; accumulator < specs.size(); accumulator++) {
-            if (!specs.get(accumulator).readsValue()) {
-                continue;
+        int input = 0;
+        for (GroupedAggregationUpdate spec : specs) {
+            for (int contribution = 0; contribution < spec.contributions().size(); contribution++, input++) {
+                if (!spec.readsValue(contribution)) {
+                    continue;
+                }
+                code.aload(INPUTS);
+                code.loadConstant(input);
+                code.aaload();
+                code.checkcast(doubleInputs[input] ? CD_DOUBLE_ARRAY : intInputs[input] ? CD_INT_ARRAY : CD_LONG_ARRAY);
+                code.astore(INPUT_ARRAY_BASE + input);
             }
-            code.aload(INPUTS);
-            code.loadConstant(accumulator);
-            code.aaload();
-            code.checkcast(doubleInputs[accumulator] ? CD_DOUBLE_ARRAY : intInputs[accumulator] ? CD_INT_ARRAY : CD_LONG_ARRAY);
-            code.astore(INPUT_ARRAY_BASE + accumulator);
         }
 
         // long nextId = startNextId;
@@ -553,9 +557,26 @@ final class FusedGroupingAggregationKernelGenerator
                 continue;
             }
             GroupedAggregationUpdate spec = specs.get(accumulator);
+            if (spec.contributions().size() > 1) {
+                emitMultiInputIncrement(
+                        code,
+                        spec,
+                        accumulator,
+                        inputOffset(specs, accumulator),
+                        intInputs,
+                        doubleInputs,
+                        mappedInputs,
+                        mappedInputNulls,
+                        inputUsesKeyIds,
+                        inputNullUsesKeyIds,
+                        offsetInputs,
+                        offsetInputNulls);
+                emitted[accumulator] = true;
+                continue;
+            }
             if (!spec.readsInput()) {
                 if (!batchConstantRuns) {
-                    emitIncrement(code, spec, accumulator, intInputs, doubleInputs, mappedInputs, inputUsesKeyIds, offsetInputs);
+                    emitIncrement(code, spec, accumulator, inputOffset(specs, accumulator), intInputs, doubleInputs, mappedInputs, inputUsesKeyIds, offsetInputs);
                 }
                 emitted[accumulator] = true;
                 continue;
@@ -565,19 +586,20 @@ final class FusedGroupingAggregationKernelGenerator
             // then update every matching state in the same generated block (e.g. SUM(x), COUNT(x)).
             Label increment = code.newLabel();
             Label nextInput = code.newLabel();
+            int accumulatorInput = inputOffset(specs, accumulator);
             code.aload(INPUT_NULLS);
-            code.loadConstant(accumulator);
+            code.loadConstant(accumulatorInput);
             code.aaload();
             code.ifnull(increment);
             code.aload(INPUT_NULLS);
-            code.loadConstant(accumulator);
+            code.loadConstant(accumulatorInput);
             code.aaload();
-            if (inputNullUsesKeyIds[accumulator]) {
+            if (inputNullUsesKeyIds[accumulatorInput]) {
                 code.iload(KEY_POSITION);
             }
-            else if (mappedInputNulls[accumulator]) {
+            else if (mappedInputNulls[accumulatorInput]) {
                 code.aload(INPUT_NULL_IDS);
-                code.loadConstant(accumulator);
+                code.loadConstant(accumulatorInput);
                 code.aaload();
                 code.iload(POSITION);
                 code.iaload();
@@ -585,9 +607,9 @@ final class FusedGroupingAggregationKernelGenerator
             else {
                 code.iload(POSITION);
             }
-            if (offsetInputNulls[accumulator]) {
+            if (offsetInputNulls[accumulatorInput]) {
                 code.aload(INPUT_NULL_OFFSETS);
-                code.loadConstant(accumulator);
+                code.loadConstant(accumulatorInput);
                 code.iaload();
                 code.iadd();
             }
@@ -597,9 +619,10 @@ final class FusedGroupingAggregationKernelGenerator
             for (int candidate = accumulator; candidate < specs.size(); candidate++) {
                 GroupedAggregationUpdate candidateSpec = specs.get(candidate);
                 if (!emitted[candidate]
+                        && candidateSpec.contributions().size() == 1
                         && candidateSpec.readsInput()
                         && candidateSpec.inputColumn() == spec.inputColumn()) {
-                    emitIncrement(code, candidateSpec, candidate, intInputs, doubleInputs, mappedInputs, inputUsesKeyIds, offsetInputs);
+                    emitIncrement(code, candidateSpec, candidate, inputOffset(specs, candidate), intInputs, doubleInputs, mappedInputs, inputUsesKeyIds, offsetInputs);
                     emitted[candidate] = true;
                 }
             }
@@ -633,7 +656,21 @@ final class FusedGroupingAggregationKernelGenerator
 
     private static int runGroupLocal(List<GroupedAggregationUpdate> specs)
     {
-        return INPUT_ARRAY_BASE + specs.size();
+        return INPUT_ARRAY_BASE + inputCount(specs);
+    }
+
+    private static int inputCount(List<GroupedAggregationUpdate> specs)
+    {
+        return specs.stream().mapToInt(spec -> spec.contributions().size()).sum();
+    }
+
+    private static int inputOffset(List<GroupedAggregationUpdate> specs, int accumulator)
+    {
+        int offset = 0;
+        for (int index = 0; index < accumulator; index++) {
+            offset += specs.get(index).contributions().size();
+        }
+        return offset;
     }
 
     private static int runCountLocal(List<GroupedAggregationUpdate> specs)
@@ -660,7 +697,9 @@ final class FusedGroupingAggregationKernelGenerator
             code.loadConstant(accumulator);
             code.aaload();
             code.iload(runGroup);
-            code.loadConstant(spec.constantValue());
+            for (int contribution = 0; contribution < spec.contributions().size(); contribution++) {
+                code.loadConstant(spec.constantValue(contribution));
+            }
             code.iload(runCount);
             emitUpdateInvocation(code, specs.get(accumulator), accumulator, true);
         }
@@ -683,6 +722,7 @@ final class FusedGroupingAggregationKernelGenerator
             CodeBuilder code,
             GroupedAggregationUpdate spec,
             int accumulator,
+            int inputOffset,
             boolean[] intInputs,
             boolean[] doubleInputs,
             boolean[] mappedInputs,
@@ -693,14 +733,81 @@ final class FusedGroupingAggregationKernelGenerator
         code.loadConstant(accumulator);
         code.aaload();
         code.iload(GROUP);
-        if (spec.readsValue()) {
-            code.aload(INPUT_ARRAY_BASE + accumulator);
-            if (inputUsesKeyIds[accumulator]) {
+        int input = inputOffset;
+        for (int contribution = 0; contribution < spec.contributions().size(); contribution++, input++) {
+            if (spec.readsValue(contribution)) {
+                code.aload(INPUT_ARRAY_BASE + input);
+                if (inputUsesKeyIds[input]) {
+                    code.iload(KEY_POSITION);
+                }
+                else if (mappedInputs[input]) {
+                    code.aload(INPUT_IDS);
+                    code.loadConstant(input);
+                    code.aaload();
+                    code.iload(POSITION);
+                    code.iaload();
+                }
+                else {
+                    code.iload(POSITION);
+                }
+                if (offsetInputs[input]) {
+                    code.aload(INPUT_OFFSETS);
+                    code.loadConstant(input);
+                    code.iaload();
+                    code.iadd();
+                }
+                if (doubleInputs[input]) {
+                    code.daload();
+                }
+                else if (intInputs[input]) {
+                    code.iaload();
+                    code.i2l();
+                }
+                else {
+                    code.laload();
+                }
+            }
+            else {
+                code.loadConstant(spec.constantValue(contribution));
+            }
+        }
+        emitUpdateInvocation(code, spec, accumulator, false);
+    }
+
+    private static void emitMultiInputIncrement(
+            CodeBuilder code,
+            GroupedAggregationUpdate spec,
+            int accumulator,
+            int inputOffset,
+            boolean[] intInputs,
+            boolean[] doubleInputs,
+            boolean[] mappedInputs,
+            boolean[] mappedInputNulls,
+            boolean[] inputUsesKeyIds,
+            boolean[] inputNullUsesKeyIds,
+            boolean[] offsetInputs,
+            boolean[] offsetInputNulls)
+    {
+        Label next = code.newLabel();
+        for (int contribution = 0; contribution < spec.contributions().size(); contribution++) {
+            if (!spec.readsInput(contribution)) {
+                continue;
+            }
+            int input = inputOffset + contribution;
+            Label noNullVector = code.newLabel();
+            code.aload(INPUT_NULLS);
+            code.loadConstant(input);
+            code.aaload();
+            code.ifnull(noNullVector);
+            code.aload(INPUT_NULLS);
+            code.loadConstant(input);
+            code.aaload();
+            if (inputNullUsesKeyIds[input]) {
                 code.iload(KEY_POSITION);
             }
-            else if (mappedInputs[accumulator]) {
-                code.aload(INPUT_IDS);
-                code.loadConstant(accumulator);
+            else if (mappedInputNulls[input]) {
+                code.aload(INPUT_NULL_IDS);
+                code.loadConstant(input);
                 code.aaload();
                 code.iload(POSITION);
                 code.iaload();
@@ -708,35 +815,32 @@ final class FusedGroupingAggregationKernelGenerator
             else {
                 code.iload(POSITION);
             }
-            if (offsetInputs[accumulator]) {
-                code.aload(INPUT_OFFSETS);
-                code.loadConstant(accumulator);
+            if (offsetInputNulls[input]) {
+                code.aload(INPUT_NULL_OFFSETS);
+                code.loadConstant(input);
                 code.iaload();
                 code.iadd();
             }
-            if (doubleInputs[accumulator]) {
-                code.daload();
-            }
-            else if (intInputs[accumulator]) {
-                code.iaload();
-                code.i2l();
-            }
-            else {
-                code.laload();
-            }
+            code.baload();
+            code.ifne(next);
+            code.labelBinding(noNullVector);
         }
-        else {
-            code.loadConstant(spec.constantValue());
-        }
-        emitUpdateInvocation(code, spec, accumulator, false);
+        emitIncrement(code, spec, accumulator, inputOffset, intInputs, doubleInputs, mappedInputs, inputUsesKeyIds, offsetInputs);
+        code.labelBinding(next);
     }
 
     private static void emitUpdateInvocation(CodeBuilder code, GroupedAggregationUpdate spec, int accumulator, boolean repeated)
     {
-        ClassDesc contribution = spec.readsDoubleValue() ? CD_double : CD_long;
-        MethodTypeDesc type = repeated
-                ? MethodTypeDesc.of(CD_void, CD_Object, CD_int, contribution, CD_int)
-                : MethodTypeDesc.of(CD_void, CD_Object, CD_int, contribution);
+        List<ClassDesc> parameters = new ArrayList<>();
+        parameters.add(CD_Object);
+        parameters.add(CD_int);
+        for (GroupedAggregationUpdate.Contribution contribution : spec.contributions()) {
+            parameters.add(contribution instanceof GroupedAggregationUpdate.DoubleInputValue ? CD_double : CD_long);
+        }
+        if (repeated) {
+            parameters.add(CD_int);
+        }
+        MethodTypeDesc type = MethodTypeDesc.of(CD_void, parameters.toArray(ClassDesc[]::new));
         code.invokedynamic(DynamicCallSiteDesc.of(
                 BSM_UPDATE,
                 (repeated ? "repeated" : "update") + accumulator,

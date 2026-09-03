@@ -15,6 +15,7 @@ package org.weakref.nitro.core.function.aggregation;
 
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodType;
+import java.util.List;
 import java.util.Optional;
 
 import static java.util.Objects.requireNonNull;
@@ -22,7 +23,8 @@ import static java.util.Objects.requireNonNull;
 /**
  * Exact provider-owned invocation targets for one generated grouped-state update.
  *
- * <p>The first argument is an opaque provider state, followed by the group id and one primitive contribution.
+ * <p>The first argument is an opaque provider state, followed by the group id and one or more primitive
+ * contributions.
  * Generated engine code links the handle as a constant, so the provider state class never appears symbolically in
  * the generated class. The optional repeated target consumes an exact logical multiplicity for encoded domains.
  */
@@ -35,12 +37,12 @@ public record GroupedAggregationUpdateTarget(MethodHandle update, Optional<Metho
         validate(update, false);
         repeatedUpdate.ifPresent(target -> validate(target, true));
         Class<?> stateType = update.type().parameterType(0);
-        Class<?> contributionCarrier = update.type().parameterType(2);
+        List<Class<?>> contributionCarriers = contributionCarriers(update, false);
         repeatedUpdate.ifPresent(target -> {
             if (target.type().parameterType(0) != stateType) {
                 throw new IllegalArgumentException("update and repeated update have different state types");
             }
-            if (target.type().parameterType(2) != contributionCarrier) {
+            if (!contributionCarriers(target, true).equals(contributionCarriers)) {
                 throw new IllegalArgumentException("update and repeated update have different contribution carriers");
             }
         });
@@ -51,22 +53,41 @@ public record GroupedAggregationUpdateTarget(MethodHandle update, Optional<Metho
         this(update, Optional.empty());
     }
 
+    public List<Class<?>> contributionCarriers()
+    {
+        return contributionCarriers(update, false);
+    }
+
     public Class<?> contributionCarrier()
     {
-        return update.type().parameterType(2);
+        if (contributionCarriers().size() != 1) {
+            throw new IllegalStateException("target has multiple contribution carriers");
+        }
+        return contributionCarriers().getFirst();
     }
 
     private static void validate(MethodHandle target, boolean repeated)
     {
         MethodType type = target.type();
-        int parameters = repeated ? 4 : 3;
+        int minimumParameters = repeated ? 4 : 3;
         if (type.returnType() != void.class ||
-                type.parameterCount() != parameters ||
+                type.parameterCount() < minimumParameters ||
                 type.parameterType(0).isPrimitive() ||
                 type.parameterType(1) != int.class ||
-                (type.parameterType(2) != long.class && type.parameterType(2) != double.class) ||
-                (repeated && type.parameterType(3) != int.class)) {
+                (repeated && type.lastParameterType() != int.class)) {
             throw new IllegalArgumentException("invalid grouped update target type: " + type);
         }
+        int contributionLimit = type.parameterCount() - (repeated ? 1 : 0);
+        for (int parameter = 2; parameter < contributionLimit; parameter++) {
+            if (type.parameterType(parameter) != long.class && type.parameterType(parameter) != double.class) {
+                throw new IllegalArgumentException("invalid grouped update target type: " + type);
+            }
+        }
+    }
+
+    private static List<Class<?>> contributionCarriers(MethodHandle target, boolean repeated)
+    {
+        MethodType type = target.type();
+        return type.parameterList().subList(2, type.parameterCount() - (repeated ? 1 : 0));
     }
 }

@@ -40,14 +40,12 @@ interface FusedGroupingKernel
      * @param tableMask {@code capacity - 1} bitmask for the table
      * @param keysByGroup reverse map: key by group id
      * @param startNextId the next group id to assign
-     * @param inputs per-accumulator primitive base value column ({@code int[]} or {@code long[]});
-     *        {@code inputs[a]} is {@code null} when accumulator
-     *        {@code a} increments by a constant)
-     * @param inputIds optional per-accumulator dictionary ids mapping logical positions into {@code inputs}
+     * @param inputs primitive base value columns flattened in accumulator/contribution order
+     *        ({@code int[]}, {@code long[]}, or {@code double[]}); an entry is null for a constant contribution
+     * @param inputIds optional per-contribution dictionary ids mapping logical positions into {@code inputs}
      * @param inputOffsets physical base offsets added after optional dictionary mapping
-     * @param inputNulls per-accumulator null base column, or {@code null} when that input is known
-     *        null-free (and for constant-increment accumulators)
-     * @param inputNullIds optional per-accumulator dictionary ids mapping logical positions into {@code inputNulls}
+     * @param inputNulls per-contribution null base column, or {@code null} when that input is known null-free
+     * @param inputNullIds optional per-contribution dictionary ids mapping logical positions into {@code inputNulls}
      * @param inputNullOffsets physical base offsets added after optional dictionary mapping
      * @param states per-accumulator opaque state-update target
      * @return the next group id after assigning any new groups encountered

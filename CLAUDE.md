@@ -184,13 +184,15 @@ java --add-modules jdk.incubator.vector --enable-native-access=ALL-UNNAMED \
 with `Sum`, `SumF64`, `Min`, `Max`, `MinUtf8`, `Avg`, `First`, `CountAll`,
 `CountColumn`, and `StddevSamp`. Operators execute the accumulator sequence supplied by the
 physical plan without recognizing or rewriting combinations of aggregate functions. Providers may
-optionally publish exact `GroupedAggregationUpdateTarget` method handles; generated engine code constant-links
-those targets while treating provider state as opaque rather than referencing a builtin state class.
+optionally publish exact `GroupedAggregationUpdateTarget` method handles over an ordered tuple of primitive
+contributions; generated engine code flattens the physical inputs, applies the combined null convention, and
+constant-links those targets while treating provider state as opaque rather than referencing a builtin state class.
 The generated single-long grouping backend receives reusable `GeneratedLongGroupingBindings`; physical
 I32/I64, dictionary, and null-stream inspection lives in that data-layer adapter rather than in the operator.
 State objects are rebound only when aggregate state is allocated or grown, not per input batch. Providers may also
 publish an exact repeated-update target for encoded-domain multiplicities; otherwise the engine conservatively
-invokes the single update once per logical occurrence.
+invokes the single update once per logical occurrence. Do not admit a multi-input encoded-domain shortcut without
+proving that every value and null mapping shares the same physical domain.
 
 ### Evaluator (`org.weakref.nitro.operator.evaluator`)
 

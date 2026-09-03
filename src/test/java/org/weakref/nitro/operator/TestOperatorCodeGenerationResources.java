@@ -46,6 +46,7 @@ class TestOperatorCodeGenerationResources
     private static final GroupedAggregationUpdateTarget WEIGHTED_LONG_TARGET = longTarget(WeightedState.class);
     private static final GroupedAggregationUpdateTarget ORDERED_LONG_TARGET = longTarget(OrderedState.class);
     private static final GroupedAggregationUpdateTarget DOUBLE_SUM_TARGET = doubleTarget(DoubleSumState.class);
+    private static final GroupedAggregationUpdateTarget MIXED_TARGET = mixedTarget();
 
     @Test
     void testGeneratedPhysicalHashSupportsBooleanAccessors()
@@ -346,6 +347,54 @@ class TestOperatorCodeGenerationResources
     }
 
     @Test
+    void testGeneratedGroupingUsesMixedContributionsAndCombinedNullConvention()
+    {
+        try (OperatorCodeGenerationResources resources = new OperatorCodeGenerationResources()) {
+            FusedGroupingKernel kernel = resources.fusedGrouping().create(
+                    List.of(GroupedAggregationUpdate.inputs(
+                            List.of(
+                                    new GroupedAggregationUpdate.InputValue(0),
+                                    new GroupedAggregationUpdate.DoubleInputValue(1)),
+                            MIXED_TARGET)),
+                    false, false, false, false, false, false, false, false, false,
+                    new boolean[] {false, false},
+                    new boolean[] {false, true},
+                    new boolean[] {false, false},
+                    new boolean[] {false, false},
+                    new boolean[] {false, false},
+                    new boolean[] {false, false},
+                    new boolean[] {false, false},
+                    new boolean[] {false, false});
+            int[] tableIds = new int[8];
+            Arrays.fill(tableIds, -1);
+            MixedState state = new MixedState(2);
+
+            long nextGroup = kernel.accumulate(
+                    null,
+                    3,
+                    new long[] {1, 1, 2},
+                    null,
+                    0,
+                    new long[8],
+                    tableIds,
+                    7,
+                    new long[2],
+                    0,
+                    null,
+                    new Object[] {new long[] {2, 4, 8}, new double[] {0.5, 1.5, 3.0}},
+                    new int[2][],
+                    new int[2],
+                    new boolean[][] {null, new boolean[] {false, true, false}},
+                    new int[2][],
+                    new int[2],
+                    new Object[] {state});
+
+            assertThat(nextGroup).isEqualTo(2);
+            assertThat(state.values).containsExactly(1.0, 24.0);
+        }
+    }
+
+    @Test
     void testGeneratedGroupingCacheSeparatesFunctionTargetsWithTheSamePhysicalShape()
     {
         try (OperatorCodeGenerationResources resources = new OperatorCodeGenerationResources()) {
@@ -561,6 +610,34 @@ class TestOperatorCodeGenerationResources
         }
         catch (ReflectiveOperationException e) {
             throw new ExceptionInInitializerError(e);
+        }
+    }
+
+    private static GroupedAggregationUpdateTarget mixedTarget()
+    {
+        try {
+            return new GroupedAggregationUpdateTarget(lookup().findVirtual(
+                    MixedState.class,
+                    "update",
+                    methodType(void.class, int.class, long.class, double.class)));
+        }
+        catch (ReflectiveOperationException e) {
+            throw new ExceptionInInitializerError(e);
+        }
+    }
+
+    private static final class MixedState
+    {
+        private final double[] values;
+
+        private MixedState(int size)
+        {
+            values = new double[size];
+        }
+
+        public void update(int group, long left, double right)
+        {
+            values[group] += left * right;
         }
     }
 

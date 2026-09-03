@@ -18,9 +18,9 @@ import java.util.List;
 import static java.util.Objects.requireNonNull;
 
 /**
- * Provider-authored grouped-update description in function-argument coordinates.
+ * Provider-authored grouped-update tuple in function-argument coordinates.
  */
-public record GroupedAggregationUpdateTemplate(Contribution contribution, GroupedAggregationUpdateTarget target)
+public record GroupedAggregationUpdateTemplate(List<Contribution> contributions, GroupedAggregationUpdateTarget target)
 {
     public sealed interface Contribution
             permits InputValue, DoubleInputValue, Constant {}
@@ -56,8 +56,33 @@ public record GroupedAggregationUpdateTemplate(Contribution contribution, Groupe
 
     public GroupedAggregationUpdateTemplate
     {
-        contribution = requireNonNull(contribution, "contribution is null");
+        contributions = List.copyOf(requireNonNull(contributions, "contributions is null"));
+        if (contributions.isEmpty()) {
+            throw new IllegalArgumentException("contributions is empty");
+        }
         target = requireNonNull(target, "target is null");
+        if (target.contributionCarriers().size() != contributions.size()) {
+            throw new IllegalArgumentException("target accepts %s contributions but template declares %s"
+                    .formatted(target.contributionCarriers().size(), contributions.size()));
+        }
+        for (int index = 0; index < contributions.size(); index++) {
+            Class<?> expectedCarrier = contributions.get(index) instanceof DoubleInputValue ? double.class : long.class;
+            Class<?> actualCarrier = target.contributionCarriers().get(index);
+            if (actualCarrier != expectedCarrier) {
+                throw new IllegalArgumentException("contribution %s requires %s but target accepts %s"
+                        .formatted(index, expectedCarrier, actualCarrier));
+            }
+        }
+    }
+
+    public GroupedAggregationUpdateTemplate(Contribution contribution, GroupedAggregationUpdateTarget target)
+    {
+        this(List.of(requireNonNull(contribution, "contribution is null")), target);
+    }
+
+    public static GroupedAggregationUpdateTemplate inputs(List<Contribution> contributions, GroupedAggregationUpdateTarget target)
+    {
+        return new GroupedAggregationUpdateTemplate(contributions, target);
     }
 
     public static GroupedAggregationUpdateTemplate inputValue(int argument, GroupedAggregationUpdateTarget target)
@@ -84,12 +109,21 @@ public record GroupedAggregationUpdateTemplate(Contribution contribution, Groupe
     public GroupedAggregationUpdate bind(List<AggregationArgumentBinding> arguments)
     {
         requireNonNull(arguments, "arguments is null");
+        return GroupedAggregationUpdate.inputs(
+                contributions.stream()
+                        .map(contribution -> bind(contribution, arguments))
+                        .toList(),
+                target);
+    }
+
+    private static GroupedAggregationUpdate.Contribution bind(Contribution contribution, List<AggregationArgumentBinding> arguments)
+    {
         return switch (contribution) {
-            case InputValue input -> GroupedAggregationUpdate.inputValue(inputColumn(arguments, input.argument()), target);
-            case DoubleInputValue input -> GroupedAggregationUpdate.doubleInputValue(inputColumn(arguments, input.argument()), target);
+            case InputValue input -> new GroupedAggregationUpdate.InputValue(inputColumn(arguments, input.argument()));
+            case DoubleInputValue input -> new GroupedAggregationUpdate.DoubleInputValue(inputColumn(arguments, input.argument()));
             case Constant constant when constant.nullCheckArgument() >= 0 ->
-                    GroupedAggregationUpdate.constantWhenNotNull(constant.value(), inputColumn(arguments, constant.nullCheckArgument()), target);
-            case Constant constant -> GroupedAggregationUpdate.constant(constant.value(), target);
+                    new GroupedAggregationUpdate.Constant(constant.value(), inputColumn(arguments, constant.nullCheckArgument()));
+            case Constant constant -> new GroupedAggregationUpdate.Constant(constant.value(), -1);
         };
     }
 

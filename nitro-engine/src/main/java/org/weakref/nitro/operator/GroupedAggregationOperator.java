@@ -116,6 +116,7 @@ public class GroupedAggregationOperator
     private boolean fusedPhysicalPathCommitted;
     private FusedGroupingKernel fusedKernel;
     private GroupedAggregationUpdate[] fusedSpecs;
+    private int[] fusedInputOffsets;
     private boolean fusedIntermediateMerge;
     private int[] fusedAggregationIndexes;
     private int[] fusedStateOffsets;
@@ -1033,12 +1034,16 @@ public class GroupedAggregationOperator
         }
         fusedStateOffsets[fusedAggregationIndexes.length] = updates.size();
         fusedSpecs = updates.toArray(GroupedAggregationUpdate[]::new);
+        fusedInputOffsets = new int[fusedSpecs.length + 1];
+        for (int update = 0; update < fusedSpecs.length; update++) {
+            fusedInputOffsets[update + 1] = fusedInputOffsets[update] + fusedSpecs[update].contributions().size();
+        }
         fusedIntermediateMerge = fusedAggregationIndexes.length > 0;
         for (int aggregationIndex : fusedAggregationIndexes) {
             fusedIntermediateMerge &= ((GeneratedGroupedAggregationUnit) aggregations[aggregationIndex])
                     .mergesIntermediateInput();
         }
-        fusedBindings = new GeneratedLongGroupingBindings(fusedSpecs.length, fusedDictionaryInput);
+        fusedBindings = new GeneratedLongGroupingBindings(fusedInputOffsets[fusedSpecs.length], fusedDictionaryInput);
         fusedStateVectors = new Object[fusedSpecs.length];
     }
 
@@ -1059,6 +1064,11 @@ public class GroupedAggregationOperator
                 (!generatedUpdates && !groupedDomainInput && !encodedGroupedInput && !filteredEncodedGroupedInput) ||
                 (filteredAggregationIndexes.length != 0 && !filteredEncodedGroupedInput) ||
                 distinctAggregationGroups.length != 0) {
+            return false;
+        }
+        if (generatedUpdates && Arrays.stream(fusedSpecs).anyMatch(spec -> spec.contributions().size() != 1)) {
+            // Multi-input domain execution additionally requires proof that every value and null mapping shares
+            // one physical domain. Keep it on the generated logical-row path until that proof is represented.
             return false;
         }
         if (groupByColumns.length != 1) {
@@ -1822,16 +1832,24 @@ public class GroupedAggregationOperator
             System.err.printf("[fused-grouping-reuse-continuation] groups=%d rows=%d keyMapped=%s runCache=%s%n",
                     inlineGroupingState.groupCount(), mask.count(), keyMapped, runCache);
         }
-        for (int index = 0; index < fusedSpecs.length; index++) {
-            GroupedAggregationUpdate spec = fusedSpecs[index];
-            if (!spec.readsInput()) {
-                fusedBindings.clearInput(index);
-                continue;
-            }
-            Output valueOutput = batch.output(spec.inputColumn());
-            Vector values = spec.readsValue() ? valueOutput.borrow(Stream.VALUES) : null;
-            if (!fusedBindings.bindInput(index, values, valueOutput.borrowOrNull(Stream.NULLS), spec.readsValue(), spec.readsDoubleValue())) {
-                return false;
+        for (int update = 0; update < fusedSpecs.length; update++) {
+            GroupedAggregationUpdate spec = fusedSpecs[update];
+            for (int contribution = 0; contribution < spec.contributions().size(); contribution++) {
+                int input = fusedInputOffsets[update] + contribution;
+                if (!spec.readsInput(contribution)) {
+                    fusedBindings.clearInput(input);
+                    continue;
+                }
+                Output valueOutput = batch.output(spec.inputColumn(contribution));
+                Vector values = spec.readsValue(contribution) ? valueOutput.borrow(Stream.VALUES) : null;
+                if (!fusedBindings.bindInput(
+                        input,
+                        values,
+                        valueOutput.borrowOrNull(Stream.NULLS),
+                        spec.readsValue(contribution),
+                        spec.readsDoubleValue(contribution))) {
+                    return false;
+                }
             }
         }
 
