@@ -10,24 +10,36 @@ micro-benchmarks it now reads real Parquet data and runs subsets of the TPC-DS
 and ClickBench query suites, benchmarked apples-to-apples against an equivalent
 tree of Trino operators.
 
+## Architecture specification and decisions
+
+- `docs/SPEC.md` is the normative architecture contract for Nitro and its Cork/Trino integration. Read the relevant
+  section before architecture work. A contradiction is either an implementation defect or a deliberate spec change.
+- `docs/decisions/` records why consequential choices were made. Add a numbered decision record when a change selects
+  among viable alternatives, changes a hard-to-reverse contract, deliberately accepts a cost, or declines a
+  capability. Accepted records are immutable; amendments and reversals create a new record and update both ends plus
+  the index.
+- A consequential architecture change updates the spec and decision record in the same Nitro commit. A paired Cork
+  integration commit cites the Nitro ADR number. Do not leave the current contract only in a dated campaign note.
+
 ## Design knowledge base — `~/notes/nitro/`
 
 Durable design principles, learnings, and design decisions live under `~/notes/nitro/`. Read the
 relevant notes before starting perf/architecture work, and **keep them current as new principles and
 decisions come up** — this is part of the task, not optional cleanup:
 
-- `design-principles.md` — the numbered, curated list of rules we optimize toward. When a new
+- `design-principles.md` — the empirical and performance rules we optimize toward. It complements but does not replace
+  `docs/SPEC.md`. When a new
   *generalizable* principle emerges (a lever that works, a class of refuted levers, a methodology, an
   architectural invariant), add it here. When a change violates one, that's usually the bug or the lever.
 - `tooling-and-methodology.md` — profiling/benchmark/Velox-harness recipes and Vector-API/JVM caveats.
 - Dated `YYYY-MM-DD-*.md` notes — session narratives and design decisions (what was tried, measured,
   kept/refuted, and why). Write one when you close out a non-trivial investigation.
 
-Rules of thumb: a **generalizable** learning → a `design-principles.md` entry (or sharpen an existing
-one); a **recipe** → `tooling-and-methodology.md`; a **narrative/decision** → a dated note. A one-off
-query-specific fix belongs in the auto-memory, not here. If a new learning *corrects* an earlier note,
-update the note (the notes are the authority) rather than leaving both. Prefer editing/sharpening an
-existing entry over adding a near-duplicate.
+Rules of thumb: a **current architectural contract** → `docs/SPEC.md`; a consequential choice among alternatives → a
+`docs/decisions/` record; a **generalizable empirical learning** → a `design-principles.md` entry (or sharpen an
+existing one); a **recipe** → `tooling-and-methodology.md`; a **narrative** → a dated note. A one-off query-specific
+fix belongs in the auto-memory, not here. If a new learning corrects an earlier note, update that note rather than
+leaving both. Prefer editing or sharpening an existing entry over adding a near-duplicate.
 
 ## Commands
 

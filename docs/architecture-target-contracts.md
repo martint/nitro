@@ -1,5 +1,9 @@
 # Nitro Target Contracts
 
+> **Historical migration document.** [`SPEC.md`](SPEC.md) is now the normative Nitro architecture specification.
+> This file is retained for detailed design history while still-relevant contracts are migrated. Where the two
+> disagree, `SPEC.md` is authoritative.
+
 This document captures the intended architectural contracts for Nitro as it
 evolves from the current prototype state toward a stream-first evaluation
 engine.
