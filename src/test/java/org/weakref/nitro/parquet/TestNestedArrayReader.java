@@ -37,6 +37,7 @@ import java.util.Arrays;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
 class TestNestedArrayReader
 {
@@ -145,6 +146,153 @@ class TestNestedArrayReader
         }
     }
 
+    @Test
+    void testReconstructsRecursivelyNestedLists()
+    {
+        try (Allocator allocator = new Allocator(EngineResources.createDefault());
+                NestedArrayReader reader = nestedReader(Integer.MAX_VALUE, true)) {
+            assertNestedLists(
+                    reader.read(allocator, new Allocator.Context("test"), 4, Mask.all(4)),
+                    new int[] {0, 4, 4, 4, 5},
+                    new boolean[] {false, true, false, false},
+                    new int[] {0, 2, 2, 2, 3, 3},
+                    new boolean[] {false, true, false, false, false},
+                    new long[] {1, 0, 4},
+                    new boolean[] {false, true, false});
+        }
+    }
+
+    @Test
+    void testSelectsRecursivelyNestedLists()
+    {
+        try (Allocator allocator = new Allocator(EngineResources.createDefault());
+                NestedArrayReader reader = nestedReader(Integer.MAX_VALUE, true)) {
+            assertNestedLists(
+                    reader.read(allocator, new Allocator.Context("test"), 4, Mask.sparse(new int[] {0, 3}, 4)),
+                    new int[] {0, 4, 4, 4, 5},
+                    new boolean[] {false, false, false, false},
+                    new int[] {0, 2, 2, 2, 3, 3},
+                    new boolean[] {false, true, false, false, false},
+                    new long[] {1, 0, 4},
+                    new boolean[] {false, true, false});
+        }
+    }
+
+    @Test
+    void testMaterializesEmptyNestedDomain()
+    {
+        try (Allocator allocator = new Allocator(EngineResources.createDefault());
+                NestedArrayReader reader = nestedReader(Integer.MAX_VALUE, true)) {
+            Streams streams = reader.read(allocator, new Allocator.Context("test"), 4, Mask.sparse(new int[] {1}, 4));
+            ArrayVector outer = (ArrayVector) streams.values();
+            ArrayVector inner = (ArrayVector) outer.elementValues();
+
+            assertThat(outer.offsets()).containsExactly(0, 0, 0, 0, 0);
+            assertThat(inner.offsets()).containsExactly(0);
+            assertThat(outer.elementNulls().values()).isEmpty();
+            assertThat(((I64Vector) inner.elementValues()).values()).isEmpty();
+            assertThat(inner.elementNulls().values()).isEmpty();
+        }
+    }
+
+    @Test
+    void testSkipsRecursivelyNestedLists()
+    {
+        try (Allocator allocator = new Allocator(EngineResources.createDefault());
+                NestedArrayReader reader = nestedReader(Integer.MAX_VALUE, true)) {
+            reader.skip(3);
+            assertNestedLists(
+                    reader.read(allocator, new Allocator.Context("test"), 1, Mask.all(1)),
+                    new int[] {0, 1},
+                    new boolean[] {false},
+                    new int[] {0, 0},
+                    new boolean[] {false},
+                    new long[] {},
+                    new boolean[] {});
+        }
+    }
+
+    @Test
+    void testReconstructsRecursivelyNestedListsAcrossEventWindows()
+    {
+        try (Allocator allocator = new Allocator(EngineResources.createDefault());
+                NestedArrayReader reader = nestedReader(2, false)) {
+            assertNestedLists(
+                    reader.read(allocator, new Allocator.Context("test"), 4, Mask.all(4)),
+                    new int[] {0, 4, 4, 4, 5},
+                    new boolean[] {false, true, false, false},
+                    new int[] {0, 2, 2, 2, 3, 3},
+                    new boolean[] {false, true, false, false, false},
+                    new long[] {1, 0, 4},
+                    new boolean[] {false, true, false});
+        }
+    }
+
+    @Test
+    void testReconstructsDictionaryNestedListsAfterPoolReuse()
+    {
+        try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
+            try (NestedArrayReader reader = dictionaryNestedReader()) {
+                assertNestedLists(
+                        reader.read(allocator, new Allocator.Context("first"), 2, Mask.all(2)),
+                        new int[] {0, 1, 2},
+                        new boolean[] {false, false},
+                        new int[] {0, 2, 4},
+                        new boolean[] {false, false},
+                        new long[] {10, 20, 20, 10},
+                        new boolean[] {false, false, false, false});
+            }
+            try (NestedArrayReader reader = dictionaryNestedReader()) {
+                assertNestedLists(
+                        reader.read(allocator, new Allocator.Context("second"), 2, Mask.all(2)),
+                        new int[] {0, 1, 2},
+                        new boolean[] {false, false},
+                        new int[] {0, 2, 4},
+                        new boolean[] {false, false},
+                        new long[] {10, 20, 20, 10},
+                        new boolean[] {false, false, false, false});
+            }
+        }
+    }
+
+    @Test
+    void testRejectsNestedMapElementsExplicitly()
+    {
+        ParquetSchema.Group map = new ParquetSchema.Group(
+                "element", FieldRepetitionType.OPTIONAL, ConvertedType.MAP, null, List.of(), 3, 1);
+        ParquetSchema.Group repeatedValues = new ParquetSchema.Group(
+                "list", FieldRepetitionType.REPEATED, null, null, List.of(map), 2, 1);
+        ParquetSchema.Group list = new ParquetSchema.Group(
+                "outer", FieldRepetitionType.OPTIONAL, ConvertedType.LIST, null, List.of(repeatedValues), 1, 0);
+
+        assertThat(catchThrowable(() -> new NestedArrayReader(
+                list,
+                RleReaderPolicy.defaults(),
+                new NestedLeafCursor[0])))
+                .isInstanceOf(UnsupportedParquetFeatureException.class)
+                .hasMessageContaining("nested MAP elements are not implemented yet");
+    }
+
+    private static void assertNestedLists(
+            Streams streams,
+            int[] outerOffsets,
+            boolean[] outerNulls,
+            int[] innerOffsets,
+            boolean[] innerNulls,
+            long[] values,
+            boolean[] valueNulls)
+    {
+        ArrayVector outer = (ArrayVector) streams.values();
+        ArrayVector inner = (ArrayVector) outer.elementValues();
+
+        assertThat(outer.offsets()).containsExactly(outerOffsets);
+        assertThat(((BooleanVector) streams.get(Stream.NULLS)).values()).containsExactly(outerNulls);
+        assertThat(inner.offsets()).containsExactly(innerOffsets);
+        assertThat(outer.elementNulls().values()).containsExactly(innerNulls);
+        assertThat(((I64Vector) inner.elementValues()).values()).containsExactly(values);
+        assertThat(inner.elementNulls().values()).containsExactly(valueNulls);
+    }
+
     private static NestedArrayReader reader()
     {
         return reader(
@@ -210,6 +358,63 @@ class TestNestedArrayReader
                     new TestingCursor(labels, repetitions, new int[] {4, 2, 1, 3, 0}, new int[] {0, -1, -1, -1, -1}, 3, false)});
     }
 
+    private static NestedArrayReader nestedReader(int maximumWindowLength, boolean scalarAdvanceSupported)
+    {
+        ParquetSchema.Primitive value = new ParquetSchema.Primitive(
+                "element", FieldRepetitionType.OPTIONAL, Type.INT64, null, null, 0, 0, 0, 0,
+                List.of("outer", "list", "element", "list", "element"), 5, 2);
+        ParquetSchema.Group innerRepeatedValues = new ParquetSchema.Group(
+                "list", FieldRepetitionType.REPEATED, null, null, List.of(value), 4, 2);
+        ParquetSchema.Group inner = new ParquetSchema.Group(
+                "element", FieldRepetitionType.OPTIONAL, ConvertedType.LIST, null, List.of(innerRepeatedValues), 3, 1);
+        ParquetSchema.Group outerRepeatedValues = new ParquetSchema.Group(
+                "list", FieldRepetitionType.REPEATED, null, null, List.of(inner), 2, 1);
+        ParquetSchema.Group outer = new ParquetSchema.Group(
+                "outer", FieldRepetitionType.OPTIONAL, ConvertedType.LIST, null, List.of(outerRepeatedValues), 1, 0);
+
+        PrimitiveArrayPool pool = new PrimitiveArrayPool(0, 0);
+        LongPhysicalValueDecoder values = new LongPhysicalValueDecoder(Type.INT64, pool);
+        values.decodePlain(longs(1, 4), 0, 2);
+        return new NestedArrayReader(
+                outer,
+                RleReaderPolicy.defaults(),
+                new TestingCursor(
+                        values,
+                        new int[] {0, 2, 1, 1, 1, 0, 0, 0},
+                        new int[] {5, 4, 2, 3, 5, 0, 1, 3},
+                        new int[] {0, -1, -1, -1, 1, -1, -1, -1},
+                        maximumWindowLength,
+                        scalarAdvanceSupported));
+    }
+
+    private static NestedArrayReader dictionaryNestedReader()
+    {
+        ParquetSchema.Primitive value = new ParquetSchema.Primitive(
+                "element", FieldRepetitionType.OPTIONAL, Type.INT64, null, null, 0, 0, 0, 0,
+                List.of("outer", "list", "element", "list", "element"), 5, 2);
+        ParquetSchema.Group innerRepeatedValues = new ParquetSchema.Group(
+                "list", FieldRepetitionType.REPEATED, null, null, List.of(value), 4, 2);
+        ParquetSchema.Group inner = new ParquetSchema.Group(
+                "element", FieldRepetitionType.OPTIONAL, ConvertedType.LIST, null, List.of(innerRepeatedValues), 3, 1);
+        ParquetSchema.Group outerRepeatedValues = new ParquetSchema.Group(
+                "list", FieldRepetitionType.REPEATED, null, null, List.of(inner), 2, 1);
+        ParquetSchema.Group outer = new ParquetSchema.Group(
+                "outer", FieldRepetitionType.OPTIONAL, ConvertedType.LIST, null, List.of(outerRepeatedValues), 1, 0);
+
+        PrimitiveArrayPool pool = new PrimitiveArrayPool(0, 0);
+        LongPhysicalValueDecoder values = new LongPhysicalValueDecoder(Type.INT64, pool);
+        values.decodeDictionary(longs(10, 20), 2, org.apache.parquet.format.Encoding.PLAIN);
+        return new NestedArrayReader(
+                outer,
+                RleReaderPolicy.defaults(),
+                new TestingCursor(
+                        values,
+                        new int[] {0, 2, 0, 2},
+                        new int[] {5, 5, 5, 5},
+                        new int[] {0, 1, 1, 0},
+                        new int[] {0, 1, 1, 0}));
+    }
+
     private static String value(BinaryVector vector, int position)
     {
         return new String(
@@ -244,6 +449,7 @@ class TestNestedArrayReader
         private final int[] repetitions;
         private final int[] definitions;
         private final int[] ordinals;
+        private final int[] dictionaryIds;
         private final int maximumWindowLength;
         private final boolean scalarAdvanceSupported;
         private final NestedEventWindow window = new NestedEventWindow();
@@ -266,8 +472,25 @@ class TestNestedArrayReader
             this.repetitions = repetitions;
             this.definitions = definitions;
             this.ordinals = ordinals;
+            this.dictionaryIds = null;
             this.maximumWindowLength = maximumWindowLength;
             this.scalarAdvanceSupported = scalarAdvanceSupported;
+        }
+
+        private TestingCursor(
+                PhysicalValueDecoder decoder,
+                int[] repetitions,
+                int[] definitions,
+                int[] ordinals,
+                int[] dictionaryIds)
+        {
+            this.decoder = decoder;
+            this.repetitions = repetitions;
+            this.definitions = definitions;
+            this.ordinals = ordinals;
+            this.dictionaryIds = dictionaryIds;
+            this.maximumWindowLength = Integer.MAX_VALUE;
+            this.scalarAdvanceSupported = false;
         }
 
         @Override
@@ -312,7 +535,7 @@ class TestNestedArrayReader
         @Override
         public int dictionaryId()
         {
-            return -1;
+            return dictionaryIds == null ? -1 : dictionaryIds[event];
         }
 
         @Override
@@ -327,7 +550,7 @@ class TestNestedArrayReader
                     repetitions,
                     definitions,
                     ordinals,
-                    null,
+                    dictionaryIds,
                     offset,
                     Math.min(maximumWindowLength, repetitions.length - offset));
             return window;

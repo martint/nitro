@@ -447,6 +447,7 @@ final class LongNestedValueAccumulator
         int nullId = outputDictionarySize - 1;
         I32Vector ids = I32Vector.allocate(allocator, context, size);
         I32Vector frequencies = I32Vector.allocate(allocator, context, outputDictionarySize);
+        Arrays.fill(frequencies.values(), 0, outputDictionarySize, 0);
         Arrays.fill(dictionaryFrequencies, 0, dictionarySize, 0);
         for (int position = 0; position < size; position++) {
             int id = dictionaryIds[position] < 0 ? nullId : dictionaryIds[position];

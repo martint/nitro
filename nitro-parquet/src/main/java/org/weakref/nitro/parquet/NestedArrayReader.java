@@ -134,7 +134,24 @@ final class NestedArrayReader
         NestedLogicalBindings bindings = logicalBinding == null
                 ? null
                 : NestedLogicalBindings.require(list.name(), outputType, logicalBinding, 1);
-        this.elements = switch (element) {
+        this.elements = createElementReader(
+                element,
+                rlePolicy,
+                materializationPolicy,
+                arrayPool,
+                elementCursors,
+                bindings);
+    }
+
+    private ElementReader createElementReader(
+            ParquetSchema.Node element,
+            RleReaderPolicy rlePolicy,
+            ParquetMaterializationPolicy materializationPolicy,
+            PrimitiveArrayPool arrayPool,
+            NestedLeafCursor[] elementCursors,
+            NestedLogicalBindings bindings)
+    {
+        return switch (element) {
             case ParquetSchema.Primitive primitive -> new PrimitiveElementReader(
                     primitive,
                     rlePolicy,
@@ -149,8 +166,14 @@ final class NestedArrayReader
                     arrayPool,
                     elementCursors,
                     bindings == null ? null : bindings.childGroup(0, group));
-            case ParquetSchema.Group group -> throw unsupported(
-                    "nested " + (group.isList() ? "LIST" : "MAP") + " elements are not implemented yet");
+            case ParquetSchema.Group group when group.isList() -> new ArrayElementReader(
+                    group,
+                    rlePolicy,
+                    materializationPolicy,
+                    arrayPool,
+                    elementCursors,
+                    bindings == null ? null : bindings.childGroup(0, group));
+            case ParquetSchema.Group group -> throw unsupported("nested MAP elements are not implemented yet");
         };
     }
 
@@ -338,7 +361,6 @@ final class NestedArrayReader
             int rowCount)
     {
         int row = -1;
-        int outputElementCount = 0;
         int elementDefinitionLevel = repeatedValues.maximumDefinitionLevel();
         int listDefinitionLevel = list.maximumDefinitionLevel();
 
@@ -346,15 +368,16 @@ final class NestedArrayReader
             NestedEventWindowView window = reader.eventWindow();
             if (window == null) {
                 if (row == rowCount - 1) {
-                    arrays.offsets()[rowCount] = outputElementCount;
+                    arrays.offsets()[rowCount] = elements.size();
                     return;
                 }
                 throw new IllegalArgumentException("Nested LIST event stream ended before row " + (row + 1));
             }
 
             int windowLength = window.length();
-            if (window.allDefinitionLevelsAtLeast(windowLength, elementDefinitionLevel)) {
+            if (reader.oneOutputPerEvent() && window.allDefinitionLevelsAtLeast(windowLength, elementDefinitionLevel)) {
                 int consumed = 0;
+                int outputElementCount = elements.size();
                 while (consumed < windowLength) {
                     if (window.repetitionLevel(consumed) == 0) {
                         if (row >= 0) {
@@ -373,7 +396,6 @@ final class NestedArrayReader
                     consumed++;
                 }
                 elements.appendWindow(window, 0, consumed);
-                outputElementCount += consumed;
                 reader.advanceEvents(consumed);
                 continue;
             }
@@ -384,12 +406,13 @@ final class NestedArrayReader
             while (consumed < windowLength) {
                 int repetitionLevel = window.repetitionLevel(consumed);
                 if (repetitionLevel == 0) {
+                    if (elementRunCount != 0) {
+                        elements.appendWindow(window, elementRunStart, elementRunCount);
+                        elementRunCount = 0;
+                    }
                     if (row >= 0) {
-                        arrays.offsets()[row + 1] = outputElementCount;
+                        arrays.offsets()[row + 1] = elements.size();
                         if (row + 1 == rowCount) {
-                            if (elementRunCount != 0) {
-                                elements.appendWindow(window, elementRunStart, elementRunCount);
-                            }
                             reader.advanceEvents(consumed);
                             return;
                         }
@@ -408,7 +431,6 @@ final class NestedArrayReader
                         elementRunStart = consumed;
                     }
                     elementRunCount++;
-                    outputElementCount++;
                 }
                 else if (elementRunCount != 0) {
                     elements.appendWindow(window, elementRunStart, elementRunCount);
@@ -501,6 +523,11 @@ final class NestedArrayReader
         default void appendWindow(NestedEventWindowView window, int offset, int count)
         {
             throw new UnsupportedOperationException("element reader does not support event windows");
+        }
+
+        default boolean oneOutputPerEvent()
+        {
+            return true;
         }
 
         int size();
@@ -633,6 +660,191 @@ final class NestedArrayReader
         {
             try (reader; values) {
                 // Closing releases the physical leaf and allocator-owned accumulation buffers.
+            }
+        }
+    }
+
+    private final class ArrayElementReader
+            implements ElementReader
+    {
+        private final ParquetSchema.Group list;
+        private final ParquetSchema.Group repeatedValues;
+        private final ElementReader elements;
+        private final OffsetAccumulator offsets = new OffsetAccumulator();
+        private final NullAccumulator nulls = new NullAccumulator();
+
+        private ArrayElementReader(
+                ParquetSchema.Group list,
+                RleReaderPolicy rlePolicy,
+                ParquetMaterializationPolicy materializationPolicy,
+                PrimitiveArrayPool arrayPool,
+                NestedLeafCursor[] cursors,
+                NestedLogicalBindings.Group logicalBinding)
+        {
+            this.list = requireNonNull(list, "list is null");
+            if (!list.isList() || list.children().size() != 1 ||
+                    !(list.children().getFirst() instanceof ParquetSchema.Group repeatedGroup)) {
+                throw unsupported("nested LIST must use the standard three-level layout");
+            }
+            this.repeatedValues = repeatedGroup;
+            if (repeatedValues.repetition() != FieldRepetitionType.REPEATED || repeatedValues.children().size() != 1) {
+                throw unsupported("nested LIST element group must be repeated and contain exactly one field");
+            }
+            ParquetSchema.Node element = repeatedValues.children().getFirst();
+            if (element.repetition() == FieldRepetitionType.REPEATED) {
+                throw unsupported("nested LIST element cannot be repeated");
+            }
+            if (!(element instanceof ParquetSchema.Primitive)) {
+                throw unsupported("nested LIST must contain a primitive element");
+            }
+            NestedLogicalBindings bindings = logicalBinding == null
+                    ? null
+                    : NestedLogicalBindings.require(list.name(), logicalBinding.type(), logicalBinding.value(), 1);
+            this.elements = createElementReader(
+                    element,
+                    rlePolicy,
+                    materializationPolicy,
+                    arrayPool,
+                    cursors,
+                    bindings);
+        }
+
+        @Override
+        public void addRowGroup(ParquetFile file, RowGroup rowGroup)
+        {
+            elements.addRowGroup(file, rowGroup);
+        }
+
+        @Override
+        public void reset(Allocator allocator)
+        {
+            elements.reset(allocator);
+            offsets.reset(allocator);
+            nulls.reset(allocator);
+        }
+
+        @Override
+        public boolean next()
+        {
+            return elements.next();
+        }
+
+        @Override
+        public int repetitionLevel()
+        {
+            return elements.repetitionLevel();
+        }
+
+        @Override
+        public int definitionLevel()
+        {
+            return elements.definitionLevel();
+        }
+
+        @Override
+        public void appendCurrent()
+        {
+            appendEvent(elements.repetitionLevel(), elements.definitionLevel(), elements::appendCurrent);
+        }
+
+        @Override
+        public NestedEventWindowView eventWindow()
+        {
+            return elements.eventWindow();
+        }
+
+        @Override
+        public void advanceEvents(int count)
+        {
+            elements.advanceEvents(count);
+        }
+
+        @Override
+        public void appendWindow(NestedEventWindowView window, int offset, int count)
+        {
+            int end = offset + count;
+            int childRunStart = -1;
+            int childRunCount = 0;
+            for (int index = offset; index < end; index++) {
+                int repetitionLevel = window.repetitionLevel(index);
+                int definitionLevel = window.definitionLevel(index);
+                if (repetitionLevel < repeatedValues.maximumRepetitionLevel()) {
+                    if (childRunCount != 0) {
+                        elements.appendWindow(window, childRunStart, childRunCount);
+                        childRunCount = 0;
+                    }
+                    beginArray(definitionLevel);
+                }
+                if (definitionLevel >= repeatedValues.maximumDefinitionLevel()) {
+                    if (childRunCount == 0) {
+                        childRunStart = index;
+                    }
+                    childRunCount++;
+                }
+                else if (childRunCount != 0) {
+                    elements.appendWindow(window, childRunStart, childRunCount);
+                    childRunCount = 0;
+                }
+            }
+            if (childRunCount != 0) {
+                elements.appendWindow(window, childRunStart, childRunCount);
+            }
+        }
+
+        @Override
+        public boolean oneOutputPerEvent()
+        {
+            return false;
+        }
+
+        private void appendEvent(int repetitionLevel, int definitionLevel, Runnable appendElement)
+        {
+            if (repetitionLevel < repeatedValues.maximumRepetitionLevel()) {
+                beginArray(definitionLevel);
+            }
+            if (definitionLevel >= repeatedValues.maximumDefinitionLevel()) {
+                appendElement.run();
+            }
+        }
+
+        private void beginArray(int definitionLevel)
+        {
+            offsets.append(elements.size());
+            if (list.repetition() != FieldRepetitionType.REQUIRED) {
+                nulls.append(definitionLevel < list.maximumDefinitionLevel());
+            }
+        }
+
+        @Override
+        public int size()
+        {
+            return offsets.size();
+        }
+
+        @Override
+        public Streams materialize(Allocator allocator, Allocator.Context context)
+        {
+            offsets.finish(elements.size());
+            ArrayVector arrays = allocator.allocateArray(context, size());
+            offsets.copyTo(arrays.offsets());
+            arrays.setElements(elements.materialize(allocator, context));
+            if (list.repetition() == FieldRepetitionType.REQUIRED) {
+                return Streams.ofValues(arrays);
+            }
+            return Streams.ofValuesAndNulls(arrays, nulls.materialize(allocator, context));
+        }
+
+        @Override
+        public long consumedPageBytes()
+        {
+            return elements.consumedPageBytes();
+        }
+
+        @Override
+        public void close()
+        {
+            try (elements; offsets; nulls) {
+                // Closing recursively releases the physical leaf and allocator-owned accumulation buffers.
             }
         }
     }
@@ -1050,6 +1262,84 @@ final class NestedArrayReader
                 values = EMPTY;
                 arrayPool = null;
                 size = 0;
+            }
+        }
+    }
+
+    private static final class OffsetAccumulator
+            implements AutoCloseable
+    {
+        private static final int[] EMPTY = new int[0];
+
+        private PrimitiveArrayPool arrayPool;
+        private int[] values = EMPTY;
+        private int size;
+        private boolean finished;
+
+        void reset(Allocator allocator)
+        {
+            PrimitiveArrayPool requestedPool = requireNonNull(allocator, "allocator is null").primitiveArrays();
+            if (arrayPool != null && arrayPool != requestedPool) {
+                throw new IllegalArgumentException("Nested offset accumulator cannot change allocator ownership");
+            }
+            arrayPool = requestedPool;
+            size = 0;
+            finished = false;
+        }
+
+        void append(int value)
+        {
+            ensureCapacity(size + 1);
+            values[size++] = value;
+        }
+
+        void finish(int value)
+        {
+            if (!finished) {
+                if (size == 0) {
+                    append(0);
+                }
+                else {
+                    append(value);
+                }
+                finished = true;
+            }
+        }
+
+        int size()
+        {
+            return finished ? size - 1 : size;
+        }
+
+        void copyTo(int[] target)
+        {
+            if (!finished || target.length != size) {
+                throw new IllegalStateException("Nested offsets are not ready for materialization");
+            }
+            System.arraycopy(values, 0, target, 0, size);
+        }
+
+        private void ensureCapacity(int required)
+        {
+            if (values.length >= required) {
+                return;
+            }
+            int capacity = Math.max(required, Math.max(16, values.length * 2));
+            int[] replacement = arrayPool.borrowInts(capacity);
+            System.arraycopy(values, 0, replacement, 0, size);
+            arrayPool.release(values);
+            values = replacement;
+        }
+
+        @Override
+        public void close()
+        {
+            if (arrayPool != null) {
+                arrayPool.release(values);
+                values = EMPTY;
+                arrayPool = null;
+                size = 0;
+                finished = false;
             }
         }
     }
