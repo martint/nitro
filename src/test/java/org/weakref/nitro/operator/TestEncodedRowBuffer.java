@@ -56,6 +56,13 @@ final class TestEncodedRowBuffer
             assertThat(rows.sourceSize(2)).isEqualTo(3);
             assertThat(rows.sharesSource(0, 1)).isTrue();
             assertThat(rows.sharesSource(1, 2)).isFalse();
+            assertThat(rows.sourceRunEnd(0)).isEqualTo(2);
+            assertThat(rows.sourceRunEnd(1)).isEqualTo(2);
+            assertThat(rows.sourceRunEnd(2)).isEqualTo(5);
+
+            SliceRowPositionIndex slice = new SliceRowPositionIndex(rows, 1, 4);
+            assertThat(slice.sourceRunEnd(0)).isEqualTo(1);
+            assertThat(slice.sourceRunEnd(1)).isEqualTo(3);
         }
     }
 

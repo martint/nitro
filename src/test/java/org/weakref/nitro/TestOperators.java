@@ -601,6 +601,23 @@ public class TestOperators
     }
 
     @Test
+    void testRleNullProofUsesTheCompletePhysicalDomain()
+    {
+        assertThat(VectorAccess.isAllFalseNulls(new RleVector(
+                new int[] {3, 4},
+                new BooleanVector(new boolean[] {false, false})))).isTrue();
+        assertThat(VectorAccess.isAllFalseNulls(new RleVector(
+                new int[] {3, 4},
+                new BooleanVector(new boolean[] {false, true})))).isFalse();
+        assertThat(VectorAccess.isAllTrueNulls(new RleVector(
+                new int[] {3, 4},
+                new BooleanVector(new boolean[] {true, true})))).isTrue();
+        assertThat(VectorAccess.isAllTrueNulls(new RleVector(
+                new int[] {3, 4},
+                new BooleanVector(new boolean[] {true, false})))).isFalse();
+    }
+
+    @Test
     void testProjectOperatorSupportsNestedDictionaryIntegerDispatch()
     {
         PrimitiveRegistry primitiveRegistry = primitiveRegistry();

@@ -79,8 +79,9 @@ class TestRegionVector
                 new RleVector(new int[] {1}, new RegionVector(values, 3, 1)),
         };
         try {
-            I64Vector materialized = (I64Vector) rows[0].materializeRows(allocator, context, rows);
-            assertThat(materialized.values()).containsExactly(20, 20, 40);
+            RleVector materialized = (RleVector) rows[0].materializeRows(allocator, context, rows);
+            assertThat(materialized.counts()).containsExactly(2, 1);
+            assertThat(((I64Vector) materialized.values()).values()).containsExactly(20, 40);
         }
         finally {
             allocator.release(context);

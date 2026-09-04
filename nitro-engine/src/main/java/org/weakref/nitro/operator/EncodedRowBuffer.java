@@ -188,6 +188,12 @@ final class EncodedRowBuffer
         return pageIndex(leftPosition) == pageIndex(rightPosition);
     }
 
+    @Override
+    public int sourceRunEnd(int position)
+    {
+        return page(position).end();
+    }
+
     private Page page(int position)
     {
         return pages.get(pageIndex(position));

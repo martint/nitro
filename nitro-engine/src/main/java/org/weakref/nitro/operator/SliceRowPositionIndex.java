@@ -66,6 +66,12 @@ final class SliceRowPositionIndex
     }
 
     @Override
+    public int sourceRunEnd(int position)
+    {
+        return Math.min(size(), rows.sourceRunEnd(absolute(position)) - start);
+    }
+
+    @Override
     public int compareNonNull(int leftColumn, int leftPosition, int rightColumn, int rightPosition)
     {
         return rows.compareNonNull(leftColumn, absolute(leftPosition), rightColumn, absolute(rightPosition));

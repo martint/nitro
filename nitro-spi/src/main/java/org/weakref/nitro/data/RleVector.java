@@ -292,7 +292,30 @@ public final class RleVector
     @Override
     public Vector materializeRows(Allocator allocator, Allocator.Context allocationContext, Vector[] rows)
     {
-        return values.materializeRows(allocator, allocationContext, rows);
+        int runCount = 0;
+        for (Vector row : rows) {
+            if (!(row instanceof RleVector rle)) {
+                return values.materializeRows(allocator, allocationContext, rows);
+            }
+            runCount = Math.addExact(runCount, rle.counts.length);
+        }
+
+        int[] combinedCounts = allocator.primitiveArrays().borrowInts(runCount);
+        Vector[] valueDomains = new Vector[rows.length];
+        try {
+            int outputRun = 0;
+            for (int index = 0; index < rows.length; index++) {
+                RleVector rle = (RleVector) rows[index];
+                System.arraycopy(rle.counts, 0, combinedCounts, outputRun, rle.counts.length);
+                outputRun += rle.counts.length;
+                valueDomains[index] = rle.values;
+            }
+            Vector combinedValues = values.materializeRows(allocator, allocationContext, valueDomains);
+            return allocator.allocateRle(allocationContext, combinedCounts, runCount, combinedValues);
+        }
+        finally {
+            allocator.primitiveArrays().release(combinedCounts);
+        }
     }
 
     @Override

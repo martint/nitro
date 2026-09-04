@@ -776,6 +776,26 @@ public class TestBatchRuntime
     }
 
     @Test
+    void testRleRowMaterializationPreservesPhysicalRuns()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            Allocator.Context context = new Allocator.Context("RleRowMaterialization");
+            RleVector first = new RleVector(new int[] {2, 1}, new I64Vector(new long[] {10, 20}));
+            RleVector second = new RleVector(new int[] {3}, new I64Vector(new long[] {30}));
+
+            RleVector result = (RleVector) first.materializeRows(
+                    allocator,
+                    context,
+                    new Vector[] {first, second});
+
+            assertThat(result.counts()).containsExactly(2, 1, 3);
+            assertThat(((I64Vector) result.values()).values()).containsExactly(10, 20, 30);
+            assertThat(VectorAccess.longValues(result).value(5)).isEqualTo(30);
+        }
+    }
+
+    @Test
     void testBinaryVectorCopySinglePositionPreservesSparseOutputOffsets()
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());

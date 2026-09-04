@@ -38,6 +38,19 @@ public interface RowPositionIndex
     /// Returns whether two logical positions are backed by the same physical source vectors.
     boolean sharesSource(int leftPosition, int rightPosition);
 
+    /// Returns the exclusive end of the contiguous logical run backed by the same physical source as {@code position}.
+    default int sourceRunEnd(int position)
+    {
+        if (position < 0 || position >= size()) {
+            throw new IndexOutOfBoundsException("position is outside row index");
+        }
+        int end = position + 1;
+        while (end < size() && sharesSource(position, end)) {
+            end++;
+        }
+        return end;
+    }
+
     default Batch copyRange(Allocator allocator, int start, int length, int[] channels)
     {
         requireNonNull(allocator, "allocator is null");

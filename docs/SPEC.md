@@ -137,6 +137,11 @@ row-count-sized identity-position array. Flat vectors may bulk-copy storage, enc
 runs or mappings, and the compatibility default copies individual positions without allocating range metadata.
 Representation-specific range copying preserves the ordinary destination ownership and allocator-context rules.
 
+Dense concatenation preserves a common encoded representation when it can compose the physical domains exactly. In
+particular, concatenating RLE segments concatenates their run counts and materializes only their physical run-value
+domains; it does not expand runs into one value per logical row. Mixed or incompatible representations retain the
+general dense materialization fallback.
+
 A physical carrier does not imply a logical type. An I64 carrier may hold BIGINT, a short decimal, date, time, or a
 timestamp representation. Binary storage does not imply UTF-8. The type registry supplies equality, hashing,
 comparison, coercion, display, and function semantics.
@@ -428,8 +433,10 @@ An aggregation provider may bind a reversible window range kernel for that forwa
     physically binds frame bounds and prepares one batch-sized destination before invoking the provider once for a
     contiguous output range. The bound frame cursor may drive the provider directly or expose an exact compact affine
     ROWS descriptor containing only partition size and constant preceding/following distances. The descriptor has no
-    logical type or function meaning. It is admitted only when every offset is proven single-run, non-null, error-free,
-    and non-negative; otherwise the cursor retains exact per-row resolved bounds. The provider owns state reset, null,
+    logical type or function meaning. It is admitted only when every retained physical source run proves the same
+    single-run, non-null, error-free, and non-negative offset; otherwise the cursor retains exact per-row resolved
+    bounds. A row-position index exposes source-run boundaries without flattening or allocating a position mapping so
+    the proof scales with retained physical sources rather than logical rows. The provider owns state reset, null,
     inverse, empty-frame, and result semantics and must not retain the borrowed bounds or partition input view after the
     call. Equal frame traversal identities share one bound cursor or descriptor across sibling functions. Missing
     capabilities retain reversible single-position updates or complete-frame replay. Execution diagnostics report kernel

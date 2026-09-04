@@ -461,7 +461,7 @@ public final class VectorAccess
 
     /**
      * Returns true when {@code nulls} represents "no rows are null" — i.e. the reference is null,
-     * or is a run-length-encoded vector whose single run is false, or is a flat boolean vector of
+     * or is a run-length-encoded vector whose physical value domain is all false, or is a flat boolean vector of
      * length one with value false. Scalar function implementations can use this to short-circuit
      * null-propagation loops when both of their inputs are known to be null-free (the common case
      * for literals, column outputs from scans of non-nullable columns, and outputs of aggregates
@@ -474,8 +474,8 @@ public final class VectorAccess
         if (nulls == null) {
             return true;
         }
-        if (nulls instanceof RleVector rle && rle.values() instanceof BooleanVector runValues && runValues.length() == 1) {
-            return !runValues.values()[0];
+        if (nulls instanceof RleVector rle) {
+            return isAllFalseNulls(rle.values());
         }
         if (nulls instanceof BooleanVector flat) {
             // O(n) on first call, O(1) thereafter. See BooleanVector.isAllFalse() for the caching
@@ -506,8 +506,8 @@ public final class VectorAccess
     /** Returns true when every position in a null stream is known to be null. */
     public static boolean isAllTrueNulls(Vector nulls)
     {
-        if (nulls instanceof RleVector rle && rle.values() instanceof BooleanVector runValues && runValues.length() == 1) {
-            return runValues.values()[0];
+        if (nulls instanceof RleVector rle) {
+            return isAllTrueNulls(rle.values());
         }
         if (nulls instanceof BooleanVector flat) {
             return flat.isAllTrue();
