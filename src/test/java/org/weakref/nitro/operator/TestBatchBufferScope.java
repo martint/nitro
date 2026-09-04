@@ -26,6 +26,7 @@ import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.execution.EngineResources;
 
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -52,6 +53,47 @@ class TestBatchBufferScope
         transferred.close();
         I64Vector reused = allocator.allocate(scope.context(), I64Vector.class, 8, I64Vector::new);
         assertThat(reused).isSameAs(vector);
+    }
+
+    @Test
+    void transfersAnEnclosingCloseActionWithBatchOwnership()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        BatchBufferScope scope = new BatchBufferScope(allocator, "transfer-close-action");
+        I64Vector vector = allocator.allocate(scope.context(), I64Vector.class, 8, I64Vector::new);
+        Batch original = scope.batch(
+                allocator.allocateAllMask(scope.context(), 8),
+                new Output(Set.of(Stream.VALUES), _ -> vector, scope));
+        AtomicBoolean closed = new AtomicBoolean();
+
+        Batch transferred = original.transferOwnership(() -> closed.set(true));
+        original.close();
+        assertThat(closed).isFalse();
+
+        transferred.close();
+        assertThat(closed).isTrue();
+    }
+
+    @Test
+    void preservesEnclosingCloseActionWhenAppendingOutput()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        BatchBufferScope scope = new BatchBufferScope(allocator, "append-close-action");
+        I64Vector vector = allocator.allocate(scope.context(), I64Vector.class, 8, I64Vector::new);
+        Batch original = scope.batch(
+                allocator.allocateAllMask(scope.context(), 8),
+                new Output(Set.of(Stream.VALUES), _ -> vector, scope));
+        AtomicBoolean closed = new AtomicBoolean();
+
+        Batch transferred = original.transferOwnership(() -> closed.set(true));
+        Batch appended = transferred.appendOutput(new Output(Set.of(), _ -> {
+            throw new AssertionError("empty output cannot resolve a stream");
+        }));
+        transferred.close();
+        assertThat(closed).isFalse();
+
+        appended.close();
+        assertThat(closed).isTrue();
     }
 
     @Test

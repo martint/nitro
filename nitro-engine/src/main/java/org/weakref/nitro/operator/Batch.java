@@ -44,6 +44,7 @@ public final class Batch
     private final Lifecycle lifecycle;
     private final BatchBufferScope bufferScope;
     private final AsyncOwnershipTransfer asyncOwnershipTransfer;
+    private Runnable additionalCloseAction = () -> {};
     private boolean maskTaken;
     private boolean closed;
 
@@ -203,6 +204,8 @@ public final class Batch
         lifecycle = source.lifecycle;
         bufferScope = source.bufferScope;
         asyncOwnershipTransfer = source.asyncOwnershipTransfer;
+        additionalCloseAction = source.additionalCloseAction;
+        source.additionalCloseAction = () -> {};
         maskTaken = source.maskTaken;
     }
 
@@ -219,6 +222,8 @@ public final class Batch
         lifecycle = source.lifecycle;
         bufferScope = source.bufferScope;
         asyncOwnershipTransfer = source.asyncOwnershipTransfer;
+        additionalCloseAction = source.additionalCloseAction;
+        source.additionalCloseAction = () -> {};
         maskTaken = source.maskTaken;
     }
 
@@ -232,6 +237,27 @@ public final class Batch
         checkOpen();
         Batch transferred = new Batch(this);
         closed = true;
+        return transferred;
+    }
+
+    /**
+     * Moves this batch's complete ownership contract and runs {@code additionalCloseAction} after the transferred
+     * lifetime closes. This lets a boundary move accounting or another enclosing lease with the batch without
+     * changing its vector, mask, or buffering ownership.
+     */
+    public Batch transferOwnership(Runnable additionalCloseAction)
+    {
+        requireNonNull(additionalCloseAction, "additionalCloseAction is null");
+        Batch transferred = transferOwnership();
+        Runnable previous = transferred.additionalCloseAction;
+        transferred.additionalCloseAction = () -> {
+            try {
+                previous.run();
+            }
+            finally {
+                additionalCloseAction.run();
+            }
+        };
         return transferred;
     }
 
@@ -362,37 +388,44 @@ public final class Batch
             return;
         }
         closed = true;
-        if (outputs != null) {
-            for (Output output : outputs) {
-                output.close();
+        try {
+            if (outputs != null) {
+                for (Output output : outputs) {
+                    output.close();
+                }
             }
-        }
-        if (bufferScope != null) {
-            if (!maskTaken || mask != ownedMask) {
-                bufferScope.release(ownedMask);
+            if (bufferScope != null) {
+                if (!maskTaken || mask != ownedMask) {
+                    bufferScope.release(ownedMask);
+                }
             }
-        }
-        else if (!maskTaken) {
-            if (lifecycle == null) {
-                maskReleaseResolver.accept(mask);
+            else if (!maskTaken) {
+                if (lifecycle == null) {
+                    maskReleaseResolver.accept(mask);
+                }
+                else {
+                    lifecycle.releaseMask(mask);
+                }
             }
-            else {
-                lifecycle.releaseMask(mask);
+            if (bufferScope != null) {
+                try {
+                    closeAction.run();
+                }
+                finally {
+                    bufferScope.endBatch();
+                }
             }
-        }
-        if (bufferScope != null) {
-            try {
+            else if (lifecycle == null) {
                 closeAction.run();
             }
-            finally {
-                bufferScope.endBatch();
+            else {
+                lifecycle.close();
             }
         }
-        else if (lifecycle == null) {
-            closeAction.run();
-        }
-        else {
-            lifecycle.close();
+        finally {
+            Runnable action = additionalCloseAction;
+            additionalCloseAction = () -> {};
+            action.run();
         }
     }
 

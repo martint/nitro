@@ -70,6 +70,9 @@ public final class WindowOperator
 
     private Streams[] sourceSchema;
     private List<TableOperator.Page> pages;
+    // Retained source batches keep borrowed or asynchronously leased input vectors alive until the blocking window
+    // has finished with them. Taking individual vectors would sever their enclosing lifetime contract.
+    private final List<Batch> retainedInputBatches = new ArrayList<>();
     // Multi-page order is one packed page/position long per row. This avoids one RowReference object per row
     // and makes the retained ordering footprint exact and host-visible.
     private long[] rowReferences;
@@ -706,6 +709,7 @@ public final class WindowOperator
     {
         windowFunctions.forEach(function -> function.reportDiagnostics(diagnostics));
         source.close();
+        closeRetainedInputBatches();
         partitionPositionIndex.close();
         allocator.release(allocationContext);
         arrayPool.release(singlePageOrder);
@@ -744,11 +748,19 @@ public final class WindowOperator
                 // once, as WindowSession historically did; retain only dense batches whose logical and physical
                 // positions already coincide.
                 if (source.supportsRetainedBatches() && mask.all()) {
+                    Batch retainedBatch = batch.transferOwnership();
                     Streams[] retainedColumns = new Streams[source.outputCount()];
-                    for (int outputIndex = 0; outputIndex < retainedColumns.length; outputIndex++) {
-                        retainedColumns[outputIndex] = takeStreams(batch.output(outputIndex));
+                    try {
+                        for (int outputIndex = 0; outputIndex < retainedColumns.length; outputIndex++) {
+                            retainedColumns[outputIndex] = borrowedStreams(retainedBatch.output(outputIndex));
+                        }
+                        pages.add(new TableOperator.Page(mask.count(), retainedColumns, retainedBatch.borrowMask()));
+                        retainedInputBatches.add(retainedBatch);
                     }
-                    pages.add(new TableOperator.Page(mask.count(), retainedColumns, allocator.transfer(allocationContext, batch.takeMask())));
+                    catch (RuntimeException | Error failure) {
+                        retainedBatch.close();
+                        throw failure;
+                    }
                     continue;
                 }
                 Streams[] columns = new Streams[source.outputCount()];
@@ -974,6 +986,7 @@ public final class WindowOperator
         }
         pages.clear();
         pages.add(new TableOperator.Page(rows, columns, Mask.all(rows)));
+        closeRetainedInputBatches();
     }
 
     private boolean haveConsistentStreams()
@@ -2566,6 +2579,28 @@ public final class WindowOperator
             builder.put(stream, allocator.transfer(allocationContext, output.take(stream)));
         }
         return builder.build();
+    }
+
+    private void closeRetainedInputBatches()
+    {
+        RuntimeException failure = null;
+        for (Batch batch : retainedInputBatches) {
+            try {
+                batch.close();
+            }
+            catch (RuntimeException closeFailure) {
+                if (failure == null) {
+                    failure = closeFailure;
+                }
+                else {
+                    failure.addSuppressed(closeFailure);
+                }
+            }
+        }
+        retainedInputBatches.clear();
+        if (failure != null) {
+            throw failure;
+        }
     }
 
     private record FlatIntegerOrderKey(long[] longs, int[] integers, boolean[] nulls, boolean descending, boolean nullsFirst) {}

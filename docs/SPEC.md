@@ -376,6 +376,17 @@ The lifecycle is acquire or reuse, borrow within a lease, transfer when retentio
 and retain only bounded policy-admitted storage. Pools report live, retained, and peak bytes. Soft references are not
 an ownership protocol.
 
+At an asynchronous exchange boundary, storage ownership and host reservation ownership move together. The exchange
+reservation remains live while a batch is queued; after dequeue, a retaining consumer charges the same physical bytes
+to its allocator context until the complete transferred batch lifetime closes. A blocking operator retains that batch
+lifetime rather than taking individual vector objects out of the enclosing lease. Streaming consumers release the
+transferred lifetime after the batch is consumed. No interval may leave live storage uncharged, and the handoff must
+not double-charge one physical allocation.
+
+Host-backed lazy input is charged when each column materializes, not by forcing the host page to load at ingress.
+The reservation follows the complete source-batch lifetime and therefore covers a materialized vector retained by a
+blocking consumer while preserving selection-driven lazy reads for columns that are never demanded.
+
 The steady-state goal is no allocation proportional to row count for streaming scan/filter/project/aggregate shapes.
 Initialization, bounded resizing, state growth, output materialization, and provider-required variable-size results may
 allocate, but repeated batches should reuse their working set. Reuse includes encoded results: an owned RLE proposal may

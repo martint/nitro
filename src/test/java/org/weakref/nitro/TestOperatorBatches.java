@@ -2209,6 +2209,67 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testWindowOperatorRetainsCompleteInputBatchLifetime()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        AtomicBoolean inputClosed = new AtomicBoolean();
+        Operator source = new Operator()
+        {
+            private boolean emitted;
+
+            @Override
+            public int outputCount()
+            {
+                return 1;
+            }
+
+            @Override
+            public boolean hasNext()
+            {
+                return !emitted;
+            }
+
+            @Override
+            public Batch next()
+            {
+                emitted = true;
+                return new Batch(
+                        Mask.all(3),
+                        _ -> {},
+                        Function.identity(),
+                        _ -> {},
+                        () -> inputClosed.set(true),
+                        Output.of(Streams.ofValues(new I64Vector(new long[] {1, 2, 3}))));
+            }
+
+            @Override
+            public void constrain(Mask mask) {}
+
+            @Override
+            public boolean supportsRetainedBatches()
+            {
+                return true;
+            }
+
+            @Override
+            public void close() {}
+        };
+
+        try (WindowOperator window = new WindowOperator(
+                allocator,
+                source,
+                new int[0],
+                new int[0],
+                new boolean[0],
+                List.of(new RunningSumI64WindowFunction(0)));
+                Batch output = window.next()) {
+            assertThat(((I64Vector) output.output(1).borrow(Stream.VALUES)).values()).containsExactly(1, 3, 6);
+            assertThat(inputClosed).isFalse();
+        }
+        assertThat(inputClosed).isTrue();
+    }
+
+    @Test
     void testTopNRankingOperatorEmitsLargeResultsAcrossMultipleBatches()
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());
