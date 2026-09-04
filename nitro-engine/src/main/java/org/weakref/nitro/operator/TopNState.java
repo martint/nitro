@@ -36,6 +36,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import static java.lang.Math.toIntExact;
 import static java.util.Objects.requireNonNull;
 
 final class TopNState
@@ -644,7 +645,11 @@ final class TopNState
     public void copyRow(Batch batch, int position, int slot)
     {
         for (int orderingColumn : orderingColumns) {
-            slotColumns[orderingColumn][slot] = buffers.copyPosition(batch.output(orderingColumn), slotColumns[orderingColumn][slot], position);
+            slotColumns[orderingColumn][slot] = copySlotPosition(
+                    orderingColumn, batch.output(orderingColumn), slotColumns[orderingColumn][slot], position);
+            if (schema[orderingColumn] == null) {
+                schema[orderingColumn] = slotColumns[orderingColumn][slot];
+            }
         }
         for (int outputIndex = 0; outputIndex < slotColumns.length; outputIndex++) {
             if (isOrderingColumn(outputIndex)) {
@@ -691,11 +696,11 @@ final class TopNState
             if (isOrderingColumn(outputIndex)) {
                 continue;
             }
-            slotColumns[outputIndex][slot] = buffers.copyPosition(
-                    batch.output(outputIndex),
-                    slotColumns[outputIndex][slot],
-                    position);
-            schema[outputIndex] = slotColumns[outputIndex][slot];
+            slotColumns[outputIndex][slot] = copySlotPosition(
+                    outputIndex, batch.output(outputIndex), slotColumns[outputIndex][slot], position);
+            if (schema[outputIndex] == null) {
+                schema[outputIndex] = slotColumns[outputIndex][slot];
+            }
         }
     }
 
@@ -734,7 +739,8 @@ final class TopNState
                 if (isOrderingColumn(outputIndex)) {
                     continue;
                 }
-                slotColumns[outputIndex][slot] = buffers.copyPosition(batch.output(outputIndex), slotColumns[outputIndex][slot], pendingPositions[slot]);
+                slotColumns[outputIndex][slot] = copySlotPosition(
+                        outputIndex, batch.output(outputIndex), slotColumns[outputIndex][slot], pendingPositions[slot]);
                 if (schema[outputIndex] == null) {
                     schema[outputIndex] = slotColumns[outputIndex][slot];
                 }
@@ -754,7 +760,8 @@ final class TopNState
                 if (isOrderingColumn(outputIndex)) {
                     continue;
                 }
-                slotColumns[outputIndex][slot] = buffers.copyPosition(batch.output(outputIndex), slotColumns[outputIndex][slot], pendingPositions[slot]);
+                slotColumns[outputIndex][slot] = copySlotPosition(
+                        outputIndex, batch.output(outputIndex), slotColumns[outputIndex][slot], pendingPositions[slot]);
                 if (schema[outputIndex] == null) {
                     schema[outputIndex] = slotColumns[outputIndex][slot];
                 }
@@ -775,6 +782,47 @@ final class TopNState
     public boolean isPendingFrom(int slot, Batch batch)
     {
         return pendingBatches[slot] == batch;
+    }
+
+    private Streams copySlotPosition(int outputIndex, Output output, Streams existing, int position)
+    {
+        Streams targetSchema = schema[outputIndex] != null ? schema[outputIndex] : existing;
+        Vector nulls = output.borrowOrNull(Stream.NULLS);
+        if (OperatorVectorSupport.isNull(nulls, position)) {
+            Streams sample = targetSchema != null ? targetSchema : buffers.borrowStreams(output);
+            return buffers.copyNullPosition(existing, sample, 1, 0);
+        }
+
+        Streams specialized = output.copySinglePosition(existing, position, 0, 1);
+        if (specialized != null) {
+            return specialized;
+        }
+
+        if (targetSchema != null && targetSchema.hasValues()) {
+            Vector targetValues = OperatorVectorSupport.flatten(targetSchema.values());
+            Vector sourceValues = output.borrow(Stream.VALUES);
+            if (targetValues instanceof I64Vector && OperatorVectorSupport.flatten(sourceValues) instanceof I32Vector) {
+                I64Vector values = allocator.allocateOrGrow(
+                        allocationContext,
+                        existing != null && existing.values() instanceof I64Vector reusable ? reusable : null,
+                        I64Vector.class,
+                        1,
+                        I64Vector::new);
+                values.values()[0] = VectorAccess.longValues(sourceValues).value(position);
+                return Streams.ofValues(values);
+            }
+            if (targetValues instanceof I32Vector && OperatorVectorSupport.flatten(sourceValues) instanceof I64Vector) {
+                I32Vector values = allocator.allocateOrGrow(
+                        allocationContext,
+                        existing != null && existing.values() instanceof I32Vector reusable ? reusable : null,
+                        I32Vector.class,
+                        1,
+                        I32Vector::new);
+                values.values()[0] = toIntExact(VectorAccess.longValues(sourceValues).value(position));
+                return Streams.ofValues(values);
+            }
+        }
+        return buffers.copyPosition(output, existing, position);
     }
 
     public void setOrderedSlots(List<Integer> orderedSlots)

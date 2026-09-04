@@ -153,3 +153,4 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | [0071](0071-bind-specialization-constants-before-generated-scalar-adaptation.md) | Bind specialization constants before generated scalar adaptation | accepted |
 | [0072](0072-retain-only-qualifying-topn-ranking-groups.md) | Retain only qualifying Top-N ranking peer groups | accepted |
 | [0073](0073-bind-exact-normalized-ordering-keys.md) | Bind exact normalized ordering keys through the type provider | accepted |
+| [0074](0074-share-bounded-state-across-partitioned-topn-ranking.md) | Share bounded state across partitioned Top-N ranking | accepted |

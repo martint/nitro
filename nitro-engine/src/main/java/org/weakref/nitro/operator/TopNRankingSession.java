@@ -16,11 +16,6 @@ package org.weakref.nitro.operator;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
-import org.weakref.nitro.data.Stream;
-import org.weakref.nitro.data.Streams;
-
-import java.util.ArrayList;
-import java.util.List;
 
 import static java.util.Objects.requireNonNull;
 
@@ -31,13 +26,7 @@ import static java.util.Objects.requireNonNull;
 public final class TopNRankingSession
         implements Operator
 {
-    private final Allocator.Context allocationContext =
-            new Allocator.Context("TopNRankingSession", TopNRankingSession.class);
-    private final Allocator allocator;
-    private final int inputColumns;
-    private final List<TableOperator.Page> pages = new ArrayList<>();
-    private final TopNRankingOperator ranking;
-    private final UnpartitionedTopNRankingState unpartitionedRanking;
+    private final TopNRankingState ranking;
     private boolean finished;
     private boolean closed;
 
@@ -77,11 +66,11 @@ public final class TopNRankingSession
             Schema rankingSchema,
             OperatorResources resources)
     {
-        this.allocator = requireNonNull(allocator, "allocator is null");
-        inputColumns = requireNonNull(inputSchema, "inputSchema is null").size();
+        requireNonNull(allocator, "allocator is null");
+        requireNonNull(inputSchema, "inputSchema is null");
         resources = requireNonNull(resources, "resources is null");
         if (partitionColumns.length == 0) {
-            unpartitionedRanking = new UnpartitionedTopNRankingState(
+            ranking = new UnpartitionedTopNRankingState(
                     allocator,
                     limit,
                     orderingColumns,
@@ -92,11 +81,9 @@ public final class TopNRankingSession
                     inputSchema,
                     rankingSchema,
                     resources);
-            ranking = null;
         }
         else {
-            unpartitionedRanking = null;
-            ranking = new TopNRankingOperator(
+            ranking = new PartitionedTopNRankingState(
                     allocator,
                     limit,
                     partitionColumns,
@@ -104,7 +91,8 @@ public final class TopNRankingSession
                     descending,
                     nullsFirst,
                     rankingType,
-                    TableOperator.retained(inputSchema, pages),
+                    true,
+                    inputSchema,
                     rankingSchema,
                     resources);
         }
@@ -117,30 +105,12 @@ public final class TopNRankingSession
         if (finished) {
             throw new IllegalStateException("TopN ranking input is finished");
         }
-        Mask mask = batch.borrowMask();
-        if (mask.none()) {
-            return;
-        }
-        if (unpartitionedRanking != null) {
-            unpartitionedRanking.addInput(batch);
-            return;
-        }
-        Streams[] columns = new Streams[inputColumns];
-        for (int outputIndex = 0; outputIndex < columns.length; outputIndex++) {
-            Output output = batch.output(outputIndex);
-            Streams.Builder borrowed = Streams.builder();
-            for (Stream stream : output.streams()) {
-                borrowed.put(stream, output.borrow(stream));
-            }
-            columns[outputIndex] = allocator.copyStreams(allocationContext, borrowed.build(), mask);
-        }
-        pages.add(new TableOperator.Page(mask.count(), columns, Mask.all(mask.count())));
+        ranking.addInput(batch);
     }
 
     /**
-     * Adds an allocator-owned native batch whose contents may be retained. A partitioned state can transfer the
-     * complete batch; a bounded unpartitioned state instead copies only qualifying rows. The caller relinquishes
-     * the contents and must close the batch after this method returns, whether or not it was physically drained.
+     * Adds an allocator-owned native batch. Bounded state copies only qualifying rows. The caller relinquishes the
+     * contents and must close the batch after this method returns, whether or not it was physically drained.
      */
     public void addRetainedInput(Batch batch)
     {
@@ -149,27 +119,7 @@ public final class TopNRankingSession
         if (finished) {
             throw new IllegalStateException("TopN ranking input is finished");
         }
-        Mask mask = batch.borrowMask();
-        if (mask.none()) {
-            return;
-        }
-        if (unpartitionedRanking != null) {
-            unpartitionedRanking.addInput(batch);
-            return;
-        }
-        Streams[] columns = new Streams[inputColumns];
-        for (int outputIndex = 0; outputIndex < columns.length; outputIndex++) {
-            Output output = batch.output(outputIndex);
-            Streams.Builder retained = Streams.builder();
-            for (Stream stream : output.streams()) {
-                retained.put(stream, allocator.transfer(allocationContext, output.take(stream)));
-            }
-            columns[outputIndex] = retained.build();
-        }
-        pages.add(new TableOperator.Page(
-                mask.count(),
-                columns,
-                allocator.transfer(allocationContext, batch.takeMask())));
+        ranking.addInput(batch);
     }
 
     public void finishInput()
@@ -179,9 +129,7 @@ public final class TopNRankingSession
             throw new IllegalStateException("TopN ranking input is already finished");
         }
         finished = true;
-        if (unpartitionedRanking != null) {
-            unpartitionedRanking.finishInput();
-        }
+        ranking.finishInput();
     }
 
     @Override
@@ -229,12 +177,7 @@ public final class TopNRankingSession
             return;
         }
         closed = true;
-        try {
-            delegate().close();
-        }
-        finally {
-            allocator.release(allocationContext);
-        }
+        ranking.close();
     }
 
     private void checkFinished()
@@ -247,7 +190,7 @@ public final class TopNRankingSession
 
     private Operator delegate()
     {
-        return unpartitionedRanking != null ? unpartitionedRanking : ranking;
+        return ranking;
     }
 
     private void checkOpen()

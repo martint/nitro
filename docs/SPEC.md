@@ -314,11 +314,13 @@ inside an island.
 Blocking operators may retain state, but retained input and output ownership must be explicit. Operators close fully
 consumed batches promptly and cannot retain borrowed vectors after their lease ends.
 
-Unpartitioned Top-N ranking selects incrementally. `ROW_NUMBER` retains at most the requested row count; `RANK`
+Top-N ranking selects incrementally. `ROW_NUMBER` retains at most the requested row count per partition; `RANK`
 retains peer groups while their preceding-row count is below the limit; and `DENSE_RANK` retains the requested number
-of distinct peer groups. New better groups evict worse groups during ingestion. Retained state therefore scales with
-the observable qualifying result, including required boundary ties, rather than with total input. The host-session and
-island-pull entry points use the same physical state.
+of distinct peer groups. New better groups evict worse groups during ingestion. Partitioned ranking assigns identity
+through the generic grouping contract and shares one allocator-owned row store across partitions; it does not create a
+complete operator state per partition. Retained row state therefore scales with the observable qualifying result,
+including required boundary ties, rather than with total input. Partition-key state necessarily scales with distinct
+partition count. The host-session and island-pull entry points use the same physical state.
 
 Operators are generic over functions, logical types, arity, query shape, tables, and column combinations.
 Specialization comes through general physical interfaces or generated resolved layouts.

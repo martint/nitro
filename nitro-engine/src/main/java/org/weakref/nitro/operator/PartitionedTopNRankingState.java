@@ -16,31 +16,39 @@ package org.weakref.nitro.operator;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
 import org.weakref.nitro.core.type.Field;
 import org.weakref.nitro.core.type.Schema;
+import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.core.type.TypeOrderKeyBinder;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
+import org.weakref.nitro.data.Vector;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
+import static java.lang.Math.toIntExact;
 import static java.util.Objects.requireNonNull;
 
-/** Streaming bounded state for an unpartitioned Top-N ranking. */
-final class UnpartitionedTopNRankingState
+/** Streaming bounded state for a partitioned Top-N ranking. */
+final class PartitionedTopNRankingState
         implements TopNRankingState
 {
     private final Allocator.Context allocationContext =
-            new Allocator.Context("UnpartitionedTopNRankingState", UnpartitionedTopNRankingState.class);
+            new Allocator.Context("PartitionedTopNRankingState", PartitionedTopNRankingState.class);
     private final Allocator allocator;
     private final int limit;
+    private final int[] partitionColumns;
     private final TopNRankingOperator.RankingType rankingType;
     private final int maxBatchRows;
     private final boolean outputRanking;
     private final Schema outputSchema;
-    private final TopNState state;
-    private final List<PeerGroup> groups = new ArrayList<>();
+    private final TopNState rows;
+    private final GroupingState partitionGrouping;
+    private final StructuralComparisonKernel[] partitionComparisons;
+    private final List<Partition> partitions = new ArrayList<>();
     private final IntArrayList freeSlots = new IntArrayList();
     private int nextSlot;
     private int retainedRows;
@@ -51,9 +59,10 @@ final class UnpartitionedTopNRankingState
     private boolean finished;
     private boolean closed;
 
-    UnpartitionedTopNRankingState(
+    PartitionedTopNRankingState(
             Allocator allocator,
             int limit,
+            int[] partitionColumns,
             int[] orderingColumns,
             boolean[] descending,
             boolean[] nullsFirst,
@@ -66,6 +75,7 @@ final class UnpartitionedTopNRankingState
         this(
                 allocator,
                 limit,
+                partitionColumns,
                 orderingColumns,
                 descending,
                 nullsFirst,
@@ -73,14 +83,14 @@ final class UnpartitionedTopNRankingState
                 outputRanking,
                 inputSchema,
                 rankingSchema,
-                requireNonNull(resources, "resources is null").joinBufferPolicy(),
-                resources.codeGeneration().structuralTypes(),
-                resources.topNRankingPolicy());
+                resources,
+                requireNonNull(resources, "resources is null").topNRankingPolicy());
     }
 
-    UnpartitionedTopNRankingState(
+    PartitionedTopNRankingState(
             Allocator allocator,
             int limit,
+            int[] partitionColumns,
             int[] orderingColumns,
             boolean[] descending,
             boolean[] nullsFirst,
@@ -88,26 +98,42 @@ final class UnpartitionedTopNRankingState
             boolean outputRanking,
             Schema inputSchema,
             Schema rankingSchema,
-            JoinBufferPolicy joinBufferPolicy,
-            StructuralTypeKernelFactory structuralTypes,
+            OperatorResources resources,
             TopNRankingOperatorPolicy policy)
     {
         this.allocator = requireNonNull(allocator, "allocator is null");
         this.limit = limit;
+        this.partitionColumns = partitionColumns.clone();
         this.rankingType = requireNonNull(rankingType, "rankingType is null");
         this.outputRanking = outputRanking;
+        resources = requireNonNull(resources, "resources is null");
         this.maxBatchRows = requireNonNull(policy, "policy is null").maxBatchRows();
         this.outputSchema = outputRanking ? appendRanking(inputSchema, rankingSchema) : inputSchema;
-        state = new TopNState(
+        rows = new TopNState(
                 orderingColumns,
                 descending,
                 nullsFirst,
-                requireNonNull(joinBufferPolicy, "joinBufferPolicy is null"),
+                resources.joinBufferPolicy(),
                 allocator,
                 allocationContext,
                 inputSchema,
-                requireNonNull(structuralTypes, "structuralTypes is null"),
+                resources.codeGeneration().structuralTypes(),
                 limit);
+        List<TypeBinding> partitionTypes = Arrays.stream(this.partitionColumns)
+                .mapToObj(column -> inputSchema.field(column).type())
+                .toList();
+        partitionGrouping = new GroupingState(
+                allocator.primitiveArrays(),
+                resources.codeGeneration(),
+                resources.grouping().forGroupingOnlyAggregation(),
+                resources.adaptiveLongGroupingPolicy(),
+                resources.flatKeyTablePolicy(),
+                partitionTypes,
+                allocator,
+                allocationContext);
+        partitionComparisons = partitionTypes.stream()
+                .map(resources.codeGeneration().structuralTypes()::comparison)
+                .toArray(StructuralComparisonKernel[]::new);
     }
 
     @Override
@@ -115,63 +141,78 @@ final class UnpartitionedTopNRankingState
     {
         requireNonNull(batch, "batch is null");
         checkAcceptingInput();
-        state.beginBatch();
-        state.captureSchema(batch, true);
+        rows.beginBatch();
+        rows.captureSchema(batch, true);
         Mask mask = batch.borrowMask();
         if (mask.none()) {
-            state.discardFallbackBatch();
+            rows.discardFallbackBatch();
             return;
         }
 
+        Vector[] partitionValues = new Vector[partitionColumns.length];
+        Vector[] partitionNulls = new Vector[partitionColumns.length];
+        for (int index = 0; index < partitionColumns.length; index++) {
+            Output output = batch.output(partitionColumns[index]);
+            partitionValues[index] = output.borrow(Stream.VALUES);
+            partitionNulls[index] = output.borrowOrNull(Stream.NULLS);
+        }
+
+        I64Vector partitionIds = allocator.allocate(allocationContext, I64Vector.class, mask.size(), I64Vector::new);
         IntArrayList touchedSlots = new IntArrayList();
         boolean compactCandidate = mask.size() > (1 << 16);
-        TypeOrderKeyBinder.Bound normalizedOrdering = normalizedOrderingDisabled ? null : state.bindSingleOrderingKey(batch);
+        TypeOrderKeyBinder.Bound normalizedOrdering = normalizedOrderingDisabled ? null : rows.bindSingleOrderingKey(batch);
         if (normalizedOrdering == null) {
             normalizedOrderingDisabled = true;
         }
         try {
+            partitionGrouping.assignGroupsForBlockingAggregation(partitionValues, partitionNulls, mask, partitionIds);
+            ensurePartitions(toIntExact(partitionGrouping.groupCount()));
             for (int selectedIndex = 0; selectedIndex < mask.count(); selectedIndex++) {
                 int position = mask.position(selectedIndex);
+                Partition partition = partitions.get(toIntExact(partitionIds.values()[position]));
                 long orderingKey = normalizedOrdering == null ? 0 : normalizedOrdering.key(position);
-                int groupIndex = insertionPoint(batch, position, orderingKey, compactCandidate, normalizedOrdering != null);
-                if (!isAdmitted(groupIndex)) {
+                int groupIndex = insertionPoint(
+                        partition, batch, position, orderingKey, compactCandidate, normalizedOrdering != null);
+                if (!isAdmitted(partition, groupIndex)) {
                     continue;
                 }
 
                 PeerGroup group;
-                if (groupIndex < groups.size() &&
-                        compare(batch, position, orderingKey, groups.get(groupIndex), compactCandidate, normalizedOrdering != null) == 0) {
+                if (groupIndex < partition.groups.size() &&
+                        compare(batch, position, orderingKey, partition.groups.get(groupIndex), compactCandidate, normalizedOrdering != null) == 0) {
                     if (rankingType == TopNRankingOperator.RankingType.ROW_NUMBER &&
-                            retainedRows >= limit &&
-                            groupIndex == groups.size() - 1) {
+                            partition.retainedRows >= limit &&
+                            groupIndex == partition.groups.size() - 1) {
                         continue;
                     }
-                    group = groups.get(groupIndex);
+                    group = partition.groups.get(groupIndex);
                 }
                 else {
                     group = new PeerGroup(orderingKey);
-                    groups.add(groupIndex, group);
+                    partition.groups.add(groupIndex, group);
                 }
 
                 int slot = acquireSlot();
-                state.copyRow(batch, position, slot);
-                group.slots().add(slot);
+                rows.copyRow(batch, position, slot);
+                group.slots.add(slot);
                 touchedSlots.add(slot);
+                partition.retainedRows++;
                 retainedRows++;
-                trim();
+                trim(partition);
             }
 
             IntArrayList liveTouched = new IntArrayList(touchedSlots.size());
             for (int index = 0; index < touchedSlots.size(); index++) {
                 int slot = touchedSlots.getInt(index);
-                if (state.isPendingFrom(slot, batch)) {
+                if (rows.isPendingFrom(slot, batch)) {
                     liveTouched.add(slot);
                 }
             }
-            state.flushPendingBatch(batch, liveTouched.elements(), 0, liveTouched.size());
+            rows.flushPendingBatch(batch, liveTouched.elements(), 0, liveTouched.size());
         }
         finally {
-            state.discardFallbackBatch();
+            allocator.release(allocationContext, partitionIds);
+            rows.discardFallbackBatch();
         }
     }
 
@@ -183,37 +224,90 @@ final class UnpartitionedTopNRankingState
             throw new IllegalStateException("TopN ranking input is already finished");
         }
         finished = true;
+        partitionGrouping.finishInput();
+        List<Integer> orderedPartitions = orderedPartitions();
         outputSlots = new int[retainedRows];
         outputRanks = outputRanking ? new long[retainedRows] : null;
-        int position = 0;
-        long precedingRows = 0;
-        for (int groupIndex = 0; groupIndex < groups.size(); groupIndex++) {
-            PeerGroup group = groups.get(groupIndex);
-            long groupRank = switch (rankingType) {
-                case ROW_NUMBER -> -1;
-                case RANK -> precedingRows + 1;
-                case DENSE_RANK -> groupIndex + 1L;
-            };
-            for (int index = 0; index < group.slots().size(); index++) {
-                outputSlots[position] = group.slots().getInt(index);
-                if (outputRanking) {
-                    outputRanks[position] = rankingType == TopNRankingOperator.RankingType.ROW_NUMBER ? position + 1L : groupRank;
+        int output = 0;
+        for (int partitionId : orderedPartitions) {
+            Partition partition = partitions.get(partitionId);
+            long precedingRows = 0;
+            int partitionPosition = 0;
+            for (int groupIndex = 0; groupIndex < partition.groups.size(); groupIndex++) {
+                PeerGroup group = partition.groups.get(groupIndex);
+                long groupRank = switch (rankingType) {
+                    case ROW_NUMBER -> -1;
+                    case RANK -> precedingRows + 1;
+                    case DENSE_RANK -> groupIndex + 1L;
+                };
+                for (int index = 0; index < group.slots.size(); index++) {
+                    outputSlots[output] = group.slots.getInt(index);
+                    if (outputRanking) {
+                        outputRanks[output] = rankingType == TopNRankingOperator.RankingType.ROW_NUMBER
+                                ? partitionPosition + 1L
+                                : groupRank;
+                    }
+                    output++;
+                    partitionPosition++;
                 }
-                position++;
+                precedingRows += group.slots.size();
             }
-            precedingRows += group.slots().size();
         }
     }
 
-    private int insertionPoint(Batch batch, int position, long orderingKey, boolean compactCandidate, boolean normalizedOrdering)
+    private List<Integer> orderedPartitions()
     {
-        for (int index = 0; index < groups.size(); index++) {
-            int comparison = compare(batch, position, orderingKey, groups.get(index), compactCandidate, normalizedOrdering);
-            if (comparison >= 0) {
+        if (partitions.isEmpty()) {
+            rows.prepareEmptyOutputSchema();
+            return List.of();
+        }
+        int count = partitions.size();
+        Mask mask = allocator.allocateRangeMask(allocationContext, 0, count);
+        Streams[] keys = new Streams[partitionColumns.length];
+        try {
+            for (int index = 0; index < keys.length; index++) {
+                keys[index] = partitionGrouping.groupedValues(index, mask, null, allocator, allocationContext);
+            }
+        }
+        finally {
+            allocator.release(allocationContext, mask);
+        }
+        List<Integer> ordered = new ArrayList<>(count);
+        for (int partition = 0; partition < count; partition++) {
+            ordered.add(partition);
+        }
+        ordered.sort((left, right) -> comparePartitionKeys(keys, left, right));
+        return ordered;
+    }
+
+    private int comparePartitionKeys(Streams[] keys, int left, int right)
+    {
+        for (int index = 0; index < keys.length; index++) {
+            Streams key = keys[index];
+            int comparison = partitionComparisons[index].compare(
+                    key.values(), key.getOrNull(Stream.NULLS), left,
+                    key.values(), key.getOrNull(Stream.NULLS), right);
+            if (comparison != 0) {
+                return comparison;
+            }
+        }
+        return 0;
+    }
+
+    private int insertionPoint(
+            Partition partition,
+            Batch batch,
+            int position,
+            long orderingKey,
+            boolean compactCandidate,
+            boolean normalizedOrdering)
+    {
+        for (int index = 0; index < partition.groups.size(); index++) {
+            if (compare(batch, position, orderingKey, partition.groups.get(index), compactCandidate, normalizedOrdering) >= 0) {
                 return index;
             }
         }
-        return groups.size();
+        return partition.groups.size();
     }
 
     private int compare(
@@ -225,23 +319,29 @@ final class UnpartitionedTopNRankingState
             boolean normalizedOrdering)
     {
         if (!normalizedOrdering) {
-            return state.compareOrderingValue(batch, position, group.representative(), compactCandidate);
+            return rows.compareOrderingValue(batch, position, group.representative(), compactCandidate);
         }
-        return state.singleOrderingDescending()
-                ? Long.compareUnsigned(orderingKey, group.orderingKey())
-                : Long.compareUnsigned(group.orderingKey(), orderingKey);
+        return rows.singleOrderingDescending()
+                ? Long.compareUnsigned(orderingKey, group.orderingKey)
+                : Long.compareUnsigned(group.orderingKey, orderingKey);
     }
 
-    private boolean isAdmitted(int groupIndex)
+    private boolean isAdmitted(Partition partition, int groupIndex)
     {
-        if (groupIndex < groups.size()) {
+        if (groupIndex < partition.groups.size()) {
             return true;
         }
         return switch (rankingType) {
-            case ROW_NUMBER -> retainedRows < limit;
-            case RANK -> retainedRows < limit;
-            case DENSE_RANK -> groups.size() < limit;
+            case ROW_NUMBER, RANK -> partition.retainedRows < limit;
+            case DENSE_RANK -> partition.groups.size() < limit;
         };
+    }
+
+    private void ensurePartitions(int count)
+    {
+        while (partitions.size() < count) {
+            partitions.add(new Partition());
+        }
     }
 
     private int acquireSlot()
@@ -250,59 +350,60 @@ final class UnpartitionedTopNRankingState
             return freeSlots.removeInt(freeSlots.size() - 1);
         }
         int slot = nextSlot++;
-        state.ensureCapacity(nextSlot);
+        rows.ensureCapacity(nextSlot);
         return slot;
     }
 
-    private void trim()
+    private void trim(Partition partition)
     {
         switch (rankingType) {
-            case ROW_NUMBER -> trimRows(limit);
+            case ROW_NUMBER -> trimRows(partition, limit);
             case DENSE_RANK -> {
-                while (groups.size() > limit) {
-                    removeGroup(groups.size() - 1);
+                while (partition.groups.size() > limit) {
+                    removeGroup(partition, partition.groups.size() - 1);
                 }
             }
             case RANK -> {
                 int preceding = 0;
                 int retainedGroups = 0;
-                for (PeerGroup group : groups) {
+                for (PeerGroup group : partition.groups) {
                     if (preceding >= limit) {
                         break;
                     }
-                    preceding += group.slots().size();
+                    preceding += group.slots.size();
                     retainedGroups++;
                 }
-                while (groups.size() > retainedGroups) {
-                    removeGroup(groups.size() - 1);
+                while (partition.groups.size() > retainedGroups) {
+                    removeGroup(partition, partition.groups.size() - 1);
                 }
             }
         }
     }
 
-    private void trimRows(int maximumRows)
+    private void trimRows(Partition partition, int maximumRows)
     {
-        while (retainedRows > maximumRows) {
-            PeerGroup tail = groups.get(groups.size() - 1);
-            releaseSlot(tail.slots().removeInt(tail.slots().size() - 1));
-            if (tail.slots().isEmpty()) {
-                groups.remove(groups.size() - 1);
+        while (partition.retainedRows > maximumRows) {
+            PeerGroup tail = partition.groups.get(partition.groups.size() - 1);
+            releaseSlot(partition, tail.slots.removeInt(tail.slots.size() - 1));
+            if (tail.slots.isEmpty()) {
+                partition.groups.remove(partition.groups.size() - 1);
             }
         }
     }
 
-    private void removeGroup(int index)
+    private void removeGroup(Partition partition, int index)
     {
-        PeerGroup group = groups.remove(index);
-        for (int slotIndex = 0; slotIndex < group.slots().size(); slotIndex++) {
-            releaseSlot(group.slots().getInt(slotIndex));
+        PeerGroup group = partition.groups.remove(index);
+        for (int slotIndex = 0; slotIndex < group.slots.size(); slotIndex++) {
+            releaseSlot(partition, group.slots.getInt(slotIndex));
         }
     }
 
-    private void releaseSlot(int slot)
+    private void releaseSlot(Partition partition, int slot)
     {
-        state.discardPendingSlot(slot);
+        rows.discardPendingSlot(slot);
         freeSlots.add(slot);
+        partition.retainedRows--;
         retainedRows--;
     }
 
@@ -335,15 +436,15 @@ final class UnpartitionedTopNRankingState
         int batchSize = Math.min(maxBatchRows, outputSlots.length - outputPosition);
         int[] slots = new int[batchSize];
         System.arraycopy(outputSlots, outputPosition, slots, 0, batchSize);
-        state.setOrderedSlots(slots, batchSize);
+        rows.setOrderedSlots(slots, batchSize);
 
         Output[] outputs = new Output[outputCount()];
         int sourceOutputs = outputCount() - (outputRanking ? 1 : 0);
         for (int outputIndex = 0; outputIndex < sourceOutputs; outputIndex++) {
             int index = outputIndex;
             outputs[index] = new Output(
-                    state.outputStreams(index),
-                    stream -> state.output(index).get(stream),
+                    rows.outputStreams(index),
+                    stream -> rows.output(index).get(stream),
                     (stream, vector) -> allocator.transfer(allocationContext, vector),
                     (stream, vector) -> allocator.release(allocationContext, vector));
         }
@@ -362,7 +463,7 @@ final class UnpartitionedTopNRankingState
         Mask outputMask = allocator.allocateRangeMask(allocationContext, 0, batchSize);
         return new Batch(
                 outputMask,
-                state::constrain,
+                rows::constrain,
                 takenMask -> allocator.transfer(allocationContext, takenMask),
                 batchMask -> allocator.release(allocationContext, batchMask),
                 () -> {},
@@ -372,7 +473,7 @@ final class UnpartitionedTopNRankingState
     @Override
     public void constrain(Mask mask)
     {
-        state.constrain(mask);
+        rows.constrain(mask);
     }
 
     @Override
@@ -388,7 +489,8 @@ final class UnpartitionedTopNRankingState
             return;
         }
         closed = true;
-        state.close();
+        partitionGrouping.releaseBuffers();
+        rows.close();
         allocator.release(allocationContext);
     }
 
@@ -427,11 +529,20 @@ final class UnpartitionedTopNRankingState
         return new Schema(fields);
     }
 
-    private record PeerGroup(IntArrayList slots, long orderingKey)
+    private static final class Partition
     {
+        private final List<PeerGroup> groups = new ArrayList<>();
+        private int retainedRows;
+    }
+
+    private static final class PeerGroup
+    {
+        private final IntArrayList slots = new IntArrayList();
+        private final long orderingKey;
+
         private PeerGroup(long orderingKey)
         {
-            this(new IntArrayList(), orderingKey);
+            this.orderingKey = orderingKey;
         }
 
         private int representative()

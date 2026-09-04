@@ -1608,6 +1608,65 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testPartitionedTopNRankingReplacesEarlierRowsForRowNumberAndDenseRank()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        List<org.weakref.nitro.data.Row> rows = List.of(
+                row("a", 100L, "old-a"),
+                row("b", 90L, "old-b"),
+                row("a", 1L, "first-a"),
+                row("a", 2L, "second-a"),
+                row("b", 3L, "first-b"),
+                row("b", 4L, "second-b"));
+
+        try (Operator rowNumber = new TopNRankingOperator(
+                allocator,
+                1,
+                new int[] {0},
+                new int[] {1},
+                new boolean[] {false},
+                TopNRankingOperator.RankingType.ROW_NUMBER,
+                new BatchSliceOperator(
+                        allocator,
+                        2,
+                        new ConstantTableOperator(allocator, 3, rows)),
+                Schema.unspecified(1),
+                EngineResources.from(allocator).operatorResources())) {
+            assertThat(OperatorAssertions.OperatorAssert.toRows(rowNumber))
+                    .containsExactly(
+                            row("a", 1L, "first-a", 1L),
+                            row("b", 3L, "first-b", 1L));
+        }
+
+        try (Operator denseRank = new TopNRankingOperator(
+                allocator,
+                1,
+                new int[] {0},
+                new int[] {1},
+                new boolean[] {false},
+                TopNRankingOperator.RankingType.DENSE_RANK,
+                new BatchSliceOperator(
+                        allocator,
+                        2,
+                        new ConstantTableOperator(allocator, 3, List.of(
+                                row("a", 100L, "old-a"),
+                                row("b", 90L, "old-b"),
+                                row("a", 1L, "first-a"),
+                                row("a", 1L, "first-a-tie"),
+                                row("b", 3L, "first-b"),
+                                row("b", 3L, "first-b-tie")))),
+                Schema.unspecified(1),
+                EngineResources.from(allocator).operatorResources())) {
+            assertThat(OperatorAssertions.OperatorAssert.toRows(denseRank))
+                    .containsExactly(
+                            row("a", 1L, "first-a", 1L),
+                            row("a", 1L, "first-a-tie", 1L),
+                            row("b", 3L, "first-b", 1L),
+                            row("b", 3L, "first-b-tie", 1L));
+        }
+    }
+
+    @Test
     void testTopNRankingSessionRetainsTransferredEncodedInputs()
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());
