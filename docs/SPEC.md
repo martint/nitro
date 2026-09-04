@@ -132,6 +132,11 @@ Growing a fixed-cardinality structural vector is an atomic reconstruction: alloc
 every child stream to cover the new domain, and only then attach the children. Generic copy-then-grow machinery must
 not publish an enlarged parent with its former undersized children, even transiently.
 
+The vector SPI represents contiguous logical-range copies directly. A caller must not expand a range into a
+row-count-sized identity-position array. Flat vectors may bulk-copy storage, encoded vectors traverse their physical
+runs or mappings, and the compatibility default copies individual positions without allocating range metadata.
+Representation-specific range copying preserves the ordinary destination ownership and allocator-context rules.
+
 A physical carrier does not imply a logical type. An I64 carrier may hold BIGINT, a short decimal, date, time, or a
 timestamp representation. Binary storage does not imply UTF-8. The type registry supplies equality, hashing,
 comparison, coercion, display, and function semantics.

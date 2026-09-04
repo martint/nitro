@@ -126,6 +126,14 @@ public class I32Vector
     }
 
     @Override
+    public Vector copyRangeInto(Allocator allocator, Allocator.Context allocationContext, Vector existing, int sourceStart, int sourceEnd, int outputStart, int size)
+    {
+        I32Vector target = allocator.allocateOrGrow(allocationContext, (I32Vector) existing, I32Vector.class, size, I32Vector::new);
+        System.arraycopy(values, sourceStart, target.values(), outputStart, sourceEnd - sourceStart);
+        return target;
+    }
+
+    @Override
     public Vector copySinglePositionInto(Allocator allocator, Allocator.Context allocationContext, Vector existing, int sourcePosition, int outputPosition, int size)
     {
         I32Vector target = allocator.allocateOrGrow(allocationContext, (I32Vector) existing, I32Vector.class, size, I32Vector::new);
@@ -154,11 +162,8 @@ public class I32Vector
         int outputStart = 0;
         for (Vector row : rows) {
             int rowLength = row.length();
-            if (rowLength == 1) {
-                row.copySinglePositionInto(allocator, allocationContext, result, 0, outputStart, result.length());
-            }
-            else if (rowLength > 1) {
-                row.copyPositionsInto(allocator, allocationContext, result, VectorSupport.densePositions(rowLength), rowLength, outputStart, result.length());
+            if (rowLength > 0) {
+                row.copyRangeInto(allocator, allocationContext, result, 0, rowLength, outputStart, result.length());
             }
             outputStart += rowLength;
         }

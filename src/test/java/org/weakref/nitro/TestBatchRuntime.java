@@ -743,6 +743,39 @@ public class TestBatchRuntime
     }
 
     @Test
+    void testContiguousRleCopyTraversesRunsWithoutPositionArray()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        Allocator.Context context = new Allocator.Context("ContiguousRleCopy");
+        int[] rangeCopies = new int[1];
+        I64Vector values = new I64Vector(new long[] {10, 20, 30})
+        {
+            @Override
+            public Vector copyPositionsInto(Allocator targetAllocator, Allocator.Context targetContext, Vector existing, int[] positions, int count, int outputStart, int size)
+            {
+                throw new AssertionError("contiguous RLE copy must not materialize logical positions");
+            }
+
+            @Override
+            public Vector copySinglePositionRangeInto(Allocator targetAllocator, Allocator.Context targetContext, Vector existing, int sourcePosition, int outputStart, int outputEnd, int size)
+            {
+                rangeCopies[0]++;
+                return super.copySinglePositionRangeInto(targetAllocator, targetContext, existing, sourcePosition, outputStart, outputEnd, size);
+            }
+        };
+        RleVector rle = new RleVector(new int[] {2, 3, 1}, values);
+
+        I64Vector copied = (I64Vector) rle.copyRangeInto(allocator, context, null, 1, 5, 0, 4);
+
+        assertThat(copied.values()).containsExactly(10, 20, 20, 20);
+        assertThat(rangeCopies[0]).isEqualTo(2);
+
+        I64Vector materialized = (I64Vector) values.materializeRows(allocator, context, new Vector[] {rle});
+        assertThat(materialized.values()).containsExactly(10, 10, 20, 20, 20, 30);
+        assertThat(rangeCopies[0]).isEqualTo(5);
+    }
+
+    @Test
     void testBinaryVectorCopySinglePositionPreservesSparseOutputOffsets()
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());

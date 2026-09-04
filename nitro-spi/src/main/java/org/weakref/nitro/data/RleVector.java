@@ -246,6 +246,32 @@ public final class RleVector
     }
 
     @Override
+    public Vector copyRangeInto(Allocator allocator, Allocator.Context allocationContext, Vector existing, int sourceStart, int sourceEnd, int outputStart, int size)
+    {
+        Vector output = existing;
+        int sourcePosition = sourceStart;
+        int outputPosition = outputStart;
+        int runHint = sourceStart < sourceEnd ? runIndex(sourceStart) : 0;
+        while (sourcePosition < sourceEnd) {
+            int runIndex = runIndexFromHint(sourcePosition, runHint);
+            int copyEnd = Math.min(sourceEnd, runEnd(runIndex));
+            int copyLength = copyEnd - sourcePosition;
+            output = values.copySinglePositionRangeInto(
+                    allocator,
+                    allocationContext,
+                    output,
+                    runIndex,
+                    outputPosition,
+                    outputPosition + copyLength,
+                    size);
+            sourcePosition = copyEnd;
+            outputPosition += copyLength;
+            runHint = runIndex + 1;
+        }
+        return output;
+    }
+
+    @Override
     public Vector copySelectedPositionsInto(Allocator allocator, Allocator.Context allocationContext, Vector existing, SelectedPositions sourcePositions, int outputStart, int size)
     {
         return values.copySelectedPositionsInto(allocator, allocationContext, existing, SelectedPositions.map(sourcePositions, this::runIndex), outputStart, size);

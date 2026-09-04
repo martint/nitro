@@ -147,6 +147,29 @@ public interface Vector
     }
 
     /**
+     * Copies the contiguous logical source range {@code [sourceStart, sourceEnd)} into
+     * {@code existing}, starting at {@code outputStart}.
+     * <p>
+     * This operation represents a range directly so callers do not need to allocate an identity
+     * position array. Physical representations should override it when they can copy storage in
+     * bulk or traverse encoded runs directly.
+     */
+    default Vector copyRangeInto(Allocator allocator, Allocator.Context allocationContext, Vector existing, int sourceStart, int sourceEnd, int outputStart, int size)
+    {
+        Vector output = existing;
+        for (int sourcePosition = sourceStart; sourcePosition < sourceEnd; sourcePosition++) {
+            output = copySinglePositionInto(
+                    allocator,
+                    allocationContext,
+                    output,
+                    sourcePosition,
+                    outputStart + sourcePosition - sourceStart,
+                    size);
+        }
+        return output;
+    }
+
+    /**
      * Copies the supplied logical positions into {@code existing} without first materializing the
      * selected row set into an intermediate array.
      * <p>

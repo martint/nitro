@@ -179,6 +179,33 @@ public final class ConcatenatedBooleanVector
     }
 
     @Override
+    public Vector copyRangeInto(Allocator allocator, Allocator.Context allocationContext, Vector existing, int sourceStart, int sourceEnd, int outputStart, int size)
+    {
+        BooleanVector target = ensureBooleanCapacity(allocator, allocationContext, existing, size);
+        int sourcePosition = sourceStart;
+        int outputPosition = outputStart;
+        int segmentHint = sourceStart < sourceEnd ? segmentIndex(sourceStart) : 0;
+        while (sourcePosition < sourceEnd) {
+            int segmentIndex = segmentIndexFromHint(sourcePosition, segmentHint);
+            int segmentOffset = offsets[segmentIndex];
+            int copyEnd = Math.min(sourceEnd, offsets[segmentIndex + 1]);
+            int copyLength = copyEnd - sourcePosition;
+            segments[segmentIndex].copyRangeInto(
+                    allocator,
+                    allocationContext,
+                    target,
+                    sourcePosition - segmentOffset,
+                    copyEnd - segmentOffset,
+                    outputPosition,
+                    size);
+            sourcePosition = copyEnd;
+            outputPosition += copyLength;
+            segmentHint = segmentIndex + 1;
+        }
+        return target;
+    }
+
+    @Override
     public Vector copySinglePositionInto(Allocator allocator, Allocator.Context allocationContext, Vector existing, int sourcePosition, int outputPosition, int size)
     {
         BooleanVector target = ensureBooleanCapacity(allocator, allocationContext, existing, size);
@@ -199,11 +226,8 @@ public final class ConcatenatedBooleanVector
         int outputStart = 0;
         for (Vector row : rows) {
             int rowLength = row.length();
-            if (rowLength == 1) {
-                row.copySinglePositionInto(allocator, allocationContext, result, 0, outputStart, result.length());
-            }
-            else if (rowLength > 1) {
-                row.copyPositionsInto(allocator, allocationContext, result, VectorSupport.densePositions(rowLength), rowLength, outputStart, result.length());
+            if (rowLength > 0) {
+                row.copyRangeInto(allocator, allocationContext, result, 0, rowLength, outputStart, result.length());
             }
             outputStart += rowLength;
         }

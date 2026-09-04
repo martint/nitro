@@ -123,6 +123,19 @@ public final class RegionVector
     }
 
     @Override
+    public Vector copyRangeInto(Allocator allocator, Allocator.Context allocationContext, Vector existing, int sourceStart, int sourceEnd, int outputStart, int size)
+    {
+        return values.copyRangeInto(
+                allocator,
+                allocationContext,
+                existing,
+                offset + sourceStart,
+                offset + sourceEnd,
+                outputStart,
+                size);
+    }
+
+    @Override
     public Vector copySelectedPositionsInto(Allocator allocator, Allocator.Context allocationContext, Vector existing, SelectedPositions sourcePositions, int outputStart, int size)
     {
         return values.copySelectedPositionsInto(
