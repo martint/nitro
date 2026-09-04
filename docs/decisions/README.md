@@ -62,15 +62,15 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | §5 Vectors, streams, types | 0006, 0008, 0012, 0021, 0022, 0023, 0054, 0064, 0068, 0070 |
 | §6 Masks and conditions | 0008, 0012, 0020, 0034, 0064 |
 | §7 Evaluation IR | 0010, 0011, 0012, 0040, 0067 |
-| §8 Function conventions | 0006, 0011, 0013–0016, 0037, 0038, 0040, 0049–0054, 0062, 0063, 0066–0068, 0070 |
+| §8 Function conventions | 0006, 0011, 0013–0016, 0037, 0038, 0040, 0049–0054, 0062, 0063, 0066–0068, 0070, 0071 |
 | §9 Operators and islands | 0003, 0010, 0017, 0024, 0044–0047 |
 | §10 Cooperative execution | 0004, 0044, 0045 |
 | §11 Allocation and memory | 0007, 0014, 0017–0019, 0041, 0066 |
 | §12 Aggregation, windows, patterns, table functions | 0011–0013, 0015, 0016, 0022, 0036, 0045, 0046, 0055–0061, 0064 |
 | §13 Joins and dynamic filters | 0006, 0012, 0018, 0025, 0035, 0036 |
 | §14 Sources and Parquet | 0009, 0020–0023, 0031, 0068 |
-| §15 Host boundaries | 0003, 0017, 0019, 0024, 0033, 0044, 0046 |
-| §16 Adaptivity and generation | 0011, 0012, 0027, 0032, 0036, 0037, 0054–0061, 0068 |
+| §15 Host boundaries | 0003, 0017, 0019, 0024, 0033, 0044, 0046, 0071 |
+| §16 Adaptivity and generation | 0011, 0012, 0027, 0032, 0036, 0037, 0054–0061, 0068, 0071 |
 | §17 Correctness and tests | 0026, 0029, 0043, 0047 |
 | §18 Performance evidence | 0026–0028, 0032, 0041, 0042 |
 | §19 Coverage and productization | 0029–0031, 0033–0035, 0042, 0046, 0047 |
@@ -150,3 +150,4 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | [0068](0068-recover-low-cardinality-nested-parent-domains.md) | Recover low-cardinality nested parent domains | accepted |
 | [0069](0069-preserve-dictionary-domains-through-structural-construction.md) | Preserve dictionary domains through structural construction | accepted |
 | [0070](0070-make-unordered-placement-explicit.md) | Make unordered-value placement explicit in ordering capabilities | accepted |
+| [0071](0071-bind-specialization-constants-before-generated-scalar-adaptation.md) | Bind specialization constants before generated scalar adaptation | accepted |

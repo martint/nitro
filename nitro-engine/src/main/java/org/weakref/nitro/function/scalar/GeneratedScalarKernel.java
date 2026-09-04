@@ -19,17 +19,17 @@ import org.weakref.nitro.data.Mask;
 
 public interface GeneratedScalarKernel
 {
-    void applyDenseFlatNullFree(Object[] values, Object output, ErrorVector errors, ScalarFailureMapper failureMapper, int count);
+    void applyDenseFlatNullFree(Object[] values, Object output, boolean[] resultNulls, ErrorVector errors, ScalarFailureMapper failureMapper, int count);
 
-    void applySparseFlatNullFree(Object[] values, Object output, ErrorVector errors, ScalarFailureMapper failureMapper, int[] positions, int count);
+    void applySparseFlatNullFree(Object[] values, Object output, boolean[] resultNulls, ErrorVector errors, ScalarFailureMapper failureMapper, int[] positions, int count);
 
-    void applyDenseDictionaryNullFree(Object[] values, int[][] ids, Object output, ErrorVector errors, ScalarFailureMapper failureMapper, int count);
+    void applyDenseDictionaryNullFree(Object[] values, int[][] ids, Object output, boolean[] resultNulls, ErrorVector errors, ScalarFailureMapper failureMapper, int count);
 
-    void applySparseDictionaryNullFree(Object[] values, int[][] ids, Object output, ErrorVector errors, ScalarFailureMapper failureMapper, int[] positions, int count);
+    void applySparseDictionaryNullFree(Object[] values, int[][] ids, Object output, boolean[] resultNulls, ErrorVector errors, ScalarFailureMapper failureMapper, int[] positions, int count);
 
-    void applyDense(Object[] values, Object[] nulls, Object output, ErrorVector errors, ScalarFailureMapper failureMapper, int count);
+    void applyDense(Object[] values, Object[] nulls, Object output, boolean[] resultNulls, ErrorVector errors, ScalarFailureMapper failureMapper, int count);
 
-    void applySparse(Object[] values, Object[] nulls, Object output, ErrorVector errors, ScalarFailureMapper failureMapper, int[] positions, int count);
+    void applySparse(Object[] values, Object[] nulls, Object output, boolean[] resultNulls, ErrorVector errors, ScalarFailureMapper failureMapper, int[] positions, int count);
 
     default boolean applyMask(Object[] values, Object[] blockers, Mask mask, boolean selectedValue)
     {

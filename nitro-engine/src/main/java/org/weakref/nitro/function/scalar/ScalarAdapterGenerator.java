@@ -80,12 +80,12 @@ public final class ScalarAdapterGenerator
     private static final MethodTypeDesc BOOLEAN_VALUE = MethodTypeDesc.of(CD_boolean, CD_int);
     private static final MethodTypeDesc MAP_FAILURE = MethodTypeDesc.of(CD_ERROR_VALUE, CD_THROWABLE);
     private static final MethodTypeDesc SET_ERROR = MethodTypeDesc.of(CD_void, CD_int, CD_ERROR_VALUE);
-    private static final MethodTypeDesc DENSE_FLAT_NULL_FREE = MethodTypeDesc.of(CD_void, CD_OBJECT_ARRAY, CD_OBJECT, CD_ERROR_VECTOR, CD_FAILURE_MAPPER, CD_int);
-    private static final MethodTypeDesc SPARSE_FLAT_NULL_FREE = MethodTypeDesc.of(CD_void, CD_OBJECT_ARRAY, CD_OBJECT, CD_ERROR_VECTOR, CD_FAILURE_MAPPER, CD_INT_ARRAY, CD_int);
-    private static final MethodTypeDesc DENSE_DICTIONARY_NULL_FREE = MethodTypeDesc.of(CD_void, CD_OBJECT_ARRAY, CD_INT_ARRAY_ARRAY, CD_OBJECT, CD_ERROR_VECTOR, CD_FAILURE_MAPPER, CD_int);
-    private static final MethodTypeDesc SPARSE_DICTIONARY_NULL_FREE = MethodTypeDesc.of(CD_void, CD_OBJECT_ARRAY, CD_INT_ARRAY_ARRAY, CD_OBJECT, CD_ERROR_VECTOR, CD_FAILURE_MAPPER, CD_INT_ARRAY, CD_int);
-    private static final MethodTypeDesc DENSE = MethodTypeDesc.of(CD_void, CD_OBJECT_ARRAY, CD_OBJECT_ARRAY, CD_OBJECT, CD_ERROR_VECTOR, CD_FAILURE_MAPPER, CD_int);
-    private static final MethodTypeDesc SPARSE = MethodTypeDesc.of(CD_void, CD_OBJECT_ARRAY, CD_OBJECT_ARRAY, CD_OBJECT, CD_ERROR_VECTOR, CD_FAILURE_MAPPER, CD_INT_ARRAY, CD_int);
+    private static final MethodTypeDesc DENSE_FLAT_NULL_FREE = MethodTypeDesc.of(CD_void, CD_OBJECT_ARRAY, CD_OBJECT, CD_BOOLEAN_ARRAY, CD_ERROR_VECTOR, CD_FAILURE_MAPPER, CD_int);
+    private static final MethodTypeDesc SPARSE_FLAT_NULL_FREE = MethodTypeDesc.of(CD_void, CD_OBJECT_ARRAY, CD_OBJECT, CD_BOOLEAN_ARRAY, CD_ERROR_VECTOR, CD_FAILURE_MAPPER, CD_INT_ARRAY, CD_int);
+    private static final MethodTypeDesc DENSE_DICTIONARY_NULL_FREE = MethodTypeDesc.of(CD_void, CD_OBJECT_ARRAY, CD_INT_ARRAY_ARRAY, CD_OBJECT, CD_BOOLEAN_ARRAY, CD_ERROR_VECTOR, CD_FAILURE_MAPPER, CD_int);
+    private static final MethodTypeDesc SPARSE_DICTIONARY_NULL_FREE = MethodTypeDesc.of(CD_void, CD_OBJECT_ARRAY, CD_INT_ARRAY_ARRAY, CD_OBJECT, CD_BOOLEAN_ARRAY, CD_ERROR_VECTOR, CD_FAILURE_MAPPER, CD_INT_ARRAY, CD_int);
+    private static final MethodTypeDesc DENSE = MethodTypeDesc.of(CD_void, CD_OBJECT_ARRAY, CD_OBJECT_ARRAY, CD_OBJECT, CD_BOOLEAN_ARRAY, CD_ERROR_VECTOR, CD_FAILURE_MAPPER, CD_int);
+    private static final MethodTypeDesc SPARSE = MethodTypeDesc.of(CD_void, CD_OBJECT_ARRAY, CD_OBJECT_ARRAY, CD_OBJECT, CD_BOOLEAN_ARRAY, CD_ERROR_VECTOR, CD_FAILURE_MAPPER, CD_INT_ARRAY, CD_int);
     private static final MethodTypeDesc APPLY_MASK = MethodTypeDesc.of(CD_boolean, CD_OBJECT_ARRAY, CD_OBJECT_ARRAY, CD_MASK, CD_boolean);
     private static final MethodTypeDesc MASK_COUNT = MethodTypeDesc.of(CD_int);
     private static final MethodTypeDesc MASK_SELECTED_POSITIONS = MethodTypeDesc.of(CD_INT_ARRAY);
@@ -140,6 +140,35 @@ public final class ScalarAdapterGenerator
                 List.of(new NullPropagatingScalarMethodTarget(signature, target.target())));
     }
 
+    /**
+     * Adapts a strict scalar whose reference-carrier target may return null for non-null arguments.
+     *
+     * <p>The generated loop records a null result in the ordinary NULLS stream and does not pass it to the
+     * provider-owned result writer. Primitive nullable returns require a boxed calling convention and are not
+     * represented by this profile.
+     */
+    public ScalarDescriptor adaptNullableReferenceResult(
+            String name,
+            BoundSignature signature,
+            FunctionSemantics semantics,
+            ScalarMethodTarget target)
+    {
+        requireNonNull(name, "name is null");
+        requireNonNull(signature, "signature is null");
+        requireNonNull(semantics, "semantics is null");
+        requireNonNull(target, "target is null");
+        checkArgument(semantics.argumentNullConventions().size() == signature.argumentTypes().size(),
+                "Scalar semantics argument count does not match bound signature");
+        checkArgument(semantics.argumentNullConventions().stream().allMatch(RETURN_NULL_ON_NULL::equals),
+                "Nullable-reference scalar currently requires strict arguments");
+        checkArgument(semantics.nullableResult(), "Nullable-reference scalar requires a nullable result");
+        checkArgument(!signature.resultType().carrierType().isPrimitive(),
+                "Nullable-reference scalar requires a reference result carrier");
+        ScalarResultWriterFactory resultWriterFactory = resultWriterFactory(signature.resultType());
+        validateTarget(signature, target.target(), resultWriterFactory);
+        return descriptor(name, signature, semantics, target, resultWriterFactory, List.of(target));
+    }
+
     private ScalarDescriptor descriptor(
             String name,
             BoundSignature signature,
@@ -157,7 +186,8 @@ public final class ScalarAdapterGenerator
                         name,
                         signature,
                         semantics.deterministic(),
-                        generate(signature, target, resultWriterFactory, mayFail),
+                        semantics.nullableResult(),
+                        generate(signature, semantics, target, resultWriterFactory, mayFail),
                         resultWriterFactory,
                         mayFail,
                         failureMapper),
@@ -166,6 +196,7 @@ public final class ScalarAdapterGenerator
 
     private GeneratedScalarKernel generate(
             BoundSignature signature,
+            FunctionSemantics semantics,
             ScalarMethodTarget target,
             ScalarResultWriterFactory resultWriterFactory,
             boolean mayFail)
@@ -183,6 +214,7 @@ public final class ScalarAdapterGenerator
                 .toList();
         Class<?> result = signature.resultType().carrierType();
         boolean referenceResult = !result.isPrimitive();
+        boolean nullableReferenceResult = referenceResult && semantics.nullableResult();
         boolean capturesFailures = mayFail && target.failureMapper().isPresent();
         MethodHandles.Lookup definitionLookup = MethodHandles.lookup();
         String packageName = definitionLookup.lookupClass().getPackageName();
@@ -210,17 +242,17 @@ public final class ScalarAdapterGenerator
                 code.return_();
             });
             builder.withMethodBody("applyDenseFlatNullFree", DENSE_FLAT_NULL_FREE, ClassFile.ACC_PUBLIC,
-                    code -> emitLoop(code, arguments, result, invocationType, false, InputForm.FLAT, capturesFailures));
+                    code -> emitLoop(code, arguments, result, invocationType, false, InputForm.FLAT, capturesFailures, nullableReferenceResult));
             builder.withMethodBody("applySparseFlatNullFree", SPARSE_FLAT_NULL_FREE, ClassFile.ACC_PUBLIC,
-                    code -> emitLoop(code, arguments, result, invocationType, true, InputForm.FLAT, capturesFailures));
+                    code -> emitLoop(code, arguments, result, invocationType, true, InputForm.FLAT, capturesFailures, nullableReferenceResult));
             builder.withMethodBody("applyDenseDictionaryNullFree", DENSE_DICTIONARY_NULL_FREE, ClassFile.ACC_PUBLIC,
-                    code -> emitLoop(code, arguments, result, invocationType, false, InputForm.DICTIONARY, capturesFailures));
+                    code -> emitLoop(code, arguments, result, invocationType, false, InputForm.DICTIONARY, capturesFailures, nullableReferenceResult));
             builder.withMethodBody("applySparseDictionaryNullFree", SPARSE_DICTIONARY_NULL_FREE, ClassFile.ACC_PUBLIC,
-                    code -> emitLoop(code, arguments, result, invocationType, true, InputForm.DICTIONARY, capturesFailures));
+                    code -> emitLoop(code, arguments, result, invocationType, true, InputForm.DICTIONARY, capturesFailures, nullableReferenceResult));
             builder.withMethodBody("applyDense", DENSE, ClassFile.ACC_PUBLIC,
-                    code -> emitLoop(code, arguments, result, invocationType, false, InputForm.ACCESSOR, capturesFailures));
+                    code -> emitLoop(code, arguments, result, invocationType, false, InputForm.ACCESSOR, capturesFailures, nullableReferenceResult));
             builder.withMethodBody("applySparse", SPARSE, ClassFile.ACC_PUBLIC,
-                    code -> emitLoop(code, arguments, result, invocationType, true, InputForm.ACCESSOR, capturesFailures));
+                    code -> emitLoop(code, arguments, result, invocationType, true, InputForm.ACCESSOR, capturesFailures, nullableReferenceResult));
             if (result == boolean.class && !capturesFailures) {
                 builder.withMethodBody("applyMask", APPLY_MASK, ClassFile.ACC_PUBLIC,
                         code -> emitMaskLoop(code, arguments, invocationType));
@@ -370,22 +402,25 @@ public final class ScalarAdapterGenerator
             MethodTypeDesc invocationType,
             boolean sparse,
             InputForm inputForm,
-            boolean capturesFailures)
+            boolean capturesFailures,
+            boolean nullableReferenceResult)
     {
         int values = 1;
         boolean checkNulls = inputForm == InputForm.ACCESSOR;
         int nulls = checkNulls ? 2 : -1;
         int ids = inputForm == InputForm.DICTIONARY ? 2 : -1;
         int output = inputForm == InputForm.FLAT ? 2 : 3;
-        int errors = output + 1;
-        int failureMapper = output + 2;
-        int positions = sparse ? output + 3 : -1;
-        int count = sparse ? output + 4 : output + 3;
+        int resultNulls = output + 1;
+        int errors = output + 2;
+        int failureMapper = output + 3;
+        int positions = sparse ? output + 4 : -1;
+        int count = sparse ? output + 5 : output + 4;
         int index = count + 1;
         int position = index + 1;
         int valueAccessors = position + 1;
         int secondaryAccessors = valueAccessors + arguments.size();
         int failure = secondaryAccessors + arguments.size();
+        int callResult = failure + 1;
 
         for (int argument = 0; argument < arguments.size(); argument++) {
             Class<?> carrier = arguments.get(argument);
@@ -444,9 +479,11 @@ public final class ScalarAdapterGenerator
             }
         }
 
-        code.aload(output);
-        code.checkcast(result.isPrimitive() ? arrayDescriptor(result) : CD_RESULT_WRITER);
-        code.iload(position);
+        if (!nullableReferenceResult) {
+            code.aload(output);
+            code.checkcast(result.isPrimitive() ? arrayDescriptor(result) : CD_RESULT_WRITER);
+            code.iload(position);
+        }
         for (int argument = 0; argument < arguments.size(); argument++) {
             Class<?> carrier = arguments.get(argument);
             code.aload(valueAccessors + argument);
@@ -490,7 +527,37 @@ public final class ScalarAdapterGenerator
         if (capturesFailures) {
             code.labelBinding(invocationEnd);
         }
-        if (result.isPrimitive()) {
+        if (nullableReferenceResult) {
+            code.astore(callResult);
+            code.aload(callResult);
+            Label notNull = code.newLabel();
+            code.ifnonnull(notNull);
+            code.aload(resultNulls);
+            code.ifnull(next);
+            code.aload(resultNulls);
+            code.iload(position);
+            code.loadConstant(1);
+            code.bastore();
+            code.goto_(next);
+            code.labelBinding(notNull);
+            Label nullRecorded = code.newLabel();
+            code.aload(resultNulls);
+            code.ifnull(nullRecorded);
+            code.aload(resultNulls);
+            code.iload(position);
+            code.loadConstant(0);
+            code.bastore();
+            code.labelBinding(nullRecorded);
+            code.aload(output);
+            code.checkcast(CD_RESULT_WRITER);
+            code.iload(position);
+            code.aload(callResult);
+            code.invokedynamic(DynamicCallSiteDesc.of(
+                    BSM_SCALAR_TARGET,
+                    "write",
+                    MethodTypeDesc.of(CD_void, CD_RESULT_WRITER, CD_int, CD_OBJECT)));
+        }
+        else if (result.isPrimitive()) {
             store(code, result);
         }
         else {

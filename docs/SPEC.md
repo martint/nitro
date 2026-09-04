@@ -222,6 +222,13 @@ Generated adapters are ordinary implementations of the batch convention. They ma
 around a constant method-handle target, hoist null/error classification, traverse selected positions, and write into
 allocator-owned outputs. Generation does not transfer function semantics into the evaluator.
 
+A provider that resolves the complete logical call may consume immutable specialization constants before lowering
+the runtime batch signature. This is required when the host function uses a planning-only carrier that is not a Nitro
+logical type, such as a compiled pattern or path. The provider binds the constant into the exact target, removes that
+argument from the runtime vector signature, and gives distinct bound values distinct function identities. Only exact
+non-null constants may be consumed this way; a non-constant unsupported argument rejects the call. The evaluator
+neither vectorizes the host-only carrier nor recognizes the function that uses it.
+
 When the result carrier is Boolean, the same generated adapter may implement the mask convention directly: evaluate
 the composed scalar target only at active logical positions and compact the caller-owned mask in the same loop. This
 form must preserve strict null/error exclusion and exact invocation counts. In particular, a nondeterministic target
@@ -235,6 +242,12 @@ positions to rediscover that fact. The same rule applies to other provably empty
 Reference-carrier arguments are read through exact handles supplied by the logical type binding. Reference-carrier
 results are appended immediately through a provider-owned result writer into Nitro vectors. Nitro does not retain an
 array of host objects and does not infer logical meaning from `Slice`, `Block`, or another carrier class.
+
+A strict reference-carrier target may return null for non-null inputs when its resolved semantics declare a nullable
+result. The generated loop records such a return directly in the NULLS stream and must not pass null to the
+provider-owned result writer. A NULLS-only request still invokes the target because result nullness is data-dependent,
+but the resulting VALUES vector is not published. Nullable primitive-return targets require a distinct boxed or
+explicit-null calling convention and are rejected until one is supplied.
 
 An exact scalar target is eligible only when adapting its carrier does not introduce row-proportional allocation or
 erase a useful physical representation. A composite host carrier assembled from several vector children is not an

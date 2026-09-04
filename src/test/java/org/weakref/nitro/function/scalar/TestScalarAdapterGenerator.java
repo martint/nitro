@@ -271,6 +271,57 @@ final class TestScalarAdapterGenerator
     }
 
     @Test
+    void testNullableReferenceResultWritesNullStreamWithoutPassingNullToWriter()
+            throws Throwable
+    {
+        PrimitiveFunction function = new ScalarAdapterGenerator().adaptNullableReferenceResult(
+                "render_odd",
+                new BoundSignature(STRING_RESULT, List.of(LONG)),
+                new FunctionSemantics(true, List.of(RETURN_NULL_ON_NULL), true, NEVER_FAILS),
+                new ScalarMethodTarget(MethodHandles.lookup().findStatic(
+                        TestScalarAdapterGenerator.class,
+                        "renderOdd",
+                        MethodType.methodType(String.class, long.class))))
+                .implementation();
+
+        try (Allocator allocator = new Allocator(createDefault())) {
+            PrimitiveExecutionContext context = new PrimitiveExecutionContext(allocator);
+            assertThat(function.requiredInputStreams(0, EnumSet.of(Stream.NULLS)))
+                    .containsExactlyInAnyOrder(Stream.VALUES, Stream.NULLS);
+            Streams nullsOnly = function.apply(
+                    List.of(Streams.ofValues(new I64Vector(new long[] {1, 2, 4, 5}))),
+                    Mask.all(4),
+                    EnumSet.of(Stream.NULLS),
+                    Streams.empty(),
+                    context);
+            assertThat(nullsOnly.hasValues()).isFalse();
+            assertThat(((BooleanVector) nullsOnly.get(Stream.NULLS)).values()).containsExactly(false, true, true, false);
+
+            Streams dense = function.apply(
+                    List.of(Streams.ofValuesAndNulls(
+                            new I64Vector(new long[] {1, 2, 3, 5}),
+                            new BooleanVector(new boolean[] {false, false, true, false}))),
+                    Mask.all(4),
+                    EnumSet.of(Stream.VALUES, Stream.NULLS),
+                    Streams.empty(),
+                    context);
+            assertThat(strings((BinaryVector) dense.values())).containsExactly("v1", "", "", "v5");
+            assertThat(((BooleanVector) dense.get(Stream.NULLS)).values()).containsExactly(false, true, true, false);
+
+            Streams dictionary = function.apply(
+                    List.of(Streams.ofValues(new DictionaryVector(
+                            new int[] {0, 1, 0, 2},
+                            new I64Vector(new long[] {7, 8, 9})))),
+                    Mask.all(4),
+                    EnumSet.of(Stream.VALUES, Stream.NULLS),
+                    Streams.empty(),
+                    context);
+            assertThat(strings((BinaryVector) dictionary.values())).containsExactly("v7", "", "v7", "v9");
+            assertThat(((BooleanVector) dictionary.get(Stream.NULLS)).values()).containsExactly(false, true, false, false);
+        }
+    }
+
+    @Test
     void testRegistryOwnedReferenceCarrierAcrossPhysicalEncodings()
             throws Throwable
     {
@@ -981,6 +1032,11 @@ final class TestScalarAdapterGenerator
     private static String renderLong(long value)
     {
         return "v" + value;
+    }
+
+    private static String renderOdd(long value)
+    {
+        return (value & 1) == 0 ? null : renderLong(value);
     }
 
     private static String renderNonNegative(long value)

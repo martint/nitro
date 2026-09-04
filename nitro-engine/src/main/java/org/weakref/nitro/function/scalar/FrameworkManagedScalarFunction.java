@@ -46,6 +46,7 @@ final class FrameworkManagedScalarFunction
     private final String name;
     private final BoundSignature signature;
     private final boolean deterministic;
+    private final boolean nullableResult;
     private final GeneratedScalarKernel kernel;
     private final ScalarResultWriterFactory resultWriterFactory;
     private final boolean mayFail;
@@ -55,6 +56,7 @@ final class FrameworkManagedScalarFunction
             String name,
             BoundSignature signature,
             boolean deterministic,
+            boolean nullableResult,
             GeneratedScalarKernel kernel,
             ScalarResultWriterFactory resultWriterFactory,
             boolean mayFail,
@@ -63,6 +65,7 @@ final class FrameworkManagedScalarFunction
         this.name = requireNonNull(name, "name is null");
         this.signature = requireNonNull(signature, "signature is null");
         this.deterministic = deterministic;
+        this.nullableResult = nullableResult;
         this.kernel = requireNonNull(kernel, "kernel is null");
         this.resultWriterFactory = resultWriterFactory;
         this.mayFail = mayFail;
@@ -80,6 +83,7 @@ final class FrameworkManagedScalarFunction
     {
         checkArgument(inputIndex >= 0 && inputIndex < signature.argumentTypes().size(), "Unexpected argument index: %s", inputIndex);
         boolean invokeTarget = requestedOutputStreams.contains(Stream.VALUES) ||
+                (nullableResult && requestedOutputStreams.contains(Stream.NULLS)) ||
                 (mayFail && requestedOutputStreams.contains(Stream.ERRORS));
         return PrimitiveFunction.inputStreams(
                 invokeTarget,
@@ -139,7 +143,7 @@ final class FrameworkManagedScalarFunction
         boolean requestValues = requestedStreams.contains(Stream.VALUES);
         boolean requestNulls = requestedStreams.contains(Stream.NULLS);
         boolean requestErrors = requestedStreams.contains(Stream.ERRORS);
-        boolean invokeTarget = requestValues || (mayFail && requestErrors);
+        boolean invokeTarget = requestValues || (nullableResult && requestNulls) || (mayFail && requestErrors);
         if (!requestValues && !requestNulls && !requestErrors) {
             return Streams.empty();
         }
@@ -175,10 +179,11 @@ final class FrameworkManagedScalarFunction
         if (requestErrors) {
             result = result.with(Stream.ERRORS, errors);
         }
+        boolean[] resultNulls = null;
         if (requestNulls) {
             // Do not turn null-free inputs into a logical-position loop merely because a strict function's caller
             // requested NULLS.  Represent the result with the allocator's immutable all-false vector instead.
-            if (!hasNulls(state.nulls)) {
+            if (!nullableResult && !hasNulls(state.nulls)) {
                 result = result.with(Stream.NULLS, context.allocator().borrowAllFalseBoolean(allocationContext, requiredLength));
             }
             else {
@@ -189,6 +194,7 @@ final class FrameworkManagedScalarFunction
                         requiredLength);
                 combineNulls(state.nulls, mask, nulls.values());
                 result = result.with(Stream.NULLS, nulls);
+                resultNulls = nulls.values();
             }
         }
         if (!invokeTarget) {
@@ -198,7 +204,7 @@ final class FrameworkManagedScalarFunction
 
         Vector proposedValues = output == null ? null : output.getOrNull(Stream.VALUES);
         RleVector proposedRle = proposedValues instanceof RleVector rle && state.vectorAllocator.owns(rle) ? rle : null;
-        if (deterministic && !mayFail && !requestErrors && mask.all() &&
+        if (deterministic && !nullableResult && !mayFail && !requestErrors && mask.all() &&
                 (proposedValues == null || proposedRle != null) &&
                 bindRleValuesIfNullFree(inputs, state, mask.size())) {
             int runCount = mergeRuns(inputs, state);
@@ -206,12 +212,12 @@ final class FrameworkManagedScalarFunction
             Vector runValues;
             if (state.resultWriter == null) {
                 runValues = writablePrimitiveResult(context.allocator(), allocationContext, proposedRunValues, runCount);
-                kernel.applyDenseDictionaryNullFree(state.flatValues, state.rleIds, valueArray(runValues), null, null, runCount);
+                kernel.applyDenseDictionaryNullFree(state.flatValues, state.rleIds, valueArray(runValues), null, null, null, runCount);
             }
             else {
                 try {
                     state.resultWriter.begin(state.vectorAllocator, proposedRunValues, runCount, Mask.all(runCount));
-                    kernel.applyDenseDictionaryNullFree(state.flatValues, state.rleIds, state.resultWriter, null, null, runCount);
+                    kernel.applyDenseDictionaryNullFree(state.flatValues, state.rleIds, state.resultWriter, null, null, null, runCount);
                     runValues = state.resultWriter.finish();
                 }
                 catch (RuntimeException | Error failure) {
@@ -234,7 +240,7 @@ final class FrameworkManagedScalarFunction
                 Vector proposed = output != null ? output.getOrNull(Stream.VALUES) : null;
                 state.resultWriter.begin(state.vectorAllocator, proposed, requiredLength, mask);
             }
-            applyKernel(inputs, state, mask, kernelOutput, errors);
+            applyKernel(inputs, state, mask, kernelOutput, resultNulls, errors);
             if (state.resultWriter != null) {
                 values = state.resultWriter.finish();
             }
@@ -261,32 +267,32 @@ final class FrameworkManagedScalarFunction
         return result.with(Stream.VALUES, values);
     }
 
-    private void applyKernel(List<Streams> inputs, InvocationState state, Mask mask, Object output, ErrorVector errors)
+    private void applyKernel(List<Streams> inputs, InvocationState state, Mask mask, Object output, boolean[] resultNulls, ErrorVector errors)
     {
         int[] positions = mask.selectedPositions();
         if (bindFlatValuesIfNullFree(inputs, state)) {
             if (positions == null) {
-                kernel.applyDenseFlatNullFree(state.flatValues, output, errors, failureMapper, mask.count());
+                kernel.applyDenseFlatNullFree(state.flatValues, output, resultNulls, errors, failureMapper, mask.count());
             }
             else {
-                kernel.applySparseFlatNullFree(state.flatValues, output, errors, failureMapper, positions, mask.count());
+                kernel.applySparseFlatNullFree(state.flatValues, output, resultNulls, errors, failureMapper, positions, mask.count());
             }
         }
         else if (bindDictionaryValuesIfNullFree(inputs, state)) {
             if (positions == null) {
-                kernel.applyDenseDictionaryNullFree(state.flatValues, state.dictionaryIds, output, errors, failureMapper, mask.count());
+                kernel.applyDenseDictionaryNullFree(state.flatValues, state.dictionaryIds, output, resultNulls, errors, failureMapper, mask.count());
             }
             else {
-                kernel.applySparseDictionaryNullFree(state.flatValues, state.dictionaryIds, output, errors, failureMapper, positions, mask.count());
+                kernel.applySparseDictionaryNullFree(state.flatValues, state.dictionaryIds, output, resultNulls, errors, failureMapper, positions, mask.count());
             }
         }
         else {
             bindValues(inputs, state);
             if (positions == null) {
-                kernel.applyDense(state.values, state.executionBlockers, output, errors, failureMapper, mask.count());
+                kernel.applyDense(state.values, state.executionBlockers, output, resultNulls, errors, failureMapper, mask.count());
             }
             else {
-                kernel.applySparse(state.values, state.executionBlockers, output, errors, failureMapper, positions, mask.count());
+                kernel.applySparse(state.values, state.executionBlockers, output, resultNulls, errors, failureMapper, positions, mask.count());
             }
         }
     }
