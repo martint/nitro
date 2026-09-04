@@ -13,10 +13,17 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.core.execution.ExecutionDiagnostics;
 import org.weakref.nitro.core.function.aggregation.AggregationExecution;
 import org.weakref.nitro.core.function.aggregation.AggregationImplementation;
 import org.weakref.nitro.core.function.aggregation.AggregationInput;
 import org.weakref.nitro.core.function.aggregation.AggregationPositionAccumulator;
+import org.weakref.nitro.core.function.aggregation.AggregationWindowFrameBounds;
+import org.weakref.nitro.core.function.aggregation.AggregationWindowPartition;
+import org.weakref.nitro.core.function.aggregation.PrimitiveRangeConsumer;
+import org.weakref.nitro.core.function.aggregation.PrimitiveRangeContribution;
+import org.weakref.nitro.core.function.aggregation.ReversibleAggregationPositionAccumulator;
+import org.weakref.nitro.core.function.aggregation.ReversibleAggregationWindowKernel;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
@@ -36,6 +43,10 @@ import static java.util.Objects.requireNonNull;
 public final class RegisteredAggregationWindowFunction
         implements RunningWindowFunction
 {
+    public static final String KERNEL_POSITIONS = "nitro.window-kernel-positions";
+    public static final String KERNEL_ADDITIONS = "nitro.window-kernel-additions";
+    public static final String KERNEL_REMOVALS = "nitro.window-kernel-removals";
+    public static final String KERNEL_RESULTS = "nitro.window-kernel-results";
     private final AggregationImplementation implementation;
     private final Schema inputSchema;
     private final int[] inputColumns;
@@ -45,6 +56,7 @@ public final class RegisteredAggregationWindowFunction
     private final StructuralComparisonKernel[] orderingKernels;
     private final int[] activePosition = new int[1];
     private final WindowFrame.Bounds positionBounds = new WindowFrame.Bounds();
+    private final WindowFrame.Bounds previousPositionBounds = new WindowFrame.Bounds();
     private final Streams[] framedSourceColumns;
 
     private Object state;
@@ -52,11 +64,17 @@ public final class RegisteredAggregationWindowFunction
     private Streams[] boundSourceColumns;
     private AggregationInput boundInput;
     private AggregationPositionAccumulator boundPositionAccumulator;
+    private ReversibleAggregationPositionAccumulator boundReversiblePositionAccumulator;
+    private ReversibleAggregationWindowKernel reversibleWindowKernel;
     private Streams[] previousColumns;
     private int previousPosition;
     private int peerStartOutputPosition;
     private WindowPositionIndex boundPartition;
     private int boundPartitionPosition = -1;
+    private long kernelPositions;
+    private long kernelAdditions;
+    private long kernelRemovals;
+    private long kernelResults;
 
     public RegisteredAggregationWindowFunction(
             AggregationImplementation implementation,
@@ -145,6 +163,8 @@ public final class RegisteredAggregationWindowFunction
         peerStartOutputPosition = -1;
         boundPartition = null;
         boundPartitionPosition = -1;
+        positionBounds.clear();
+        previousPositionBounds.clear();
     }
 
     @Override
@@ -204,7 +224,10 @@ public final class RegisteredAggregationWindowFunction
             int inputPosition)
     {
         bindInput(sourceColumns);
-        if (boundPositionAccumulator != null) {
+        if (boundReversiblePositionAccumulator != null) {
+            boundReversiblePositionAccumulator.add(inputPosition);
+        }
+        else if (boundPositionAccumulator != null) {
             boundPositionAccumulator.add(inputPosition);
         }
         else {
@@ -241,6 +264,7 @@ public final class RegisteredAggregationWindowFunction
             return sourceColumns[inputColumns[argument]].getOrNull(stream);
         };
         boundPositionAccumulator = implementation.bindRawInputPosition(state, 0, boundInput);
+        boundReversiblePositionAccumulator = implementation.bindReversibleRawInputPosition(state, 0, boundInput);
     }
 
     @Override
@@ -287,22 +311,15 @@ public final class RegisteredAggregationWindowFunction
                     outputSize);
         }
 
+        WindowFrame.Bounds previousBounds = new WindowFrame.Bounds();
         for (int outputPosition = 0; outputPosition < partition.size(); outputPosition++) {
-            implementation.initialize(state, 0, 1);
+            previousBounds.setFrom(positionBounds);
             positionBounds.clear();
             positionFrame.resolve(partition, outputPosition, positionBounds);
-            if (positionBounds.present()) {
-                for (int position = positionBounds.start(); position < positionBounds.end(); position++) {
-                    if (boundPartition != partition || boundPartitionPosition < 0 || !partition.sharesSource(boundPartitionPosition, position)) {
-                        for (int column : inputColumns) {
-                            framedSourceColumns[column] = partition.column(column, position);
-                        }
-                        rebindInput(framedSourceColumns);
-                    }
-                    boundPartition = partition;
-                    boundPartitionPosition = position;
-                    addPosition(allocator, allocationContext, framedSourceColumns, partition.sourcePosition(position));
-                }
+            if (!updateFrame(allocator, allocationContext, partition, previousBounds)) {
+                implementation.initialize(state, 0, 1);
+                invalidateInputBinding();
+                addRange(allocator, allocationContext, partition, positionBounds);
             }
             Streams direct = implementation.copyResultPosition(
                     0,
@@ -328,6 +345,310 @@ public final class RegisteredAggregationWindowFunction
             }
         }
         return output;
+    }
+
+    @Override
+    public boolean supportsForwardBatchRangeMaterialization()
+    {
+        return positionFrame != null;
+    }
+
+    @Override
+    public PrimitiveRangeContribution primitiveRangeContribution()
+    {
+        return positionFrame == null ? null : implementation.primitiveWindowResultContribution(inputColumns.length);
+    }
+
+    @Override
+    public void emitForwardPrimitiveRange(
+            Allocator allocator,
+            Allocator.Context allocationContext,
+            WindowPositionIndex partition,
+            int rangeStart,
+            int rangeEnd,
+            AggregationWindowFrameBounds bounds,
+            PrimitiveRangeConsumer consumer)
+    {
+        requireNonNull(consumer, "consumer is null");
+        if (state == null) {
+            state = implementation.allocate(new AggregationExecution(allocator, allocationContext, inputSchema), 1);
+            implementation.initialize(state, 0, 1);
+            reversibleWindowKernel = implementation.bindReversibleWindowKernel(state, 0, inputColumns.length);
+        }
+        if (rangeStart == 0) {
+            reset();
+            reversibleWindowKernel.reset();
+        }
+        ReversibleAggregationWindowKernel.Work work = reversibleWindowKernel.process(
+                aggregationWindowPartition(partition),
+                bounds,
+                rangeStart,
+                rangeEnd - rangeStart,
+                consumer);
+        kernelPositions += work.positions();
+        kernelAdditions += work.additions();
+        kernelRemovals += work.removals();
+        kernelResults += work.results();
+    }
+
+    @Override
+    public Streams materializeForwardBatchRange(
+            Allocator allocator,
+            Allocator.Context allocationContext,
+            Streams output,
+            WindowPositionIndex partition,
+            int rangeStart,
+            int rangeEnd,
+            int destinationStart,
+            int destinationSize)
+    {
+        AggregationWindowFrameBounds bounds = bindForwardBatchBounds(partition).bind(rangeStart, rangeEnd - rangeStart);
+        return materializeForwardBatchRange(
+                allocator,
+                allocationContext,
+                output,
+                partition,
+                rangeStart,
+                rangeEnd,
+                destinationStart,
+                destinationSize,
+                bounds);
+    }
+
+    @Override
+    public Object frameTraversalIdentity()
+    {
+        return positionFrame == null ? this : positionFrame.traversalIdentity();
+    }
+
+    @Override
+    public WindowFrame.Cursor bindForwardBatchBounds(WindowPositionIndex partition)
+    {
+        return positionFrame.bind(partition);
+    }
+
+    @Override
+    public Streams materializeForwardBatchRange(
+            Allocator allocator,
+            Allocator.Context allocationContext,
+            Streams output,
+            WindowPositionIndex partition,
+            int rangeStart,
+            int rangeEnd,
+            int destinationStart,
+            int destinationSize,
+            AggregationWindowFrameBounds bounds)
+    {
+        if (positionFrame == null) {
+            throw new UnsupportedOperationException("forward batch-range materialization requires a positional frame");
+        }
+        if (rangeStart < 0 || rangeStart > rangeEnd || rangeEnd > partition.size()) {
+            throw new IndexOutOfBoundsException("Invalid partition range [%s, %s) for %s positions"
+                    .formatted(rangeStart, rangeEnd, partition.size()));
+        }
+        if (destinationStart < 0 || destinationStart + rangeEnd - rangeStart > destinationSize) {
+            throw new IndexOutOfBoundsException("Invalid destination range [%s, %s) for %s positions"
+                    .formatted(destinationStart, destinationStart + rangeEnd - rangeStart, destinationSize));
+        }
+
+        if (state == null) {
+            output = emptyOutput(allocator, allocationContext, destinationSize);
+            reversibleWindowKernel = implementation.bindReversibleWindowKernel(state, 0, inputColumns.length);
+        }
+        else if (output == null) {
+            output = emptyBatchOutput(allocator, allocationContext);
+        }
+        if (rangeStart == 0) {
+            reset();
+            if (reversibleWindowKernel != null) {
+                reversibleWindowKernel.reset();
+            }
+        }
+
+        if (reversibleWindowKernel != null) {
+            output = reversibleWindowKernel.prepareOutput(output, destinationSize, allocator, allocationContext);
+            ReversibleAggregationWindowKernel.Work work = reversibleWindowKernel.process(
+                    aggregationWindowPartition(partition),
+                    bounds,
+                    rangeStart,
+                    rangeEnd - rangeStart,
+                    output,
+                    destinationStart);
+            kernelPositions += work.positions();
+            kernelAdditions += work.additions();
+            kernelRemovals += work.removals();
+            kernelResults += work.results();
+            return output;
+        }
+
+        for (int partitionPosition = rangeStart; partitionPosition < rangeEnd; partitionPosition++) {
+            previousPositionBounds.setFrom(positionBounds);
+            if (bounds.start(partitionPosition) < 0) {
+                positionBounds.clear();
+            }
+            else {
+                positionBounds.set(bounds.start(partitionPosition), bounds.end(partitionPosition));
+            }
+            if (!updateFrame(allocator, allocationContext, partition, previousPositionBounds)) {
+                implementation.initialize(state, 0, 1);
+                invalidateInputBinding();
+                addRange(allocator, allocationContext, partition, positionBounds);
+            }
+            int outputPosition = destinationStart + partitionPosition - rangeStart;
+            Streams direct = implementation.copyResultPosition(
+                    0,
+                    0,
+                    state,
+                    output,
+                    outputPosition,
+                    destinationSize,
+                    allocator,
+                    allocationContext);
+            if (direct != null) {
+                output = direct;
+            }
+            else {
+                result = implementation.result(0, state, result, allocator, allocationContext);
+                output = copyResultPosition(
+                        allocator,
+                        allocationContext,
+                        result,
+                        output,
+                        outputPosition,
+                        destinationSize);
+            }
+        }
+        return output;
+    }
+
+    @Override
+    public void reportDiagnostics(ExecutionDiagnostics diagnostics)
+    {
+        diagnostics.record(KERNEL_POSITIONS, kernelPositions);
+        diagnostics.record(KERNEL_ADDITIONS, kernelAdditions);
+        diagnostics.record(KERNEL_REMOVALS, kernelRemovals);
+        diagnostics.record(KERNEL_RESULTS, kernelResults);
+        kernelPositions = 0;
+        kernelAdditions = 0;
+        kernelRemovals = 0;
+        kernelResults = 0;
+    }
+
+    private AggregationWindowPartition aggregationWindowPartition(WindowPositionIndex partition)
+    {
+        return new AggregationWindowPartition()
+        {
+            @Override
+            public int size()
+            {
+                return partition.size();
+            }
+
+            @Override
+            public org.weakref.nitro.data.Vector stream(int argument, Stream stream, int partitionPosition)
+            {
+                return partition.column(inputColumns[argument], partitionPosition).getOrNull(stream);
+            }
+
+            @Override
+            public int sourcePosition(int partitionPosition)
+            {
+                return partition.sourcePosition(partitionPosition);
+            }
+
+            @Override
+            public boolean sharesSource(int leftPosition, int rightPosition)
+            {
+                return partition.sharesSource(leftPosition, rightPosition);
+            }
+        };
+    }
+
+    private Streams emptyBatchOutput(Allocator allocator, Allocator.Context allocationContext)
+    {
+        Streams.Builder output = Streams.builder();
+        for (Stream stream : result.streams()) {
+            output.put(stream, result.get(stream).emptyLike(allocator, allocationContext));
+        }
+        return output.build();
+    }
+
+    private boolean updateFrame(
+            Allocator allocator,
+            Allocator.Context allocationContext,
+            WindowPositionIndex partition,
+            WindowFrame.Bounds previousBounds)
+    {
+        if (!previousBounds.present() || !positionBounds.present() ||
+                !implementation.supportsReversibleRawInputPosition() ||
+                positionBounds.start() < previousBounds.start() || positionBounds.end() < previousBounds.end()) {
+            return false;
+        }
+        for (int position = previousBounds.start(); position < Math.min(previousBounds.end(), positionBounds.start()); position++) {
+            removePosition(partition, position);
+        }
+        addRange(
+                allocator,
+                allocationContext,
+                partition,
+                Math.max(previousBounds.end(), positionBounds.start()),
+                positionBounds.end());
+        return true;
+    }
+
+    private void addRange(
+            Allocator allocator,
+            Allocator.Context allocationContext,
+            WindowPositionIndex partition,
+            WindowFrame.Bounds bounds)
+    {
+        if (bounds.present()) {
+            addRange(allocator, allocationContext, partition, bounds.start(), bounds.end());
+        }
+    }
+
+    private void addRange(
+            Allocator allocator,
+            Allocator.Context allocationContext,
+            WindowPositionIndex partition,
+            int start,
+            int end)
+    {
+        for (int position = start; position < end; position++) {
+            bindPartitionPosition(partition, position);
+            addPosition(allocator, allocationContext, framedSourceColumns, partition.sourcePosition(position));
+        }
+    }
+
+    private void removePosition(WindowPositionIndex partition, int position)
+    {
+        bindPartitionPosition(partition, position);
+        if (boundReversiblePositionAccumulator == null) {
+            throw new IllegalStateException("reversible aggregation binding is unavailable");
+        }
+        boundReversiblePositionAccumulator.remove(partition.sourcePosition(position));
+    }
+
+    private void bindPartitionPosition(WindowPositionIndex partition, int position)
+    {
+        if (boundPartition != partition || boundPartitionPosition < 0 || !partition.sharesSource(boundPartitionPosition, position)) {
+            for (int column : inputColumns) {
+                framedSourceColumns[column] = partition.column(column, position);
+            }
+            rebindInput(framedSourceColumns);
+        }
+        boundPartition = partition;
+        boundPartitionPosition = position;
+    }
+
+    private void invalidateInputBinding()
+    {
+        boundSourceColumns = null;
+        boundInput = null;
+        boundPositionAccumulator = null;
+        boundReversiblePositionAccumulator = null;
+        boundPartition = null;
+        boundPartitionPosition = -1;
     }
 
     private Streams copyCurrentResultRange(

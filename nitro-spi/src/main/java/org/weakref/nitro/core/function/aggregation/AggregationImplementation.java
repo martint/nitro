@@ -163,6 +163,64 @@ public interface AggregationImplementation
         return null;
     }
 
+    /**
+     * Optionally binds exact add/remove updates for overlapping window frames.
+     *
+     * <p>Every removed position must previously have been added to the same provider state. Bindings may be refreshed
+     * across physical source batches and must update that shared state exactly. Returning {@code null} retains frame
+     * replay for the implementation.
+     */
+    default ReversibleAggregationPositionAccumulator bindReversibleRawInputPosition(
+            Object state,
+            int group,
+            AggregationInput input)
+    {
+        return null;
+    }
+
+    /** Whether every physical binding for this implementation supports exact reversible updates. */
+    default boolean supportsReversibleRawInputPosition()
+    {
+        return false;
+    }
+
+    /**
+     * Optionally binds a provider-owned batch loop for pre-resolved, monotonically advancing window frames.
+     * Returning {@code null} retains reversible single-position updates or complete-frame replay.
+     */
+    default ReversibleAggregationWindowKernel bindReversibleWindowKernel(Object state, int group, int inputCount)
+    {
+        return null;
+    }
+
+    /** Exact primitive result shape of the reversible window kernel, or {@code null} for vector-only output. */
+    default PrimitiveRangeContribution primitiveWindowResultContribution(int inputCount)
+    {
+        return null;
+    }
+
+    /**
+     * Optionally binds one raw-input primitive contribution directly to provider state. The returned input index is
+     * relative to this aggregate's arguments; {@code -1} denotes range cardinality. Exact carrier and null semantics
+     * are matched structurally with an upstream provider before either provider advances semantic state.
+     */
+    default PrimitiveAggregationInput bindPrimitiveRangeInput(Object state, int group, int inputCount)
+    {
+        return null;
+    }
+
+    /** Exact primitive raw-input shape, available without allocating or mutating provider state. */
+    default PrimitiveRangeContribution primitiveRangeInputContribution(int inputCount)
+    {
+        return null;
+    }
+
+    /** Argument index consumed by {@link #primitiveRangeInputContribution}; {@code -1} denotes cardinality. */
+    default int primitiveRangeInputIndex(int inputCount)
+    {
+        return -1;
+    }
+
     void addIntermediate(Object state, int group, Mask mask, AggregationInput input);
 
     void addIntermediate(Object state, Vector groups, Mask mask, AggregationInput input);

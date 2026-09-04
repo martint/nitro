@@ -21,7 +21,7 @@ import java.util.Optional;
  * Aggregation state whose input batches are scheduled by an external host.
  */
 public interface BatchAggregationSession
-        extends AutoCloseable
+        extends RangeInputSink, PrimitiveRangeInputSink, AutoCloseable
 {
     enum InputOwnership
     {
@@ -30,6 +30,30 @@ public interface BatchAggregationSession
     }
 
     Schema outputSchema();
+
+    @Override
+    default boolean supportsRangeInput(Schema schema)
+    {
+        return false;
+    }
+
+    @Override
+    default void addRange(int positionCount, org.weakref.nitro.operator.aggregation.StreamAccessor streams)
+    {
+        throw new UnsupportedOperationException("direct range input is not supported");
+    }
+
+    @Override
+    default boolean supportsPrimitiveRangeInput(java.util.List<org.weakref.nitro.core.function.aggregation.PrimitiveRangeContribution> outputs)
+    {
+        return false;
+    }
+
+    @Override
+    default PrimitiveRangeInput bindPrimitiveRangeInput(java.util.List<org.weakref.nitro.core.function.aggregation.PrimitiveRangeContribution> outputs)
+    {
+        throw new UnsupportedOperationException("primitive range input is not supported");
+    }
 
     void addInput(Batch batch);
 

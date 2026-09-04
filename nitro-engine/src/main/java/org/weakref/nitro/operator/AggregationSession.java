@@ -13,6 +13,9 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.core.function.aggregation.PrimitiveAggregationInput;
+import org.weakref.nitro.core.function.aggregation.PrimitiveRangeConsumer;
+import org.weakref.nitro.core.function.aggregation.PrimitiveRangeContribution;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
@@ -22,8 +25,10 @@ import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.operator.aggregation.AggregationExecutionContext;
 import org.weakref.nitro.operator.aggregation.PhysicalAggregationProgram;
 import org.weakref.nitro.operator.aggregation.PhysicalAggregationUnit;
+import org.weakref.nitro.operator.aggregation.StreamAccessor;
 import org.weakref.nitro.operator.aggregation.StreamAccessors;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import static java.util.Objects.requireNonNull;
@@ -88,6 +93,151 @@ public final class AggregationSession
     public Schema outputSchema()
     {
         return program.outputSchema();
+    }
+
+    @Override
+    public boolean supportsRangeInput(Schema schema)
+    {
+        requireNonNull(schema, "schema is null");
+        return schema.isLayoutCompatibleWith(aggregationExecutionContext.inputSchema()) &&
+                distinctAggregationPlan.plainAggregationIndexes().length == units.size();
+    }
+
+    @Override
+    public boolean supportsPrimitiveRangeInput(List<PrimitiveRangeContribution> outputs)
+    {
+        requireNonNull(outputs, "outputs is null");
+        if (distinctAggregationPlan.plainAggregationIndexes().length != units.size()) {
+            return false;
+        }
+        for (PhysicalAggregationUnit unit : units) {
+            PrimitiveRangeContribution contribution = unit.primitiveRangeInputContribution();
+            if (contribution == null) {
+                return false;
+            }
+            int input = unit.primitiveRangeInputColumn();
+            if (contribution.carrier() == PrimitiveRangeContribution.Carrier.CARDINALITY) {
+                if (input != -1) {
+                    return false;
+                }
+            }
+            else if (input < 0 || input >= outputs.size() || !contribution.equals(outputs.get(input))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    @Override
+    public PrimitiveRangeInput bindPrimitiveRangeInput(List<PrimitiveRangeContribution> outputs)
+    {
+        if (!supportsPrimitiveRangeInput(outputs)) {
+            throw new IllegalArgumentException("primitive range input is incompatible");
+        }
+        ensureState();
+        List<List<PrimitiveRangeConsumer>> byOutput = new ArrayList<>(outputs.size());
+        for (int output = 0; output < outputs.size(); output++) {
+            byOutput.add(new ArrayList<>());
+        }
+        List<PrimitiveRangeConsumer> cardinality = new ArrayList<>();
+        for (int unit = 0; unit < units.size(); unit++) {
+            PrimitiveAggregationInput binding = requireNonNull(
+                    units.get(unit).bindPrimitiveRangeInput(state[unit], 0),
+                    "primitive range binding is null");
+            if (!binding.contribution().equals(units.get(unit).primitiveRangeInputContribution())) {
+                throw new IllegalStateException("primitive range binding changed its declared contribution");
+            }
+            if (binding.input() != units.get(unit).primitiveRangeInputColumn()) {
+                throw new IllegalStateException("primitive range binding changed its declared input");
+            }
+            if (binding.input() < 0) {
+                cardinality.add(binding.consumer());
+            }
+            else {
+                byOutput.get(binding.input()).add(binding.consumer());
+            }
+        }
+        PrimitiveRangeConsumer[] consumers = new PrimitiveRangeConsumer[outputs.size()];
+        for (int output = 0; output < outputs.size(); output++) {
+            consumers[output] = combine(byOutput.get(output));
+        }
+        PrimitiveRangeConsumer cardinalityConsumer = combine(cardinality);
+        return new PrimitiveRangeInput()
+        {
+            @Override
+            public PrimitiveRangeConsumer output(int output)
+            {
+                return consumers[output];
+            }
+
+            @Override
+            public void addCardinality(long count)
+            {
+                if (cardinalityConsumer != null) {
+                    cardinalityConsumer.addCardinality(count);
+                }
+                if (!deferResultMaterialization) {
+                    materializeResults();
+                }
+            }
+        };
+    }
+
+    private static PrimitiveRangeConsumer combine(List<PrimitiveRangeConsumer> consumers)
+    {
+        if (consumers.isEmpty()) {
+            return null;
+        }
+        if (consumers.size() == 1) {
+            return consumers.getFirst();
+        }
+        return new PrimitiveRangeConsumer()
+        {
+            @Override
+            public void addLong(long value)
+            {
+                consumers.forEach(consumer -> consumer.addLong(value));
+            }
+
+            @Override
+            public void addRepeatedLong(long value, long count)
+            {
+                consumers.forEach(consumer -> consumer.addRepeatedLong(value, count));
+            }
+
+            @Override
+            public void addNull()
+            {
+                consumers.forEach(PrimitiveRangeConsumer::addNull);
+            }
+
+            @Override
+            public void addCardinality(long count)
+            {
+                consumers.forEach(consumer -> consumer.addCardinality(count));
+            }
+        };
+    }
+
+    @Override
+    public void addRange(int positionCount, StreamAccessor streams)
+    {
+        requireNonNull(streams, "streams is null");
+        checkAcceptingInput();
+        if (positionCount < 0) {
+            throw new IllegalArgumentException("positionCount is negative");
+        }
+        if (positionCount == 0) {
+            return;
+        }
+        ensureState();
+        Mask mask = Mask.all(positionCount);
+        for (int unit : distinctAggregationPlan.plainAggregationIndexes()) {
+            unitArray[unit].accumulate(state[unit], 0, mask, streams);
+        }
+        if (!deferResultMaterialization) {
+            materializeResults();
+        }
     }
 
     @Override

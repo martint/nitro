@@ -41,6 +41,7 @@ public final class BatchAggregationOperator
     private Batch finalOutput;
     private Batch currentOutput;
     private boolean inputFinished;
+    private boolean rangeInputAttempted;
     private boolean closed;
 
     public BatchAggregationOperator(
@@ -89,6 +90,23 @@ public final class BatchAggregationOperator
         }
         if (inputFinished) {
             return false;
+        }
+
+        if (!rangeInputAttempted) {
+            rangeInputAttempted = true;
+            if (source instanceof RangeOutputSource rangeSource &&
+                    rangeSource.drainPrimitiveTo(aggregation)) {
+                inputFinished = true;
+                finalOutput = requireNonNull(aggregation.finishOutput(), "aggregation returned null final output").orElse(null);
+                return finalOutput != null;
+            }
+            if (source instanceof RangeOutputSource rangeSource &&
+                    aggregation.supportsRangeInput(source.outputSchema()) &&
+                    rangeSource.drainTo(aggregation)) {
+                inputFinished = true;
+                finalOutput = requireNonNull(aggregation.finishOutput(), "aggregation returned null final output").orElse(null);
+                return finalOutput != null;
+            }
         }
 
         while (source.hasNext()) {

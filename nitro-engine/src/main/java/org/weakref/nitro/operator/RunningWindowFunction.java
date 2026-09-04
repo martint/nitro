@@ -13,6 +13,10 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.core.execution.ExecutionDiagnostics;
+import org.weakref.nitro.core.function.aggregation.AggregationWindowFrameBounds;
+import org.weakref.nitro.core.function.aggregation.PrimitiveRangeConsumer;
+import org.weakref.nitro.core.function.aggregation.PrimitiveRangeContribution;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Streams;
 
@@ -51,4 +55,78 @@ public interface RunningWindowFunction
                 partitionStart + partition.size(),
                 outputSize);
     }
+
+    default boolean supportsForwardBatchRangeMaterialization()
+    {
+        return false;
+    }
+
+    default PrimitiveRangeContribution primitiveRangeContribution()
+    {
+        return null;
+    }
+
+    default void emitForwardPrimitiveRange(
+            Allocator allocator,
+            Allocator.Context allocationContext,
+            WindowPositionIndex partition,
+            int rangeStart,
+            int rangeEnd,
+            AggregationWindowFrameBounds bounds,
+            PrimitiveRangeConsumer consumer)
+    {
+        throw new UnsupportedOperationException("primitive range output is not supported");
+    }
+
+    /**
+     * Materializes a forward range of one complete partition into an independently owned batch result.
+     * Calls for a partition begin at {@code rangeStart == 0} and advance without gaps. A function may
+     * retain state between calls, but must reset that state when a new partition starts.
+     */
+    default Streams materializeForwardBatchRange(
+            Allocator allocator,
+            Allocator.Context allocationContext,
+            Streams output,
+            WindowPositionIndex partition,
+            int rangeStart,
+            int rangeEnd,
+            int destinationStart,
+            int destinationSize)
+    {
+        throw new UnsupportedOperationException("forward batch-range materialization is not supported");
+    }
+
+    default Object frameTraversalIdentity()
+    {
+        return this;
+    }
+
+    default WindowFrame.Cursor bindForwardBatchBounds(WindowPositionIndex partition)
+    {
+        throw new UnsupportedOperationException("forward batch bounds are not supported");
+    }
+
+    default Streams materializeForwardBatchRange(
+            Allocator allocator,
+            Allocator.Context allocationContext,
+            Streams output,
+            WindowPositionIndex partition,
+            int rangeStart,
+            int rangeEnd,
+            int destinationStart,
+            int destinationSize,
+            AggregationWindowFrameBounds bounds)
+    {
+        return materializeForwardBatchRange(
+                allocator,
+                allocationContext,
+                output,
+                partition,
+                rangeStart,
+                rangeEnd,
+                destinationStart,
+                destinationSize);
+    }
+
+    default void reportDiagnostics(ExecutionDiagnostics diagnostics) {}
 }

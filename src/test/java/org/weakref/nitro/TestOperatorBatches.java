@@ -41,7 +41,9 @@ import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.data.VectorAllocator;
 import org.weakref.nitro.execution.EngineResources;
 import org.weakref.nitro.operator.AggregationOperator;
+import org.weakref.nitro.operator.AggregationSession;
 import org.weakref.nitro.operator.Batch;
+import org.weakref.nitro.operator.BatchAggregationOperator;
 import org.weakref.nitro.operator.BatchSliceOperator;
 import org.weakref.nitro.operator.BuildOuterJoinOperator;
 import org.weakref.nitro.operator.ConstantTableOperator;
@@ -67,6 +69,8 @@ import org.weakref.nitro.operator.PartitionAverageI64WindowFunction;
 import org.weakref.nitro.operator.PartitionOffsetI64WindowFunction;
 import org.weakref.nitro.operator.PartitionSumI64WindowFunction;
 import org.weakref.nitro.operator.ProjectOperator;
+import org.weakref.nitro.operator.RangeInputSink;
+import org.weakref.nitro.operator.RangeOutputSource;
 import org.weakref.nitro.operator.RankWindowFunction;
 import org.weakref.nitro.operator.RunningMaxI64WindowFunction;
 import org.weakref.nitro.operator.RunningSumI64WindowFunction;
@@ -88,6 +92,7 @@ import org.weakref.nitro.operator.aggregation.AggregationExecutionContext;
 import org.weakref.nitro.operator.aggregation.Avg;
 import org.weakref.nitro.operator.aggregation.CountAll;
 import org.weakref.nitro.operator.aggregation.CountColumn;
+import org.weakref.nitro.operator.aggregation.PhysicalAggregationProgram;
 import org.weakref.nitro.operator.aggregation.Sum;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 import org.weakref.nitro.operator.evaluator.ir.AllMask;
@@ -257,6 +262,72 @@ public class TestOperatorBatches
         Batch batch = operator.next();
         assertThat(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values()).containsExactly(6L);
         assertThat(((I64Vector) batch.output(1).borrow(Stream.VALUES)).values()).containsExactly(3L);
+    }
+
+    @Test
+    void testBatchAggregationOperatorUsesDirectRangeInput()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        I64Vector values = new I64Vector(new long[] {1, 2, 3});
+        AtomicBoolean batchFallback = new AtomicBoolean();
+        class DirectSource
+                implements Operator, RangeOutputSource
+        {
+            @Override
+            public int outputCount()
+            {
+                return 1;
+            }
+
+            @Override
+            public Schema outputSchema()
+            {
+                return Schema.unspecified(1);
+            }
+
+            @Override
+            public boolean drainTo(RangeInputSink sink)
+            {
+                if (!sink.supportsRangeInput(outputSchema())) {
+                    return false;
+                }
+                sink.addRange(3, (column, stream) -> stream == Stream.VALUES ? values : null);
+                return true;
+            }
+
+            @Override
+            public boolean hasNext()
+            {
+                batchFallback.set(true);
+                return false;
+            }
+
+            @Override
+            public Batch next()
+            {
+                throw new AssertionError("batch fallback must not run");
+            }
+
+            @Override
+            public void constrain(Mask mask) {}
+
+            @Override
+            public void close() {}
+        }
+
+        Operator source = new DirectSource();
+        AggregationSession aggregation = new AggregationSession(
+                allocator,
+                Schema.unspecified(1),
+                PhysicalAggregationProgram.independent(List.of(new Sum(0), new CountAll())),
+                EngineResources.from(allocator).operatorResources());
+
+        try (Operator operator = new BatchAggregationOperator(source, aggregation, _ -> 0);
+                Batch batch = operator.next()) {
+            assertThat(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values()).containsExactly(6L);
+            assertThat(((I64Vector) batch.output(1).borrow(Stream.VALUES)).values()).containsExactly(3L);
+        }
+        assertThat(batchFallback).isFalse();
     }
 
     @Test
@@ -824,6 +895,75 @@ public class TestOperatorBatches
                             row(1L, 3, null, 8L, 5L),
                             row(2L, 1, 7L, 7L, 7L),
                             row(2L, 2, 4L, 11L, 7L));
+        }
+    }
+
+    @Test
+    void testWindowOperatorPublishesOnlySelectedOutputs()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        int[] hiddenPayloadCopies = new int[1];
+        I64Vector hiddenPayload = new I64Vector(new long[] {50, 30, 70})
+        {
+            @Override
+            public Vector copyPositionsInto(Allocator targetAllocator, Allocator.Context context, Vector existing, int[] positions, int count, int outputStart, int size)
+            {
+                hiddenPayloadCopies[0]++;
+                return super.copyPositionsInto(targetAllocator, context, existing, positions, count, outputStart, size);
+            }
+        };
+        Schema sourceSchema = Schema.unspecified(3);
+        Operator source = TableOperator.retained(sourceSchema, List.of(TableOperator.Page.values(
+                3,
+                new Vector[] {
+                        new I64Vector(new long[] {1, 1, 1}),
+                        new I64Vector(new long[] {2, 1, 3}),
+                        hiddenPayload},
+                Mask.all(3))));
+
+        try (WindowOperator window = new WindowOperator(
+                allocator,
+                source,
+                new int[] {0},
+                new int[] {1},
+                new boolean[] {false},
+                List.of(
+                        new RunningSumI64WindowFunction(2),
+                        new RunningMaxI64WindowFunction(2))).withOutputs(3, 4)) {
+            assertThat(window.outputCount()).isEqualTo(2);
+            assertThat(window.outputSchema().size()).isEqualTo(2);
+            assertThat(OperatorAssertions.OperatorAssert.toRows(window))
+                    .containsExactly(row(30L, 30L), row(80L, 50L), row(150L, 70L));
+            assertThat(hiddenPayloadCopies).containsExactly(0);
+        }
+    }
+
+    @Test
+    void testWindowSessionPublishesSelectedOutputsBeforeInput()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        try (WindowSession session = new WindowSession(
+                allocator,
+                Schema.unspecified(3),
+                new int[] {0},
+                new int[] {1},
+                new boolean[] {false},
+                List.of(
+                        new RunningSumI64WindowFunction(2),
+                        new RunningMaxI64WindowFunction(2)),
+                Schema.unspecified(2),
+                EngineResources.from(allocator).operatorResources()).withOutputs(3, 4);
+                Batch input = new Batch(
+                        Mask.all(2),
+                        Output.of(Streams.ofValues(new I64Vector(new long[] {1, 1}))),
+                        Output.of(Streams.ofValues(new I64Vector(new long[] {2, 1}))),
+                        Output.of(Streams.ofValues(new I64Vector(new long[] {5, 3}))))) {
+            session.addInput(input);
+            session.finishInput();
+
+            assertThat(session.outputCount()).isEqualTo(2);
+            assertThat(OperatorAssertions.OperatorAssert.toRows(session))
+                    .containsExactly(row(3L, 3L), row(8L, 5L));
         }
     }
 
@@ -1567,6 +1707,113 @@ public class TestOperatorBatches
                     .containsExactly(row(-3L, 1L), row(-1L, 2L));
             assertThat(keyReads).hasValue(4);
         }
+    }
+
+    @Test
+    void testUnpartitionedWindowRadixSortUsesProviderOrderingKeysOncePerRow()
+    {
+        AtomicInteger keyReads = new AtomicInteger();
+        TypeBinding type = new TypeBinding()
+        {
+            @Override
+            public TypeIdentity identity()
+            {
+                return new TypeIdentity("test:window-order-key");
+            }
+
+            @Override
+            public Class<?> carrierType()
+            {
+                return long.class;
+            }
+
+            @Override
+            public TypeOperators operators()
+            {
+                return TypeOperators.UNSPECIFIED;
+            }
+
+            @Override
+            public Optional<TypeOrderKeyBinder> orderKeyBinder()
+            {
+                return Optional.of(values -> {
+                    VectorAccess.LongValues longs = VectorAccess.longValues(values);
+                    return Optional.of(position -> {
+                        keyReads.incrementAndGet();
+                        return longs.value(position) ^ Long.MIN_VALUE;
+                    });
+                });
+            }
+
+            @Override
+            public Set<Class<? extends Vector>> supportedVectorTypes()
+            {
+                return Set.of(I64Vector.class);
+            }
+        };
+        Schema schema = new Schema(List.of(new Field(type, false)));
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        Operator source = new TableOperator(
+                schema,
+                List.of(
+                        TableOperator.Page.values(
+                                4,
+                                new Vector[] {new I64Vector(new long[] {7, -2, 4, 4})},
+                                Mask.all(4)),
+                        TableOperator.Page.values(
+                                3,
+                                new Vector[] {new I64Vector(new long[] {-5, 4, 1})},
+                                Mask.all(3))));
+
+        try (Operator window = new WindowOperator(
+                allocator,
+                source,
+                new int[0],
+                new int[] {0},
+                new boolean[] {false},
+                List.of(new RunningSumI64WindowFunction(0)))) {
+            assertThat(OperatorAssertions.OperatorAssert.toRows(window))
+                    .containsExactly(
+                            row(-5L, -5L),
+                            row(-2L, -7L),
+                            row(1L, -6L),
+                            row(4L, -2L),
+                            row(4L, 2L),
+                            row(4L, 6L),
+                            row(7L, 13L));
+        }
+        assertThat(keyReads).hasValue(7);
+
+        keyReads.set(0);
+        source = new TableOperator(
+                schema,
+                List.of(
+                        TableOperator.Page.values(
+                                4,
+                                new Vector[] {new I64Vector(new long[] {7, -2, 4, 4})},
+                                Mask.all(4)),
+                        TableOperator.Page.values(
+                                3,
+                                new Vector[] {new I64Vector(new long[] {-5, 4, 1})},
+                                Mask.all(3))));
+        try (Operator window = new WindowOperator(
+                allocator,
+                source,
+                new int[0],
+                new int[] {0},
+                new boolean[] {true},
+                List.of(new RunningSumI64WindowFunction(0)))) {
+            assertThat(OperatorAssertions.OperatorAssert.toRows(window))
+                    .containsExactly(
+                            row(7L, 7L),
+                            row(4L, 11L),
+                            row(4L, 15L),
+                            row(4L, 19L),
+                            row(1L, 20L),
+                            row(-2L, 18L),
+                            row(-5L, 13L));
+        }
+        assertThat(keyReads).hasValue(7);
     }
 
     @Test

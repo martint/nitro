@@ -17,6 +17,8 @@ import org.weakref.nitro.core.function.aggregation.AggregationExecution;
 import org.weakref.nitro.core.function.aggregation.AggregationImplementation;
 import org.weakref.nitro.core.function.aggregation.AggregationInput;
 import org.weakref.nitro.core.function.aggregation.GroupedAggregationDomain;
+import org.weakref.nitro.core.function.aggregation.PrimitiveAggregationInput;
+import org.weakref.nitro.core.function.aggregation.PrimitiveRangeContribution;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.Mask;
@@ -173,6 +175,44 @@ public class RegisteredAggregationUnit
         else {
             implementation.addIntermediate(state, group, mask, input(streams));
         }
+    }
+
+    @Override
+    public PrimitiveAggregationInput bindPrimitiveRangeInput(Object state, int group)
+    {
+        if (inputMode != InputMode.RAW || filterInputColumn >= 0) {
+            return null;
+        }
+        PrimitiveAggregationInput binding = implementation.bindPrimitiveRangeInput(state, group, inputColumns.length);
+        if (binding == null || binding.input() < 0) {
+            return binding;
+        }
+        if (binding.input() >= inputColumns.length) {
+            throw new IllegalArgumentException("primitive range input is outside aggregate arguments");
+        }
+        return new PrimitiveAggregationInput(inputColumns[binding.input()], binding.contribution(), binding.consumer());
+    }
+
+    @Override
+    public PrimitiveRangeContribution primitiveRangeInputContribution()
+    {
+        if (inputMode != InputMode.RAW || filterInputColumn >= 0) {
+            return null;
+        }
+        return implementation.primitiveRangeInputContribution(inputColumns.length);
+    }
+
+    @Override
+    public int primitiveRangeInputColumn()
+    {
+        int input = implementation.primitiveRangeInputIndex(inputColumns.length);
+        if (input < 0) {
+            return -1;
+        }
+        if (input >= inputColumns.length) {
+            throw new IllegalArgumentException("primitive range input is outside aggregate arguments");
+        }
+        return inputColumns[input];
     }
 
     @Override

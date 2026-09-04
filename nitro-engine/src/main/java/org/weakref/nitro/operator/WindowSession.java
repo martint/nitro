@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.core.execution.ExecutionDiagnostics;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
@@ -169,6 +170,24 @@ public final class WindowSession
         }
         coalescePages();
         finished = true;
+    }
+
+    public WindowSession withOutputs(int... outputChannels)
+    {
+        if (!pages.isEmpty() || finished) {
+            throw new IllegalStateException("Window outputs must be selected before input");
+        }
+        window.withOutputs(outputChannels);
+        return this;
+    }
+
+    public WindowSession withDiagnostics(ExecutionDiagnostics diagnostics)
+    {
+        if (!pages.isEmpty() || finished) {
+            throw new IllegalStateException("Window diagnostics must be set before input");
+        }
+        window.withDiagnostics(diagnostics);
+        return this;
     }
 
     private void coalescePages()

@@ -14,6 +14,7 @@
 package org.weakref.nitro.operator;
 
 import org.weakref.nitro.core.execution.ExecutionDiagnostics;
+import org.weakref.nitro.core.function.aggregation.PrimitiveRangeContribution;
 import org.weakref.nitro.core.type.Field;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
@@ -52,7 +53,7 @@ import java.util.Set;
 import static java.util.Objects.requireNonNull;
 
 public class ProjectOperator
-        implements Operator
+        implements Operator, RangeOutputSource
 {
     public static final String PLANNED_ASSIGNMENTS = "nitro.projection.planned-assignments";
     public static final String PLANNED_COMPUTED_OUTPUTS = "nitro.projection.planned-computed-outputs";
@@ -311,6 +312,143 @@ public class ProjectOperator
                     batchState.close();
                 },
                 outputs);
+    }
+
+    @Override
+    public boolean drainTo(RangeInputSink sink)
+    {
+        requireNonNull(sink, "sink is null");
+        if (!passThroughProjection || !(source instanceof RangeOutputSource rangeSource) || !sink.supportsRangeInput(outputSchema)) {
+            return false;
+        }
+        int[] inputColumns = new int[outputReferences.size()];
+        for (int output = 0; output < inputColumns.length; output++) {
+            Reference reference = outputReferences.get(output);
+            if (reference.stream() != Stream.VALUES || !(reference.producer() instanceof Input input)) {
+                return false;
+            }
+            inputColumns[output] = input.index();
+        }
+        return rangeSource.drainTo(new RangeInputSink()
+        {
+            @Override
+            public boolean supportsRangeInput(Schema schema)
+            {
+                return true;
+            }
+
+            @Override
+            public void addRange(int positionCount, org.weakref.nitro.operator.aggregation.StreamAccessor streams)
+            {
+                sink.addRange(positionCount, (column, stream) -> streams.stream(inputColumns[column], stream));
+            }
+        });
+    }
+
+    @Override
+    public boolean drainPrimitiveTo(PrimitiveRangeInputSink sink)
+    {
+        requireNonNull(sink, "sink is null");
+        if (!passThroughProjection || !(source instanceof RangeOutputSource rangeSource)) {
+            return false;
+        }
+        int[] inputColumns = passThroughInputColumns();
+        if (inputColumns == null) {
+            return false;
+        }
+        return rangeSource.drainPrimitiveTo(new PrimitiveRangeInputSink()
+        {
+            @Override
+            public boolean supportsPrimitiveRangeInput(java.util.List<PrimitiveRangeContribution> sourceOutputs)
+            {
+                return sink.supportsPrimitiveRangeInput(remap(sourceOutputs, inputColumns));
+            }
+
+            @Override
+            public PrimitiveRangeInput bindPrimitiveRangeInput(java.util.List<PrimitiveRangeContribution> sourceOutputs)
+            {
+                PrimitiveRangeInput projected = sink.bindPrimitiveRangeInput(remap(sourceOutputs, inputColumns));
+                return new PrimitiveRangeInput()
+                {
+                    @Override
+                    public org.weakref.nitro.core.function.aggregation.PrimitiveRangeConsumer output(int output)
+                    {
+                        org.weakref.nitro.core.function.aggregation.PrimitiveRangeConsumer combined = null;
+                        for (int projectedOutput = 0; projectedOutput < inputColumns.length; projectedOutput++) {
+                            if (inputColumns[projectedOutput] == output) {
+                                combined = combine(combined, projected.output(projectedOutput));
+                            }
+                        }
+                        return combined;
+                    }
+
+                    @Override
+                    public void addCardinality(long count)
+                    {
+                        projected.addCardinality(count);
+                    }
+                };
+            }
+        });
+    }
+
+    private int[] passThroughInputColumns()
+    {
+        int[] inputColumns = new int[outputReferences.size()];
+        for (int output = 0; output < inputColumns.length; output++) {
+            Reference reference = outputReferences.get(output);
+            if (reference.stream() != Stream.VALUES || !(reference.producer() instanceof Input input)) {
+                return null;
+            }
+            inputColumns[output] = input.index();
+        }
+        return inputColumns;
+    }
+
+    private static java.util.List<PrimitiveRangeContribution> remap(
+            java.util.List<PrimitiveRangeContribution> sourceOutputs,
+            int[] inputColumns)
+    {
+        java.util.ArrayList<PrimitiveRangeContribution> projected = new java.util.ArrayList<>(inputColumns.length);
+        for (int inputColumn : inputColumns) {
+            projected.add(sourceOutputs.get(inputColumn));
+        }
+        return java.util.List.copyOf(projected);
+    }
+
+    private static org.weakref.nitro.core.function.aggregation.PrimitiveRangeConsumer combine(
+            org.weakref.nitro.core.function.aggregation.PrimitiveRangeConsumer first,
+            org.weakref.nitro.core.function.aggregation.PrimitiveRangeConsumer second)
+    {
+        if (first == null) {
+            return second;
+        }
+        if (second == null) {
+            return first;
+        }
+        return new org.weakref.nitro.core.function.aggregation.PrimitiveRangeConsumer()
+        {
+            @Override
+            public void addLong(long value)
+            {
+                first.addLong(value);
+                second.addLong(value);
+            }
+
+            @Override
+            public void addRepeatedLong(long value, long count)
+            {
+                first.addRepeatedLong(value, count);
+                second.addRepeatedLong(value, count);
+            }
+
+            @Override
+            public void addNull()
+            {
+                first.addNull();
+                second.addNull();
+            }
+        };
     }
 
     @Override

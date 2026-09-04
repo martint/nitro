@@ -62,11 +62,11 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | §5 Vectors, streams, types | 0006, 0008, 0012, 0021, 0022, 0023, 0054, 0064, 0068, 0070, 0073 |
 | §6 Masks and conditions | 0008, 0012, 0020, 0034, 0064 |
 | §7 Evaluation IR | 0010, 0011, 0012, 0040, 0067 |
-| §8 Function conventions | 0006, 0011, 0013–0016, 0037, 0038, 0040, 0049–0054, 0062, 0063, 0066–0068, 0070, 0071, 0073, 0075 |
-| §9 Operators and islands | 0003, 0010, 0017, 0024, 0044–0047, 0072 |
+| §8 Function conventions | 0006, 0011, 0013–0016, 0037, 0038, 0040, 0049–0054, 0062, 0063, 0066–0068, 0070, 0071, 0073, 0075–0077 |
+| §9 Operators and islands | 0003, 0010, 0017, 0024, 0044–0047, 0072, 0079–0081 |
 | §10 Cooperative execution | 0004, 0044, 0045 |
-| §11 Allocation and memory | 0007, 0014, 0017–0019, 0041, 0066, 0072, 0075 |
-| §12 Aggregation, windows, patterns, table functions | 0011–0013, 0015, 0016, 0022, 0036, 0045, 0046, 0055–0061, 0064, 0075 |
+| §11 Allocation and memory | 0007, 0014, 0017–0019, 0041, 0066, 0072, 0075, 0077 |
+| §12 Aggregation, windows, patterns, table functions | 0011–0013, 0015, 0016, 0022, 0036, 0045, 0046, 0055–0061, 0064, 0075–0081 |
 | §13 Joins and dynamic filters | 0006, 0012, 0018, 0025, 0035, 0036 |
 | §14 Sources and Parquet | 0009, 0020–0023, 0031, 0068 |
 | §15 Host boundaries | 0003, 0017, 0019, 0024, 0033, 0044, 0046, 0071 |
@@ -155,3 +155,9 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | [0073](0073-bind-exact-normalized-ordering-keys.md) | Bind exact normalized ordering keys through the type provider | accepted |
 | [0074](0074-share-bounded-state-across-partitioned-topn-ranking.md) | Share bounded state across partitioned Top-N ranking | accepted |
 | [0075](0075-bind-exact-counted-key-aggregation.md) | Bind exact counted-key aggregation through type identity | accepted |
+| [0076](0076-bind-reversible-window-aggregation-state.md) | Bind reversible window aggregation state through providers | accepted |
+| [0077](0077-materialize-selected-window-results-by-forward-batch-range.md) | Materialize selected capable window results by forward batch range | accepted |
+| [0078](0078-run-reversible-window-ranges-in-provider-kernels.md) | Run reversible window ranges in provider kernels | accepted |
+| [0079](0079-compose-synchronous-operator-result-ranges.md) | Compose synchronous operator result ranges without batch transport | accepted |
+| [0080](0080-compose-provider-primitive-result-ranges.md) | Compose provider primitive result ranges | accepted |
+| [0081](0081-preserve-repeated-primitive-range-multiplicity.md) | Preserve repeated primitive range multiplicity | accepted |

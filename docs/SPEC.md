@@ -329,6 +329,24 @@ partition count. The host-session and island-pull entry points use the same phys
 Operators are generic over functions, logical types, arity, query shape, tables, and column combinations.
 Specialization comes through general physical interfaces or generated resolved layouts.
 
+An operator may optionally publish dense forward output ranges to a synchronous downstream sink without constructing
+a `Batch`, `Output`, or `Mask`. Capability negotiation occurs before either side advances or mutates state. The source
+retains ownership of every borrowed result lane for the duration of the call, and the sink must consume it before the
+call returns. Declining the capability preserves ordinary batch pull exactly; cancellation or failure releases the
+current producer-owned range and closes through the same operator graph. Pass-through projections may remap this
+capability, but computed expressions, filtering, distinct aggregation, and other operators requiring row identity or
+selection retain batch pull unless they provide their own exact range contract.
+
+A provider-owned forward range kernel may instead publish primitive contributions directly to provider-owned
+downstream state. Each output declares a classloader-neutral carrier and exact null convention, while each downstream
+unit declares the input channel and identical contribution shape it accepts. The engine matches the complete program
+structurally before loading input and never compares function identity. Primitive `long` values may carry explicit
+null contributions or an exact logical multiplicity for a contiguous run of one proven value; an aggregate
+independent of values may consume range cardinality separately. The default repeated-value convention expands to
+scalar contributions, while a provider may override it only when one state transition preserves its exact arithmetic,
+null, error, and ordering semantics. Any missing or incompatible declaration retains vector range or batch pull
+without partial advancement.
+
 ## 10. Cooperative execution and scheduling
 
 Nitro does not own the host scheduler. The current Cork and Trino integration retains the existing time-sharing
@@ -374,6 +392,49 @@ operator conditionals.
 State is allocator-owned and may use fixed-width, segmented, recursive, dictionary-domain, or generated layouts.
 Function-specific aggregation-state vector types belong with function implementations, not in the core vector
 vocabulary.
+
+A provider may bind exact reversible single-position updates for overlapping window frames. The window driver adds
+newly entering positions and removes positions leaving a monotonically advancing frame; the provider retains all
+function, null, and state semantics. A provider may decline the capability, in which case the driver reinitializes
+and replays each complete frame. Physical bindings may be refreshed across retained source batches, but every binding
+updates the same provider state and a position is removed only after that state has observed its addition. Replay
+initialization invalidates all prior physical bindings.
+
+A positional-frame window function may additionally declare forward batch-range result materialization. For a
+selected capable function, the window operator may omit the complete result plane and eagerly produce independently
+owned result streams no larger than the public output batch while preserving one complete-partition position index
+and function state across successive ranges. A new partition resets that state; source-page transitions refresh
+physical bindings without truncating the partition view; replay fallback remains valid inside any range. Functions
+without the capability, and capable functions whose output is not selected, retain or omit the established complete
+plane respectively. Source outputs remain independently lazy, and duplicate selected outputs own distinct vectors.
+
+An aggregation provider may bind a reversible window range kernel for that forward materialization. The engine
+    physically binds frame bounds and prepares one batch-sized destination before invoking the provider once for a
+    contiguous output range. The bound frame cursor may drive the provider directly or expose an exact compact affine
+    ROWS descriptor containing only partition size and constant preceding/following distances. The descriptor has no
+    logical type or function meaning. It is admitted only when every offset is proven single-run, non-null, error-free,
+    and non-negative; otherwise the cursor retains exact per-row resolved bounds. The provider owns state reset, null,
+    inverse, empty-frame, and result semantics and must not retain the borrowed bounds or partition input view after the
+    call. Equal frame traversal identities share one bound cursor or descriptor across sibling functions. Missing
+    capabilities retain reversible single-position updates or complete-frame replay. Execution diagnostics report kernel
+    positions, additions, removals, and results.
+
+When every selected window output has forward range materialization and a downstream global physical aggregation
+program accepts dense synchronous ranges, the window may deliver its provider-produced result streams directly to the
+aggregation state. This bypasses batch transport wrappers and masks but does not transfer function semantics or result
+storage ownership: window providers still construct result lanes, aggregation providers still interpret them, and the
+engine only maps physical output channels. Filters, DISTINCT, grouping, incompatible schemas, legacy window functions,
+and intervening computed expressions use normal batch pull.
+
+When every downstream global aggregation unit supplies a structurally compatible primitive range binding, the same
+composition may omit provider result vectors and generic aggregation traversal. The window provider emits primitive
+values, exact repeated-value runs, or null contributions from its range kernel directly into opaque
+aggregation-provider consumers; units such as row count that do not observe values receive exact range cardinality
+instead. A producer coalesces only contiguous contributions whose physical equality it proves, and the consumer owns
+the meaning of multiplicity. Multiple outputs and multiple consumers remain independently bound. Filters, DISTINCT,
+grouping, carrier/null mismatches, or any unit without the capability decline atomically before the window loads and
+retain the established fallback. Cancellation propagates from the consumer and graph close releases provider state
+through the ordinary lifecycle.
 
 An exact counted-key aggregation binds hashing, equality, retained-key copying, and result construction from its
 input type provider. Its provider-owned live state may retain allocator-owned vector segments and refer to their

@@ -153,6 +153,14 @@ public final class CountStateVector
         wideChunks[chunkIndex][chunkOffset] = updated;
     }
 
+    public void decrement(int index)
+    {
+        if (value(index) == 0) {
+            throw new IllegalStateException("count state underflow");
+        }
+        increment(index, -1);
+    }
+
     public void update(int group, long value)
     {
         increment(group, value);

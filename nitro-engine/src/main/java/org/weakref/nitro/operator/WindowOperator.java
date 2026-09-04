@@ -13,8 +13,13 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.core.execution.ExecutionDiagnostics;
+import org.weakref.nitro.core.function.aggregation.AggregationWindowFrameBounds;
+import org.weakref.nitro.core.function.aggregation.PrimitiveRangeConsumer;
+import org.weakref.nitro.core.function.aggregation.PrimitiveRangeContribution;
 import org.weakref.nitro.core.type.Field;
 import org.weakref.nitro.core.type.Schema;
+import org.weakref.nitro.core.type.TypeOrderKeyBinder;
 import org.weakref.nitro.core.type.UnorderedPlacement;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
@@ -40,7 +45,7 @@ import java.util.Set;
 import static java.util.Objects.requireNonNull;
 
 public final class WindowOperator
-        implements Operator
+        implements Operator, RangeOutputSource
 {
     private final WindowOperatorPolicy policy;
     private final Allocator allocator;
@@ -54,7 +59,10 @@ public final class WindowOperator
     private final List<RunningWindowFunction> windowFunctions;
     private final WindowInputOrder inputOrder;
     private final boolean lazyOutputs;
-    private final Schema outputSchema;
+    private final Schema fullOutputSchema;
+    // Public output ordinal -> full [source..., window functions...] channel. Execution retains the full input layout.
+    private int[] outputChannels;
+    private Schema outputSchema;
     private final StructuralComparisonKernel[] comparisonKernels;
     private final StructuralTypeKernelFactory structuralTypes;
     private final boolean allowsLegacyOrderingShortcuts;
@@ -75,6 +83,12 @@ public final class WindowOperator
     private int[] recycledLazyBatchPositions;
     private final int[] radixCounts = new int[256];
     private Streams[] windowOutputs;
+    private boolean[] forwardBatchRangeFunctions;
+    private int forwardPartitionStart;
+    private int forwardPartitionEnd;
+    private WindowFrame.Cursor[] forwardFrameCursors;
+    private AggregationWindowFrameBounds[] forwardFrameBounds;
+    private ExecutionDiagnostics diagnostics = (_, _) -> {};
     private int currentOutputPosition;
     private boolean loaded;
 
@@ -270,7 +284,10 @@ public final class WindowOperator
         this.nullsFirstByColumn = nullsFirstByColumn.clone();
         this.windowFunctions = List.copyOf(windowFunctions);
         this.inputOrder = requireNonNull(inputOrder, "inputOrder is null");
-        this.outputSchema = outputSchema(source.outputSchema(), windowSchema);
+        this.fullOutputSchema = outputSchema(source.outputSchema(), windowSchema);
+        this.outputSchema = fullOutputSchema;
+        this.outputChannels = new int[fullOutputSchema.size()];
+        java.util.Arrays.setAll(outputChannels, index -> index);
         this.structuralTypes = requireNonNull(structuralTypes, "structuralTypes is null");
         this.comparisonKernels = comparisonKernels(
                 source.outputSchema(),
@@ -328,7 +345,7 @@ public final class WindowOperator
     @Override
     public int outputCount()
     {
-        return source.outputCount() + windowFunctions.size();
+        return outputChannels.length;
     }
 
     @Override
@@ -342,6 +359,39 @@ public final class WindowOperator
         List<Field> fields = new ArrayList<>(sourceSchema.fields());
         fields.addAll(windowSchema.fields());
         return new Schema(fields);
+    }
+
+    /**
+     * Selects and orders the window's public outputs using full output ordinals ({@code source columns} followed by
+     * {@code window function results}). Source columns required by partitioning, ordering, frames, or functions remain
+     * available to execution when omitted, but are not exposed or gathered into public output batches.
+     */
+    public WindowOperator withOutputs(int... outputChannels)
+    {
+        requireNonNull(outputChannels, "outputChannels is null");
+        int[] selected = outputChannels.clone();
+        List<Field> fields = new ArrayList<>(selected.length);
+        for (int outputChannel : selected) {
+            if (outputChannel < 0 || outputChannel >= fullOutputSchema.size()) {
+                throw new IllegalArgumentException("Window output column is out of bounds: " + outputChannel);
+            }
+            fields.add(fullOutputSchema.field(outputChannel));
+        }
+        this.outputChannels = selected;
+        this.outputSchema = new Schema(fields);
+        if (loaded) {
+            forwardBatchRangeFunctions = selectedForwardBatchRangeFunctions();
+        }
+        return this;
+    }
+
+    public WindowOperator withDiagnostics(ExecutionDiagnostics diagnostics)
+    {
+        if (loaded) {
+            throw new IllegalStateException("Window diagnostics must be set before input is loaded");
+        }
+        this.diagnostics = requireNonNull(diagnostics, "diagnostics is null");
+        return this;
     }
 
     @Override
@@ -373,8 +423,9 @@ public final class WindowOperator
             }
             batchSize = rowsInPage;
         }
+        Streams[] forwardBatchOutputs = materializeForwardBatchOutputs(currentOutputPosition, batchSize);
         if (lazyOutputs) {
-            return lazyBatch(currentOutputPosition, batchSize);
+            return lazyBatch(currentOutputPosition, batchSize, forwardBatchOutputs);
         }
         if (singlePage) {
             ensureBatchPositions(batchSize);
@@ -388,19 +439,20 @@ public final class WindowOperator
             }
         }
         Output[] outputs = new Output[outputCount()];
-        for (int outputIndex = 0; outputIndex < source.outputCount(); outputIndex++) {
-            Streams batchStreams = singlePage
-                    ? materializeSinglePageSourceColumnBatch(outputIndex, batchSize)
-                    : materializeSourceColumnBatch(outputIndex, currentOutputPosition, batchSize);
+        boolean[] claimedForwardOutput = new boolean[windowFunctions.size()];
+        for (int outputIndex = 0; outputIndex < outputChannels.length; outputIndex++) {
+            int outputChannel = outputChannels[outputIndex];
+            Streams batchStreams = outputChannel < source.outputCount()
+                    ? singlePage
+                            ? materializeSinglePageSourceColumnBatch(outputChannel, batchSize)
+                            : materializeSourceColumnBatch(outputChannel, currentOutputPosition, batchSize)
+                    : outputBatchStreams(
+                            outputChannel - source.outputCount(),
+                            currentOutputPosition,
+                            batchSize,
+                            forwardBatchOutputs,
+                            claimedForwardOutput);
             outputs[outputIndex] = new Output(
-                    batchStreams.streams(),
-                    batchStreams::get,
-                    (stream, vector) -> allocator.transfer(allocationContext, vector),
-                    (stream, vector) -> allocator.release(allocationContext, vector));
-        }
-        for (int functionIndex = 0; functionIndex < windowFunctions.size(); functionIndex++) {
-            Streams batchStreams = materializeWindowBatch(functionIndex, currentOutputPosition, batchSize);
-            outputs[source.outputCount() + functionIndex] = new Output(
                     batchStreams.streams(),
                     batchStreams::get,
                     (stream, vector) -> allocator.transfer(allocationContext, vector),
@@ -417,23 +469,205 @@ public final class WindowOperator
                 outputs);
     }
 
-    private Batch lazyBatch(int startPosition, int batchSize)
+    @Override
+    public boolean drainTo(RangeInputSink sink)
+    {
+        requireNonNull(sink, "sink is null");
+        if (loaded || currentOutputPosition != 0 || !supportsDirectRanges() || !sink.supportsRangeInput(outputSchema)) {
+            return false;
+        }
+        load();
+        while (currentOutputPosition < rowCount()) {
+            int batchSize = directBatchSize();
+            Streams[] generated = materializeForwardBatchOutputs(currentOutputPosition, batchSize);
+            try {
+                sink.addRange(batchSize, (column, stream) -> {
+                    if (column < 0 || column >= outputChannels.length) {
+                        throw new IndexOutOfBoundsException("window range output: " + column);
+                    }
+                    int function = outputChannels[column] - source.outputCount();
+                    return generated[function].getOrNull(stream);
+                });
+            }
+            finally {
+                releaseGeneratedOutputs(generated);
+            }
+            currentOutputPosition += batchSize;
+        }
+        return true;
+    }
+
+    @Override
+    public boolean drainPrimitiveTo(PrimitiveRangeInputSink sink)
+    {
+        requireNonNull(sink, "sink is null");
+        if (loaded || currentOutputPosition != 0 || !supportsDirectRanges()) {
+            return false;
+        }
+        List<PrimitiveRangeContribution> contributions = new ArrayList<>(outputChannels.length);
+        for (int outputChannel : outputChannels) {
+            PrimitiveRangeContribution contribution = windowFunctions.get(outputChannel - source.outputCount()).primitiveRangeContribution();
+            if (contribution == null) {
+                return false;
+            }
+            contributions.add(contribution);
+        }
+        if (!sink.supportsPrimitiveRangeInput(contributions)) {
+            return false;
+        }
+        PrimitiveRangeInput input = requireNonNull(sink.bindPrimitiveRangeInput(contributions), "primitive range input is null");
+        load();
+        while (currentOutputPosition < rowCount()) {
+            int batchSize = directBatchSize();
+            emitForwardPrimitiveOutputs(currentOutputPosition, batchSize, input);
+            input.addCardinality(batchSize);
+            currentOutputPosition += batchSize;
+        }
+        return true;
+    }
+
+    private void emitForwardPrimitiveOutputs(int batchStart, int batchSize, PrimitiveRangeInput input)
+    {
+        PrimitiveRangeConsumer[] consumers = new PrimitiveRangeConsumer[windowFunctions.size()];
+        for (int output = 0; output < outputChannels.length; output++) {
+            int function = outputChannels[output] - source.outputCount();
+            consumers[function] = combine(consumers[function], input.output(output));
+        }
+        int batchEnd = batchStart + batchSize;
+        int position = batchStart;
+        while (position < batchEnd) {
+            if (position == forwardPartitionEnd) {
+                forwardPartitionStart = position;
+                forwardPartitionEnd = partitionEnd(position);
+                partitionPositionIndex.reset(forwardPartitionStart, forwardPartitionEnd);
+                bindForwardFrameCursors();
+            }
+            int rangeEnd = Math.min(forwardPartitionEnd, batchEnd);
+            for (int functionIndex = 0; functionIndex < windowFunctions.size(); functionIndex++) {
+                PrimitiveRangeConsumer consumer = consumers[functionIndex];
+                if (consumer == null) {
+                    continue;
+                }
+                int boundsOwner = functionIndex;
+                for (int previous = 0; previous < functionIndex; previous++) {
+                    if (forwardBatchRangeFunctions[previous] && forwardFrameCursors[previous] == forwardFrameCursors[functionIndex]) {
+                        boundsOwner = previous;
+                        break;
+                    }
+                }
+                if (boundsOwner == functionIndex) {
+                    forwardFrameBounds[functionIndex] = forwardFrameCursors[functionIndex].bind(
+                            position - forwardPartitionStart,
+                            rangeEnd - position);
+                }
+                else {
+                    forwardFrameBounds[functionIndex] = forwardFrameBounds[boundsOwner];
+                }
+                windowFunctions.get(functionIndex).emitForwardPrimitiveRange(
+                        allocator,
+                        allocationContext,
+                        partitionPositionIndex,
+                        position - forwardPartitionStart,
+                        rangeEnd - forwardPartitionStart,
+                        forwardFrameBounds[functionIndex],
+                        consumer);
+            }
+            position = rangeEnd;
+        }
+    }
+
+    private static PrimitiveRangeConsumer combine(PrimitiveRangeConsumer first, PrimitiveRangeConsumer second)
+    {
+        if (first == null) {
+            return second;
+        }
+        if (second == null) {
+            return first;
+        }
+        return new PrimitiveRangeConsumer()
+        {
+            @Override
+            public void addLong(long value)
+            {
+                first.addLong(value);
+                second.addLong(value);
+            }
+
+            @Override
+            public void addRepeatedLong(long value, long count)
+            {
+                first.addRepeatedLong(value, count);
+                second.addRepeatedLong(value, count);
+            }
+
+            @Override
+            public void addNull()
+            {
+                first.addNull();
+                second.addNull();
+            }
+        };
+    }
+
+    private boolean supportsDirectRanges()
+    {
+        for (int outputChannel : outputChannels) {
+            int function = outputChannel - source.outputCount();
+            if (function < 0 || !windowFunctions.get(function).supportsForwardBatchRangeMaterialization()) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private int directBatchSize()
+    {
+        int batchSize = Math.min(policy.maxBatchRows(), rowCount() - currentOutputPosition);
+        if (!singlePage && inputOrder.isFullyOrdered(orderingColumns.length)) {
+            int page = pageIndex(rowReferences[currentOutputPosition]);
+            int rowsInPage = 1;
+            while (rowsInPage < batchSize && pageIndex(rowReferences[currentOutputPosition + rowsInPage]) == page) {
+                rowsInPage++;
+            }
+            batchSize = rowsInPage;
+        }
+        return batchSize;
+    }
+
+    private void releaseGeneratedOutputs(Streams[] outputs)
+    {
+        Set<Vector> released = Collections.newSetFromMap(new IdentityHashMap<>());
+        for (int outputChannel : outputChannels) {
+            Streams streams = outputs[outputChannel - source.outputCount()];
+            for (Vector vector : streams.asMap().values()) {
+                if (released.add(vector)) {
+                    allocator.release(allocationContext, vector);
+                }
+            }
+        }
+    }
+
+    private Batch lazyBatch(int startPosition, int batchSize, Streams[] forwardBatchOutputs)
     {
         LazyBatchState batchState = new LazyBatchState(startPosition, batchSize);
         Output[] outputs = new Output[outputCount()];
-        for (int outputIndex = 0; outputIndex < source.outputCount(); outputIndex++) {
-            int output = outputIndex;
+        boolean[] claimedForwardOutput = new boolean[windowFunctions.size()];
+        for (int outputIndex = 0; outputIndex < outputChannels.length; outputIndex++) {
+            int outputChannel = outputChannels[outputIndex];
+            boolean sourceOutput = outputChannel < source.outputCount();
+            int physicalOutput = sourceOutput ? outputChannel : outputChannel - source.outputCount();
+            Streams streams = sourceOutput
+                    ? sourceSchema[physicalOutput]
+                    : forwardBatchRangeFunctions[physicalOutput]
+                            ? claimForwardOutput(forwardBatchOutputs[physicalOutput], physicalOutput, claimedForwardOutput)
+                            : windowOutputs[physicalOutput];
             outputs[outputIndex] = new Output(
-                    sourceSchema[output].streams(),
-                    stream -> batchState.materializeSourceStream(output, stream),
-                    (stream, vector) -> allocator.transfer(allocationContext, vector),
-                    (stream, vector) -> allocator.release(allocationContext, vector));
-        }
-        for (int functionIndex = 0; functionIndex < windowFunctions.size(); functionIndex++) {
-            int function = functionIndex;
-            outputs[source.outputCount() + functionIndex] = new Output(
-                    windowOutputs[function].streams(),
-                    stream -> batchState.materializeWindowStream(function, stream),
+                    streams.streams(),
+                    sourceOutput
+                            ? stream -> batchState.materializeSourceStream(physicalOutput, stream)
+                            : forwardBatchRangeFunctions[physicalOutput]
+                                    ? streams::get
+                                    : stream -> batchState.materializeWindowStream(physicalOutput, stream),
                     (stream, vector) -> allocator.transfer(allocationContext, vector),
                     (stream, vector) -> allocator.release(allocationContext, vector));
         }
@@ -470,6 +704,7 @@ public final class WindowOperator
     @Override
     public void close()
     {
+        windowFunctions.forEach(function -> function.reportDiagnostics(diagnostics));
         source.close();
         partitionPositionIndex.close();
         allocator.release(allocationContext);
@@ -526,6 +761,7 @@ public final class WindowOperator
         coalesceUnorderedPages();
         loaded = true;
         windowOutputs = new Streams[windowFunctions.size()];
+        forwardBatchRangeFunctions = selectedForwardBatchRangeFunctions();
         if (pages.size() == 1) {
             singlePage = true;
             singlePageRowCount = pages.getFirst().mask().count();
@@ -535,12 +771,14 @@ public final class WindowOperator
                 stableSortSinglePagePositions(singlePageOrder);
                 accountRetainedArrays();
             }
-            if (policy.fusedFunctions() && windowFunctions.size() > 1) {
+            if (policy.fusedFunctions() && windowFunctions.size() > 1 && !hasBatchRangeCapableFunctions()) {
                 materializeSinglePageWindows();
             }
             else {
                 for (int functionIndex = 0; functionIndex < windowFunctions.size(); functionIndex++) {
-                    windowOutputs[functionIndex] = materializeSinglePageWindow(windowFunctions.get(functionIndex));
+                    if (!windowFunctions.get(functionIndex).supportsForwardBatchRangeMaterialization()) {
+                        windowOutputs[functionIndex] = materializeSinglePageWindow(windowFunctions.get(functionIndex));
+                    }
                 }
             }
         }
@@ -551,11 +789,139 @@ public final class WindowOperator
             }
             accountRetainedArrays();
             for (int functionIndex = 0; functionIndex < windowFunctions.size(); functionIndex++) {
-                windowOutputs[functionIndex] = inputOrder.isFullyOrdered(orderingColumns.length)
-                        ? materializeOrderedWindow(windowFunctions.get(functionIndex))
-                        : materializeWindow(windowFunctions.get(functionIndex));
+                if (!windowFunctions.get(functionIndex).supportsForwardBatchRangeMaterialization()) {
+                    windowOutputs[functionIndex] = inputOrder.isFullyOrdered(orderingColumns.length)
+                            ? materializeOrderedWindow(windowFunctions.get(functionIndex))
+                            : materializeWindow(windowFunctions.get(functionIndex));
+                }
             }
         }
+    }
+
+    private boolean[] selectedForwardBatchRangeFunctions()
+    {
+        boolean[] selected = new boolean[windowFunctions.size()];
+        for (int outputChannel : outputChannels) {
+            int functionIndex = outputChannel - source.outputCount();
+            if (functionIndex >= 0 && windowFunctions.get(functionIndex).supportsForwardBatchRangeMaterialization()) {
+                selected[functionIndex] = true;
+            }
+        }
+        forwardFrameCursors = new WindowFrame.Cursor[windowFunctions.size()];
+        forwardFrameBounds = new AggregationWindowFrameBounds[windowFunctions.size()];
+        return selected;
+    }
+
+    private boolean hasForwardBatchRangeFunctions()
+    {
+        for (boolean function : forwardBatchRangeFunctions) {
+            if (function) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean hasBatchRangeCapableFunctions()
+    {
+        for (RunningWindowFunction function : windowFunctions) {
+            if (function.supportsForwardBatchRangeMaterialization()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private Streams[] materializeForwardBatchOutputs(int batchStart, int batchSize)
+    {
+        if (!hasForwardBatchRangeFunctions()) {
+            return null;
+        }
+        Streams[] outputs = new Streams[windowFunctions.size()];
+        int batchEnd = batchStart + batchSize;
+        int position = batchStart;
+        while (position < batchEnd) {
+            if (position == forwardPartitionEnd) {
+                forwardPartitionStart = position;
+                forwardPartitionEnd = partitionEnd(position);
+                partitionPositionIndex.reset(forwardPartitionStart, forwardPartitionEnd);
+                bindForwardFrameCursors();
+            }
+            int rangeEnd = Math.min(forwardPartitionEnd, batchEnd);
+            for (int functionIndex = 0; functionIndex < windowFunctions.size(); functionIndex++) {
+                if (forwardBatchRangeFunctions[functionIndex]) {
+                    int boundsOwner = functionIndex;
+                    for (int previous = 0; previous < functionIndex; previous++) {
+                        if (forwardBatchRangeFunctions[previous] && forwardFrameCursors[previous] == forwardFrameCursors[functionIndex]) {
+                            boundsOwner = previous;
+                            break;
+                        }
+                    }
+                    if (boundsOwner == functionIndex) {
+                        forwardFrameBounds[functionIndex] = forwardFrameCursors[functionIndex].bind(
+                                position - forwardPartitionStart,
+                                rangeEnd - position);
+                    }
+                    else {
+                        forwardFrameBounds[functionIndex] = forwardFrameBounds[boundsOwner];
+                    }
+                    outputs[functionIndex] = windowFunctions.get(functionIndex).materializeForwardBatchRange(
+                            allocator,
+                            allocationContext,
+                            outputs[functionIndex],
+                            partitionPositionIndex,
+                            position - forwardPartitionStart,
+                            rangeEnd - forwardPartitionStart,
+                            position - batchStart,
+                            batchSize,
+                            forwardFrameBounds[functionIndex]);
+                }
+            }
+            position = rangeEnd;
+        }
+        return outputs;
+    }
+
+    private void bindForwardFrameCursors()
+    {
+        for (int functionIndex = 0; functionIndex < windowFunctions.size(); functionIndex++) {
+            if (!forwardBatchRangeFunctions[functionIndex]) {
+                continue;
+            }
+            int shared = -1;
+            Object identity = windowFunctions.get(functionIndex).frameTraversalIdentity();
+            for (int previous = 0; previous < functionIndex; previous++) {
+                if (forwardBatchRangeFunctions[previous] && java.util.Objects.equals(windowFunctions.get(previous).frameTraversalIdentity(), identity)) {
+                    shared = previous;
+                    break;
+                }
+            }
+            forwardFrameCursors[functionIndex] = shared >= 0
+                    ? forwardFrameCursors[shared]
+                    : windowFunctions.get(functionIndex).bindForwardBatchBounds(partitionPositionIndex);
+        }
+    }
+
+    private int partitionEnd(int position)
+    {
+        if (partitionColumns.length == 0) {
+            return rowCount();
+        }
+        int end = position + 1;
+        while (end < rowCount() && samePartitionAt(end - 1, end)) {
+            end++;
+        }
+        return end;
+    }
+
+    private boolean samePartitionAt(int left, int right)
+    {
+        if (singlePage) {
+            int leftPosition = singlePageIdentityOrder ? left : singlePageOrder[left];
+            int rightPosition = singlePageIdentityOrder ? right : singlePageOrder[right];
+            return samePartition(pages.getFirst().columns(), leftPosition, rightPosition);
+        }
+        return samePartition(rowReferences[left], rowReferences[right]);
     }
 
     /**
@@ -870,6 +1236,9 @@ public final class WindowOperator
      */
     private boolean tryStableRadixSortSinglePagePositions(int[] positions)
     {
+        if (tryStableRadixSortNormalizedOrderingKey(positions)) {
+            return true;
+        }
         if (!allowsLegacyOrderingShortcuts) {
             return false;
         }
@@ -908,6 +1277,94 @@ public final class WindowOperator
             arrayPool.release(scratch);
         }
         return true;
+    }
+
+    /**
+     * Bind one exact provider-owned ordering key per input position, then keep keys and row positions aligned through
+     * the radix passes. This avoids repeatedly gathering the retained value vector for every byte of a wide key.
+     */
+    private boolean tryStableRadixSortNormalizedOrderingKey(int[] positions)
+    {
+        if (partitionColumns.length != 0 || orderingColumns.length != 1) {
+            return false;
+        }
+        int column = orderingColumns[0];
+        Streams streams = pages.getFirst().columns()[column];
+        if (!VectorAccess.isAllFalseNulls(streams.getOrNull(Stream.NULLS))) {
+            return false;
+        }
+        TypeOrderKeyBinder binder = source.outputSchema().field(column).type().orderKeyBinder().orElse(null);
+        if (binder == null) {
+            return false;
+        }
+        TypeOrderKeyBinder.Bound ordering = binder.bind(streams.values()).orElse(null);
+        if (ordering == null) {
+            return false;
+        }
+
+        int length = positions.length;
+        long[] keys = arrayPool.borrowLongs(length);
+        long[] scratchKeys = arrayPool.borrowLongs(length);
+        int[] scratchPositions = arrayPool.borrowInts(length);
+        try {
+            long firstKey = 0;
+            long varyingBytes = 0;
+            for (int index = 0; index < length; index++) {
+                long key = ordering.key(positions[index]);
+                if (descendingByColumn[0]) {
+                    key = ~key;
+                }
+                keys[index] = key;
+                if (index == 0) {
+                    firstKey = key;
+                }
+                else {
+                    varyingBytes |= firstKey ^ key;
+                }
+            }
+
+            int[] sourcePositions = positions;
+            int[] targetPositions = scratchPositions;
+            long[] sourceKeys = keys;
+            long[] targetKeys = scratchKeys;
+            for (int byteIndex = 0; byteIndex < Long.BYTES; byteIndex++) {
+                int shift = byteIndex * Byte.SIZE;
+                if (((varyingBytes >>> shift) & 0xFF) == 0) {
+                    continue;
+                }
+                java.util.Arrays.fill(radixCounts, 0);
+                for (int index = 0; index < length; index++) {
+                    radixCounts[(int) ((sourceKeys[index] >>> shift) & 0xFF)]++;
+                }
+                int offset = 0;
+                for (int bucket = 0; bucket < radixCounts.length; bucket++) {
+                    int count = radixCounts[bucket];
+                    radixCounts[bucket] = offset;
+                    offset += count;
+                }
+                for (int index = 0; index < length; index++) {
+                    long key = sourceKeys[index];
+                    int output = radixCounts[(int) ((key >>> shift) & 0xFF)]++;
+                    targetKeys[output] = key;
+                    targetPositions[output] = sourcePositions[index];
+                }
+                int[] positionSwap = sourcePositions;
+                sourcePositions = targetPositions;
+                targetPositions = positionSwap;
+                long[] keySwap = sourceKeys;
+                sourceKeys = targetKeys;
+                targetKeys = keySwap;
+            }
+            if (sourcePositions != positions) {
+                System.arraycopy(sourcePositions, 0, positions, 0, length);
+            }
+            return true;
+        }
+        finally {
+            arrayPool.release(keys);
+            arrayPool.release(scratchKeys);
+            arrayPool.release(scratchPositions);
+        }
     }
 
     private void stableHashRadixSortBinaryPartition(int[] positions, Streams streams)
@@ -1498,6 +1955,32 @@ public final class WindowOperator
             builder.put(stream, result == null ? source.emptyLike(allocator, allocationContext) : result);
         }
         return builder.build();
+    }
+
+    private Streams outputBatchStreams(
+            int functionIndex,
+            int startPosition,
+            int batchSize,
+            Streams[] forwardBatchOutputs,
+            boolean[] claimedForwardOutput)
+    {
+        if (!forwardBatchRangeFunctions[functionIndex]) {
+            return materializeWindowBatch(functionIndex, startPosition, batchSize);
+        }
+        return claimForwardOutput(forwardBatchOutputs[functionIndex], functionIndex, claimedForwardOutput);
+    }
+
+    private Streams claimForwardOutput(Streams output, int functionIndex, boolean[] claimed)
+    {
+        if (!claimed[functionIndex]) {
+            claimed[functionIndex] = true;
+            return output;
+        }
+        Streams.Builder copy = Streams.builder();
+        for (Stream stream : output.streams()) {
+            copy.put(stream, output.get(stream).copy(allocator, allocationContext));
+        }
+        return copy.build();
     }
 
     private Vector materializeSourceStreamBatch(int outputIndex, Stream stream, int startPosition, int batchSize, int[] positions)

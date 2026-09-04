@@ -14,6 +14,8 @@
 package org.weakref.nitro.operator.aggregation;
 
 import org.weakref.nitro.core.function.aggregation.GroupedAggregationDomain;
+import org.weakref.nitro.core.function.aggregation.PrimitiveAggregationInput;
+import org.weakref.nitro.core.function.aggregation.PrimitiveRangeContribution;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.Mask;
@@ -69,6 +71,21 @@ public interface PhysicalAggregationUnit
     void initialize(Object state, int offset, int length);
 
     void accumulate(Object state, int group, Mask mask, StreamAccessor streams);
+
+    default PrimitiveAggregationInput bindPrimitiveRangeInput(Object state, int group)
+    {
+        return null;
+    }
+
+    default PrimitiveRangeContribution primitiveRangeInputContribution()
+    {
+        return null;
+    }
+
+    default int primitiveRangeInputColumn()
+    {
+        return -1;
+    }
 
     default void accumulateDistinctSelected(Object state, int group, Mask mask, StreamAccessor streams)
     {
