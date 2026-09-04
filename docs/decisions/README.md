@@ -62,15 +62,15 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | §5 Vectors, streams, types | 0006, 0008, 0012, 0021, 0022, 0023, 0054, 0064, 0068, 0070, 0073 |
 | §6 Masks and conditions | 0008, 0012, 0020, 0034, 0064 |
 | §7 Evaluation IR | 0010, 0011, 0012, 0040, 0067 |
-| §8 Function conventions | 0006, 0011, 0013–0016, 0037, 0038, 0040, 0049–0054, 0062, 0063, 0066–0068, 0070, 0071, 0073 |
+| §8 Function conventions | 0006, 0011, 0013–0016, 0037, 0038, 0040, 0049–0054, 0062, 0063, 0066–0068, 0070, 0071, 0073, 0075 |
 | §9 Operators and islands | 0003, 0010, 0017, 0024, 0044–0047, 0072 |
 | §10 Cooperative execution | 0004, 0044, 0045 |
-| §11 Allocation and memory | 0007, 0014, 0017–0019, 0041, 0066, 0072 |
-| §12 Aggregation, windows, patterns, table functions | 0011–0013, 0015, 0016, 0022, 0036, 0045, 0046, 0055–0061, 0064 |
+| §11 Allocation and memory | 0007, 0014, 0017–0019, 0041, 0066, 0072, 0075 |
+| §12 Aggregation, windows, patterns, table functions | 0011–0013, 0015, 0016, 0022, 0036, 0045, 0046, 0055–0061, 0064, 0075 |
 | §13 Joins and dynamic filters | 0006, 0012, 0018, 0025, 0035, 0036 |
 | §14 Sources and Parquet | 0009, 0020–0023, 0031, 0068 |
 | §15 Host boundaries | 0003, 0017, 0019, 0024, 0033, 0044, 0046, 0071 |
-| §16 Adaptivity and generation | 0011, 0012, 0027, 0032, 0036, 0037, 0054–0061, 0068, 0071–0073 |
+| §16 Adaptivity and generation | 0011, 0012, 0027, 0032, 0036, 0037, 0054–0061, 0068, 0071–0073, 0075 |
 | §17 Correctness and tests | 0026, 0029, 0043, 0047 |
 | §18 Performance evidence | 0026–0028, 0032, 0041, 0042 |
 | §19 Coverage and productization | 0029–0031, 0033–0035, 0042, 0046, 0047 |
@@ -154,3 +154,4 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | [0072](0072-retain-only-qualifying-topn-ranking-groups.md) | Retain only qualifying Top-N ranking peer groups | accepted |
 | [0073](0073-bind-exact-normalized-ordering-keys.md) | Bind exact normalized ordering keys through the type provider | accepted |
 | [0074](0074-share-bounded-state-across-partitioned-topn-ranking.md) | Share bounded state across partitioned Top-N ranking | accepted |
+| [0075](0075-bind-exact-counted-key-aggregation.md) | Bind exact counted-key aggregation through type identity | accepted |

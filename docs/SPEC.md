@@ -371,6 +371,13 @@ State is allocator-owned and may use fixed-width, segmented, recursive, dictiona
 Function-specific aggregation-state vector types belong with function implementations, not in the core vector
 vocabulary.
 
+An exact counted-key aggregation binds hashing, equality, retained-key copying, and result construction from its
+input type provider. Its provider-owned live state may retain allocator-owned vector segments and refer to their
+positions from generic primitive table metadata. Partial and final stages exchange the provider's portable recursive
+value, such as `MAP(K, BIGINT)`; neither the aggregation operator nor evaluator recognizes the function, key type,
+physical carrier, or intermediate layout. A carrier-specific state may exist only as a measured implementation tier
+behind the same registry binding.
+
 An aggregation implementation that accepts exact multiplicities may consume an independently encoded input by first
 counting selected row ids into allocator-owned reusable domain scratch. Mapping identity permits direct zero-pass
 domain reuse. Independently owned mappings may reuse the same counts only after an explicit O(rows) proof that their
