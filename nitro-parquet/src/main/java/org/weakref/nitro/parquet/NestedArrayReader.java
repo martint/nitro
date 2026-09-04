@@ -232,14 +232,16 @@ final class NestedArrayReader
             int rowCount,
             Mask mask)
     {
-        if (materializationPolicy.constantNestedDomain() && mask.all()) {
-            Streams encoded = ConstantNestedDomainEncoder.tryEncode(
+        if (materializationPolicy.nestedDomain() && mask.all()) {
+            Streams encoded = NestedDomainEncoder.tryEncode(
                     allocator,
                     context,
                     arrays,
                     listNulls,
                     rowCount,
-                    materializationPolicy.constantNestedDomainMinRows());
+                    materializationPolicy.nestedDomainMinRows(),
+                    materializationPolicy.dictionaryDomainFrequencyMaxEntries(),
+                    materializationPolicy.dictionaryDomainFrequencyMinRowsPerEntry());
             if (encoded != null) {
                 allocator.release(context, arrays);
                 if (listNulls != null) {

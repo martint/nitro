@@ -424,6 +424,11 @@ The Nitro Parquet reader decodes directly into Nitro vectors, preserves useful d
 unneeded streams without decoding values. Missing types or encodings fail loudly; they do not fall back to `parquet-mr`
 record materialization.
 
+When encoded child streams prove that many repeated ARRAY or MAP parents are identical, the reader may recover a
+bounded outer dictionary domain. Equality is established only from exact parent null state, repeated boundaries, and
+the immutable physical identities of every child value/null/error stream. Admission is controlled by the immutable
+materialization policy; failure to prove a sufficiently small domain retains the ordinary recursive vector.
+
 The reader uses a connector-authoritative ranged-input abstraction that preserves object-store support,
 authentication, retry, accounting, and cancellation. Nitro may add coalescing, prefetch, or caching above ranged reads,
 but cannot bypass those host capabilities.
@@ -448,6 +453,9 @@ stages. Page/Block boundaries are not ownership boundaries inside an island.
 
 Adaptive choices respond to measured physical facts: mask density, selectivity, domain size, run length, cardinality,
 novelty, key width, state footprint, ordering, and locality.
+
+A bounded independent-domain evaluation may combine dictionary arguments with single-run RLE arguments. The latter
+contributes a one-entry domain; it must not force otherwise encoded work back to logical-row evaluation.
 
 Decisions occur outside inner position loops, at construction, first batch, stable shape, or bounded re-evaluation
 points. Mid-stream re-adaptation resists oscillation.

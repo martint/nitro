@@ -781,21 +781,28 @@ public final class PlanEvaluator
             return null;
         }
 
-        DictionaryVector[] dictionaries = new DictionaryVector[inputs.size()];
+        IndependentDomainInput[] domains = new IndependentDomainInput[inputs.size()];
         int productSize = 1;
         for (int input = 0; input < inputs.size(); input++) {
             Streams streams = inputs.get(input);
-            if (!(streams.getOrNull(Stream.VALUES) instanceof DictionaryVector dictionary) ||
-                    !VectorAccess.isAllFalseNulls(streams.getOrNull(Stream.NULLS)) ||
+            if (!VectorAccess.isAllFalseNulls(streams.getOrNull(Stream.NULLS)) ||
                     !VectorAccess.isAllFalseNulls(streams.getOrNull(Stream.ERRORS))) {
                 return null;
             }
-            int cardinality = dictionary.values().length();
+            IndependentDomainInput domain = switch (streams.getOrNull(Stream.VALUES)) {
+                case DictionaryVector dictionary -> new IndependentDomainInput(dictionary.values(), dictionary.ids());
+                case RleVector rle when rle.counts().length == 1 -> new IndependentDomainInput(rle.values(), null);
+                default -> null;
+            };
+            if (domain == null) {
+                return null;
+            }
+            int cardinality = domain.values().length();
             if (cardinality == 0 || productSize > policy.independentDictionaryDomainMaxEntries() / cardinality) {
                 return null;
             }
             productSize *= cardinality;
-            dictionaries[input] = dictionary;
+            domains[input] = domain;
         }
         if ((long) productSize * policy.independentDictionaryDomainMinimumReduction() > mask.count()) {
             return null;
@@ -817,15 +824,15 @@ public final class PlanEvaluator
             int domainCount = 0;
             for (int position = 0; position < mask.size(); position++) {
                 int tuple = 0;
-                for (DictionaryVector dictionary : dictionaries) {
-                    tuple = tuple * dictionary.values().length() + dictionary.ids()[position];
+                for (IndependentDomainInput domain : domains) {
+                    tuple = tuple * domain.values().length() + domain.id(position);
                 }
                 int domain = tupleGroups[tuple];
                 if (domain < 0) {
                     domain = domainCount++;
                     tupleGroups[tuple] = domain;
-                    for (int input = 0; input < dictionaries.length; input++) {
-                        domainIds[input][domain] = dictionaries[input].ids()[position];
+                    for (int input = 0; input < domains.length; input++) {
+                        domainIds[input][domain] = domains[input].id(position);
                     }
                 }
                 logicalIds.values()[position] = domain;
@@ -837,7 +844,7 @@ public final class PlanEvaluator
                 domainInputs.add(Streams.ofValues(DictionaryVector.wrapNested(
                         domainIds[input],
                         domainCount,
-                        dictionaries[input].values())));
+                        domains[input].values())));
             }
             Mask domainMask = allocator.allocateAllMask(allocationContext, domainCount);
             Streams domainResult;
@@ -884,6 +891,14 @@ public final class PlanEvaluator
                     allocator.release(allocationContext, ownedFrequencies);
                 }
             }
+        }
+    }
+
+    private record IndependentDomainInput(Vector values, int[] ids)
+    {
+        private int id(int position)
+        {
+            return ids == null ? 0 : ids[position];
         }
     }
 

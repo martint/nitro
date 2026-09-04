@@ -34,8 +34,8 @@ public record ParquetMaterializationPolicy(
         int dictionaryDomainFrequencyMaxEntries,
         int dictionaryDomainFrequencyMinRowsPerEntry,
         int dictionaryDomainMembershipProbeRowsPerEntry,
-        boolean constantNestedDomain,
-        int constantNestedDomainMinRows)
+        boolean nestedDomain,
+        int nestedDomainMinRows)
 {
     public ParquetMaterializationPolicy
     {
@@ -48,8 +48,8 @@ public record ParquetMaterializationPolicy(
         if (dictionaryDomainMembershipProbeRowsPerEntry < 0) {
             throw new IllegalArgumentException("dictionaryDomainMembershipProbeRowsPerEntry is negative");
         }
-        if (constantNestedDomainMinRows < 0) {
-            throw new IllegalArgumentException("constantNestedDomainMinRows is negative");
+        if (nestedDomainMinRows < 0) {
+            throw new IllegalArgumentException("nestedDomainMinRows is negative");
         }
     }
 
@@ -81,7 +81,11 @@ public record ParquetMaterializationPolicy(
                 Integer.getInteger("nitro.parquet.dictionaryDomainFrequencyMaxEntries", 256),
                 Integer.getInteger("nitro.parquet.dictionaryDomainFrequencyMinRowsPerEntry", 64),
                 Integer.getInteger("nitro.parquet.dictionaryDomainMembershipProbeRowsPerEntry", 64),
-                Boolean.parseBoolean(System.getProperty("nitro.parquet.constantNestedDomain", "true")),
-                Integer.getInteger("nitro.parquet.constantNestedDomainMinRows", 64));
+                Boolean.parseBoolean(System.getProperty(
+                        "nitro.parquet.nestedDomain",
+                        System.getProperty("nitro.parquet.constantNestedDomain", "true"))),
+                Integer.getInteger(
+                        "nitro.parquet.nestedDomainMinRows",
+                        Integer.getInteger("nitro.parquet.constantNestedDomainMinRows", 64)));
     }
 }

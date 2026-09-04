@@ -135,7 +135,7 @@ class TestNestedMapReader
                     Streams.ofValues(allocator.allocateDictionary(
                             context, ids, new I64Vector(new long[] {11, 22}))));
 
-            Streams encoded = ConstantNestedDomainEncoder.tryEncode(
+            Streams encoded = NestedDomainEncoder.tryEncode(
                     allocator, context, maps, null, rowCount, 64);
 
             assertThat(encoded).isNotNull();
@@ -155,8 +155,45 @@ class TestNestedMapReader
 
             DictionaryVector keyMapping = (DictionaryVector) maps.repeatedOutput(0).values();
             keyMapping.ids()[keyMapping.length() - 1] = 0;
-            assertThat(ConstantNestedDomainEncoder.tryEncode(
+            assertThat(NestedDomainEncoder.tryEncode(
                     allocator, context, maps, null, rowCount, 64)).isNull();
+        }
+    }
+
+    @Test
+    void testRecoversLowCardinalityParentDomainFromEncodedChildren()
+    {
+        int rowCount = 128;
+        Allocator.Context context = new Allocator.Context("test");
+        try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
+            MapVector maps = allocator.allocateMap(context, rowCount);
+            int[] ids = new int[rowCount];
+            for (int position = 0; position < rowCount; position++) {
+                maps.offsets()[position + 1] = position + 1;
+                ids[position] = position & 1;
+            }
+            maps.setEntries(
+                    Streams.ofValues(allocator.allocateDictionary(
+                            context, ids, new I64Vector(new long[] {1, 2}))),
+                    Streams.ofValues(allocator.allocateDictionary(
+                            context, ids, new I64Vector(new long[] {11, 22}))));
+
+            Streams encoded = NestedDomainEncoder.tryEncode(
+                    allocator, context, maps, null, rowCount, 64, 16, 8);
+
+            assertThat(encoded).isNotNull();
+            assertThat(encoded.values()).isInstanceOfSatisfying(DictionaryVector.class, dictionary -> {
+                assertThat(dictionary.length()).isEqualTo(rowCount);
+                assertThat(dictionary.values().length()).isEqualTo(2);
+                assertThat(dictionary.domainFrequency(0)).isEqualTo(rowCount / 2);
+                assertThat(dictionary.domainFrequency(1)).isEqualTo(rowCount / 2);
+                MapVector domain = (MapVector) dictionary.values();
+                for (int position = 0; position < rowCount; position++) {
+                    int domainPosition = dictionary.ids()[position];
+                    assertThat(VectorAccess.longValues(domain.keyValues()).value(domain.startOffset(domainPosition)))
+                            .isEqualTo(position % 2 == 0 ? 1 : 2);
+                }
+            });
         }
     }
 

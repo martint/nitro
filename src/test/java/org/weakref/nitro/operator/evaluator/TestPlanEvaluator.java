@@ -4623,6 +4623,51 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testIndependentDictionaryDomainIncludesSingleRunInput()
+    {
+        AtomicInteger evaluatedPositions = new AtomicInteger();
+        PrimitiveRegistry registry = new PrimitiveRegistry();
+        registry.register("dictionary_with_constant", (inputs, mask, requestedStreams, output, context) -> {
+            evaluatedPositions.set(mask.count());
+            return inputs.getFirst();
+        });
+
+        Variable result = new Variable(0);
+        Reference dictionaryInput = new Reference(new Input(0), Stream.VALUES);
+        Reference constantInput = new Reference(new Input(1), Stream.VALUES);
+        Reference resultValues = new Reference(result, Stream.VALUES);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(
+                        result,
+                        new Call("dictionary_with_constant", List.of(dictionaryInput, constantInput)),
+                        AllMask.ALL)),
+                List.of(resultValues));
+
+        int positions = 128;
+        int[] ids = new int[positions];
+        for (int position = 0; position < positions; position++) {
+            ids[position] = position & 1;
+        }
+        try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
+            PlanEvaluator evaluator = planEvaluator(
+                        plan,
+                        registry,
+                        inputResolver(Map.of(
+                                dictionaryInput, DictionaryVector.wrap(ids, new I64Vector(new long[] {11, 29})),
+                                constantInput, new RleVector(new int[] {positions}, new I64Vector(new long[] {7})))),
+                        allocator);
+            Streams evaluated = evaluator.evaluate(resultValues, Mask.all(positions));
+
+            assertThat(evaluatedPositions).hasValue(2);
+            assertThat(readLongs(evaluated.values())).containsExactly(
+                    java.util.stream.IntStream.range(0, positions)
+                            .mapToLong(position -> position % 2 == 0 ? 11 : 29)
+                            .toArray());
+            evaluator.close();
+        }
+    }
+
+    @Test
     void testIndependentDictionaryDomainsShareAllocatorOwnedOutputMapping()
     {
         AtomicInteger evaluatedPositions = new AtomicInteger();
