@@ -63,6 +63,7 @@ public class TopNRankingOperator
     private final Schema outputSchema;
     private final StructuralComparisonKernel[] comparisonKernels;
     private final StructuralKeyKernel[] partitionKernels;
+    private final UnpartitionedTopNRankingState unpartitionedRanking;
 
     private Streams[] sourceSchema;
     private List<TableOperator.Page> pages;
@@ -91,7 +92,8 @@ public class TopNRankingOperator
                 policy,
                 RankingType.RANK,
                 true,
-                EngineResources.from(allocator).operatorResources().codeGeneration().structuralTypes());
+                EngineResources.from(allocator).operatorResources().codeGeneration().structuralTypes(),
+                EngineResources.from(allocator).operatorResources().joinBufferPolicy());
     }
 
     public TopNRankingOperator(
@@ -115,7 +117,8 @@ public class TopNRankingOperator
                 policy,
                 RankingType.RANK,
                 true,
-                EngineResources.from(allocator).operatorResources().codeGeneration().structuralTypes());
+                EngineResources.from(allocator).operatorResources().codeGeneration().structuralTypes(),
+                EngineResources.from(allocator).operatorResources().joinBufferPolicy());
     }
 
     public TopNRankingOperator(
@@ -139,7 +142,8 @@ public class TopNRankingOperator
                 policy,
                 RankingType.RANK,
                 true,
-                EngineResources.from(allocator).operatorResources().codeGeneration().structuralTypes());
+                EngineResources.from(allocator).operatorResources().codeGeneration().structuralTypes(),
+                EngineResources.from(allocator).operatorResources().joinBufferPolicy());
     }
 
     public TopNRankingOperator(
@@ -164,7 +168,8 @@ public class TopNRankingOperator
                 policy,
                 RankingType.RANK,
                 true,
-                EngineResources.from(allocator).operatorResources().codeGeneration().structuralTypes());
+                EngineResources.from(allocator).operatorResources().codeGeneration().structuralTypes(),
+                EngineResources.from(allocator).operatorResources().joinBufferPolicy());
     }
 
     public TopNRankingOperator(
@@ -189,7 +194,8 @@ public class TopNRankingOperator
                 requireNonNull(resources, "resources is null").topNRankingPolicy(),
                 RankingType.RANK,
                 true,
-                resources.codeGeneration().structuralTypes());
+                resources.codeGeneration().structuralTypes(),
+                resources.joinBufferPolicy());
     }
 
     public TopNRankingOperator(
@@ -215,7 +221,8 @@ public class TopNRankingOperator
                 requireNonNull(resources, "resources is null").topNRankingPolicy(),
                 rankingType,
                 true,
-                resources.codeGeneration().structuralTypes());
+                resources.codeGeneration().structuralTypes(),
+                resources.joinBufferPolicy());
     }
 
     public TopNRankingOperator(
@@ -269,7 +276,8 @@ public class TopNRankingOperator
                 requireNonNull(resources, "resources is null").topNRankingPolicy(),
                 rankingType,
                 outputRanking,
-                resources.codeGeneration().structuralTypes());
+                resources.codeGeneration().structuralTypes(),
+                resources.joinBufferPolicy());
     }
 
     private TopNRankingOperator(
@@ -284,7 +292,8 @@ public class TopNRankingOperator
             TopNRankingOperatorPolicy policy,
             RankingType rankingType,
             boolean outputRanking,
-            StructuralTypeKernelFactory structuralTypes)
+            StructuralTypeKernelFactory structuralTypes,
+            JoinBufferPolicy joinBufferPolicy)
     {
         if (limit <= 0) {
             throw new IllegalArgumentException("TopNRanking limit must be positive");
@@ -320,6 +329,21 @@ public class TopNRankingOperator
                 source.outputSchema(),
                 this.partitionColumns,
                 structuralTypes);
+        this.unpartitionedRanking = partitionColumns.length == 0
+                ? new UnpartitionedTopNRankingState(
+                        allocator,
+                        limit,
+                        orderingColumns,
+                        descendingByColumn,
+                        nullsFirstByColumn,
+                        rankingType,
+                        outputRanking,
+                        source.outputSchema(),
+                        rankingSchema,
+                        joinBufferPolicy,
+                        structuralTypes,
+                        policy)
+                : null;
     }
 
     @Override
@@ -388,6 +412,9 @@ public class TopNRankingOperator
         if (!loaded) {
             load();
         }
+        if (unpartitionedRanking != null) {
+            return unpartitionedRanking.hasNext();
+        }
         return currentOutputPosition < selectedRows.size();
     }
 
@@ -396,6 +423,9 @@ public class TopNRankingOperator
     {
         if (!loaded) {
             load();
+        }
+        if (unpartitionedRanking != null) {
+            return unpartitionedRanking.next();
         }
         int batchSize = Math.min(maxBatchRows, selectedRows.size() - currentOutputPosition);
         Output[] outputs = new Output[outputCount()];
@@ -429,6 +459,9 @@ public class TopNRankingOperator
     @Override
     public void constrain(Mask mask)
     {
+        if (unpartitionedRanking != null) {
+            unpartitionedRanking.constrain(mask);
+        }
     }
 
     @Override
@@ -448,12 +481,29 @@ public class TopNRankingOperator
     @Override
     public void close()
     {
-        source.close();
-        allocator.release(allocationContext);
+        try {
+            if (unpartitionedRanking != null) {
+                unpartitionedRanking.close();
+            }
+        }
+        finally {
+            source.close();
+            allocator.release(allocationContext);
+        }
     }
 
     private void load()
     {
+        if (unpartitionedRanking != null) {
+            while (source.hasNext()) {
+                try (Batch batch = source.next()) {
+                    unpartitionedRanking.addInput(batch);
+                }
+            }
+            unpartitionedRanking.finishInput();
+            loaded = true;
+            return;
+        }
         if (pages == null) {
             pages = new ArrayList<>();
             sourceSchema = new Streams[source.outputCount()];

@@ -14,6 +14,7 @@
 package org.weakref.nitro.operator;
 
 import org.weakref.nitro.core.type.Schema;
+import org.weakref.nitro.core.type.TypeOrderKeyBinder;
 import org.weakref.nitro.core.type.UnorderedPlacement;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
@@ -46,6 +47,7 @@ final class TopNState
     private final boolean[] nullsFirstByColumn;
     private final boolean[] orderingColumnFlags;
     private final StructuralComparisonKernel[] comparisonKernels;
+    private final TypeOrderKeyBinder singleOrderingKeyBinder;
     private final Schema sourceSchema;
     private Streams[][] slotColumns;
     private final Streams[] comparisonColumns;
@@ -110,6 +112,9 @@ final class TopNState
                             sourceSchema.field(orderingColumn).type(),
                             nullsFirstByColumn[orderingIndex] ? UnorderedPlacement.FIRST : UnorderedPlacement.LAST);
         }
+        this.singleOrderingKeyBinder = orderingColumns.length == 1
+                ? sourceSchema.field(orderingColumns[0]).type().orderKeyBinder().orElse(null)
+                : null;
         this.slotColumns = new Streams[outputCount][capacity];
         this.comparisonColumns = new Streams[outputCount];
         this.candidateNullVectors = new Vector[outputCount];
@@ -613,6 +618,18 @@ final class TopNState
         };
     }
 
+    public TypeOrderKeyBinder.Bound bindSingleOrderingKey(Batch batch)
+    {
+        if (singleOrderingKeyBinder == null) {
+            return null;
+        }
+        Output output = batch.output(orderingColumns[0]);
+        if (!VectorAccess.isAllFalseNulls(output.hasNulls() ? output.borrow(Stream.NULLS) : null)) {
+            return null;
+        }
+        return singleOrderingKeyBinder.bind(output.borrow(Stream.VALUES)).orElse(null);
+    }
+
     public boolean singleOrderingDescending()
     {
         return descendingByColumn[0];
@@ -744,6 +761,20 @@ final class TopNState
             }
             pendingBatches[slot] = null;
         }
+    }
+
+    /**
+     * Forgets a candidate that was rejected before its deferred payload was copied. The slot's
+     * ordering storage remains available for reuse by a later candidate.
+     */
+    public void discardPendingSlot(int slot)
+    {
+        pendingBatches[slot] = null;
+    }
+
+    public boolean isPendingFrom(int slot, Batch batch)
+    {
+        return pendingBatches[slot] == batch;
     }
 
     public void setOrderedSlots(List<Integer> orderedSlots)

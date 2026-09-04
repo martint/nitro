@@ -71,6 +71,15 @@ public interface TypeBinding
         return Optional.empty();
     }
 
+    /// Optional exact normalized ordering key for physical domains that fit in 64 bits.
+    ///
+    /// Unsigned key comparison must agree with this binding's logical comparison for every
+    /// non-null admitted value. Consumers use the ordinary comparison capability when absent.
+    default Optional<TypeOrderKeyBinder> orderKeyBinder()
+    {
+        return Optional.empty();
+    }
+
     /// Whether grouping implementations for this binding can consume a provider-compatible,
     /// position-aligned authoritative hash instead of recomputing the logical key hash.
     ///

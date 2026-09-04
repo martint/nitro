@@ -199,6 +199,12 @@ unordered-first from unordered-last comparison, and structural composition appli
 to nested nulls and unordered leaf values. A consumer must bind the convention required by its logical function; it
 must not infer one convention from another or recognize a concrete logical type to repair the difference.
 
+A type provider may additionally expose a lossless normalized ordering-key binder for a logical non-null domain whose
+complete order fits in 64 bits. The binder resolves an admitted physical vector once and returns keys whose unsigned
+comparison exactly agrees with logical comparison and whose equality exactly identifies peers. This is an explicit
+provider proof, independent of carrier width and raw identity. Consumers must retain structural comparison for absent
+or inapplicable binders and handle null placement separately.
+
 Stateful registry implementations may also request a composed key binder. Each bound vector exposes opaque hashing
 and cross-vector identity over positions, allowing retained indexes such as map construction state to span owned
 vector segments. The binder does not prescribe table layout, growth, payload retention, or duplicate policy.
@@ -307,6 +313,12 @@ inside an island.
 
 Blocking operators may retain state, but retained input and output ownership must be explicit. Operators close fully
 consumed batches promptly and cannot retain borrowed vectors after their lease ends.
+
+Unpartitioned Top-N ranking selects incrementally. `ROW_NUMBER` retains at most the requested row count; `RANK`
+retains peer groups while their preceding-row count is below the limit; and `DENSE_RANK` retains the requested number
+of distinct peer groups. New better groups evict worse groups during ingestion. Retained state therefore scales with
+the observable qualifying result, including required boundary ties, rather than with total input. The host-session and
+island-pull entry points use the same physical state.
 
 Operators are generic over functions, logical types, arity, query shape, tables, and column combinations.
 Specialization comes through general physical interfaces or generated resolved layouts.

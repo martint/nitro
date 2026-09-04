@@ -21,6 +21,7 @@ import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.core.type.TypeIdentity;
 import org.weakref.nitro.core.type.TypeOperators;
+import org.weakref.nitro.core.type.TypeOrderKeyBinder;
 import org.weakref.nitro.core.type.TypeVectorFactory;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.ArrayVector;
@@ -1402,6 +1403,168 @@ public class TestOperatorBatches
                     .containsExactlyInAnyOrder(
                             row(null, 1L, "first-a", 1L),
                             row(null, 1L, "first-b", 1L));
+        }
+    }
+
+    @Test
+    void testUnpartitionedTopNRankingSessionReplacesEarlierWorseGroups()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        try (Operator first = new ConstantTableOperator(allocator, 2, List.of(
+                row(100L, "old-a"),
+                row(100L, "old-b")));
+                TopNRankingSession session = new TopNRankingSession(
+                        allocator,
+                        2,
+                        new int[0],
+                        new int[] {0},
+                        new boolean[] {false},
+                        TopNRankingOperator.RankingType.RANK,
+                        first.outputSchema(),
+                        Schema.unspecified(1),
+                        EngineResources.from(allocator).operatorResources())) {
+            try (Batch batch = first.next()) {
+                session.addInput(batch);
+            }
+            try (Operator second = new ConstantTableOperator(allocator, 2, List.of(
+                    row(1L, "first-a"),
+                    row(1L, "first-b"),
+                    row(2L, "second"),
+                    row(3L, "third")));
+                    Batch batch = second.next()) {
+                session.addInput(batch);
+            }
+            session.finishInput();
+
+            assertThat(OperatorAssertions.OperatorAssert.toRows(session))
+                    .containsExactlyInAnyOrder(
+                            row(1L, "first-a", 1L),
+                            row(1L, "first-b", 1L));
+        }
+    }
+
+    @Test
+    void testUnpartitionedTopNRankingSessionSupportsDenseRankAndRowNumber()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        List<org.weakref.nitro.data.Row> rows = List.of(
+                row(3L, "third"),
+                row(1L, "first-a"),
+                row(2L, "second"),
+                row(1L, "first-b"));
+
+        try (Operator input = new ConstantTableOperator(allocator, 2, rows);
+                TopNRankingSession session = new TopNRankingSession(
+                        allocator,
+                        2,
+                        new int[0],
+                        new int[] {0},
+                        new boolean[] {false},
+                        TopNRankingOperator.RankingType.DENSE_RANK,
+                        input.outputSchema(),
+                        Schema.unspecified(1),
+                        EngineResources.from(allocator).operatorResources())) {
+            try (Batch batch = input.next()) {
+                session.addInput(batch);
+            }
+            session.finishInput();
+            assertThat(OperatorAssertions.OperatorAssert.toRows(session))
+                    .containsExactlyInAnyOrder(
+                            row(1L, "first-a", 1L),
+                            row(1L, "first-b", 1L),
+                            row(2L, "second", 2L));
+        }
+
+        try (Operator input = new ConstantTableOperator(allocator, 2, rows);
+                TopNRankingSession session = new TopNRankingSession(
+                        allocator,
+                        2,
+                        new int[0],
+                        new int[] {0},
+                        new boolean[] {false},
+                        TopNRankingOperator.RankingType.ROW_NUMBER,
+                        input.outputSchema(),
+                        Schema.unspecified(1),
+                        EngineResources.from(allocator).operatorResources())) {
+            try (Batch batch = input.next()) {
+                session.addInput(batch);
+            }
+            session.finishInput();
+            assertThat(OperatorAssertions.OperatorAssert.toRows(session))
+                    .hasSize(2)
+                    .extracting(row -> row.values()[0])
+                    .containsExactly(1L, 1L);
+        }
+    }
+
+    @Test
+    void testUnpartitionedTopNRankingUsesProviderOrderingKeys()
+    {
+        AtomicInteger keyReads = new AtomicInteger();
+        TypeBinding type = new TypeBinding()
+        {
+            @Override
+            public TypeIdentity identity()
+            {
+                return new TypeIdentity("test:signed-order-key");
+            }
+
+            @Override
+            public Class<?> carrierType()
+            {
+                return long.class;
+            }
+
+            @Override
+            public TypeOperators operators()
+            {
+                return TypeOperators.UNSPECIFIED;
+            }
+
+            @Override
+            public Optional<TypeOrderKeyBinder> orderKeyBinder()
+            {
+                return Optional.of(values -> {
+                    VectorAccess.LongValues longs = VectorAccess.longValues(values);
+                    return Optional.of(position -> {
+                        keyReads.incrementAndGet();
+                        return longs.value(position) ^ Long.MIN_VALUE;
+                    });
+                });
+            }
+
+            @Override
+            public Set<Class<? extends Vector>> supportedVectorTypes()
+            {
+                return Set.of(I64Vector.class);
+            }
+        };
+        Schema schema = new Schema(List.of(new Field(type, false)));
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        try (Operator input = new TableOperator(
+                schema,
+                List.of(TableOperator.Page.values(
+                        4,
+                        new Vector[] {new I64Vector(new long[] {-1, 5, -3, 0})},
+                        Mask.all(4))));
+                TopNRankingSession session = new TopNRankingSession(
+                        allocator,
+                        2,
+                        new int[0],
+                        new int[] {0},
+                        new boolean[] {false},
+                        TopNRankingOperator.RankingType.ROW_NUMBER,
+                        schema,
+                        Schema.unspecified(1),
+                        EngineResources.from(allocator).operatorResources())) {
+            try (Batch batch = input.next()) {
+                session.addInput(batch);
+            }
+            session.finishInput();
+
+            assertThat(OperatorAssertions.OperatorAssert.toRows(session))
+                    .containsExactly(row(-3L, 1L), row(-1L, 2L));
+            assertThat(keyReads).hasValue(4);
         }
     }
 

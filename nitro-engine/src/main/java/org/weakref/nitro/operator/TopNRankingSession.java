@@ -25,7 +25,7 @@ import java.util.List;
 import static java.util.Objects.requireNonNull;
 
 /**
- * Host-driven partitioned TopN-ranking state. Offered batches remain caller-owned and are copied
+ * Host-driven TopN-ranking state. Offered batches remain caller-owned and are copied
  * before {@link #addInput(Batch)} returns.
  */
 public final class TopNRankingSession
@@ -37,6 +37,7 @@ public final class TopNRankingSession
     private final int inputColumns;
     private final List<TableOperator.Page> pages = new ArrayList<>();
     private final TopNRankingOperator ranking;
+    private final UnpartitionedTopNRankingState unpartitionedRanking;
     private boolean finished;
     private boolean closed;
 
@@ -78,17 +79,35 @@ public final class TopNRankingSession
     {
         this.allocator = requireNonNull(allocator, "allocator is null");
         inputColumns = requireNonNull(inputSchema, "inputSchema is null").size();
-        ranking = new TopNRankingOperator(
-                allocator,
-                limit,
-                partitionColumns,
-                orderingColumns,
-                descending,
-                nullsFirst,
-                rankingType,
-                TableOperator.retained(inputSchema, pages),
-                rankingSchema,
-                requireNonNull(resources, "resources is null"));
+        resources = requireNonNull(resources, "resources is null");
+        if (partitionColumns.length == 0) {
+            unpartitionedRanking = new UnpartitionedTopNRankingState(
+                    allocator,
+                    limit,
+                    orderingColumns,
+                    descending,
+                    nullsFirst,
+                    rankingType,
+                    true,
+                    inputSchema,
+                    rankingSchema,
+                    resources);
+            ranking = null;
+        }
+        else {
+            unpartitionedRanking = null;
+            ranking = new TopNRankingOperator(
+                    allocator,
+                    limit,
+                    partitionColumns,
+                    orderingColumns,
+                    descending,
+                    nullsFirst,
+                    rankingType,
+                    TableOperator.retained(inputSchema, pages),
+                    rankingSchema,
+                    resources);
+        }
     }
 
     public void addInput(Batch batch)
@@ -100,6 +119,10 @@ public final class TopNRankingSession
         }
         Mask mask = batch.borrowMask();
         if (mask.none()) {
+            return;
+        }
+        if (unpartitionedRanking != null) {
+            unpartitionedRanking.addInput(batch);
             return;
         }
         Streams[] columns = new Streams[inputColumns];
@@ -115,8 +138,9 @@ public final class TopNRankingSession
     }
 
     /**
-     * Adds an allocator-owned native batch without copying its streams. Ownership of every stream and the
-     * selection transfers to this session; the caller must still close the now-drained batch.
+     * Adds an allocator-owned native batch whose contents may be retained. A partitioned state can transfer the
+     * complete batch; a bounded unpartitioned state instead copies only qualifying rows. The caller relinquishes
+     * the contents and must close the batch after this method returns, whether or not it was physically drained.
      */
     public void addRetainedInput(Batch batch)
     {
@@ -127,6 +151,10 @@ public final class TopNRankingSession
         }
         Mask mask = batch.borrowMask();
         if (mask.none()) {
+            return;
+        }
+        if (unpartitionedRanking != null) {
+            unpartitionedRanking.addInput(batch);
             return;
         }
         Streams[] columns = new Streams[inputColumns];
@@ -151,38 +179,41 @@ public final class TopNRankingSession
             throw new IllegalStateException("TopN ranking input is already finished");
         }
         finished = true;
+        if (unpartitionedRanking != null) {
+            unpartitionedRanking.finishInput();
+        }
     }
 
     @Override
     public int outputCount()
     {
-        return ranking.outputCount();
+        return delegate().outputCount();
     }
 
     @Override
     public Schema outputSchema()
     {
-        return ranking.outputSchema();
+        return delegate().outputSchema();
     }
 
     @Override
     public boolean hasNext()
     {
         checkFinished();
-        return ranking.hasNext();
+        return delegate().hasNext();
     }
 
     @Override
     public Batch next()
     {
         checkFinished();
-        return ranking.next();
+        return delegate().next();
     }
 
     @Override
     public void constrain(Mask mask)
     {
-        ranking.constrain(mask);
+        delegate().constrain(mask);
     }
 
     @Override
@@ -199,7 +230,7 @@ public final class TopNRankingSession
         }
         closed = true;
         try {
-            ranking.close();
+            delegate().close();
         }
         finally {
             allocator.release(allocationContext);
@@ -212,6 +243,11 @@ public final class TopNRankingSession
         if (!finished) {
             throw new IllegalStateException("TopN ranking input is not finished");
         }
+    }
+
+    private Operator delegate()
+    {
+        return unpartitionedRanking != null ? unpartitionedRanking : ranking;
     }
 
     private void checkOpen()
