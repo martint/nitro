@@ -49,6 +49,24 @@ class TestStructVector
     }
 
     @Test
+    void testSinglePositionRangeGrowsChildrenWithParent()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        Allocator.Context context = new Allocator.Context("test");
+        StructVector existing = allocator.allocate(context, StructVector.class, 0, StructVector::new);
+        existing.setField("value", Streams.ofValues(allocator.allocate(context, I64Vector.class, 0, I64Vector::new)));
+        StructVector source = new StructVector(1);
+        source.setField("value", Streams.ofValues(new I64Vector(new long[] {5})));
+
+        StructVector result = (StructVector) source.copySinglePositionRangeInto(allocator, context, existing, 0, 0, 212, 212);
+
+        assertThat(result.length()).isEqualTo(212);
+        assertThat(result.fieldValues("value").length()).isEqualTo(212);
+        assertThat(((I64Vector) result.fieldValues("value")).values()).containsOnly(5);
+        allocator.release(context);
+    }
+
+    @Test
     void testFieldViewsPreserveSemanticOrder()
     {
         StructVector vector = new StructVector(1);

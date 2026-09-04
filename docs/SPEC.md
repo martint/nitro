@@ -128,6 +128,9 @@ Pooled vector storage may have more capacity than the logical or physical domain
 mapping. A consumer requires storage to cover that domain and must not infer additional valid positions from spare
 capacity or require exact capacity equality. Every stream of a fixed-cardinality structural child covers the parent
 domain; a null parent row may leave child contents unspecified, but it does not permit a shorter child vector.
+Growing a fixed-cardinality structural vector is an atomic reconstruction: allocate or reuse the parent shell, grow
+every child stream to cover the new domain, and only then attach the children. Generic copy-then-grow machinery must
+not publish an enlarged parent with its former undersized children, even transiently.
 
 A physical carrier does not imply a logical type. An I64 carrier may hold BIGINT, a short decimal, date, time, or a
 timestamp representation. Binary storage does not imply UTF-8. The type registry supplies equality, hashing,

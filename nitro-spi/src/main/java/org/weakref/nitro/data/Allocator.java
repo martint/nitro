@@ -682,6 +682,7 @@ public class Allocator
 
     public <T extends Vector> T reallocateIfNecessary(Context context, T vector, Class<T> vectorType, int count, IntFunction<T> vectorAllocator)
     {
+        checkArgument(vectorType != StructVector.class, "StructVector growth requires allocateOrGrowStruct");
         if (vector == null) {
             return allocate(context, vectorType, count, vectorAllocator);
         }
@@ -694,6 +695,27 @@ public class Allocator
         }
 
         return vector;
+    }
+
+    /**
+     * Grows a struct's fixed-cardinality shell without transiently attaching undersized children.
+     *
+     * <p>The caller retains references to the old fields, grows or replaces every child stream, and attaches only
+     * streams that cover the new parent domain. Discarding the old shell does not discard its separately tracked
+     * children.
+     */
+    public StructVector allocateOrGrowStruct(Context context, StructVector vector, int count)
+    {
+        if (vector == null) {
+            return allocate(context, StructVector.class, count, StructVector::new);
+        }
+        if (vector.length() >= count) {
+            return vector;
+        }
+
+        StructVector grown = allocate(context, StructVector.class, count, StructVector::new);
+        discardVector(context, vector);
+        return grown;
     }
 
     public Mask allocateAllMask(Context context, int size)

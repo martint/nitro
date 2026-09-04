@@ -2199,18 +2199,7 @@ final class JoinBufferSupport
 
     private StructVector ensureStructCapacity(StructVector existing, int size)
     {
-        if (existing == null) {
-            return allocator.allocate(allocationContext, StructVector.class, size, StructVector::new);
-        }
-        if (existing.length() >= size) {
-            return existing;
-        }
-
-        StructVector grown = allocator.allocate(allocationContext, StructVector.class, size, StructVector::new);
-        for (Map.Entry<String, Streams> entry : existing.fields().entrySet()) {
-            grown.setField(entry.getKey(), allocator.copyStreams(allocationContext, entry.getValue()));
-        }
-        return grown;
+        return allocator.allocateOrGrowStruct(allocationContext, existing, size);
     }
 
     private static int binaryCapacity(Vector existing, int positionCount)

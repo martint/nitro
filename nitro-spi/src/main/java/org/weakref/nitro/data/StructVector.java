@@ -139,12 +139,10 @@ public final class StructVector
     public Vector copyMasked(Allocator allocator, Allocator.Context allocationContext, Vector existing, Mask mask)
     {
         Map<String, Streams> existingFields = existing instanceof StructVector vector ? vector.fields() : Map.of();
-        StructVector output = allocator.reallocateIfNecessary(
+        StructVector output = allocator.allocateOrGrowStruct(
                 allocationContext,
                 existing instanceof StructVector vector ? vector : null,
-                StructVector.class,
-                length(),
-                StructVector::new);
+                length());
         for (Map.Entry<String, Streams> entry : fields.entrySet()) {
             output.setField(
                     entry.getKey(),
@@ -156,7 +154,7 @@ public final class StructVector
     @Override
     public Vector copyPositionsInto(Allocator allocator, Allocator.Context allocationContext, Vector existing, int[] sourcePositions, int sourceCount, int outputStart, int size)
     {
-        StructVector output = allocator.reallocateIfNecessary(allocationContext, existing instanceof StructVector vector ? vector : null, StructVector.class, size, StructVector::new);
+        StructVector output = allocator.allocateOrGrowStruct(allocationContext, existing instanceof StructVector vector ? vector : null, size);
         Map<String, Streams> existingFields = existing instanceof StructVector vector ? vector.fields() : Map.of();
         if (outputStart == 0 && !hasSameFieldLayout(output, this)) {
             if (output == existing && !existingFields.isEmpty()) {
@@ -173,7 +171,7 @@ public final class StructVector
     @Override
     public Vector copySinglePositionInto(Allocator allocator, Allocator.Context allocationContext, Vector existing, int sourcePosition, int outputPosition, int size)
     {
-        StructVector output = allocator.reallocateIfNecessary(allocationContext, existing instanceof StructVector vector ? vector : null, StructVector.class, size, StructVector::new);
+        StructVector output = allocator.allocateOrGrowStruct(allocationContext, existing instanceof StructVector vector ? vector : null, size);
         Map<String, Streams> existingFields = existing instanceof StructVector vector ? vector.fields() : Map.of();
         if (outputPosition == 0 && !hasSameFieldLayout(output, this)) {
             if (output == existing && !existingFields.isEmpty()) {
@@ -190,7 +188,7 @@ public final class StructVector
     @Override
     public Vector copySinglePositionRangeInto(Allocator allocator, Allocator.Context allocationContext, Vector existing, int sourcePosition, int outputStart, int outputEnd, int size)
     {
-        StructVector output = allocator.reallocateIfNecessary(allocationContext, existing instanceof StructVector vector ? vector : null, StructVector.class, size, StructVector::new);
+        StructVector output = allocator.allocateOrGrowStruct(allocationContext, existing instanceof StructVector vector ? vector : null, size);
         Map<String, Streams> existingFields = existing instanceof StructVector vector ? vector.fields() : Map.of();
         if (outputStart == 0 && !hasSameFieldLayout(output, this)) {
             if (output == existing && !existingFields.isEmpty()) {
