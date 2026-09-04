@@ -205,10 +205,13 @@ evaluator, may be reused across its batches, and is closed when the evaluator cl
 Higher-order function providers bind container arguments, captured outer expressions, and one or more nested
 expressions. The host compiler lowers each nested expression through the same normalized, mask-aware evaluation IR as
 an outer expression, with lambda parameters represented as ordinary nested-domain inputs. At execution, the provider
-maps selected container entries and captures into that domain, invokes the nested plan under the derived mask, and
-constructs the function result. The provider owns container semantics; neither the compiler nor evaluator recognizes
-specific higher-order functions. Parent null, error, and inactive positions contribute no nested positions, while
-recursive vector structure and encoded child streams remain available to the nested evaluator.
+maps selected container entries and captures into that domain, invokes the nested plan under one or more derived masks,
+and constructs the function result. A provider whose semantics include ordered short-circuiting narrows successive
+masks to the next entry of each unresolved parent; decisive parents leave the domain before later entries are invoked.
+This preserves per-parent order and error observability while retaining vectorized evaluation across parents. The
+provider owns container semantics; neither the compiler nor evaluator recognizes specific higher-order functions.
+Parent null, error, and inactive positions contribute no nested positions, while recursive vector structure and
+encoded child streams remain available to the nested evaluator.
 
 Generated adapters are ordinary implementations of the batch convention. They may generate direct invocation bytecode
 around a constant method-handle target, hoist null/error classification, traverse selected positions, and write into
