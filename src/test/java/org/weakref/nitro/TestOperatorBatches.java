@@ -35,6 +35,7 @@ import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Row;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
+import org.weakref.nitro.data.StructVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.data.VectorAllocator;
@@ -4307,6 +4308,38 @@ public class TestOperatorBatches
                 .containsExactly(
                         row(5L, List.of()),
                         row(4L, List.of(30L, 31L, 32L)));
+    }
+
+    @Test
+    void testTopNOperatorPreservesNullStructuralPayloadDomain()
+    {
+        StructVector decimals = new StructVector(4);
+        decimals.setField("high", Streams.ofValues(new I64Vector(new long[] {1, 2, 3, 4})));
+        decimals.setField("low", Streams.ofValues(new I64Vector(new long[] {10, 20, 30, 40})));
+
+        Operator operator = new TopNOperator(
+                new Allocator(EngineResources.createDefault()),
+                2,
+                0,
+                new TableOperator(
+                        2,
+                        List.of(new TableOperator.Page(
+                                4,
+                                new Streams[] {
+                                        Streams.ofValues(new I64Vector(new long[] {5, 4, 3, 2})),
+                                        Streams.ofValuesAndNulls(decimals, new BooleanVector(new boolean[] {true, true, false, false})),
+                                },
+                                Mask.all(4)))));
+
+        try (Batch batch = operator.next()) {
+            StructVector result = (StructVector) batch.output(1).borrow(Stream.VALUES);
+            assertThat(batch.borrowMask().count()).isEqualTo(2);
+            assertThat(result.length()).isEqualTo(2);
+            assertThat(result.fieldValues("high").length()).isEqualTo(2);
+            assertThat(result.fieldValues("low").length()).isEqualTo(2);
+            assertThat(VectorAccess.isNull(batch.output(1).borrow(Stream.NULLS), 0)).isTrue();
+            assertThat(VectorAccess.isNull(batch.output(1).borrow(Stream.NULLS), 1)).isTrue();
+        }
     }
 
     @Test

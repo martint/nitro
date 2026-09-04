@@ -25,6 +25,7 @@ import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.MapVector;
 import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.SelectedPositions;
+import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.StructVector;
 import org.weakref.nitro.data.Utf8Traits;
@@ -37,6 +38,26 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 public class TestJoinBufferSupport
 {
+    @Test
+    void testNullStructMaterializationCoversParentDomain()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        Allocator.Context context = new Allocator.Context("JoinBufferSupportTest");
+        JoinBufferSupport buffers = new JoinBufferSupport(JoinBufferPolicy.defaults(), allocator, context);
+
+        StructVector sample = new StructVector(3);
+        sample.setField("high", Streams.ofValuesAndNulls(new I64Vector(3), new BooleanVector(3)));
+        sample.setField("low", Streams.ofValues(new I64Vector(3)));
+
+        StructVector values = (StructVector) buffers.copyNullPosition(null, Streams.ofValues(sample), 5, 4).values();
+
+        assertThat(values.length()).isEqualTo(5);
+        assertThat(values.fieldValues("high").length()).isEqualTo(5);
+        assertThat(values.fieldStreamOrNull("high", Stream.NULLS).length()).isEqualTo(5);
+        assertThat(values.fieldValues("low").length()).isEqualTo(5);
+        allocator.release(context);
+    }
+
     @Test
     void testPrimitivePositionCopiesHonorInputAndOutputOffsets()
     {

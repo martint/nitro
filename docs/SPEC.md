@@ -126,7 +126,8 @@ The vector family includes fixed-width flat vectors, variable-width binary vecto
 arrays, maps, rows/structs, and compositional wrappers whose mappings can be resolved without flattening children.
 Pooled vector storage may have more capacity than the logical or physical domain currently governed by a mask or
 mapping. A consumer requires storage to cover that domain and must not infer additional valid positions from spare
-capacity or require exact capacity equality.
+capacity or require exact capacity equality. Every stream of a fixed-cardinality structural child covers the parent
+domain; a null parent row may leave child contents unspecified, but it does not permit a shorter child vector.
 
 A physical carrier does not imply a logical type. An I64 carrier may hold BIGINT, a short decimal, date, time, or a
 timestamp representation. Binary storage does not imply UTF-8. The type registry supplies equality, hashing,

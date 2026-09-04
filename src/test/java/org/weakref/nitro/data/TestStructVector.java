@@ -22,6 +22,16 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class TestStructVector
 {
     @Test
+    void testRejectsFieldStreamsThatDoNotCoverParentDomain()
+    {
+        StructVector vector = new StructVector(2);
+
+        assertThatThrownBy(() -> vector.setField("value", Streams.ofValues(new I64Vector(1))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Struct field value stream VALUES has length 1, below parent length 2");
+    }
+
+    @Test
     void testSinglePositionReplacementPreservesOtherFields()
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());

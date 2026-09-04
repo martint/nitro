@@ -727,12 +727,25 @@ final class JoinBufferSupport
             case StructVector struct -> {
                 StructVector values = allocator.allocate(allocationContext, StructVector.class, size, StructVector::new);
                 for (Map.Entry<String, Streams> field : struct.fields().entrySet()) {
-                    values.setField(field.getKey(), emptyLike(field.getValue()));
+                    values.setField(field.getKey(), nullFieldValuesLike(field.getValue(), size));
                 }
                 yield values;
             }
             default -> throw new IllegalArgumentException("Unsupported null materialization type: " + sample.getClass().getSimpleName());
         };
+    }
+
+    private Streams nullFieldValuesLike(Streams schema, int size)
+    {
+        Streams.Builder result = Streams.builder()
+                .put(Stream.VALUES, nullValuesLike(schema.values(), size));
+        if (schema.hasNulls()) {
+            result.put(Stream.NULLS, allocator.borrowAllFalseBoolean(allocationContext, size));
+        }
+        if (schema.hasErrors()) {
+            result.put(Stream.ERRORS, allocator.borrowAllFalseBoolean(allocationContext, size));
+        }
+        return result.build();
     }
 
     public Vector copyStreamVector(Streams streams, Stream stream)
