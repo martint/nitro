@@ -141,22 +141,49 @@ public final class GeneratedAggregationDomainBindings
         offsetInputNulls[index] = false;
     }
 
-    public int physicalShape()
+    public PhysicalShape capturePhysicalShape()
     {
-        int shape = 1;
+        short[] inputShapes = new short[inputs.length];
         for (int index = 0; index < inputs.length; index++) {
-            if (readsValue[index]) {
-                shape = shape * 31 + inputCarriers[index].ordinal();
-                shape = shape * 31 + (intInputs[index] ? 1 : 0);
-                shape = shape * 31 + (offsetInputs[index] ? 1 : 0);
-            }
-            if (readsInput[index]) {
-                shape = shape * 31 + (inputNulls[index] == null ? 0 : 1);
-                shape = shape * 31 + (allNullInputs[index] ? 1 : 0);
-                shape = shape * 31 + (offsetInputNulls[index] ? 1 : 0);
+            inputShapes[index] = inputPhysicalShape(index);
+        }
+        return new PhysicalShape(inputShapes);
+    }
+
+    public boolean matchesPhysicalShape(PhysicalShape shape)
+    {
+        if (shape == null || shape.inputShapes.length != inputs.length) {
+            return false;
+        }
+        for (int index = 0; index < inputs.length; index++) {
+            if (shape.inputShapes[index] != inputPhysicalShape(index)) {
+                return false;
             }
         }
-        return shape;
+        return true;
+    }
+
+    private short inputPhysicalShape(int index)
+    {
+        int carrier = readsValue[index] ? inputCarriers[index].ordinal() + 1 : 0;
+        return (short) ((readsInput[index] ? 1 : 0) |
+                (readsValue[index] ? 1 << 1 : 0) |
+                (intInputs[index] ? 1 << 2 : 0) |
+                (carrier << 3) |
+                (offsetInputs[index] ? 1 << 6 : 0) |
+                (inputNulls[index] != null ? 1 << 7 : 0) |
+                (allNullInputs[index] ? 1 << 8 : 0) |
+                (offsetInputNulls[index] ? 1 << 9 : 0));
+    }
+
+    public static final class PhysicalShape
+    {
+        private final short[] inputShapes;
+
+        private PhysicalShape(short[] inputShapes)
+        {
+            this.inputShapes = inputShapes;
+        }
     }
 
     public Object[] inputs()

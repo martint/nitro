@@ -220,26 +220,60 @@ public final class GeneratedLongGroupingBindings
         }
     }
 
-    public int physicalShape()
+    public PhysicalShape capturePhysicalShape()
     {
-        int shape = intKey ? 1 : 0;
-        shape = shape * 31 + (keyMapped ? 1 : 0);
-        shape = shape * 31 + (keyOffset != 0 ? 1 : 0);
+        short[] inputShapes = new short[inputs.length];
         for (int index = 0; index < inputs.length; index++) {
-            if (readsValue[index]) {
-                shape = shape * 31 + (intInputs[index] ? 1 : 0);
-                shape = shape * 31 + inputCarriers[index].ordinal();
-                shape = shape * 31 + (mappedInputs[index] ? 1 : 0);
-                shape = shape * 31 + (inputUsesKeyIds[index] ? 1 : 0);
-                shape = shape * 31 + (offsetInputs[index] ? 1 : 0);
-            }
-            if (readsInput[index]) {
-                shape = shape * 31 + (mappedInputNulls[index] ? 1 : 0);
-                shape = shape * 31 + (inputNullUsesKeyIds[index] ? 1 : 0);
-                shape = shape * 31 + (offsetInputNulls[index] ? 1 : 0);
+            inputShapes[index] = inputPhysicalShape(index);
+        }
+        return new PhysicalShape(keyPhysicalShape(), inputShapes);
+    }
+
+    public boolean matchesPhysicalShape(PhysicalShape shape)
+    {
+        if (shape == null || shape.keyShape != keyPhysicalShape() || shape.inputShapes.length != inputs.length) {
+            return false;
+        }
+        for (int index = 0; index < inputs.length; index++) {
+            if (shape.inputShapes[index] != inputPhysicalShape(index)) {
+                return false;
             }
         }
-        return shape;
+        return true;
+    }
+
+    private int keyPhysicalShape()
+    {
+        return (intKey ? 1 : 0) |
+                (keyMapped ? 1 << 1 : 0) |
+                (keyOffset != 0 ? 1 << 2 : 0);
+    }
+
+    private short inputPhysicalShape(int index)
+    {
+        int carrier = readsValue[index] ? inputCarriers[index].ordinal() + 1 : 0;
+        return (short) ((readsInput[index] ? 1 : 0) |
+                (readsValue[index] ? 1 << 1 : 0) |
+                (intInputs[index] ? 1 << 2 : 0) |
+                (carrier << 3) |
+                (mappedInputs[index] ? 1 << 6 : 0) |
+                (inputUsesKeyIds[index] ? 1 << 7 : 0) |
+                (offsetInputs[index] ? 1 << 8 : 0) |
+                (mappedInputNulls[index] ? 1 << 9 : 0) |
+                (inputNullUsesKeyIds[index] ? 1 << 10 : 0) |
+                (offsetInputNulls[index] ? 1 << 11 : 0));
+    }
+
+    public static final class PhysicalShape
+    {
+        private final int keyShape;
+        private final short[] inputShapes;
+
+        private PhysicalShape(int keyShape, short[] inputShapes)
+        {
+            this.keyShape = keyShape;
+            this.inputShapes = inputShapes;
+        }
     }
 
     public long sampleKeyRuns(Mask mask)

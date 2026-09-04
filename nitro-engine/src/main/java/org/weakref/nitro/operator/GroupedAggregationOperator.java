@@ -124,10 +124,11 @@ public class GroupedAggregationOperator
     private GeneratedLongGroupingBindings fusedBindings;
     private GeneratedAggregationDomainBindings fusedDomainBindings;
     private DictionaryDomainGroupingKernel fusedDomainKernel;
-    private int fusedDomainPhysicalShape = -1;
+    private GeneratedAggregationDomainBindings.PhysicalShape fusedDomainPhysicalShape;
     private Object[] fusedStateVectors;
     private boolean fusedStateVectorsBound;
-    private int fusedPhysicalShape = -1;
+    private GeneratedLongGroupingBindings.PhysicalShape fusedPhysicalShape;
+    private int fusedExecutionShape = -1;
     private boolean debugFusedLimitPrinted;
     private boolean debugFusedReuseContinuationPrinted;
     private boolean debugFusedConstantRunsPrinted;
@@ -1184,8 +1185,7 @@ public class GroupedAggregationOperator
                 if (!fusedStateVectorsBound) {
                     refreshFusedStateVectors();
                 }
-                int physicalShape = fusedDomainBindings.physicalShape();
-                if (physicalShape != fusedDomainPhysicalShape) {
+                if (!fusedDomainBindings.matchesPhysicalShape(fusedDomainPhysicalShape)) {
                     fusedDomainKernel = operatorResources.codeGeneration().dictionaryDomainGrouping().create(
                             List.of(fusedSpecs),
                             fusedDomainBindings.intInputs(),
@@ -1193,7 +1193,7 @@ public class GroupedAggregationOperator
                             fusedDomainBindings.allNullInputs(),
                             fusedDomainBindings.offsetInputs(),
                             fusedDomainBindings.offsetInputNulls());
-                    fusedDomainPhysicalShape = physicalShape;
+                    fusedDomainPhysicalShape = fusedDomainBindings.capturePhysicalShape();
                 }
                 fusedDomainKernel.accumulate(
                         domainSize,
@@ -1820,13 +1820,12 @@ public class GroupedAggregationOperator
             directGrouping = false;
             idIndexedGrouping = false;
         }
-        int physicalShape = fusedBindings.physicalShape();
-        physicalShape = physicalShape * 31 + (preResolvedKeyDomain ? 1 : 0);
-        physicalShape = physicalShape * 31 + (runCache ? 1 : 0);
-        physicalShape = physicalShape * 31 + (constantRuns ? 1 : 0);
-        physicalShape = physicalShape * 31 + (directGrouping ? 1 : 0);
-        physicalShape = physicalShape * 31 + (idIndexedGrouping ? 1 : 0);
-        if (fusedPhysicalShape != physicalShape) {
+        int executionShape = (preResolvedKeyDomain ? 1 : 0) |
+                (runCache ? 1 << 1 : 0) |
+                (constantRuns ? 1 << 2 : 0) |
+                (directGrouping ? 1 << 3 : 0) |
+                (idIndexedGrouping ? 1 << 4 : 0);
+        if (!fusedBindings.matchesPhysicalShape(fusedPhysicalShape) || fusedExecutionShape != executionShape) {
             fusedKernel = operatorResources.codeGeneration().fusedGrouping().create(
                     List.of(fusedSpecs),
                     filteredAggregationIndexes.length != 0 || distinctAggregationGroups.length != 0,
@@ -1846,7 +1845,8 @@ public class GroupedAggregationOperator
                     fusedBindings.inputNullUsesKeyIds(),
                     fusedBindings.offsetInputs(),
                     fusedBindings.offsetInputNulls());
-            fusedPhysicalShape = physicalShape;
+            fusedPhysicalShape = fusedBindings.capturePhysicalShape();
+            fusedExecutionShape = executionShape;
         }
 
         if (!fusedPhysicalPathCommitted) {

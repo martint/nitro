@@ -52,4 +52,26 @@ class TestGeneratedAggregationDomainBindings
         assertThat(bindings.bindInput(0, reference, unrelated, null, true, LONG)).isFalse();
         assertThat(bindings.bindInput(0, reference, unrelated.values(), null, true, LONG)).isFalse();
     }
+
+    @Test
+    void testMatchesPhysicalShapeExactlyAcrossRebinding()
+    {
+        int[] ids = {0, 1};
+        DictionaryVector reference = DictionaryVector.wrap(ids, new I64Vector(new long[] {11, 22}));
+        GeneratedAggregationDomainBindings bindings = new GeneratedAggregationDomainBindings(1);
+        DictionaryVector longs = reference.sharedMappingWithValues(new I64Vector(new long[] {7, 9}));
+
+        assertThat(bindings.bindInput(0, reference, longs, null, true, LONG)).isTrue();
+        GeneratedAggregationDomainBindings.PhysicalShape shape = bindings.capturePhysicalShape();
+        assertThat(bindings.matchesPhysicalShape(shape)).isTrue();
+
+        DictionaryVector offsetLongs = reference.sharedMappingWithValues(
+                new RegionVector(new I64Vector(new long[] {0, 7, 9}), 1, 2));
+        DictionaryVector nulls = reference.sharedMappingWithValues(new BooleanVector(new boolean[] {false, true}));
+        assertThat(bindings.bindInput(0, reference, offsetLongs, nulls, true, LONG)).isTrue();
+        assertThat(bindings.matchesPhysicalShape(shape)).isFalse();
+
+        assertThat(bindings.bindInput(0, reference, longs, null, true, LONG)).isTrue();
+        assertThat(bindings.matchesPhysicalShape(shape)).isTrue();
+    }
 }

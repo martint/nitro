@@ -590,6 +590,11 @@ Specialization can generate expression loops, grouping layouts, hash/probe kerne
 updates. Generated code derives from interfaces and physical layouts—not function names, queries, tables, or fixed SQL
 arities. Adaptive mechanisms report admission, strategy, transitions, and achieved reduction.
 
+Generated-kernel reuse requires exact equality of every physical property that changes emitted loads, mappings,
+null handling, or loop structure. A hash may index a cache but must not itself prove compatibility. The hot batch
+path compares a previously captured structural descriptor without allocation; it captures a new immutable descriptor
+and resolves the corresponding kernel only when that structure changes.
+
 ## 17. Correctness, diagnostics, and tests
 
 Correctness includes values, nulls, errors, ordering, multiplicity, physical position counts, ownership, memory

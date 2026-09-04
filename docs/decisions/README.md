@@ -162,3 +162,4 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | [0080](0080-compose-provider-primitive-result-ranges.md) | Compose provider primitive result ranges | accepted |
 | [0081](0081-preserve-repeated-primitive-range-multiplicity.md) | Preserve repeated primitive range multiplicity | accepted |
 | [0082](0082-represent-contiguous-vector-copies-directly.md) | Represent contiguous vector copies directly | accepted |
+| [0083](0083-match-generated-kernel-shapes-exactly.md) | Match generated-kernel physical shapes exactly | accepted |

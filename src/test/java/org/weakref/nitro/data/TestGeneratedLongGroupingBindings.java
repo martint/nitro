@@ -109,4 +109,29 @@ class TestGeneratedLongGroupingBindings
                 true,
                 LONG)).isFalse();
     }
+
+    @Test
+    void testMatchesPhysicalShapeExactlyAcrossRebinding()
+    {
+        GeneratedLongGroupingBindings bindings = new GeneratedLongGroupingBindings(1, true);
+        int[] ids = {0, 1};
+        DictionaryVector keys = DictionaryVector.wrap(ids, new I64Vector(new long[] {11, 22}));
+        DictionaryVector values = DictionaryVector.wrap(ids, new I64Vector(new long[] {7, 9}));
+
+        assertThat(bindings.bindKey(keys, null)).isTrue();
+        assertThat(bindings.bindInput(0, values, null, true, LONG)).isTrue();
+        bindings.finish();
+        GeneratedLongGroupingBindings.PhysicalShape shape = bindings.capturePhysicalShape();
+        assertThat(bindings.matchesPhysicalShape(shape)).isTrue();
+
+        assertThat(bindings.bindKey(new I32Vector(new int[] {11, 22}), null)).isTrue();
+        assertThat(bindings.bindInput(0, new RegionVector(new I64Vector(new long[] {0, 7, 9}), 1, 2), null, true, LONG)).isTrue();
+        bindings.finish();
+        assertThat(bindings.matchesPhysicalShape(shape)).isFalse();
+
+        assertThat(bindings.bindKey(keys, null)).isTrue();
+        assertThat(bindings.bindInput(0, values, null, true, LONG)).isTrue();
+        bindings.finish();
+        assertThat(bindings.matchesPhysicalShape(shape)).isTrue();
+    }
 }
