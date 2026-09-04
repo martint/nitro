@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.core.type.UnorderedPlacement;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.F64Vector;
@@ -26,13 +27,25 @@ final class OperatorOrderingSemantics
 
     public static int compare(Vector leftValues, Vector leftNulls, int leftPosition, Vector rightValues, Vector rightNulls, int rightPosition)
     {
+        return compare(leftValues, leftNulls, leftPosition, rightValues, rightNulls, rightPosition, UnorderedPlacement.LAST);
+    }
+
+    public static int compare(
+            Vector leftValues,
+            Vector leftNulls,
+            int leftPosition,
+            Vector rightValues,
+            Vector rightNulls,
+            int rightPosition,
+            UnorderedPlacement placement)
+    {
         boolean leftNull = OperatorVectorSupport.isNull(leftNulls, leftPosition);
         boolean rightNull = OperatorVectorSupport.isNull(rightNulls, rightPosition);
         if (leftNull || rightNull) {
             if (leftNull == rightNull) {
                 return 0;
             }
-            return leftNull ? 1 : -1;
+            return leftNull == (placement == UnorderedPlacement.LAST) ? 1 : -1;
         }
 
         Vector left = OperatorVectorSupport.flatten(leftValues);
@@ -43,9 +56,17 @@ final class OperatorOrderingSemantics
                     OperatorVectorSupport.longValue(rightValues, rightPosition));
         }
         if (left instanceof F64Vector && right instanceof F64Vector) {
-            return Double.compare(
-                    OperatorVectorSupport.doubleValue(leftValues, leftPosition),
-                    OperatorVectorSupport.doubleValue(rightValues, rightPosition));
+            double leftValue = OperatorVectorSupport.doubleValue(leftValues, leftPosition);
+            double rightValue = OperatorVectorSupport.doubleValue(rightValues, rightPosition);
+            if (placement == UnorderedPlacement.FIRST) {
+                if (Double.isNaN(leftValue)) {
+                    return Double.isNaN(rightValue) ? 0 : -1;
+                }
+                if (Double.isNaN(rightValue)) {
+                    return 1;
+                }
+            }
+            return Double.compare(leftValue, rightValue);
         }
         if (left instanceof BinaryVector && right instanceof BinaryVector) {
             return OperatorVectorSupport.binaryCompare(leftValues, leftPosition, rightValues, rightPosition);

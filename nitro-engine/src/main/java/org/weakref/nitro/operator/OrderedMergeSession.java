@@ -14,6 +14,7 @@
 package org.weakref.nitro.operator;
 
 import org.weakref.nitro.core.type.Schema;
+import org.weakref.nitro.core.type.UnorderedPlacement;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
@@ -92,7 +93,8 @@ public final class OrderedMergeSession
             Ordering ordering = requireNonNull(orderings[index], "ordering is null");
             checkIndex(ordering.column(), schema.size());
             comparisonKernels[index] = structuralTypes.comparison(
-                    schema.field(ordering.column()).type(), ordering.nullsFirst());
+                    schema.field(ordering.column()).type(),
+                    ordering.nullsFirst() ? UnorderedPlacement.FIRST : UnorderedPlacement.LAST);
         }
     }
 

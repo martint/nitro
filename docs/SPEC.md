@@ -194,6 +194,11 @@ lookup do not materialize host carriers or reproduce type-specific equality. The
 the type provider remains authoritative for leaf semantics, and the function provider remains authoritative for the
 operation that consumes them.
 
+An ordering request states its unordered-value placement explicitly. At minimum the type capability distinguishes
+unordered-first from unordered-last comparison, and structural composition applies the same convention recursively
+to nested nulls and unordered leaf values. A consumer must bind the convention required by its logical function; it
+must not infer one convention from another or recognize a concrete logical type to repair the difference.
+
 Stateful registry implementations may also request a composed key binder. Each bound vector exposes opaque hashing
 and cross-vector identity over positions, allowing retained indexes such as map construction state to span owned
 vector segments. The binder does not prescribe table layout, growth, payload retention, or duplicate policy.

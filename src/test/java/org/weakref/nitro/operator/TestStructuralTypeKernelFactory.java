@@ -19,10 +19,12 @@ import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.core.type.TypeIdentity;
 import org.weakref.nitro.core.type.TypeOperators;
+import org.weakref.nitro.core.type.UnorderedPlacement;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.ArrayVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.F64Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.MapVector;
 import org.weakref.nitro.data.Mask;
@@ -46,6 +48,21 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class TestStructuralTypeKernelFactory
 {
+    @Test
+    void testPlacesUnorderedValuesAccordingToRequestedConvention()
+    {
+        TypeBinding scalar = Schema.unspecified(1).field(0).type();
+        F64Vector values = new F64Vector(new double[] {Double.NaN, 1.0});
+        StructuralTypeKernelFactory factory = new StructuralTypeKernelFactory();
+
+        assertThat(factory.bindComparison(scalar, UnorderedPlacement.FIRST)
+                .compare(values, null, 0, values, null, 1))
+                .isNegative();
+        assertThat(factory.bindComparison(scalar, UnorderedPlacement.LAST)
+                .compare(values, null, 0, values, null, 1))
+                .isPositive();
+    }
+
     @Test
     void testStructuralIdentityUsesChildIdentityWithoutRequiringHash()
             throws ReflectiveOperationException
@@ -102,8 +119,8 @@ class TestStructuralTypeKernelFactory
         assertThat(kernel.identical(dictionary, null, 0, rows, null, 3)).isTrue();
         assertThat(kernel.hash(dictionary, null, 1)).isEqualTo(kernel.hash(rows, null, 0));
 
-        StructuralComparisonKernel nullsLast = factory.comparison(rowType, false);
-        StructuralComparisonKernel nullsFirst = factory.comparison(rowType, true);
+        StructuralComparisonKernel nullsLast = factory.comparison(rowType, UnorderedPlacement.LAST);
+        StructuralComparisonKernel nullsFirst = factory.comparison(rowType, UnorderedPlacement.FIRST);
         assertThat(nullsLast.compare(rows, null, 0, rows, null, 1)).isZero();
         assertThat(nullsLast.compare(rows, null, 2, rows, null, 0)).isPositive();
         assertThat(nullsFirst.compare(rows, null, 2, rows, null, 0)).isNegative();
@@ -141,8 +158,8 @@ class TestStructuralTypeKernelFactory
         assertThat(kernel.identical(rle, null, 0, arrays, null, 2)).isTrue();
         assertThat(kernel.hash(rle, null, 2)).isEqualTo(kernel.hash(arrays, null, 2));
 
-        StructuralComparisonKernel nullsLast = factory.comparison(arrayType, false);
-        StructuralComparisonKernel nullsFirst = factory.comparison(arrayType, true);
+        StructuralComparisonKernel nullsLast = factory.comparison(arrayType, UnorderedPlacement.LAST);
+        StructuralComparisonKernel nullsFirst = factory.comparison(arrayType, UnorderedPlacement.FIRST);
         assertThat(nullsLast.compare(arrays, null, 0, arrays, null, 1)).isZero();
         assertThat(nullsLast.compare(arrays, null, 2, arrays, null, 0)).isPositive();
         assertThat(nullsFirst.compare(arrays, null, 2, arrays, null, 0)).isNegative();

@@ -19,6 +19,7 @@ import org.weakref.nitro.core.type.BoundTypeKey;
 import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.core.type.TypeKeyBinder;
 import org.weakref.nitro.core.type.TypeOperators;
+import org.weakref.nitro.core.type.UnorderedPlacement;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.ArrayVector;
 import org.weakref.nitro.data.BinaryDispatchSupport;
@@ -109,7 +110,17 @@ public final class StructuralTypeKernelFactory
      */
     public BoundTypeComparison bindComparison(TypeBinding type)
     {
-        return comparison(requireNonNull(type, "type is null"));
+        return bindComparison(type, UnorderedPlacement.LAST);
+    }
+
+    /**
+     * Binds the requested unordered-value placement through scalar or recursively composed values.
+     */
+    public BoundTypeComparison bindComparison(TypeBinding type, UnorderedPlacement placement)
+    {
+        return comparison(
+                requireNonNull(type, "type is null"),
+                requireNonNull(placement, "placement is null"));
     }
 
     /**
@@ -843,14 +854,16 @@ public final class StructuralTypeKernelFactory
 
     StructuralComparisonKernel comparison(TypeBinding type)
     {
-        return comparison(type, false);
+        return comparison(type, UnorderedPlacement.LAST);
     }
 
-    StructuralComparisonKernel comparison(TypeBinding type, boolean nestedNullsFirst)
+    StructuralComparisonKernel comparison(TypeBinding type, UnorderedPlacement placement)
     {
         requireNonNull(type, "type is null");
+        requireNonNull(placement, "placement is null");
+        boolean nestedNullsFirst = placement == UnorderedPlacement.FIRST;
         TypeOperators operators = requireNonNull(type.operators(), "type operators are null");
-        boolean hasVectorComparison = operators.vectorComparison().isPresent();
+        boolean hasVectorComparison = operators.vectorComparison(placement).isPresent();
         boolean hasVectorIdentical = operators.vectorIdentical().isPresent();
         if (hasVectorComparison) {
             if (!hasVectorIdentical) {
@@ -859,17 +872,17 @@ public final class StructuralTypeKernelFactory
             }
             return new DirectStructuralComparisonKernel(
                     type,
-                    operators.vectorComparison().orElseThrow(),
+                    operators.vectorComparison(placement).orElseThrow(),
                     operators.vectorIdentical().orElseThrow());
         }
         boolean hasValueRead = operators.valueRead().isPresent();
-        boolean hasComparison = operators.comparison().isPresent();
+        boolean hasComparison = operators.comparison(placement).isPresent();
         boolean hasIdentical = operators.identical().isPresent();
         if (!hasValueRead && !hasComparison && !hasIdentical) {
             if (type.supportedVectorTypes().contains(StructVector.class)) {
                 return new StructStructuralComparisonKernel(
                         type.nestedValueTypes().stream()
-                                .map(child -> comparison(child, nestedNullsFirst))
+                                .map(child -> comparison(child, placement))
                                 .toArray(StructuralComparisonKernel[]::new),
                         nestedNullsFirst);
             }
@@ -880,9 +893,11 @@ public final class StructuralTypeKernelFactory
                             .formatted(type.identity(), children.length));
                 }
                 return new ArrayStructuralComparisonKernel(
-                        comparison(children[0], nestedNullsFirst), nestedNullsFirst);
+                        comparison(children[0], placement), nestedNullsFirst);
             }
-            return LegacyStructuralComparisonKernel.INSTANCE;
+            return placement == UnorderedPlacement.FIRST
+                    ? LegacyStructuralComparisonKernel.UNORDERED_FIRST
+                    : LegacyStructuralComparisonKernel.UNORDERED_LAST;
         }
         if (!hasValueRead || !hasComparison || !hasIdentical) {
             throw new IllegalArgumentException("Type %s must provide valueRead, comparison, and identical together"
@@ -891,7 +906,7 @@ public final class StructuralTypeKernelFactory
         return new BoundStructuralComparisonKernel(
                 type,
                 operators.valueRead().orElseThrow(),
-                operators.comparison().orElseThrow(),
+                operators.comparison(placement).orElseThrow(),
                 operators.identical().orElseThrow());
     }
 
@@ -1487,7 +1502,15 @@ public final class StructuralTypeKernelFactory
     private enum LegacyStructuralComparisonKernel
             implements StructuralComparisonKernel
     {
-        INSTANCE;
+        UNORDERED_FIRST(UnorderedPlacement.FIRST),
+        UNORDERED_LAST(UnorderedPlacement.LAST);
+
+        private final UnorderedPlacement placement;
+
+        LegacyStructuralComparisonKernel(UnorderedPlacement placement)
+        {
+            this.placement = requireNonNull(placement, "placement is null");
+        }
 
         @Override
         public boolean allowsLegacyPhysicalShortcuts()
@@ -1515,7 +1538,7 @@ public final class StructuralTypeKernelFactory
                 int rightPosition)
         {
             return OperatorOrderingSemantics.compare(
-                    leftValues, leftNulls, leftPosition, rightValues, rightNulls, rightPosition);
+                    leftValues, leftNulls, leftPosition, rightValues, rightNulls, rightPosition, placement);
         }
 
         @Override

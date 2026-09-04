@@ -14,6 +14,7 @@
 package org.weakref.nitro.operator;
 
 import org.weakref.nitro.core.type.Schema;
+import org.weakref.nitro.core.type.UnorderedPlacement;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.DictionaryVector;
@@ -107,7 +108,7 @@ final class TopNState
             comparisonKernels[orderingColumn] =
                     structuralTypes.comparison(
                             sourceSchema.field(orderingColumn).type(),
-                            nullsFirstByColumn[orderingIndex]);
+                            nullsFirstByColumn[orderingIndex] ? UnorderedPlacement.FIRST : UnorderedPlacement.LAST);
         }
         this.slotColumns = new Streams[outputCount][capacity];
         this.comparisonColumns = new Streams[outputCount];

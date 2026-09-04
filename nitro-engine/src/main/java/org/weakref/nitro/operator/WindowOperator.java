@@ -15,6 +15,7 @@ package org.weakref.nitro.operator;
 
 import org.weakref.nitro.core.type.Field;
 import org.weakref.nitro.core.type.Schema;
+import org.weakref.nitro.core.type.UnorderedPlacement;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
@@ -300,7 +301,8 @@ public final class WindowOperator
         for (int index = 0; index < orderingColumns.length; index++) {
             int column = orderingColumns[index];
             kernels[column] = structuralTypes.comparison(
-                    sourceSchema.field(column).type(), nullsFirstByColumn[index]);
+                    sourceSchema.field(column).type(),
+                    nullsFirstByColumn[index] ? UnorderedPlacement.FIRST : UnorderedPlacement.LAST);
         }
         return kernels;
     }

@@ -59,10 +59,10 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | §1–2 Purpose and scope | 0002, 0003, 0005, 0006, 0009, 0024, 0029, 0039, 0044 |
 | §3 Vocabulary | 0003, 0007, 0008, 0012, 0023 |
 | §4 Composition and modules | 0005, 0006, 0048 |
-| §5 Vectors, streams, types | 0006, 0008, 0012, 0021, 0022, 0023, 0054, 0064, 0068 |
+| §5 Vectors, streams, types | 0006, 0008, 0012, 0021, 0022, 0023, 0054, 0064, 0068, 0070 |
 | §6 Masks and conditions | 0008, 0012, 0020, 0034, 0064 |
 | §7 Evaluation IR | 0010, 0011, 0012, 0040, 0067 |
-| §8 Function conventions | 0006, 0011, 0013–0016, 0037, 0038, 0040, 0049–0054, 0062, 0063, 0066–0068 |
+| §8 Function conventions | 0006, 0011, 0013–0016, 0037, 0038, 0040, 0049–0054, 0062, 0063, 0066–0068, 0070 |
 | §9 Operators and islands | 0003, 0010, 0017, 0024, 0044–0047 |
 | §10 Cooperative execution | 0004, 0044, 0045 |
 | §11 Allocation and memory | 0007, 0014, 0017–0019, 0041, 0066 |
@@ -149,3 +149,4 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | [0067](0067-bind-higher-order-functions-as-nested-plans.md) | Bind higher-order functions as provider-owned nested plans | accepted |
 | [0068](0068-recover-low-cardinality-nested-parent-domains.md) | Recover low-cardinality nested parent domains | accepted |
 | [0069](0069-preserve-dictionary-domains-through-structural-construction.md) | Preserve dictionary domains through structural construction | accepted |
+| [0070](0070-make-unordered-placement-explicit.md) | Make unordered-value placement explicit in ordering capabilities | accepted |

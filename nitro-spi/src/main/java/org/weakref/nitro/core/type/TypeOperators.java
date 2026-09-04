@@ -25,7 +25,9 @@ import static java.util.Objects.requireNonNull;
 ///
 /// [#valueRead()] has signature `(Vector, int) -> carrier`, [#identical()] has signature
 /// `(carrier, carrier) -> boolean`, [#hash()] has signature `(carrier) -> long`, and
-/// [#comparison()] has signature `(carrier, carrier) -> int`.
+/// [#comparison()] has signature `(carrier, carrier) -> int` and is the unordered-last
+/// comparison retained for source compatibility. [#comparison(UnorderedPlacement)] selects an
+/// explicit convention.
 /// [#vectorIdentical()], [#vectorHash()], and [#vectorComparison()] operate directly on
 /// `(Vector, position)` pairs and let composite carriers avoid row-local materialization.
 /// The provider-owned reader is responsible for every vector representation advertised by its
@@ -39,9 +41,13 @@ public record TypeOperators(
         Optional<MethodHandle> valueRead,
         Optional<MethodHandle> vectorIdentical,
         Optional<MethodHandle> vectorHash,
-        Optional<MethodHandle> vectorComparison)
+        Optional<MethodHandle> vectorComparison,
+        Optional<MethodHandle> comparisonUnorderedFirst,
+        Optional<MethodHandle> vectorComparisonUnorderedFirst)
 {
     public static final TypeOperators UNSPECIFIED = new TypeOperators(
+            Optional.empty(),
+            Optional.empty(),
             Optional.empty(),
             Optional.empty(),
             Optional.empty(),
@@ -91,6 +97,47 @@ public record TypeOperators(
                 Optional.empty());
     }
 
+    public TypeOperators(
+            Optional<MethodHandle> identical,
+            Optional<MethodHandle> hash,
+            Optional<MethodHandle> comparison,
+            Optional<MethodHandle> flatRead,
+            Optional<MethodHandle> flatWrite,
+            Optional<MethodHandle> valueRead,
+            Optional<MethodHandle> vectorIdentical,
+            Optional<MethodHandle> vectorHash,
+            Optional<MethodHandle> vectorComparison)
+    {
+        this(
+                identical,
+                hash,
+                comparison,
+                flatRead,
+                flatWrite,
+                valueRead,
+                vectorIdentical,
+                vectorHash,
+                vectorComparison,
+                Optional.empty(),
+                Optional.empty());
+    }
+
+    public Optional<MethodHandle> comparison(UnorderedPlacement placement)
+    {
+        return switch (requireNonNull(placement, "placement is null")) {
+            case FIRST -> comparisonUnorderedFirst;
+            case LAST -> comparison;
+        };
+    }
+
+    public Optional<MethodHandle> vectorComparison(UnorderedPlacement placement)
+    {
+        return switch (requireNonNull(placement, "placement is null")) {
+            case FIRST -> vectorComparisonUnorderedFirst;
+            case LAST -> vectorComparison;
+        };
+    }
+
     public TypeOperators
     {
         identical = requireNonNull(identical, "identical is null");
@@ -102,5 +149,7 @@ public record TypeOperators(
         vectorIdentical = requireNonNull(vectorIdentical, "vectorIdentical is null");
         vectorHash = requireNonNull(vectorHash, "vectorHash is null");
         vectorComparison = requireNonNull(vectorComparison, "vectorComparison is null");
+        comparisonUnorderedFirst = requireNonNull(comparisonUnorderedFirst, "comparisonUnorderedFirst is null");
+        vectorComparisonUnorderedFirst = requireNonNull(vectorComparisonUnorderedFirst, "vectorComparisonUnorderedFirst is null");
     }
 }
