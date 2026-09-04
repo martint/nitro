@@ -148,3 +148,4 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | [0066](0066-close-evaluator-local-function-state.md) | Close evaluator-local function state with its evaluator | accepted |
 | [0067](0067-bind-higher-order-functions-as-nested-plans.md) | Bind higher-order functions as provider-owned nested plans | accepted |
 | [0068](0068-recover-low-cardinality-nested-parent-domains.md) | Recover low-cardinality nested parent domains | accepted |
+| [0069](0069-preserve-dictionary-domains-through-structural-construction.md) | Preserve dictionary domains through structural construction | accepted |

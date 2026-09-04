@@ -245,6 +245,12 @@ row-aligned structure whose children share a dictionary mapping is peeled once, 
 and rewrapped with that mapping and its exact frequencies. A second, projection-specific peeling implementation is
 not permitted.
 
+Generic structural construction preserves a proven shared dictionary or run domain. The evaluator constructs the
+provider-owned physical value once per backing-domain position and restores the original logical mapping; it does not
+expand child expressions to logical-row width. Known-empty companion streams do not constrain the construction
+domain. A backing vector may contain unused entries beyond the active domain, and a nested function may consume that
+backing so long as it covers every position in the invocation domain.
+
 Failure behavior describes the selected implementation, not merely the most conservative declaration in a host
 catalog. A registry may refine a host `MAY_FAIL` declaration to `NEVER_FAILS` only for an exact implementation it owns
 and can prove infallible for every value admitted by the bound signature. The proof cannot depend on observed data,

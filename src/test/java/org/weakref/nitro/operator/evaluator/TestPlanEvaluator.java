@@ -216,6 +216,70 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testStructuralConstructionPreservesSharedDictionaryDomain()
+    {
+        Variable constructed = new Variable(0);
+        Reference values = new Reference(constructed, Stream.VALUES);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(
+                        constructed,
+                        new Construct(
+                                testingStructType(),
+                                List.of(
+                                        new Reference(new Input(0), Stream.VALUES),
+                                        new Reference(new Input(1), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(values));
+        int[] ids = {0, 1, 0, 1, 1, 0};
+        PlanEvaluator evaluator = planEvaluator(
+                plan,
+                primitiveRegistry(),
+                inputResolver(Map.of(
+                        new Reference(new Input(0), Stream.VALUES), new DictionaryVector(ids, new I64Vector(new long[] {7, 9})),
+                        new Reference(new Input(0), Stream.ERRORS), new BooleanVector(ids.length),
+                        new Reference(new Input(1), Stream.VALUES), new DictionaryVector(ids, new I64Vector(new long[] {11, 13})))),
+                new Allocator(EngineResources.createDefault()));
+
+        DictionaryVector result = (DictionaryVector) evaluator.evaluate(values, Mask.all(ids.length)).values();
+
+        assertThat(result.ids()).containsExactly(ids);
+        StructVector physical = (StructVector) result.values();
+        assertThat(physical.length()).isEqualTo(2);
+        assertThat(((I64Vector) physical.field(0).values()).values()).containsExactly(7, 9);
+        assertThat(((I64Vector) physical.field(1).values()).values()).containsExactly(11, 13);
+    }
+
+    @Test
+    void testStructuralDictionaryConstructionAllowsUnusedBackingEntries()
+    {
+        Variable constructed = new Variable(0);
+        Reference values = new Reference(constructed, Stream.VALUES);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(
+                        constructed,
+                        new Construct(
+                                testingStructType(),
+                                List.of(new Reference(new Input(0), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(values));
+        int[] ids = {0, 0, 0, 0};
+        PlanEvaluator evaluator = planEvaluator(
+                plan,
+                primitiveRegistry(),
+                inputResolver(Map.of(
+                        new Reference(new Input(0), Stream.VALUES), new DictionaryVector(ids, new I64Vector(new long[] {7, 9, 11})),
+                        new Reference(new Input(0), Stream.ERRORS), new BooleanVector(ids.length))),
+                new Allocator(EngineResources.createDefault()));
+
+        DictionaryVector result = (DictionaryVector) evaluator.evaluate(values, Mask.all(ids.length)).values();
+
+        assertThat(result.ids()).containsExactly(ids);
+        StructVector physical = (StructVector) result.values();
+        assertThat(physical.length()).isEqualTo(3);
+        assertThat(((I64Vector) physical.field(0).values()).values()).containsExactly(7, 9, 11);
+    }
+
+    @Test
     void testStructuralConstructionPreservesRichChildError()
     {
         ErrorValue diagnostic = new ErrorValue("test", 17, "BAD_ARGUMENT", "USER_ERROR", "bad argument");
@@ -5638,7 +5702,7 @@ public class TestPlanEvaluator
             @Override
             public Set<Class<? extends org.weakref.nitro.data.Vector>> supportedVectorTypes()
             {
-                return Set.of(StructVector.class, RleVector.class);
+                return Set.of(StructVector.class, DictionaryVector.class, RleVector.class);
             }
         };
     }

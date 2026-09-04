@@ -583,7 +583,10 @@ public final class PlanEvaluator
 
         Streams result = Streams.empty();
         if (requestedStreams.contains(Stream.VALUES)) {
-            Vector values = tryConstructRle(construct, arguments);
+            Vector values = tryConstructDictionary(construct, arguments, mask);
+            if (values == null) {
+                values = tryConstructRle(construct, arguments);
+            }
             if (values == null) {
                 values = construct.type().vectorConstructor()
                         .orElseThrow(() -> new IllegalArgumentException("Type does not provide structural construction: " + construct.type().identity()))
@@ -618,6 +621,70 @@ public final class PlanEvaluator
             }
         }
         return completeRequestedStreams(requestedStreams, result, mask);
+    }
+
+    /**
+     * Structural construction is position-wise. When every row-varying argument carries one proven dictionary
+     * mapping, construct the physical domain once and preserve that mapping instead of expanding each argument to
+     * logical-row width. The ordinary dictionary-peeling proof also verifies companion-stream compatibility and
+     * translates a conditional logical mask onto the physical domain.
+     */
+    private Vector tryConstructDictionary(Construct construct, List<Streams> arguments, Mask mask)
+    {
+        if (!construct.type().supportedVectorTypes().contains(DictionaryVector.class) || arguments.isEmpty()) {
+            return null;
+        }
+
+        DictionaryPeeling peeling = tryBuildDictionaryPeeling(arguments, mask);
+        if (peeling == null) {
+            return null;
+        }
+        try {
+            List<Streams> constructionInputs = omitEmptyCompanionStreams(peeling.inputs());
+            int domainLength = commonStreamLength(constructionInputs);
+            if (domainLength < peeling.baseMask().size()) {
+                return null;
+            }
+            Vector physicalValues = construct.type().vectorConstructor()
+                    .orElseThrow(() -> new IllegalArgumentException("Type does not provide structural construction: " + construct.type().identity()))
+                    .construct(vectorAllocator, constructionInputs, domainLength);
+            return wrapBorrowedDictionary(peeling.mapping(), peeling.rowCount(), physicalValues);
+        }
+        finally {
+            allocator.release(allocationContext, peeling.baseMask());
+        }
+    }
+
+    private static List<Streams> omitEmptyCompanionStreams(List<Streams> streams)
+    {
+        return streams.stream()
+                .map(bundle -> {
+                    Streams.Builder result = Streams.builder().put(Stream.VALUES, bundle.values());
+                    for (Stream stream : COMPANION_STREAMS) {
+                        Vector vector = bundle.getOrNull(stream);
+                        if (vector != null && !VectorAccess.isAllFalseNulls(vector)) {
+                            result.put(stream, vector);
+                        }
+                    }
+                    return result.build();
+                })
+                .toList();
+    }
+
+    private static int commonStreamLength(List<Streams> streams)
+    {
+        int length = -1;
+        for (Streams bundle : streams) {
+            for (Vector vector : bundle.asMap().values()) {
+                if (length < 0) {
+                    length = vector.length();
+                }
+                else if (vector.length() != length) {
+                    return -1;
+                }
+            }
+        }
+        return length;
     }
 
     /**
