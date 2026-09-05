@@ -1915,6 +1915,59 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testPartitionedTopNRankingRejectsWorseRowsWithConstantBoundaryWork()
+    {
+        int limit = 100;
+        int positionCount = 70_000;
+        long[] orderingValues = java.util.stream.LongStream.range(0, positionCount).toArray();
+        AtomicInteger bulkBorrows = new AtomicInteger();
+        AtomicInteger singlePositionResolutions = new AtomicInteger();
+        Output ordering = new Output(
+                Set.of(Stream.VALUES),
+                _ -> {
+                    bulkBorrows.incrementAndGet();
+                    return new I64Vector(orderingValues);
+                },
+                (stream, vector) -> vector,
+                (stream, vector) -> {},
+                (existing, sourcePosition, outputPosition, size) -> {
+                    singlePositionResolutions.incrementAndGet();
+                    I64Vector output = existing == null ? new I64Vector(size) : (I64Vector) existing.values();
+                    output.values()[outputPosition] = orderingValues[sourcePosition];
+                    return Streams.ofValues(output);
+                });
+
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        try (TopNRankingSession session = new TopNRankingSession(
+                allocator,
+                limit,
+                new int[] {0},
+                new int[] {1},
+                new boolean[] {false},
+                TopNRankingOperator.RankingType.RANK,
+                Schema.unspecified(2),
+                Schema.unspecified(1),
+                EngineResources.from(allocator).operatorResources());
+                Batch input = new Batch(
+                        Mask.all(positionCount),
+                        Output.of(Streams.ofValues(new I64Vector(new long[positionCount]))),
+                        ordering)) {
+            session.addInput(input);
+            session.finishInput();
+
+            List<Row> rows = OperatorAssertions.OperatorAssert.toRows(session);
+            assertThat(rows)
+                    .containsExactlyElementsOf(java.util.stream.LongStream.range(0, limit)
+                            .mapToObj(value -> row(0L, value, value + 1))
+                            .toList());
+        }
+
+        assertThat(bulkBorrows).hasValue(0);
+        assertThat(singlePositionResolutions.get())
+                .isBetween(positionCount, positionCount + (limit * 2));
+    }
+
+    @Test
     void testTopNRankingSessionRetainsTransferredEncodedInputs()
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());

@@ -302,12 +302,42 @@ final class PartitionedTopNRankingState
             boolean compactCandidate,
             boolean normalizedOrdering)
     {
-        for (int index = 0; index < partition.groups.size(); index++) {
-            if (compare(batch, position, orderingKey, partition.groups.get(index), compactCandidate, normalizedOrdering) >= 0) {
-                return index;
+        int high = partition.groups.size();
+        if (high == 0) {
+            return 0;
+        }
+
+        int tailComparison = compare(
+                batch,
+                position,
+                orderingKey,
+                partition.groups.get(high - 1),
+                compactCandidate,
+                normalizedOrdering);
+        if (tailComparison <= 0) {
+            return tailComparison == 0 ? high - 1 : high;
+        }
+
+        // Peer groups are ordered best to worst. Find the first group no better than the candidate; the tail
+        // comparison above makes the overwhelmingly common rejected-row path one provider comparison.
+        int low = 0;
+        high--;
+        while (low < high) {
+            int middle = (low + high) >>> 1;
+            if (compare(
+                    batch,
+                    position,
+                    orderingKey,
+                    partition.groups.get(middle),
+                    compactCandidate,
+                    normalizedOrdering) >= 0) {
+                high = middle;
+            }
+            else {
+                low = middle + 1;
             }
         }
-        return partition.groups.size();
+        return low;
     }
 
     private int compare(
