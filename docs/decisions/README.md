@@ -72,7 +72,7 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | §15 Host boundaries | 0003, 0017, 0019, 0024, 0033, 0044, 0046, 0071 |
 | §16 Adaptivity and generation | 0011, 0012, 0027, 0032, 0036, 0037, 0054–0061, 0068, 0071–0073, 0075 |
 | §17 Correctness and tests | 0026, 0029, 0043, 0047 |
-| §18 Performance evidence | 0026–0028, 0032, 0041, 0042 |
+| §18 Performance evidence | 0026–0028, 0032, 0041, 0042, 0087 |
 | §19 Coverage and productization | 0029–0031, 0033–0035, 0042, 0046, 0047 |
 | §20 Change protocol | 0001, 0002, 0039 |
 
@@ -166,3 +166,4 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | [0084](0084-prove-constant-window-bounds-across-sources.md) | Prove constant window bounds across retained sources | accepted |
 | [0085](0085-preserve-rle-through-row-concatenation.md) | Preserve RLE through row concatenation | accepted |
 | [0086](0086-prove-raw-key-identity-through-type-providers.md) | Prove raw key identity through type providers | accepted |
+| [0087](0087-reuse-one-benchmark-jvm-per-suite.md) | Reuse one benchmark JVM per suite | accepted |

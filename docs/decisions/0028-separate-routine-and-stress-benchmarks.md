@@ -31,3 +31,12 @@ control preflight publishes runtime inventory before a campaign.
 **Apply an outer LIMIT.** Shortens output, often without reducing the operator work under test and may change plans.
 
 **Use only microbenchmarks.** Fast but misses integrated ownership, planning, source, and lifecycle behavior.
+
+## 2026-09-06 enforcement refinement
+
+The Engine Coverage routine band is now the stricter 25–45-second subset of the accepted 15–45-second preference. A
+complete warmed W5/M1 control inventory is executable admission evidence: routine launch and final audit verify every
+query identity, measured duration, threshold, classification, and inventory hash. TPC-H, TPC-DS, and ClickBench remain
+fixed macro regression guards and are inventoried without duration-based rejection or resizing. This fills the tooling
+gap that allowed a fixed-count campaign and unsized Engine Coverage to launch despite the accepted tiering decision;
+it does not change the separation between routine coverage and deliberate stress coverage.
