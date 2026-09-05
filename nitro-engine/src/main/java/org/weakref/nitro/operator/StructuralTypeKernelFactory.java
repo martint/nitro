@@ -236,6 +236,9 @@ public final class StructuralTypeKernelFactory
     StructuralKeyKernel key(TypeBinding type)
     {
         requireNonNull(type, "type is null");
+        if (type.supportsRawKeyIdentity()) {
+            return LegacyStructuralKeyKernel.INSTANCE;
+        }
         TypeOperators operators = requireNonNull(type.operators(), "type operators are null");
         boolean hasVectorHash = operators.vectorHash().isPresent();
         boolean hasVectorIdentical = operators.vectorIdentical().isPresent();

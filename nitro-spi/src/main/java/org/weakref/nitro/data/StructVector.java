@@ -39,13 +39,18 @@ public final class StructVector
     public void setField(String name, Streams streams)
     {
         requireNonNull(streams, "streams is null");
-        for (Map.Entry<Stream, Vector> stream : streams.asMap().entrySet()) {
-            if (stream.getValue().length() < positionCount) {
-                throw new IllegalArgumentException("Struct field %s stream %s has length %s, below parent length %s"
-                        .formatted(name, stream.getKey(), stream.getValue().length(), positionCount));
-            }
-        }
+        validateFieldStream(name, Stream.VALUES, streams.getOrNull(Stream.VALUES));
+        validateFieldStream(name, Stream.NULLS, streams.getOrNull(Stream.NULLS));
+        validateFieldStream(name, Stream.ERRORS, streams.getOrNull(Stream.ERRORS));
         fields.put(requireNonNull(name, "name is null"), streams);
+    }
+
+    private void validateFieldStream(String name, Stream stream, Vector vector)
+    {
+        if (vector != null && vector.length() < positionCount) {
+            throw new IllegalArgumentException("Struct field %s stream %s has length %s, below parent length %s"
+                    .formatted(name, stream, vector.length(), positionCount));
+        }
     }
 
     public Streams field(String name)

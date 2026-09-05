@@ -94,6 +94,76 @@ class TestStructuralTypeKernelFactory
     }
 
     @Test
+    void testRawKeyIdentityProofUsesGenericPhysicalKernel()
+            throws ReflectiveOperationException
+    {
+        AtomicInteger invocations = new AtomicInteger();
+        var vectorIdentical = lookup().findStatic(
+                        TestStructuralTypeKernelFactory.class,
+                        "sameRawValue",
+                        methodType(boolean.class, AtomicInteger.class, Vector.class, int.class, Vector.class, int.class))
+                .bindTo(invocations);
+        var vectorHash = lookup().findStatic(
+                        TestStructuralTypeKernelFactory.class,
+                        "rawValueHash",
+                        methodType(long.class, AtomicInteger.class, Vector.class, int.class))
+                .bindTo(invocations);
+        TypeOperators operators = new TypeOperators(
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.of(vectorIdentical),
+                Optional.of(vectorHash),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty());
+        TypeBinding rawIdentity = new TypeBinding()
+        {
+            @Override
+            public TypeIdentity identity()
+            {
+                return new TypeIdentity("testing:raw-identity");
+            }
+
+            @Override
+            public Class<?> carrierType()
+            {
+                return long.class;
+            }
+
+            @Override
+            public TypeOperators operators()
+            {
+                return operators;
+            }
+
+            @Override
+            public boolean supportsRawKeyIdentity()
+            {
+                return true;
+            }
+
+            @Override
+            public Set<Class<? extends Vector>> supportedVectorTypes()
+            {
+                return Set.of(I64Vector.class);
+            }
+        };
+        I64Vector values = new I64Vector(new long[] {1, 2});
+
+        StructuralKeyKernel kernel = new StructuralTypeKernelFactory().key(rawIdentity);
+
+        assertThat(kernel.allowsLegacyPhysicalShortcuts()).isTrue();
+        assertThat(kernel.identical(values, null, 0, values, null, 0)).isTrue();
+        assertThat(kernel.identical(values, null, 0, values, null, 1)).isFalse();
+        assertThat(kernel.hash(values, null, 0)).isNotEqualTo(kernel.hash(values, null, 1));
+        assertThat(invocations).hasValue(0);
+    }
+
+    @Test
     void testDerivesStructKeySemanticsFromLogicalChildren()
     {
         TypeBinding scalar = Schema.unspecified(1).field(0).type();
@@ -325,5 +395,28 @@ class TestStructuralTypeKernelFactory
         invocations.incrementAndGet();
         return (((I64Vector) left).values()[leftPosition] & 1) ==
                 (((I64Vector) right).values()[rightPosition] & 1);
+    }
+
+    private static long parityHash(AtomicInteger invocations, Vector values, int position)
+    {
+        invocations.incrementAndGet();
+        return ((I64Vector) values).values()[position] & 1;
+    }
+
+    private static boolean sameRawValue(
+            AtomicInteger invocations,
+            Vector left,
+            int leftPosition,
+            Vector right,
+            int rightPosition)
+    {
+        invocations.incrementAndGet();
+        return ((I64Vector) left).values()[leftPosition] == ((I64Vector) right).values()[rightPosition];
+    }
+
+    private static long rawValueHash(AtomicInteger invocations, Vector values, int position)
+    {
+        invocations.incrementAndGet();
+        return Long.hashCode(((I64Vector) values).values()[position]);
     }
 }

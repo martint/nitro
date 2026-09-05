@@ -41,6 +41,9 @@ class TestRegionVector
         assertThat(VectorAccess.longValues(longs).value(0)).isEqualTo(20);
         assertThat(VectorAccess.longValues(longs).value(1)).isEqualTo(30);
         assertThat(VectorAccess.longValues(integers).value(0)).isEqualTo(2);
+        assertThat(VectorAccess.longValue(longs, 0)).isEqualTo(20);
+        assertThat(VectorAccess.longValue(longs, 1)).isEqualTo(30);
+        assertThat(VectorAccess.longValue(integers, 0)).isEqualTo(2);
         assertThat(VectorAccess.doubleValues(doubles).value(1)).isEqualTo(3.5);
         assertThat(VectorAccess.booleanValues(booleans).value(0)).isFalse();
         assertThat(new String(
@@ -48,6 +51,21 @@ class TestRegionVector
                 VectorAccess.binaryRegions(strings).offset(1),
                 VectorAccess.binaryRegions(strings).length(1),
                 StandardCharsets.UTF_8)).isEqualTo("two");
+    }
+
+    @Test
+    void testDirectIntegralReadResolvesEncodedPositions()
+    {
+        I64Vector values = new I64Vector(new long[] {10, 20, 30});
+        DictionaryVector dictionary = new DictionaryVector(new int[] {2, 0, 1}, values);
+        RleVector runs = new RleVector(new int[] {2, 3}, new I32Vector(new int[] {7, 9}));
+
+        assertThat(VectorAccess.longValue(dictionary, 0)).isEqualTo(30);
+        assertThat(VectorAccess.longValue(dictionary, 2)).isEqualTo(20);
+        assertThat(VectorAccess.longValue(runs, 0)).isEqualTo(7);
+        assertThat(VectorAccess.longValue(runs, 1)).isEqualTo(7);
+        assertThat(VectorAccess.longValue(runs, 2)).isEqualTo(9);
+        assertThat(VectorAccess.longValue(runs, 4)).isEqualTo(9);
     }
 
     @Test

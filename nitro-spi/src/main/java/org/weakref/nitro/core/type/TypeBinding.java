@@ -143,6 +143,17 @@ public interface TypeBinding
         return false;
     }
 
+    /**
+     * Whether non-null values in every admitted vector representation have logical key identity exactly when their
+     * physical carrier values are equal. This provider-owned proof permits the engine's generic physical key tables
+     * even when the provider also exposes richer logical hash and identity operations. It must be false for types
+     * whose key semantics normalize, canonicalize, or otherwise differ from their physical vector representation.
+     */
+    default boolean supportsRawKeyIdentity()
+    {
+        return false;
+    }
+
     /// Vector representations this type provider permits at an SPI boundary.
     ///
     /// The set is descriptive metadata for connectors and integration adapters. A provider can

@@ -341,6 +341,24 @@ public final class VectorAccess
     }
 
     /**
+     * Reads one integral carrier without allocating a bound accessor.
+     *
+     * <p>Batch loops should bind {@link #longValues(Vector)} once and reuse it. This form is for provider-owned
+     * comparison and identity entry points whose calling convention supplies the vector on every invocation.
+     */
+    public static long longValue(Vector vector, int position)
+    {
+        return switch (vector) {
+            case I64Vector values -> values.values()[position];
+            case I32Vector values -> values.values()[position];
+            case RegionVector region -> longValue(region.values(), region.offset() + position);
+            case DictionaryVector dictionary -> longValue(dictionary.values(), dictionary.ids()[position]);
+            case RleVector rle -> longValue(rle.values(), rle.runIndexFromHint(position, 0));
+            default -> throw new IllegalArgumentException("Expected integer vector but found " + vector.getClass().getSimpleName());
+        };
+    }
+
+    /**
      * Projects one VALUES field from a structural vector while preserving any outer dictionary or RLE encoding.
      * The returned wrappers borrow the source mappings and child vector and are intended as read-only access views.
      */

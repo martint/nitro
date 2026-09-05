@@ -219,6 +219,13 @@ comparison exactly agrees with logical comparison and whose equality exactly ide
 provider proof, independent of carrier width and raw identity. Consumers must retain structural comparison for absent
 or inapplicable binders and handle null placement separately.
 
+A type provider may separately prove that raw equality of every admitted non-null physical representation is the
+logical key identity. This proof lets generic grouping, join, and distinct tables use their physical key kernels even
+when the binding also publishes richer logical hash or comparison operations for other consumers. The proof belongs
+to the provider and must be absent when normalization, canonicalization, unordered-value semantics, or any other
+logical rule makes raw physical equality insufficient. Consumers retain the provider's exact semantic operations when
+the proof is absent.
+
 Stateful registry implementations may also request a composed key binder. Each bound vector exposes opaque hashing
 and cross-vector identity over positions, allowing retained indexes such as map construction state to span owned
 vector segments. The binder does not prescribe table layout, growth, payload retention, or duplicate policy.
@@ -401,6 +408,11 @@ The steady-state goal is no allocation proportional to row count for streaming s
 Initialization, bounded resizing, state growth, output materialization, and provider-required variable-size results may
 allocate, but repeated batches should reuse their working set. Reuse includes encoded results: an owned RLE proposal may
 replace its wrapper while retaining or replacing its physical value-domain storage under one explicit owner.
+Immutable stream tuples and structural field tuples are also reusable storage metadata: a position-copy path retains
+the existing tuple whenever its backing vectors are unchanged and traverses its fixed streams directly rather than
+constructing maps or iterators. Provider operations invoked once per logical position must either bind physical access
+outside that loop or use a non-allocating single-value access path; an accessor factory is not itself a per-position
+calling convention.
 
 ## 12. Stateful and extensible operators
 

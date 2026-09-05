@@ -165,3 +165,4 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | [0083](0083-match-generated-kernel-shapes-exactly.md) | Match generated-kernel physical shapes exactly | accepted |
 | [0084](0084-prove-constant-window-bounds-across-sources.md) | Prove constant window bounds across retained sources | accepted |
 | [0085](0085-preserve-rle-through-row-concatenation.md) | Preserve RLE through row concatenation | accepted |
+| [0086](0086-prove-raw-key-identity-through-type-providers.md) | Prove raw key identity through type providers | accepted |
