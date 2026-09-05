@@ -1718,6 +1718,12 @@ public class GroupedAggregationOperator
                 intKey,
                 keyIds,
                 fusedIntermediateMerge);
+        if (inlineGroupingState.usesLongDirectGrouping() && !directGrouping) {
+            // A prior mapped batch may have migrated the canonical grouping state to direct indexing. Flat batches
+            // deliberately retain the staged path, whose direct-table loop handles that representation. Never run
+            // the generated hash-table shape against the direct table merely because fusion was committed earlier.
+            return false;
+        }
         long runSample = fusedLongRunCache ? fusedBindings.sampleKeyRuns(mask) : 0;
         int runComparisons = (int) (runSample >>> 32);
         int runHits = (int) runSample;

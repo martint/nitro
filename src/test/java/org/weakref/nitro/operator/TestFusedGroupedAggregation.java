@@ -316,6 +316,54 @@ class TestFusedGroupedAggregation
     }
 
     @Test
+    void fusedMappedDirectGroupingFallsBackForFlatKeys()
+    {
+        Map<Long, long[]> reference = new HashMap<>();
+        List<TableOperator.Page> pages = new ArrayList<>();
+        int batchSize = 4_096;
+        for (int start = 0; start < 12_288; start += batchSize) {
+            long[] keys = new long[batchSize];
+            long[] values = new long[batchSize];
+            int[] ids = new int[batchSize];
+            for (int index = 0; index < batchSize; index++) {
+                int id = (index * 37 + 11) % batchSize;
+                ids[index] = id;
+                long key = start + id;
+                long value = key * 7 - 3;
+                keys[id] = key;
+                values[id] = value;
+                long[] state = reference.computeIfAbsent(key, ignored -> new long[2]);
+                state[0] += value;
+                state[1]++;
+            }
+            pages.add(TableOperator.Page.values(
+                    batchSize,
+                    new Vector[] {
+                            DictionaryVector.ofTrustedIds(ids, new I64Vector(keys)),
+                            DictionaryVector.ofTrustedIds(ids, new I64Vector(values))},
+                    Mask.all(batchSize)));
+        }
+
+        long[] flatKeys = new long[batchSize];
+        long[] flatValues = new long[batchSize];
+        for (int index = 0; index < batchSize; index++) {
+            long key = 12_288L + index;
+            long value = key * 7 - 3;
+            flatKeys[index] = key;
+            flatValues[index] = value;
+            long[] state = reference.computeIfAbsent(key, ignored -> new long[2]);
+            state[0] += value;
+            state[1]++;
+        }
+        pages.add(TableOperator.Page.values(
+                batchSize,
+                new Vector[] {new I64Vector(flatKeys), new I64Vector(flatValues)},
+                Mask.all(batchSize)));
+
+        assertGroupedSumAndCount(pages, List.of(new Sum(1), new CountAll()), reference, true);
+    }
+
+    @Test
     void fusedHandlesNullValueBatches()
     {
         // Alternate null-free and nullable batches. Both stay fused; SUM skips nulls while COUNT(*)
