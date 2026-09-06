@@ -631,20 +631,26 @@ Tests assert capabilities and observable invariants. They must not infer archite
 TPC-H, TPC-DS, ClickBench, and Engine Coverage are macro regression guards. Subject and control use the same SQL, plan
 topology, input files, worker topology, concurrency, heap policy, and query execution order.
 
-Each engine uses one benchmark JVM and one distributed runner per suite. Queries execute serially in manifest order
-with independent adaptive warmup, measurement, result, plan, and diagnostic evidence. A durable per-query checkpoint
-is published only after those artifacts pass validation; a failed suite may resume at the first uncheckpointed query
-in a replacement suite JVM. Shared JIT, bounded allocator high-water state, immutable metadata, and file-cache state
-are part of the warmed suite condition. Query-owned reservations and resources must return to baseline at query close.
+Each engine uses one benchmark JVM and one distributed runner per suite. Ordered manifest points execute serially. A
+point is one query or an ordered serial bundle of existing queries and is the adaptive warmup, measurement,
+convergence, timing, and checkpoint identity. Each bundle iteration executes every member serially; additive metrics
+are summed and peak memory is the maximum member peak. Each member retains its original SQL and independent result
+validation, EXPLAIN, capability, and diagnostic evidence. A member failure fails the point and a partial bundle is
+never checkpointed. A durable point checkpoint records its ordered members and is published only after all artifacts
+pass validation; a failed suite may resume at the first uncheckpointed point in a replacement suite JVM. Shared JIT,
+bounded allocator high-water state, immutable metadata, and file-cache state are part of the warmed suite condition.
+Query-owned reservations and resources must return to baseline at query close.
 
 Primary metrics are latency, CPU core-seconds, allocated bytes, and peak memory. Reports include absolutes, a fixed
 subject/control ratio, ranges, CPU-seconds per second of latency, geometric-mean suite summaries, and per-query spread.
 
-Routine Engine Coverage points take 25–45 seconds per execution on the slower engine. A warmed one-measurement control
-preflight publishes a complete duration inventory, and routine launch and final audit fail unless every ordered query
-identity is present, every Engine Coverage point is in range, and the inventory hash matches. TPC-H, TPC-DS, and
-ClickBench remain fixed macro regression guards whose durations are recorded but do not gate admission. Larger scale,
-capacity, skew, and memory-pressure cases form a separate stress tier.
+Routine Engine Coverage points take 25–45 seconds per execution on the slower engine. Its point manifest is the single
+source of truth for harness execution and campaign audit; changing point membership, member order, or data scale
+invalidates prior inventories. A warmed one-measurement control preflight publishes a complete duration inventory,
+and routine launch and final audit fail unless every ordered point identity and member list is present, every Engine
+Coverage point is in range, and the inventory hash matches. TPC-H, TPC-DS, and ClickBench remain fixed one-query macro
+regression guards whose durations are recorded but do not gate admission. Larger scale, capacity, skew, and
+memory-pressure cases form a separate stress tier.
 
 Parameterized sweeps complement macro suites by varying adaptive inputs with per-operator attribution. Plans, input
 work, spill, and blocked time are validity checks. Performance never overrides semantics or architecture.

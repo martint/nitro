@@ -6,6 +6,10 @@
 - **Amends:** [ADR-0028](0028-separate-routine-and-stress-benchmarks.md)
 - **Evidence:** `2026-09-06-adaptive-duration-protocol-correction.md`; partial Cork W5/M1 sizing preflight
 
+> **Amended 2026-09-07 by [ADR-0088](0088-measure-serial-query-bundles-as-benchmark-points.md):** serial query
+> bundles may be one adaptive and checkpointed benchmark point while retaining independent member validation, plans,
+> capabilities, and diagnostics.
+
 ## Context
 
 The remote campaign wrapper launched a fresh parent and forked benchmark JVM for every query even though the benchmark
