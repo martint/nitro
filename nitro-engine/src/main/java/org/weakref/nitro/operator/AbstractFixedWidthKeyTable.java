@@ -19,17 +19,17 @@ import org.weakref.nitro.data.VectorAccess;
 import java.util.Arrays;
 
 /**
- * Cold-path machinery shared by every generated multi-long grouping table. Ordinary and distinct tables hold an
- * interleaved {@code entries} key array. Grouping tables that retain keys for output use that reverse map as the
- * single canonical key copy; their hash slots contain only compact group ids and compare through the reverse map.
+ * Cold-path machinery shared by every generated fixed-width key table. Primitive sources and projections are
+ * described by one physical layout; generated kernels normalize each canonical lane into the table's 64-bit storage
+ * representation. Ordinary and distinct tables hold interleaved {@code entries}; grouping tables that retain keys
+ * use the reverse map as the single canonical copy.
  *
  * <p>The arity-specialized hot work — {@link #assignBatch}, which reads the key columns into locals,
  * probes, and assigns groups for a whole batch, plus {@link #hashEntry} used by rehash — is generated
- * per arity by {@link MultiLongGroupingTableGenerator} so the emitted bytecode is structurally identical
- * to the former hand-written 2/3/4-key tables (keys in registers, no per-row dispatch or scratch array).
+ * per exact layout by {@link FixedWidthKeyTableGenerator} (keys in registers, no per-row dispatch or scratch array).
  * Fields are package-private so the generated same-package subclass can access them directly.
  */
-abstract class AbstractMultiLongGroupingTable
+abstract class AbstractFixedWidthKeyTable
         implements LongGroupingTable
 {
     static final float LOAD_FACTOR = 0.75f;
@@ -77,7 +77,7 @@ abstract class AbstractMultiLongGroupingTable
         return (byte) ((hash >>> 24) | 0x80);
     }
 
-    AbstractMultiLongGroupingTable(
+    AbstractFixedWidthKeyTable(
             PrimitiveArrayPool arrayPool,
             int arity,
             int expectedSize,
@@ -192,6 +192,19 @@ abstract class AbstractMultiLongGroupingTable
             int[] nullBaseOffsets,
             int[] positions,
             int positionCount,
+            long[] result);
+
+    abstract byte extractPhysicalKey(
+            Object[] keyArrays,
+            int[][] keyMappings,
+            int[] keyMappingOffsets,
+            int[] keyBaseOffsets,
+            boolean[][] nullArrays,
+            int[][] nullMappings,
+            int[] nullMappingOffsets,
+            int[] nullBaseOffsets,
+            int[] logicalPositions,
+            int[] laneLogicalKeys,
             long[] result);
 
     abstract int assignPhysicalDistinctBatch(
@@ -523,7 +536,7 @@ abstract class AbstractMultiLongGroupingTable
     {
         if (debugTableShapes && retainsGroupKeys) {
             System.err.printf(
-                    "[multi-long-table] arity=%d groups=%d capacity=%d stride=%d storesGroupIds=%s identitySlots=%s%n",
+                    "[fixed-width-key-table] lanes=%d groups=%d capacity=%d stride=%d storesGroupIds=%s identitySlots=%s%n",
                     arity,
                     size,
                     control.length,

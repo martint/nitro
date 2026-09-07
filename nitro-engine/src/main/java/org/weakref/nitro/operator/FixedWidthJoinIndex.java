@@ -32,7 +32,7 @@ final class FixedWidthJoinIndex
 
     private final ResolvedFixedWidthKeyLayout layout;
     private final PrimitiveArrayPool arrayPool;
-    private final AbstractMultiLongGroupingTable table;
+    private final AbstractFixedWidthKeyTable table;
     private final FixedWidthKeyBatchBindings bindings;
     private final boolean ownsStorage;
     private long[] firstReferencesByGroup;
@@ -40,6 +40,7 @@ final class FixedWidthJoinIndex
     private long[] groupScratch;
     private final long[] singleKey;
     private final int[] singleLogicalPositions;
+    private final int[] laneLogicalKeys;
     private int rowCount;
     private boolean uniqueKeys = true;
 
@@ -52,8 +53,8 @@ final class FixedWidthJoinIndex
     {
         this.layout = layout;
         this.arrayPool = arrayPool;
-        table = codeGeneration.multiLongGrouping().create(
-                Arrays.stream(layout.lanes()).map(ResolvedFixedWidthKeyLayout.Lane::carrier).toList(),
+        table = codeGeneration.fixedWidthKeyTables().create(
+                FixedWidthKeyTableLayout.from(layout),
                 expectedSize,
                 arrayPool,
                 policy);
@@ -63,6 +64,7 @@ final class FixedWidthJoinIndex
         duplicateReferencesByGroup = new LongArrayList[firstReferencesByGroup.length];
         singleKey = new long[layout.lanes().length];
         singleLogicalPositions = new int[layout.logicalKeyCount()];
+        laneLogicalKeys = layout.laneLogicalKeys();
         ownsStorage = true;
     }
 
@@ -76,6 +78,7 @@ final class FixedWidthJoinIndex
         duplicateReferencesByGroup = prepared.duplicateReferencesByGroup;
         singleKey = new long[layout.lanes().length];
         singleLogicalPositions = new int[layout.logicalKeyCount()];
+        laneLogicalKeys = layout.laneLogicalKeys();
         rowCount = prepared.rowCount;
         uniqueKeys = prepared.uniqueKeys;
         ownsStorage = false;
@@ -149,7 +152,7 @@ final class FixedWidthJoinIndex
             assignBuildBatch(values, nulls, sourcePositions, length, required);
             for (int index = 0; index < length; index++) {
                 long group = groupScratch[sourcePositions[index]];
-                if (group != AbstractMultiLongGroupingTable.EMPTY_GROUP_ID) {
+                if (group != AbstractFixedWidthKeyTable.EMPTY_GROUP_ID) {
                     appendReference(
                             toIntExact(group),
                             JoinRowReference.pack(batchIndex, startPosition + index));
@@ -175,7 +178,7 @@ final class FixedWidthJoinIndex
         for (int logicalPosition = 0; logicalPosition < mask.count(); logicalPosition++) {
             int sourcePosition = mask.all() ? logicalPosition : positions[logicalPosition];
             long group = groupScratch[sourcePosition];
-            if (group != AbstractMultiLongGroupingTable.EMPTY_GROUP_ID) {
+            if (group != AbstractFixedWidthKeyTable.EMPTY_GROUP_ID) {
                 appendReference(toIntExact(group), JoinRowReference.pack(batchIndex, logicalPosition));
             }
         }
@@ -220,7 +223,7 @@ final class FixedWidthJoinIndex
         findGroups(values, nulls, positions, positionCount);
         for (int index = 0; index < positionCount; index++) {
             long group = groupScratch[positions[index]];
-            if (group == AbstractMultiLongGroupingTable.EMPTY_GROUP_ID) {
+            if (group == AbstractFixedWidthKeyTable.EMPTY_GROUP_ID) {
                 matches[index] = LongLists.emptyList();
                 continue;
             }
@@ -253,7 +256,7 @@ final class FixedWidthJoinIndex
         findGroups(values, nulls, positions, positionCount);
         for (int index = 0; index < positionCount; index++) {
             long group = groupScratch[positions[index]];
-            refs[index] = group == AbstractMultiLongGroupingTable.EMPTY_GROUP_ID
+            refs[index] = group == AbstractFixedWidthKeyTable.EMPTY_GROUP_ID
                     ? NO_MATCH_ROW_REFERENCE
                     : firstReferencesByGroup[toIntExact(group)];
         }
@@ -308,7 +311,7 @@ final class FixedWidthJoinIndex
 
     private LongList matchesForGroup(long group)
     {
-        if (group == AbstractMultiLongGroupingTable.EMPTY_GROUP_ID) {
+        if (group == AbstractFixedWidthKeyTable.EMPTY_GROUP_ID) {
             return LongLists.emptyList();
         }
         int groupId = toIntExact(group);
@@ -339,39 +342,18 @@ final class FixedWidthJoinIndex
 
     private byte extractKey(int[] logicalPositions, long[] result)
     {
-        byte nullMask = 0;
-        Object[] keyArrays = bindings.keyArrays();
-        boolean[][] nullArrays = bindings.nullArrays();
-        for (int lane = 0; lane < result.length; lane++) {
-            int logicalPosition = logicalPositions[layout.lanes()[lane].logicalKey()];
-            if (nullArrays[lane] != null && nullArrays[lane][physicalPosition(
-                    bindings.nullMappings()[lane],
-                    bindings.nullMappingOffsets()[lane],
-                    bindings.nullBaseOffsets()[lane],
-                    logicalPosition)]) {
-                nullMask |= (byte) (1 << lane);
-                result[lane] = 0;
-                continue;
-            }
-            int physical = physicalPosition(
-                    bindings.keyMappings()[lane],
-                    bindings.keyMappingOffsets()[lane],
-                    bindings.keyBaseOffsets()[lane],
-                    logicalPosition);
-            result[lane] = switch (layout.lanes()[lane].carrier()) {
-                case I32 -> ((int[]) keyArrays[lane])[physical];
-                case I64 -> ((long[]) keyArrays[lane])[physical];
-                case F64 -> Double.doubleToRawLongBits(((double[]) keyArrays[lane])[physical]);
-                case BOOLEAN -> ((boolean[]) keyArrays[lane])[physical] ? 1 : 0;
-            };
-        }
-        return nullMask;
-    }
-
-    private static int physicalPosition(int[] mapping, int mappingOffset, int baseOffset, int logicalPosition)
-    {
-        int position = mapping == null ? logicalPosition : mapping[logicalPosition + mappingOffset];
-        return position + baseOffset;
+        return table.extractPhysicalKey(
+                bindings.keyArrays(),
+                bindings.keyMappings(),
+                bindings.keyMappingOffsets(),
+                bindings.keyBaseOffsets(),
+                bindings.nullArrays(),
+                bindings.nullMappings(),
+                bindings.nullMappingOffsets(),
+                bindings.nullBaseOffsets(),
+                logicalPositions,
+                laneLogicalKeys,
+                result);
     }
 
     @Override

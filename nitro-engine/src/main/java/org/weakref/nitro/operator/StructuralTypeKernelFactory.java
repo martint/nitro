@@ -257,6 +257,9 @@ public final class StructuralTypeKernelFactory
         boolean hasHash = operators.hash().isPresent();
         boolean hasIdentical = operators.identical().isPresent();
         if (!hasValueRead && !hasHash && !hasIdentical) {
+            if (type.fixedWidthKeyLayout().isPresent()) {
+                return new FixedWidthLayoutOnlyKeyKernel(type.identity().toString());
+            }
             if (type.supportedVectorTypes().contains(StructVector.class)) {
                 return new StructStructuralKeyKernel(type.nestedValueTypes().stream()
                         .map(this::key)
@@ -1499,6 +1502,44 @@ public final class StructuralTypeKernelFactory
         {
             return OperatorEqualitySemantics.equal(
                     leftValues, leftNulls, leftPosition, rightValues, rightNulls, rightPosition);
+        }
+    }
+
+    /**
+     * Admission marker for a provider whose persistent identity is completely described by a generated fixed-width
+     * layout but which does not expose separate semantic row operations. Persistent consumers resolve the layout
+     * before invoking this kernel; other consumers fail rather than interpreting raw physical bits as identity.
+     */
+    private record FixedWidthLayoutOnlyKeyKernel(String type)
+            implements StructuralKeyKernel
+    {
+        private FixedWidthLayoutOnlyKeyKernel
+        {
+            requireNonNull(type, "type is null");
+        }
+
+        @Override
+        public long hash(Vector values, Vector nulls, int position)
+        {
+            throw unsupportedSemanticOperation();
+        }
+
+        @Override
+        public boolean identical(
+                Vector leftValues,
+                Vector leftNulls,
+                int leftPosition,
+                Vector rightValues,
+                Vector rightNulls,
+                int rightPosition)
+        {
+            throw unsupportedSemanticOperation();
+        }
+
+        private UnsupportedOperationException unsupportedSemanticOperation()
+        {
+            return new UnsupportedOperationException(
+                    "Type %s declares generated fixed-width key identity but no semantic row key operations".formatted(type));
         }
     }
 

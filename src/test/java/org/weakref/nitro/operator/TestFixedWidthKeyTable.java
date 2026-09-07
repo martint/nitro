@@ -14,22 +14,27 @@
 package org.weakref.nitro.operator;
 
 import org.junit.jupiter.api.Test;
+import org.weakref.nitro.core.type.FixedWidthKeyLayout;
 import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.execution.EngineResources;
 
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Random;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Validates the {@link MultiLongGroupingTableGenerator}-generated tables directly (independent of the
+ * Validates the {@link FixedWidthKeyTableGenerator}-generated tables directly (independent of the
  * grouping operator): group ids are first-seen order, equal tuples collide, the reverse map matches, and
  * nulls + rehash work — for several arities.
  */
-class TestMultiLongGroupingTable
+class TestFixedWidthKeyTable
 {
     private final EngineResources engineResources = EngineResources.createDefault();
     private final PrimitiveArrayPool arrayPool = engineResources.primitiveArrays();
@@ -39,10 +44,67 @@ class TestMultiLongGroupingTable
     @Test
     void testAllAritiesAgainstReferenceModel()
     {
-        for (int arity = 2; arity <= AbstractMultiLongGroupingTable.MAX_ARITY; arity++) {
+        for (int arity = 2; arity <= AbstractFixedWidthKeyTable.MAX_ARITY; arity++) {
             assertMatchesReference(arity, 5_000, 37, 7L, 0.0);
             assertMatchesReference(arity, 5_000, 37, 11L, 0.2); // with nulls
         }
+    }
+
+    @Test
+    void testOneDescriptorGeneratesMixedSourceAndProjectedLayout()
+            throws ReflectiveOperationException
+    {
+        FixedWidthKeyTableLayout layout = new FixedWidthKeyTableLayout(
+                List.of(
+                        FixedWidthKeyLayout.Carrier.I32,
+                        FixedWidthKeyLayout.Carrier.I64,
+                        FixedWidthKeyLayout.Carrier.F64,
+                        FixedWidthKeyLayout.Carrier.BOOLEAN),
+                List.of(2, 1, 1),
+                List.of(
+                        Optional.of(MethodHandles.lookup().findStatic(
+                                TestFixedWidthKeyTable.class,
+                                "combine",
+                                MethodType.methodType(long.class, int.class, long.class))),
+                        Optional.empty(),
+                        Optional.empty()));
+        AbstractFixedWidthKeyTable table = codeGeneration.fixedWidthKeyTables().create(
+                layout,
+                16,
+                arrayPool,
+                AdaptiveLongGroupingPolicy.defaults());
+
+        Object[] sourceArrays = {
+                new int[] {1, 1, 2, 2, 1},
+                new long[] {10, 10, 20, 20, 10},
+                new double[] {0.0, -0.0, 0.0, 0.0, 0.0},
+                new boolean[] {true, true, true, false, true},
+        };
+        int sourceCount = sourceArrays.length;
+        int laneCount = layout.laneCount();
+        long[] result = new long[5];
+        long groups = table.assignPhysicalBatch(
+                sourceArrays,
+                new int[sourceCount][],
+                new int[sourceCount],
+                new int[sourceCount],
+                new boolean[laneCount][],
+                new int[laneCount][],
+                new int[laneCount],
+                new int[laneCount],
+                null,
+                result.length,
+                result,
+                0);
+
+        assertThat(groups).isEqualTo(4);
+        assertThat(result).containsExactly(0, 1, 2, 3, 0);
+        table.releaseBuffers();
+    }
+
+    private static long combine(int high, long low)
+    {
+        return ((long) high << 32) ^ low;
     }
 
     @Test
@@ -62,8 +124,8 @@ class TestMultiLongGroupingTable
             positions[position] = position;
         }
 
-        AbstractMultiLongGroupingTable table = codeGeneration.multiLongGrouping().createDistinct(
-                arity,
+        AbstractFixedWidthKeyTable table = codeGeneration.fixedWidthKeyTables().createDistinct(
+                FixedWidthKeyTableLayout.rawI64(arity),
                 16,
                 arrayPool,
                 AdaptiveLongGroupingPolicy.defaults());
@@ -97,14 +159,14 @@ class TestMultiLongGroupingTable
         }
         int[] positions = {0, 1, 2, 3, 4};
 
-        AbstractMultiLongGroupingTable table = codeGeneration.multiLongGrouping().createDiscardingResults(
-                2,
+        AbstractFixedWidthKeyTable table = codeGeneration.fixedWidthKeyTables().createDiscardingResults(
+                FixedWidthKeyTableLayout.rawI64(2),
                 16,
                 0b11,
                 arrayPool,
                 AdaptiveLongGroupingPolicy.defaults());
-        AbstractMultiLongGroupingTable ordinaryTable = codeGeneration.multiLongGrouping().create(
-                2,
+        AbstractFixedWidthKeyTable ordinaryTable = codeGeneration.fixedWidthKeyTables().create(
+                FixedWidthKeyTableLayout.rawI64(2),
                 16,
                 arrayPool,
                 AdaptiveLongGroupingPolicy.defaults());
@@ -150,8 +212,8 @@ class TestMultiLongGroupingTable
             positions[position] = position;
         }
 
-        AbstractMultiLongGroupingTable table = codeGeneration.multiLongGrouping().createDiscardingResults(
-                3,
+        AbstractFixedWidthKeyTable table = codeGeneration.fixedWidthKeyTables().createDiscardingResults(
+                FixedWidthKeyTableLayout.rawI64(3),
                 16,
                 0b101,
                 arrayPool,
@@ -184,8 +246,8 @@ class TestMultiLongGroupingTable
         VectorAccess.BooleanValues[] nullAccessors = {_ -> false, _ -> false};
         int[] positions = {0, 1, 2, 3};
 
-        AbstractMultiLongGroupingTable table = codeGeneration.multiLongGrouping().createDiscardingResults(
-                2,
+        AbstractFixedWidthKeyTable table = codeGeneration.fixedWidthKeyTables().createDiscardingResults(
+                FixedWidthKeyTableLayout.rawI64(2),
                 16,
                 0b11,
                 arrayPool,
@@ -253,7 +315,7 @@ class TestMultiLongGroupingTable
     @Test
     void testAdaptiveCompactTableAllAritiesAndExactWidePromotion()
     {
-        for (int arity = 2; arity <= AbstractMultiLongGroupingTable.MAX_ARITY; arity++) {
+        for (int arity = 2; arity <= AbstractFixedWidthKeyTable.MAX_ARITY; arity++) {
             int rows = 2_000;
             long[][] keys = new long[arity][rows];
             boolean[][] nulls = new boolean[arity][rows];
@@ -276,8 +338,8 @@ class TestMultiLongGroupingTable
             long[] compactResult = new long[rows];
             long[] referenceResult = new long[rows];
             LongGroupingTable compact = AdaptiveLongGroupingTable.create(arity, 16, arrayPool, codeGeneration, adaptiveLongGroupingPolicy);
-            LongGroupingTable reference = codeGeneration.multiLongGrouping().create(
-                    arity,
+            LongGroupingTable reference = codeGeneration.fixedWidthKeyTables().create(
+                    FixedWidthKeyTableLayout.rawI64(arity),
                     16,
                     arrayPool,
                     AdaptiveLongGroupingPolicy.defaults());
@@ -326,7 +388,7 @@ class TestMultiLongGroupingTable
     @Test
     void testAdaptiveNullFreeGeneratedKernelAndWidePromotion()
     {
-        for (int arity = 2; arity <= AbstractMultiLongGroupingTable.MAX_ARITY; arity++) {
+        for (int arity = 2; arity <= AbstractFixedWidthKeyTable.MAX_ARITY; arity++) {
             int rows = 2_000;
             long[][] keys = new long[arity][rows];
             VectorAccess.LongValues[] keyAccessors = new VectorAccess.LongValues[arity];
@@ -348,8 +410,8 @@ class TestMultiLongGroupingTable
                 nonNullAccessors[column] = ignored -> false;
             }
             LongGroupingTable compact = AdaptiveLongGroupingTable.create(arity, 16, arrayPool, codeGeneration, adaptiveLongGroupingPolicy);
-            LongGroupingTable reference = codeGeneration.multiLongGrouping().create(
-                    arity,
+            LongGroupingTable reference = codeGeneration.fixedWidthKeyTables().create(
+                    FixedWidthKeyTableLayout.rawI64(arity),
                     16,
                     arrayPool,
                     AdaptiveLongGroupingPolicy.defaults());
@@ -476,8 +538,8 @@ class TestMultiLongGroupingTable
         long[] compactResult = new long[rows];
         long[] referenceResult = new long[rows];
         LongGroupingTable compact = AdaptiveLongGroupingTable.create(arity, 16, arrayPool, codeGeneration, adaptiveLongGroupingPolicy);
-        LongGroupingTable reference = codeGeneration.multiLongGrouping().create(
-                arity,
+        LongGroupingTable reference = codeGeneration.fixedWidthKeyTables().create(
+                FixedWidthKeyTableLayout.rawI64(arity),
                 16,
                 arrayPool,
                 AdaptiveLongGroupingPolicy.defaults());
@@ -524,8 +586,8 @@ class TestMultiLongGroupingTable
         }
         long[] result = new long[rows];
 
-        AbstractMultiLongGroupingTable table = codeGeneration.multiLongGrouping().create(
-                arity,
+        AbstractFixedWidthKeyTable table = codeGeneration.fixedWidthKeyTables().create(
+                FixedWidthKeyTableLayout.rawI64(arity),
                 16,
                 arrayPool,
                 AdaptiveLongGroupingPolicy.defaults());

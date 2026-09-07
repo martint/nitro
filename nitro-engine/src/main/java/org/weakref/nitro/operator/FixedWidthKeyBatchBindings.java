@@ -49,16 +49,17 @@ final class FixedWidthKeyBatchBindings
     {
         this.layout = layout;
         this.arrayPool = arrayPool;
+        int sources = layout.sourceCount();
         int lanes = layout.lanes().length;
-        keyArrays = new Object[lanes];
-        keyMappings = new int[lanes][];
-        keyMappingOffsets = new int[lanes];
-        keyBaseOffsets = new int[lanes];
+        keyArrays = new Object[sources];
+        keyMappings = new int[sources][];
+        keyMappingOffsets = new int[sources];
+        keyBaseOffsets = new int[sources];
         nullArrays = new boolean[lanes][];
         nullMappings = new int[lanes][];
         nullMappingOffsets = new int[lanes];
         nullBaseOffsets = new int[lanes];
-        ownedKeyMappings = new int[lanes][];
+        ownedKeyMappings = new int[sources][];
         ownedNullMappings = new int[lanes][];
     }
 
@@ -73,14 +74,16 @@ final class FixedWidthKeyBatchBindings
         Arrays.fill(nullMappingOffsets, 0);
         Arrays.fill(nullBaseOffsets, 0);
         try {
-            for (int lane = 0; lane < keyArrays.length; lane++) {
-                BoundLane key = bindLane(layout.laneVector(values, lane), layout.lanes()[lane].carrier());
-                keyArrays[lane] = key.values();
-                keyMappings[lane] = key.mapping();
-                keyMappingOffsets[lane] = key.mappingOffset();
-                keyBaseOffsets[lane] = key.baseOffset();
-                ownedKeyMappings[lane] = key.ownedMapping();
-
+            var sourceCarriers = layout.sourceCarriers();
+            for (int source = 0; source < keyArrays.length; source++) {
+                BoundLane key = bindLane(layout.sourceVector(values, source), sourceCarriers.get(source));
+                keyArrays[source] = key.values();
+                keyMappings[source] = key.mapping();
+                keyMappingOffsets[source] = key.mappingOffset();
+                keyBaseOffsets[source] = key.baseOffset();
+                ownedKeyMappings[source] = key.ownedMapping();
+            }
+            for (int lane = 0; lane < nullArrays.length; lane++) {
                 Vector nullVector = nulls.length == 0 ? null : nulls[layout.lanes()[lane].logicalKey()];
                 if (!VectorAccess.isAllFalseNulls(nullVector)) {
                     BoundLane boundNulls = bindLane(nullVector, FixedWidthKeyLayout.Carrier.BOOLEAN);
@@ -140,9 +143,11 @@ final class FixedWidthKeyBatchBindings
 
     void release()
     {
-        for (int lane = 0; lane < ownedKeyMappings.length; lane++) {
-            arrayPool.release(ownedKeyMappings[lane]);
-            ownedKeyMappings[lane] = null;
+        for (int source = 0; source < ownedKeyMappings.length; source++) {
+            arrayPool.release(ownedKeyMappings[source]);
+            ownedKeyMappings[source] = null;
+        }
+        for (int lane = 0; lane < ownedNullMappings.length; lane++) {
             arrayPool.release(ownedNullMappings[lane]);
             ownedNullMappings[lane] = null;
         }

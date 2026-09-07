@@ -26,6 +26,7 @@ import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.execution.EngineResources;
 
 import java.util.List;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -136,8 +137,16 @@ class TestFixedWidthJoinIndex
     {
         return new ResolvedFixedWidthKeyLayout(
                 new ResolvedFixedWidthKeyLayout.Lane[] {
-                        new ResolvedFixedWidthKeyLayout.Lane(0, List.of("high"), FixedWidthKeyLayout.Carrier.I64),
-                        new ResolvedFixedWidthKeyLayout.Lane(0, List.of("low"), FixedWidthKeyLayout.Carrier.I64)},
+                        new ResolvedFixedWidthKeyLayout.Lane(
+                                0,
+                                new ResolvedFixedWidthKeyLayout.Source[] {
+                                        new ResolvedFixedWidthKeyLayout.Source(0, List.of("high"), FixedWidthKeyLayout.Carrier.I64)},
+                                Optional.empty()),
+                        new ResolvedFixedWidthKeyLayout.Lane(
+                                0,
+                                new ResolvedFixedWidthKeyLayout.Source[] {
+                                        new ResolvedFixedWidthKeyLayout.Source(0, List.of("low"), FixedWidthKeyLayout.Carrier.I64)},
+                                Optional.empty())},
                 1);
     }
 

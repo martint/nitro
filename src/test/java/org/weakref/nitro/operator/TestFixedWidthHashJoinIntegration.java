@@ -23,6 +23,7 @@ import org.weakref.nitro.core.type.TypeOperators;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.RegionVector;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.StructVector;
@@ -114,6 +115,62 @@ class TestFixedWidthHashJoinIntegration
                     Output.of(Streams.ofValues(DictionaryVector.wrap(
                             new int[] {0, 1, 2},
                             probeKeys)))));
+
+            List<Long> payloads = new ArrayList<>();
+            while (session.hasOutput()) {
+                try (Batch output = session.getOutput()) {
+                    VectorAccess.LongValues values = VectorAccess.longValues(output.output(2).borrow(Stream.VALUES));
+                    for (int position : output.borrowMask()) {
+                        payloads.add(values.value(position));
+                    }
+                }
+            }
+            assertThat(payloads).containsExactly(100L, 101L, 200L);
+        }
+    }
+
+    @Test
+    void testCanonicalProjectionDrivesEncodedHashJoinBuildAndProbe()
+    {
+        TypeBinding type = CanonicalFixedWidthKeyTestType.INSTANCE;
+        Schema probeSchema = new Schema(List.of(new Field(type, false)));
+        Schema buildSchema = new Schema(List.of(
+                new Field(type, false),
+                Schema.unspecified(1).field(0)));
+        I64Vector buildDomain = new I64Vector(new long[] {
+                CanonicalFixedWidthKeyTestType.pack(100, 1),
+                CanonicalFixedWidthKeyTestType.pack(200, 2),
+                CanonicalFixedWidthKeyTestType.pack(100, 3)});
+        Vector buildKeys = DictionaryVector.wrap(new int[] {0, 1, 2}, buildDomain);
+        TableOperator build = new TableOperator(
+                buildSchema,
+                List.of(TableOperator.Page.values(
+                        buildKeys.length(),
+                        new Vector[] {buildKeys, new I64Vector(new long[] {100, 200, 101})},
+                        Mask.all(buildKeys.length()))));
+
+        try (EngineResources resources = EngineResources.createDefault();
+                org.weakref.nitro.data.Allocator allocator = new org.weakref.nitro.data.Allocator(resources);
+                HashJoinSession session = new HashJoinSession(
+                        resources.operatorResources(),
+                        allocator,
+                        probeSchema,
+                        new int[] {0},
+                        build,
+                        new int[] {0},
+                        false)) {
+            allocator.beginExecution();
+            Vector probeKeys = new RegionVector(
+                    new I64Vector(new long[] {
+                            -1,
+                            CanonicalFixedWidthKeyTestType.pack(100, 9),
+                            CanonicalFixedWidthKeyTestType.pack(200, 8),
+                            CanonicalFixedWidthKeyTestType.pack(300, 7)}),
+                    1,
+                    3);
+            session.addInput(new Batch(
+                    Mask.all(probeKeys.length()),
+                    Output.of(Streams.ofValues(probeKeys))));
 
             List<Long> payloads = new ArrayList<>();
             while (session.hasOutput()) {

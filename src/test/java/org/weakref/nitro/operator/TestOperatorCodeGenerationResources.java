@@ -136,12 +136,12 @@ class TestOperatorCodeGenerationResources
         OperatorCodeGenerationResources second = new OperatorCodeGenerationResources();
         PrimitiveArrayPool arrayPool = new PrimitiveArrayPool(1 << 20, 0);
 
-        AbstractMultiLongGroupingTable firstTable =
-                first.multiLongGrouping().create(2, 16, arrayPool, AdaptiveLongGroupingPolicy.defaults());
-        AbstractMultiLongGroupingTable reusedShape =
-                first.multiLongGrouping().create(2, 16, arrayPool, AdaptiveLongGroupingPolicy.defaults());
-        AbstractMultiLongGroupingTable isolatedShape =
-                second.multiLongGrouping().create(2, 16, arrayPool, AdaptiveLongGroupingPolicy.defaults());
+        AbstractFixedWidthKeyTable firstTable =
+                first.fixedWidthKeyTables().create(FixedWidthKeyTableLayout.rawI64(2), 16, arrayPool, AdaptiveLongGroupingPolicy.defaults());
+        AbstractFixedWidthKeyTable reusedShape =
+                first.fixedWidthKeyTables().create(FixedWidthKeyTableLayout.rawI64(2), 16, arrayPool, AdaptiveLongGroupingPolicy.defaults());
+        AbstractFixedWidthKeyTable isolatedShape =
+                second.fixedWidthKeyTables().create(FixedWidthKeyTableLayout.rawI64(2), 16, arrayPool, AdaptiveLongGroupingPolicy.defaults());
         assertThat(reusedShape.getClass()).isSameAs(firstTable.getClass());
         assertThat(isolatedShape.getClass()).isNotSameAs(firstTable.getClass());
 
@@ -198,17 +198,17 @@ class TestOperatorCodeGenerationResources
         assertThat(first.dictionaryRecordEquality().create(equalityShape)).isSameAs(firstEquality);
         assertThat(second.dictionaryRecordEquality().create(equalityShape)).isNotSameAs(firstEquality);
 
-        MultiLongGroupingTableGenerator retainedGenerator = first.multiLongGrouping();
+        FixedWidthKeyTableGenerator retainedGenerator = first.fixedWidthKeyTables();
         first.close();
 
         assertThat(firstTable.getClass()).isNotNull();
         assertThatThrownBy(() -> retainedGenerator.create(
-                2,
+                FixedWidthKeyTableLayout.rawI64(2),
                 16,
                 arrayPool,
                 AdaptiveLongGroupingPolicy.defaults()))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessage("Multi-long grouping table generator is closed");
+                .hasMessage("Fixed-width key table generator is closed");
         assertThatThrownBy(first::dictionaryHash)
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("Operator code-generation resources are closed");

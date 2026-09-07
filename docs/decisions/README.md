@@ -170,3 +170,4 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | [0088](0088-measure-serial-query-bundles-as-benchmark-points.md) | Measure serial query bundles as benchmark points | accepted |
 | [0089](0089-generate-fixed-width-key-kernels-from-provider-layouts.md) | Generate fixed-width key kernels from provider layouts | amended |
 | [0090](0090-reject-row-wise-semantic-key-tables.md) | Reject row-wise semantic key tables | accepted |
+| [0091](0091-generate-canonical-fixed-width-key-projections.md) | Generate canonical fixed-width key projections | accepted |

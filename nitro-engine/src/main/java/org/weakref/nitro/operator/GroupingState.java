@@ -1394,7 +1394,7 @@ final class GroupingState
             }
             return;
         }
-        if (!requireAuthoritativeHashSupport && values.length >= 2 && values.length <= AbstractMultiLongGroupingTable.MAX_ARITY && allSingleLongGroupingCandidates(values)) {
+        if (!requireAuthoritativeHashSupport && values.length >= 2 && values.length <= AbstractFixedWidthKeyTable.MAX_ARITY && allSingleLongGroupingCandidates(values)) {
             if (compositePolicy.adaptiveCompactLong() ||
                     (compositePolicy.generatedCompactLongPair() && values.length == 2) ||
                     values.length >= compositePolicy.generatedCompactLongMinArity()) {
@@ -1426,8 +1426,8 @@ final class GroupingState
             // is emitted as bytecode so the keys live in registers exactly like the former 2/3/4-key tables.
             useMultiLongGrouping = true;
             multiLongArity = values.length;
-            multiLongTable = codeGeneration.multiLongGrouping().create(
-                    values.length,
+            multiLongTable = codeGeneration.fixedWidthKeyTables().create(
+                    FixedWidthKeyTableLayout.rawI64(values.length),
                     initialExpectedSize(values, mask),
                     arrayPool,
                     adaptiveLongGroupingPolicy);
@@ -2405,7 +2405,7 @@ final class GroupingState
 
             long key = packIntPair((int) first, (int) second);
             int hash = hashLong(key);
-            byte fragment = AbstractMultiLongGroupingTable.controlFragment(hash);
+            byte fragment = AbstractFixedWidthKeyTable.controlFragment(hash);
             int slot = hash & tableMask;
             while (true) {
                 byte control = tableControl[slot];
@@ -2470,7 +2470,7 @@ final class GroupingState
             int thirdInt = thirdNull ? 0 : (int) third;
             byte nullMask = (byte) ((firstNull ? 1 : 0) | (secondNull ? 2 : 0) | (thirdNull ? 4 : 0));
             int hash = hashPackedIntTriple(pair, thirdInt, nullMask);
-            byte fragment = AbstractMultiLongGroupingTable.controlFragment(hash);
+            byte fragment = AbstractFixedWidthKeyTable.controlFragment(hash);
             int slot = hash & tableMask;
             while (true) {
                 int encoded = compositePolicy.packedIntTripleCombinedControl() ? tableIds[slot] : 0;
@@ -2526,8 +2526,8 @@ final class GroupingState
     private void promotePackedIntGrouping(int upcomingRows)
     {
         multiLongArity = packedIntGroupingArity;
-        multiLongTable = codeGeneration.multiLongGrouping().create(
-                multiLongArity,
+        multiLongTable = codeGeneration.fixedWidthKeyTables().create(
+                FixedWidthKeyTableLayout.rawI64(multiLongArity),
                 Math.max(16, toIntExact(Math.min(Integer.MAX_VALUE, nextGroupId + upcomingRows))),
                 arrayPool,
                 adaptiveLongGroupingPolicy);
@@ -2646,7 +2646,7 @@ final class GroupingState
             while (combinedControl ? longGroupIds[slot] != 0 : packedIntPairControl[slot] != 0) {
                 slot = (slot + 1) & longGroupMask;
             }
-            byte fragment = AbstractMultiLongGroupingTable.controlFragment(hash);
+            byte fragment = AbstractFixedWidthKeyTable.controlFragment(hash);
             longGroupIds[slot] = combinedControl ? (fragment & 0xFF) << 24 | id : id;
             if (!combinedControl) {
                 packedIntPairControl[slot] = fragment;
@@ -4295,11 +4295,12 @@ final class GroupingState
         private final Allocator.Context allocationContext;
         private final PrimitiveArrayPool arrayPool;
         private final ResolvedFixedWidthKeyLayout layout;
-        private final AbstractMultiLongGroupingTable table;
+        private final AbstractFixedWidthKeyTable table;
         private final FixedWidthKeyBatchBindings bindings;
         private final ArrayList<RepresentativeSegment> representatives = new ArrayList<>();
         private final long[] probeKeys;
         private final int[] singleLogicalPositions;
+        private final int[] laneLogicalKeys;
         private boolean containsBound;
 
         private FixedWidthGroupingIndex(
@@ -4315,14 +4316,15 @@ final class GroupingState
             this.allocationContext = allocationContext;
             this.arrayPool = arrayPool;
             this.layout = layout;
-            table = codeGeneration.multiLongGrouping().create(
-                    Arrays.stream(layout.lanes()).map(ResolvedFixedWidthKeyLayout.Lane::carrier).toList(),
+            table = codeGeneration.fixedWidthKeyTables().create(
+                    FixedWidthKeyTableLayout.from(layout),
                     expectedSize,
                     arrayPool,
                     policy);
             bindings = new FixedWidthKeyBatchBindings(layout, arrayPool);
             probeKeys = new long[layout.lanes().length];
             singleLogicalPositions = new int[layout.logicalKeyCount()];
+            laneLogicalKeys = layout.laneLogicalKeys();
         }
 
         @Override
@@ -4448,7 +4450,7 @@ final class GroupingState
             }
             try {
                 byte nullMask = extractPhysicalKey(position, probeKeys);
-                return table.findGroup(probeKeys, nullMask) != AbstractMultiLongGroupingTable.EMPTY_GROUP_ID;
+                return table.findGroup(probeKeys, nullMask) != AbstractFixedWidthKeyTable.EMPTY_GROUP_ID;
             }
             finally {
                 if (temporaryBinding) {
@@ -4567,39 +4569,18 @@ final class GroupingState
 
         private byte extractPhysicalKey(int[] positions, long[] result)
         {
-            byte nullMask = 0;
-            Object[] keyArrays = bindings.keyArrays();
-            boolean[][] nullArrays = bindings.nullArrays();
-            for (int lane = 0; lane < result.length; lane++) {
-                int logicalPosition = positions[layout.lanes()[lane].logicalKey()];
-                if (nullArrays[lane] != null && nullArrays[lane][physicalPosition(
-                        bindings.nullMappings()[lane],
-                        bindings.nullMappingOffsets()[lane],
-                        bindings.nullBaseOffsets()[lane],
-                        logicalPosition)]) {
-                    nullMask |= (byte) (1 << lane);
-                    result[lane] = 0;
-                    continue;
-                }
-                int physical = physicalPosition(
-                        bindings.keyMappings()[lane],
-                        bindings.keyMappingOffsets()[lane],
-                        bindings.keyBaseOffsets()[lane],
-                        logicalPosition);
-                result[lane] = switch (layout.lanes()[lane].carrier()) {
-                    case I32 -> ((int[]) keyArrays[lane])[physical];
-                    case I64 -> ((long[]) keyArrays[lane])[physical];
-                    case F64 -> Double.doubleToRawLongBits(((double[]) keyArrays[lane])[physical]);
-                    case BOOLEAN -> ((boolean[]) keyArrays[lane])[physical] ? 1 : 0;
-                };
-            }
-            return nullMask;
-        }
-
-        private static int physicalPosition(int[] mapping, int mappingOffset, int baseOffset, int logicalPosition)
-        {
-            int position = mapping == null ? logicalPosition : mapping[logicalPosition + mappingOffset];
-            return position + baseOffset;
+            return table.extractPhysicalKey(
+                    bindings.keyArrays(),
+                    bindings.keyMappings(),
+                    bindings.keyMappingOffsets(),
+                    bindings.keyBaseOffsets(),
+                    bindings.nullArrays(),
+                    bindings.nullMappings(),
+                    bindings.nullMappingOffsets(),
+                    bindings.nullBaseOffsets(),
+                    positions,
+                    laneLogicalKeys,
+                    result);
         }
 
         private void retainNewGroups(

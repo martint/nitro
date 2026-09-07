@@ -24,6 +24,7 @@ import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.StructVector;
 import org.weakref.nitro.data.Vector;
@@ -91,6 +92,49 @@ class TestMembershipSet
                     assertThat(set.contains(0)).isTrue();
                     assertThat(set.contains(1)).isFalse();
                     assertThat(set.contains(2)).isFalse();
+                }
+                finally {
+                    set.endProbeBatch();
+                }
+            }
+            finally {
+                set.releaseBuffers();
+                allocator.release(allocationContext);
+            }
+        }
+    }
+
+    @Test
+    void canonicalProjectionDrivesEncodedMembership()
+    {
+        try (EngineResources engineResources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(engineResources)) {
+            allocator.beginExecution();
+            Allocator.Context allocationContext = new Allocator.Context("canonical-projection-membership");
+            MembershipSet set = new MembershipSet(
+                    allocator,
+                    allocationContext,
+                    engineResources.operatorResources(),
+                    engineResources.operatorResources().semiJoinPolicy().membershipSet(),
+                    Optional.of(CanonicalFixedWidthKeyTestType.INSTANCE));
+            try {
+                I64Vector buildDomain = new I64Vector(new long[] {
+                        CanonicalFixedWidthKeyTestType.pack(100, 1),
+                        CanonicalFixedWidthKeyTestType.pack(200, 2)});
+                Vector build = DictionaryVector.wrap(new int[] {0, 1}, buildDomain);
+                set.addBatch(build, null, Mask.all(build.length()));
+
+                Vector probe = new RleVector(
+                        new int[] {1, 1, 1},
+                        new I64Vector(new long[] {
+                                CanonicalFixedWidthKeyTestType.pack(100, 9),
+                                CanonicalFixedWidthKeyTestType.pack(300, 7),
+                                CanonicalFixedWidthKeyTestType.pack(200, 8)}));
+                set.beginProbeBatch(probe, null);
+                try {
+                    assertThat(set.contains(0)).isTrue();
+                    assertThat(set.contains(1)).isFalse();
+                    assertThat(set.contains(2)).isTrue();
                 }
                 finally {
                     set.endProbeBatch();

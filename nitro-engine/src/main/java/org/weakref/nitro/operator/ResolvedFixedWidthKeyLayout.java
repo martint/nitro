@@ -27,13 +27,24 @@ import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
 
+import java.lang.invoke.MethodHandle;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 /** One provider-neutral fixed-width key layout resolved across the logical key columns of a consumer. */
 record ResolvedFixedWidthKeyLayout(Lane[] lanes, int logicalKeyCount)
 {
-    record Lane(int logicalKey, List<String> fieldPath, FixedWidthKeyLayout.Carrier carrier) {}
+    record Source(int logicalKey, List<String> fieldPath, FixedWidthKeyLayout.Carrier carrier) {}
+
+    record Lane(int logicalKey, Source[] sources, Optional<MethodHandle> projection)
+    {
+        Lane
+        {
+            sources = sources.clone();
+            projection = Optional.ofNullable(projection.orElse(null));
+        }
+    }
 
     static ResolvedFixedWidthKeyLayout tryCreate(
             List<TypeBinding> keyTypes,
@@ -47,34 +58,84 @@ record ResolvedFixedWidthKeyLayout(Lane[] lanes, int logicalKeyCount)
         for (int key = 0; key < values.length; key++) {
             FixedWidthKeyLayout fixedWidth = keyTypes.get(key).fixedWidthKeyLayout().orElse(null);
             if (fixedWidth != null) {
+                int logicalKey = key;
                 for (FixedWidthKeyLayout.Lane lane : fixedWidth.lanes()) {
-                    Lane descriptor = new Lane(key, lane.fieldPath(), lane.carrier());
-                    if (!supportsLane(values, descriptor)) {
-                        throw new IllegalArgumentException("Type provider fixed-width key lane is incompatible with the admitted vector: " + descriptor);
+                    Source[] sources = lane.sources().stream()
+                            .map(source -> new Source(logicalKey, source.fieldPath(), source.carrier()))
+                            .toArray(Source[]::new);
+                    for (Source source : sources) {
+                        if (!supportsSource(values, source)) {
+                            throw new IllegalArgumentException("Type provider fixed-width key source is incompatible with the admitted vector: " + source);
+                        }
                     }
-                    lanes.add(descriptor);
+                    lanes.add(new Lane(key, sources, lane.projection()));
                 }
                 continue;
             }
             if (!kernels[key].allowsLegacyPhysicalShortcuts() || !GroupingState.isSingleLongGroupingCandidate(values[key])) {
                 return null;
             }
-            lanes.add(new Lane(key, List.of(), integerCarrier(values[key])));
+            lanes.add(new Lane(
+                    key,
+                    new Source[] {new Source(key, List.of(), integerCarrier(values[key]))},
+                    Optional.empty()));
         }
-        if (lanes.isEmpty() || lanes.size() > AbstractMultiLongGroupingTable.MAX_ARITY) {
+        if (lanes.isEmpty() || lanes.size() > AbstractFixedWidthKeyTable.MAX_ARITY) {
             throw new IllegalArgumentException("Unsupported fixed-width key lane count: " + lanes.size());
         }
         return new ResolvedFixedWidthKeyLayout(lanes.toArray(Lane[]::new), values.length);
     }
 
-    Vector laneVector(Vector[] values, int lane)
+    int sourceCount()
     {
-        return laneVector(values, lanes[lane]);
+        int count = 0;
+        for (Lane lane : lanes) {
+            count += lane.sources().length;
+        }
+        return count;
     }
 
-    private static boolean supportsLane(Vector[] values, Lane descriptor)
+    Vector sourceVector(Vector[] values, int sourceIndex)
     {
-        Vector vector = laneVector(values, descriptor);
+        int index = sourceIndex;
+        for (Lane lane : lanes) {
+            if (index < lane.sources().length) {
+                return sourceVector(values, lane.sources()[index]);
+            }
+            index -= lane.sources().length;
+        }
+        throw new IndexOutOfBoundsException(sourceIndex);
+    }
+
+    List<FixedWidthKeyLayout.Carrier> sourceCarriers()
+    {
+        ArrayList<FixedWidthKeyLayout.Carrier> carriers = new ArrayList<>();
+        for (Lane lane : lanes) {
+            for (Source source : lane.sources()) {
+                carriers.add(source.carrier());
+            }
+        }
+        return List.copyOf(carriers);
+    }
+
+    List<Integer> laneSourceCounts()
+    {
+        return java.util.Arrays.stream(lanes).map(lane -> lane.sources().length).toList();
+    }
+
+    int[] laneLogicalKeys()
+    {
+        return java.util.Arrays.stream(lanes).mapToInt(Lane::logicalKey).toArray();
+    }
+
+    List<Optional<MethodHandle>> projections()
+    {
+        return java.util.Arrays.stream(lanes).map(Lane::projection).toList();
+    }
+
+    private static boolean supportsSource(Vector[] values, Source descriptor)
+    {
+        Vector vector = sourceVector(values, descriptor);
         return switch (vector) {
             case I32Vector _ -> descriptor.carrier() == FixedWidthKeyLayout.Carrier.I32;
             case I64Vector _ -> descriptor.carrier() == FixedWidthKeyLayout.Carrier.I64;
@@ -117,7 +178,7 @@ record ResolvedFixedWidthKeyLayout(Lane[] lanes, int logicalKeyCount)
         return vector instanceof I32Vector ? FixedWidthKeyLayout.Carrier.I32 : FixedWidthKeyLayout.Carrier.I64;
     }
 
-    private static Vector laneVector(Vector[] values, Lane descriptor)
+    private static Vector sourceVector(Vector[] values, Source descriptor)
     {
         Vector vector = values[descriptor.logicalKey()];
         for (String field : descriptor.fieldPath()) {

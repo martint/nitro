@@ -27,6 +27,8 @@ import org.weakref.nitro.data.F64Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.PrimitiveArrayPool;
+import org.weakref.nitro.data.RegionVector;
+import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.StructVector;
@@ -140,6 +142,65 @@ public class TestGroupingStatePoolReuse
                     Mask.all(3),
                     encodedGroups);
             assertThat(encodedGroups.values()).containsExactly(1, 0, 2);
+
+            state.releaseBuffers();
+            allocator.release(context);
+        }
+    }
+
+    @Test
+    public void testCanonicalProjectionGroupingComposesDictionaryRegionAndRleMappings()
+    {
+        TypeBinding type = CanonicalFixedWidthKeyTestType.INSTANCE;
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            allocator.beginExecution();
+            Allocator.Context context = new Allocator.Context("canonicalProjectionGrouping");
+            GroupingState state = new GroupingState(
+                    resources.primitiveArrays(),
+                    resources.operatorCodeGeneration(),
+                    resources.groupingState(),
+                    resources.operatorResources().adaptiveLongGroupingPolicy(),
+                    resources.operatorResources().flatKeyTablePolicy(),
+                    List.of(type),
+                    allocator,
+                    context);
+
+            long instant100Zone1 = CanonicalFixedWidthKeyTestType.pack(100, 1);
+            long instant100Zone2 = CanonicalFixedWidthKeyTestType.pack(100, 2);
+            long instant200Zone3 = CanonicalFixedWidthKeyTestType.pack(200, 3);
+            Vector dictionaryRegion = DictionaryVector.wrap(
+                    new int[] {0, 1, 2, 0},
+                    new RegionVector(
+                            new I64Vector(new long[] {-1, instant100Zone1, instant100Zone2, instant200Zone3}),
+                            1,
+                            3));
+            I64Vector firstGroups = new I64Vector(4);
+            state.assignGroups(
+                    new Vector[] {dictionaryRegion},
+                    new Vector[] {null},
+                    Mask.all(4),
+                    firstGroups);
+            assertThat(firstGroups.values()).containsExactly(0, 0, 1, 0);
+
+            long instant200Zone9 = CanonicalFixedWidthKeyTestType.pack(200, 9);
+            long instant300Zone4 = CanonicalFixedWidthKeyTestType.pack(300, 4);
+            Vector rle = new RleVector(
+                    new int[] {2, 1},
+                    new I64Vector(new long[] {instant200Zone9, instant300Zone4}));
+            I64Vector secondGroups = new I64Vector(3);
+            state.assignGroups(
+                    new Vector[] {rle},
+                    new Vector[] {null},
+                    Mask.all(3),
+                    secondGroups);
+            assertThat(secondGroups.values()).containsExactly(1, 1, 2);
+            assertThat(state.groupCount()).isEqualTo(3);
+
+            Streams representatives = state.groupedValues(0, Mask.all(3), null, allocator, context);
+            assertThat(VectorAccess.longValue(representatives.values(), 0)).isEqualTo(instant100Zone1);
+            assertThat(VectorAccess.longValue(representatives.values(), 1)).isEqualTo(instant200Zone3);
+            assertThat(VectorAccess.longValue(representatives.values(), 2)).isEqualTo(instant300Zone4);
 
             state.releaseBuffers();
             allocator.release(context);

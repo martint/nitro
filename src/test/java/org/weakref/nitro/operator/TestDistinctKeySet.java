@@ -26,6 +26,7 @@ import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.PrimitiveArrayPool;
+import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.StructVector;
 import org.weakref.nitro.data.Vector;
@@ -72,6 +73,54 @@ class TestDistinctKeySet
                 int distinct = keys.addBatch(values, nulls, Mask.all(pairs.length()), positions);
                 assertThat(Arrays.copyOf(positions, distinct)).containsExactly(0, 2, 3);
                 assertThat(keys.addBatch(values, nulls, Mask.all(pairs.length()), positions)).isZero();
+            }
+            finally {
+                keys.releaseBuffers();
+            }
+        }
+    }
+
+    @Test
+    void testCanonicalProjectionDistinctAcrossDictionaryAndRleShapes()
+    {
+        long instant100Zone1 = CanonicalFixedWidthKeyTestType.pack(100, 1);
+        long instant100Zone2 = CanonicalFixedWidthKeyTestType.pack(100, 2);
+        long instant200Zone3 = CanonicalFixedWidthKeyTestType.pack(200, 3);
+        Vector dictionary = DictionaryVector.wrap(
+                new int[] {0, 1, 2, 0},
+                new I64Vector(new long[] {instant100Zone1, instant100Zone2, instant200Zone3}));
+
+        try (Allocator allocator = new Allocator(engineResources)) {
+            DistinctKeySet keys = DistinctKeySet.create(
+                    new Vector[] {dictionary},
+                    List.of(CanonicalFixedWidthKeyTestType.INSTANCE),
+                    allocator,
+                    new Allocator.Context("canonical-projection-distinct"),
+                    arrayPool,
+                    codeGeneration,
+                    DistinctKeySetPolicy.defaults(),
+                    adaptiveLongGroupingPolicy,
+                    flatKeyTablePolicy);
+            try {
+                int[] positions = new int[dictionary.length()];
+                int distinct = keys.addBatch(
+                        new Vector[] {dictionary},
+                        new Vector[] {null},
+                        Mask.all(dictionary.length()),
+                        positions);
+                assertThat(Arrays.copyOf(positions, distinct)).containsExactly(0, 2);
+
+                Vector rle = new RleVector(
+                        new int[] {2, 1},
+                        new I64Vector(new long[] {
+                                CanonicalFixedWidthKeyTestType.pack(200, 9),
+                                CanonicalFixedWidthKeyTestType.pack(300, 4)}));
+                distinct = keys.addBatch(
+                        new Vector[] {rle},
+                        new Vector[] {null},
+                        Mask.all(rle.length()),
+                        positions);
+                assertThat(Arrays.copyOf(positions, distinct)).containsExactly(2);
             }
             finally {
                 keys.releaseBuffers();

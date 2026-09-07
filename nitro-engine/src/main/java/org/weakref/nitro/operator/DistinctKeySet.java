@@ -447,7 +447,7 @@ final class DistinctKeySet
         }
         if (policy.adaptiveCompactMultiLong() &&
                 samples.length >= policy.adaptiveCompactMultiLongMinArity() &&
-                samples.length <= AbstractMultiLongGroupingTable.MAX_ARITY &&
+                samples.length <= AbstractFixedWidthKeyTable.MAX_ARITY &&
                 allIntegerVectors(samples)) {
             return new AdaptiveMultiLongDistinctIndex(
                     samples.length,
@@ -463,7 +463,7 @@ final class DistinctKeySet
         if (samples.length == 4 && isIntegerVector(samples[0]) && isIntegerVector(samples[1]) && isIntegerVector(samples[2]) && isIntegerVector(samples[3])) {
             return new LongQuadDistinctIndex(Math.max(16, expectedSize));
         }
-        if (samples.length >= 5 && samples.length <= AbstractMultiLongGroupingTable.MAX_ARITY && allIntegerVectors(samples)) {
+        if (samples.length >= 5 && samples.length <= AbstractFixedWidthKeyTable.MAX_ARITY && allIntegerVectors(samples)) {
             return new MultiLongDistinctIndex(
                     samples.length,
                     Math.max(16, expectedSize),
@@ -1367,7 +1367,7 @@ final class DistinctKeySet
     {
         private static final VectorAccess.BooleanValues ALWAYS_FALSE = _ -> false;
 
-        private final AbstractMultiLongGroupingTable table;
+        private final AbstractFixedWidthKeyTable table;
         private final VectorAccess.LongValues[] keyAccessors;
         private final VectorAccess.BooleanValues[] nullAccessors;
         private final int[] singlePosition = new int[1];
@@ -1380,8 +1380,8 @@ final class DistinctKeySet
                 OperatorCodeGenerationResources codeGeneration,
                 AdaptiveLongGroupingPolicy adaptiveLongGroupingPolicy)
         {
-            table = codeGeneration.multiLongGrouping().createDistinct(
-                    arity,
+            table = codeGeneration.fixedWidthKeyTables().createDistinct(
+                    FixedWidthKeyTableLayout.rawI64(arity),
                     expectedSize,
                     arrayPool,
                     adaptiveLongGroupingPolicy);
@@ -3256,7 +3256,7 @@ final class DistinctKeySet
             implements DistinctIndex
     {
         private final boolean retainNulls;
-        private final AbstractMultiLongGroupingTable table;
+        private final AbstractFixedWidthKeyTable table;
         private final FixedWidthKeyBatchBindings bindings;
         private final int[] singlePosition = new int[1];
         private final int[] singleDistinct = new int[1];
@@ -3270,8 +3270,8 @@ final class DistinctKeySet
                 AdaptiveLongGroupingPolicy policy)
         {
             this.retainNulls = retainNulls;
-            table = codeGeneration.multiLongGrouping().createDistinct(
-                    Arrays.stream(layout.lanes()).map(ResolvedFixedWidthKeyLayout.Lane::carrier).toList(),
+            table = codeGeneration.fixedWidthKeyTables().createDistinct(
+                    FixedWidthKeyTableLayout.from(layout),
                     Math.max(16, expectedSize),
                     arrayPool,
                     policy);

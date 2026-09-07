@@ -13,7 +13,10 @@
  */
 package org.weakref.nitro.core.type;
 
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodType;
 import java.util.List;
+import java.util.Optional;
 
 import static java.util.Objects.requireNonNull;
 
@@ -37,15 +40,79 @@ public record FixedWidthKeyLayout(List<Lane> lanes)
         BOOLEAN
     }
 
-    public record Lane(List<String> fieldPath, Carrier carrier)
+    public record Source(List<String> fieldPath, Carrier carrier)
     {
-        public Lane
+        public Source
         {
             fieldPath = List.copyOf(requireNonNull(fieldPath, "fieldPath is null"));
             if (fieldPath.stream().anyMatch(field -> field == null || field.isEmpty())) {
                 throw new IllegalArgumentException("fieldPath contains a null or empty field");
             }
             carrier = requireNonNull(carrier, "carrier is null");
+        }
+    }
+
+    /**
+     * One canonical 64-bit key lane computed from one or more physical primitive sources.
+     *
+     * <p>An absent projection is the raw identity conversion of exactly one source. A present projection is an exact
+     * provider-owned target whose primitive arguments match the sources and whose return type is {@code long}.
+     * Generated consumers constant-link the target into their row loops; it is not an interpreted or virtual
+     * callback.
+     */
+    public record Lane(List<Source> sources, Optional<MethodHandle> projection)
+    {
+        public Lane(List<String> fieldPath, Carrier carrier)
+        {
+            this(List.of(new Source(fieldPath, carrier)), Optional.empty());
+        }
+
+        public Lane
+        {
+            sources = List.copyOf(requireNonNull(sources, "sources is null"));
+            if (sources.isEmpty()) {
+                throw new IllegalArgumentException("sources is empty");
+            }
+            sources.forEach(source -> requireNonNull(source, "source is null"));
+            projection = requireNonNull(projection, "projection is null");
+            if (projection.isEmpty() && sources.size() != 1) {
+                throw new IllegalArgumentException("Raw key lane requires exactly one source");
+            }
+            if (projection.isPresent()) {
+                MethodHandle target = projection.orElseThrow();
+                MethodType expected = MethodType.methodType(
+                        long.class,
+                        sources.stream().map(source -> carrierType(source.carrier())).toArray(Class<?>[]::new));
+                if (!target.type().equals(expected)) {
+                    throw new IllegalArgumentException("Key projection target has type %s; expected %s"
+                            .formatted(target.type(), expected));
+                }
+            }
+        }
+
+        public static Lane projected(List<Source> sources, MethodHandle projection)
+        {
+            return new Lane(sources, Optional.of(requireNonNull(projection, "projection is null")));
+        }
+
+        /** Compatibility accessor for raw single-source lanes. */
+        public List<String> fieldPath()
+        {
+            return requireRawSource().fieldPath();
+        }
+
+        /** Compatibility accessor for raw single-source lanes. */
+        public Carrier carrier()
+        {
+            return requireRawSource().carrier();
+        }
+
+        private Source requireRawSource()
+        {
+            if (projection.isPresent() || sources.size() != 1) {
+                throw new IllegalStateException("Projected key lane has no single raw source");
+            }
+            return sources.getFirst();
         }
 
         public static Lane i64(List<String> fieldPath)
@@ -67,6 +134,16 @@ public record FixedWidthKeyLayout(List<Lane> lanes)
         {
             return new Lane(fieldPath, Carrier.BOOLEAN);
         }
+    }
+
+    private static Class<?> carrierType(Carrier carrier)
+    {
+        return switch (carrier) {
+            case I32 -> int.class;
+            case I64 -> long.class;
+            case F64 -> double.class;
+            case BOOLEAN -> boolean.class;
+        };
     }
 
     public FixedWidthKeyLayout

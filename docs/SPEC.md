@@ -146,10 +146,12 @@ A physical carrier does not imply a logical type. An I64 carrier may hold BIGINT
 timestamp representation. Binary storage does not imply UTF-8. The type registry supplies equality, hashing,
 comparison, coercion, display, and function semantics.
 
-A type provider may describe a logical key as an ordered fixed-width tuple of primitive lanes selected by structural
-field paths. The paths and carriers are physical layout metadata only; Nitro does not infer field meaning, a composite
-carrier type, or logical semantics from them. Logical nullness belongs to the enclosing value, and every selected
-component must be non-null whenever that value is non-null.
+A type provider may describe a logical key as an ordered fixed-width tuple of canonical primitive lanes. A lane
+either selects one raw primitive source or projects one 64-bit canonical value from one or more primitive sources.
+Every source declares its carrier and structural field path. Paths, lane partitioning, carriers, and canonical bits
+are physical layout metadata only; Nitro does not infer field meaning, a composite carrier type, or logical semantics
+from them. Logical nullness belongs to the enclosing value, and every selected component must be non-null whenever
+that value is non-null.
 
 Physical traits describe facts a producer can prove, such as ASCII-only bytes, valid UTF-8, sortedness, exact range,
 cardinality, null shape, or stable dictionary identity. Traits refine an already-bound logical type; they never create
@@ -233,13 +235,17 @@ neither this proof nor another supported physical key layout is available; they 
 and equality as an execution bridge.
 
 A provider may give the narrower structural proof that logical key identity is exactly raw equality of an ordered
-`I32`, `I64`, `F64`, or `BOOLEAN` lane tuple. Each lane selects either the value itself or a path of named structural
-fields. Generated key consumers resolve supported wrapper mappings once per batch and load the exact primitive arrays
-directly. A declared layout that does not match its admitted vector, selects an independently nullable component, or
-exceeds a consumer's supported generated shape is an admission error; it is not permission to enter a row-wise
-semantic bridge. Types without this proof retain their exact semantic key operations for scalar and other semantic
-consumers, but grouping, distinct, hash join, and membership reject unless another direct physical key capability is
-available.
+fixed-width canonical tuple. A canonical lane is either one raw `I32`, `I64`, `F64`, or `BOOLEAN` source or a 64-bit
+projection of one or more such sources through an exact provider target. Each source selects either the value itself
+or a path of named structural fields. Providers declare multiple lanes when identity requires more than 64 bits.
+Generated key consumers resolve supported wrapper mappings once per batch, load the exact primitive arrays directly,
+and constant-link projections into the generated load/hash/probe loop. They do not pre-materialize a canonical vector
+or invoke a generic projection interface, provider virtual method, or row-wise method-handle adapter. A declared
+layout that does not match its admitted vector, selects an independently nullable component, has an incompatible
+projection signature, or exceeds a consumer's supported generated shape is an admission error; it is not permission
+to enter a row-wise semantic bridge. Types without this proof retain their exact semantic key operations for scalar
+and other semantic consumers, but grouping, distinct, hash join, and membership reject unless another direct physical
+key capability is available.
 
 Stateful registry implementations may also request a composed key binder. Each bound vector exposes opaque hashing
 and cross-vector identity over positions, allowing retained indexes such as map construction state to span owned
@@ -639,10 +645,12 @@ Specialization can generate expression loops, grouping layouts, hash/probe kerne
 updates. Generated code derives from interfaces and physical layouts—not function names, queries, tables, or fixed SQL
 arities. Adaptive mechanisms report admission, strategy, transitions, and achieved reduction.
 
-Fixed-width key generation specializes the ordered carrier sequence. Primitive-array casts and mapping references are
-hoisted before the logical-row loop; the loop contains carrier-specific array loads and the generated exact probe.
-Static shape validation and batch binding may inspect vector wrappers, but hot rows do not invoke method handles,
-virtual provider operations, or polymorphic value-access interfaces.
+Fixed-width key generation specializes one exact physical layout: its ordered source carriers, source partitioning
+into canonical lanes, constant projection targets, mappings, and table-storage policy. Primitive-array casts and
+mapping references are hoisted before the logical-row loop; the loop contains carrier-specific array loads,
+constant-linked canonical projections, and the generated exact probe. Static shape validation and batch binding may
+inspect vector wrappers, but hot rows do not use generic method-handle invocation, virtual provider operations, or
+polymorphic value-access interfaces. Logical types do not select generator or table classes.
 
 There is no semantic object-table fallback for grouping, distinct, hash join, or membership. Missing physical-key
 coverage is rejected at planning when capabilities suffice and otherwise at physical binding before rows are added.
@@ -703,9 +711,10 @@ cancellation, memory pressure, and spill coordination; and observability and rol
 Adding a type, operator, calling convention, or physical path adds functional and benchmark coverage. Unsupported
 entries fail at admission and are not silently delegated inside an island.
 
-A provider-declared fixed-width key layout has cross-consumer coverage for grouping, distinct, and joins, including
-encoded mappings, sparse masks, null behavior, duplicate multiplicity, and prepared build sharing. Mismatched carriers,
-nullable selected components, unsupported representations, and unsupported generated lane counts fail loudly.
+A provider-declared fixed-width key layout has cross-consumer coverage for grouping, distinct, joins, and membership,
+including raw and projected lanes, mixed primitive sources, encoded mappings, sparse masks, null behavior, duplicate
+multiplicity, and prepared build sharing. Mismatched carriers, nullable selected components, incompatible projection
+signatures, unsupported representations, and unsupported generated lane counts fail loudly.
 
 Key types and mixed key shapes without one direct or generated physical implementation are explicit coverage gaps.
 They are not admitted through row-wise semantic key tables.

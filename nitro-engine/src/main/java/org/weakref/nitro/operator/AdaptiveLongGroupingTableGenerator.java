@@ -88,7 +88,7 @@ final class AdaptiveLongGroupingTableGenerator
 
     private static MethodHandle generate(int arity, boolean groupedProbeEligible)
     {
-        if (arity < 2 || arity > AbstractMultiLongGroupingTable.MAX_ARITY) {
+        if (arity < 2 || arity > AbstractFixedWidthKeyTable.MAX_ARITY) {
             throw new IllegalArgumentException("Unsupported grouping arity: " + arity);
         }
         ClassDesc thisClass = ClassDesc.of("org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable" + arity +
@@ -241,7 +241,7 @@ final class AdaptiveLongGroupingTableGenerator
 
             code.lload(hashVar);
             code.lload(valueVar);
-            code.loadConstant(AbstractMultiLongGroupingTable.HASH_PRIMES[column]);
+            code.loadConstant(AbstractFixedWidthKeyTable.HASH_PRIMES[column]);
             code.lmul();
             code.ladd();
             code.lstore(hashVar);

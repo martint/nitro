@@ -89,7 +89,7 @@ class AdaptiveLongGroupingTable
             int expectedSize,
             boolean groupedProbeEligible)
     {
-        if (arity < 2 || arity > AbstractMultiLongGroupingTable.MAX_ARITY) {
+        if (arity < 2 || arity > AbstractFixedWidthKeyTable.MAX_ARITY) {
             throw new IllegalArgumentException("Unsupported grouping arity: " + arity);
         }
         this.arity = arity;
@@ -563,7 +563,7 @@ class AdaptiveLongGroupingTable
 
     static long compactHashPrime(int lane)
     {
-        return AbstractMultiLongGroupingTable.HASH_PRIMES[Math.min(lane * 2 + 1, AbstractMultiLongGroupingTable.HASH_PRIMES.length - 1)];
+        return AbstractFixedWidthKeyTable.HASH_PRIMES[Math.min(lane * 2 + 1, AbstractFixedWidthKeyTable.HASH_PRIMES.length - 1)];
     }
 
     private byte groupNullMask(int groupId)
@@ -678,10 +678,10 @@ class AdaptiveLongGroupingTable
             System.err.printf("[adaptive-long-grouping] promote arity=%d groups=%d slots=%d%n", arity, groupCount, slots.length);
         }
         LongGroupingTable target = discardResults
-                ? codeGeneration.multiLongGrouping().createDiscardingResults(
-                        arity, Math.max(16, toIntExact(groupCount)), compactRetainedColumns, arrayPool, policy)
-                : codeGeneration.multiLongGrouping().create(
-                        arity, Math.max(16, toIntExact(groupCount)), compactRetainedColumns, arrayPool, policy);
+                ? codeGeneration.fixedWidthKeyTables().createDiscardingResults(
+                        FixedWidthKeyTableLayout.rawI64(arity), Math.max(16, toIntExact(groupCount)), compactRetainedColumns, arrayPool, policy)
+                : codeGeneration.fixedWidthKeyTables().create(
+                        FixedWidthKeyTableLayout.rawI64(arity), Math.max(16, toIntExact(groupCount)), compactRetainedColumns, arrayPool, policy);
         if (groupCount != 0) {
             VectorAccess.LongValues[] values = new VectorAccess.LongValues[arity];
             VectorAccess.BooleanValues[] nulls = new VectorAccess.BooleanValues[arity];

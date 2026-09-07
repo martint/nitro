@@ -20,6 +20,8 @@ import java.lang.classfile.ClassFile;
 import java.lang.classfile.CodeBuilder;
 import java.lang.classfile.Label;
 import java.lang.constant.ClassDesc;
+import java.lang.constant.DirectMethodHandleDesc;
+import java.lang.constant.DynamicCallSiteDesc;
 import java.lang.constant.MethodTypeDesc;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
@@ -27,25 +29,29 @@ import java.lang.invoke.MethodType;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.IntConsumer;
 
+import static java.lang.constant.ConstantDescs.CD_CallSite;
 import static java.lang.constant.ConstantDescs.CD_boolean;
 import static java.lang.constant.ConstantDescs.CD_byte;
+import static java.lang.constant.ConstantDescs.CD_double;
 import static java.lang.constant.ConstantDescs.CD_int;
 import static java.lang.constant.ConstantDescs.CD_long;
 import static java.lang.constant.ConstantDescs.CD_void;
+import static java.lang.constant.DirectMethodHandleDesc.Kind.STATIC;
+import static java.lang.constant.MethodHandleDesc.ofMethod;
+import static java.util.Objects.requireNonNull;
 
 /**
- * Generates, once per arity, a concrete {@link AbstractMultiLongGroupingTable} whose hot path is emitted
- * as JVM bytecode with the {@code java.lang.classfile} API. The generated {@code assignBatch} reads the N
- * key columns into local variables (no scratch array) and calls the generated {@code assignGroup} probe,
- * so the emitted code is structurally identical to the former hand-written 2/3/4-key tables — keys live in
- * registers and there is no per-row type dispatch. One mechanism covers any number of long keys.
+ * Generates a concrete {@link AbstractFixedWidthKeyTable} for each exact physical layout. Generated hot paths load
+ * the layout's primitive sources into locals, apply any constant-linked canonical projections, and probe with no
+ * per-row type dispatch or scratch tuple. Logical types never select a generator or table class.
  */
-final class MultiLongGroupingTableGenerator
+final class FixedWidthKeyTableGenerator
         implements AutoCloseable
 {
-    private static final ClassDesc CD_BASE = ClassDesc.of("org.weakref.nitro.operator.AbstractMultiLongGroupingTable");
+    private static final ClassDesc CD_BASE = ClassDesc.of("org.weakref.nitro.operator.AbstractFixedWidthKeyTable");
     private static final ClassDesc CD_POLICY = ClassDesc.of("org.weakref.nitro.operator.AdaptiveLongGroupingPolicy");
     private static final ClassDesc CD_PRIMITIVE_ARRAY_POOL = ClassDesc.of("org.weakref.nitro.data.PrimitiveArrayPool");
     private static final ClassDesc CD_LONG_ARRAY = CD_long.arrayType();
@@ -61,91 +67,70 @@ final class MultiLongGroupingTableGenerator
     private static final ClassDesc CD_BOOLEAN_VALUES = ClassDesc.of("org.weakref.nitro.data.VectorAccess$BooleanValues");
     private static final ClassDesc CD_LONG_VALUES_ARRAY = CD_LONG_VALUES.arrayType();
     private static final ClassDesc CD_BOOLEAN_VALUES_ARRAY = CD_BOOLEAN_VALUES.arrayType();
+    private static final ClassDesc CD_PROJECTION_BOOTSTRAP = ClassDesc.of("org.weakref.nitro.operator.FixedWidthKeyProjectionBootstrap");
+    private static final DirectMethodHandleDesc BSM_PROJECTION = ofMethod(
+            STATIC,
+            CD_PROJECTION_BOOTSTRAP,
+            "bootstrap",
+            MethodTypeDesc.of(CD_CallSite, ClassDesc.of("java.lang.invoke.MethodHandles$Lookup"), ClassDesc.of("java.lang.String"), ClassDesc.of("java.lang.invoke.MethodType")));
 
     private static final int MURMUR_SHIFT = 33;
     private static final long MURMUR_C1 = 0xFF51AFD7ED558CCDL;
     private static final long MURMUR_C2 = 0xC4CEB9FE1A85EC53L;
 
-    private final ConcurrentHashMap<Integer, MethodHandle> constructors = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<GenerationShape, MethodHandle> constructors = new ConcurrentHashMap<>();
+    private final AtomicInteger nextClassId = new AtomicInteger();
     private boolean closed;
 
-    AbstractMultiLongGroupingTable create(
-            int arity,
+    AbstractFixedWidthKeyTable create(
+            FixedWidthKeyTableLayout layout,
             int expectedSize,
             PrimitiveArrayPool arrayPool,
             AdaptiveLongGroupingPolicy policy)
     {
-        return create(allLongCarriers(arity), expectedSize, 0, arrayPool, policy);
+        return create(new GenerationShape(layout, 0), expectedSize, true, true, 0, arrayPool, policy);
     }
 
-    AbstractMultiLongGroupingTable create(
-            List<FixedWidthKeyLayout.Carrier> carriers,
-            int expectedSize,
-            PrimitiveArrayPool arrayPool,
-            AdaptiveLongGroupingPolicy policy)
-    {
-        return create(carriers, expectedSize, 0, arrayPool, policy);
-    }
-
-    AbstractMultiLongGroupingTable create(
-            int arity,
+    AbstractFixedWidthKeyTable create(
+            FixedWidthKeyTableLayout layout,
             int expectedSize,
             int compactRetainedColumns,
             PrimitiveArrayPool arrayPool,
             AdaptiveLongGroupingPolicy policy)
     {
-        return create(allLongCarriers(arity), expectedSize, true, true, compactRetainedColumns, arrayPool, policy);
+        return create(new GenerationShape(layout, compactRetainedColumns), expectedSize, true, true, compactRetainedColumns, arrayPool, policy);
     }
 
-    AbstractMultiLongGroupingTable createDistinct(
-            int arity,
+    AbstractFixedWidthKeyTable createDistinct(
+            FixedWidthKeyTableLayout layout,
             int expectedSize,
             PrimitiveArrayPool arrayPool,
             AdaptiveLongGroupingPolicy policy)
     {
-        return create(allLongCarriers(arity), expectedSize, false, false, 0, arrayPool, policy);
+        return create(new GenerationShape(layout, 0), expectedSize, false, false, 0, arrayPool, policy);
     }
 
-    AbstractMultiLongGroupingTable createDistinct(
-            List<FixedWidthKeyLayout.Carrier> carriers,
+    AbstractFixedWidthKeyTable createDiscardingResults(
+            FixedWidthKeyTableLayout layout,
             int expectedSize,
             PrimitiveArrayPool arrayPool,
             AdaptiveLongGroupingPolicy policy)
     {
-        return create(carriers, expectedSize, false, false, 0, arrayPool, policy);
+        return createDiscardingResults(layout, expectedSize, 0, arrayPool, policy);
     }
 
-    AbstractMultiLongGroupingTable createDiscardingResults(
-            int arity,
-            int expectedSize,
-            PrimitiveArrayPool arrayPool,
-            AdaptiveLongGroupingPolicy policy)
-    {
-        return createDiscardingResults(arity, expectedSize, 0, arrayPool, policy);
-    }
-
-    AbstractMultiLongGroupingTable createDiscardingResults(
-            int arity,
+    AbstractFixedWidthKeyTable createDiscardingResults(
+            FixedWidthKeyTableLayout layout,
             int expectedSize,
             int compactRetainedColumns,
             PrimitiveArrayPool arrayPool,
             AdaptiveLongGroupingPolicy policy)
     {
-        return create(allLongCarriers(arity), expectedSize, false, true, compactRetainedColumns, arrayPool, policy);
+        return create(new GenerationShape(layout, compactRetainedColumns), expectedSize, false, true, compactRetainedColumns, arrayPool, policy);
     }
 
-    private AbstractMultiLongGroupingTable create(
-            List<FixedWidthKeyLayout.Carrier> carriers,
-            int expectedSize,
-            int compactRetainedColumns,
-            PrimitiveArrayPool arrayPool,
-            AdaptiveLongGroupingPolicy policy)
-    {
-        return create(carriers, expectedSize, true, true, compactRetainedColumns, arrayPool, policy);
-    }
-
-    private AbstractMultiLongGroupingTable create(
-            List<FixedWidthKeyLayout.Carrier> carriers,
+    private AbstractFixedWidthKeyTable create(
+            GenerationShape shape,
             int expectedSize,
             boolean storesGroupIds,
             boolean retainGroupKeys,
@@ -154,15 +139,13 @@ final class MultiLongGroupingTableGenerator
             AdaptiveLongGroupingPolicy policy)
     {
         checkOpen();
-        carriers = List.copyOf(carriers);
-        int arity = carriers.size();
-        if (arity < 1 || arity > AbstractMultiLongGroupingTable.MAX_ARITY) {
+        int arity = shape.layout().laneCount();
+        if (arity < 1 || arity > AbstractFixedWidthKeyTable.MAX_ARITY) {
             throw new IllegalArgumentException("Unsupported grouping arity: " + arity);
         }
-        int shape = arity | (compactRetainedColumns << 8) | (carrierShape(carriers) << 16);
-        MethodHandle constructor = constructors.computeIfAbsent(shape, MultiLongGroupingTableGenerator::generate);
+        MethodHandle constructor = constructors.computeIfAbsent(shape, this::generate);
         try {
-            return (AbstractMultiLongGroupingTable) constructor.invoke(arrayPool, expectedSize, storesGroupIds, retainGroupKeys, compactRetainedColumns, policy);
+            return (AbstractFixedWidthKeyTable) constructor.invoke(arrayPool, expectedSize, storesGroupIds, retainGroupKeys, compactRetainedColumns, policy);
         }
         catch (Throwable e) {
             throw new RuntimeException("Failed to instantiate generated grouping table for arity " + arity, e);
@@ -179,48 +162,15 @@ final class MultiLongGroupingTableGenerator
     private void checkOpen()
     {
         if (closed) {
-            throw new IllegalStateException("Multi-long grouping table generator is closed");
+            throw new IllegalStateException("Fixed-width key table generator is closed");
         }
     }
 
-    private static List<FixedWidthKeyLayout.Carrier> allLongCarriers(int arity)
+    private MethodHandle generate(GenerationShape shape)
     {
-        ArrayList<FixedWidthKeyLayout.Carrier> carriers = new ArrayList<>(arity);
-        for (int index = 0; index < arity; index++) {
-            carriers.add(FixedWidthKeyLayout.Carrier.I64);
-        }
-        return List.copyOf(carriers);
-    }
-
-    private static int carrierShape(List<FixedWidthKeyLayout.Carrier> carriers)
-    {
-        int shape = 0;
-        for (int index = 0; index < carriers.size(); index++) {
-            shape |= carriers.get(index).ordinal() << (index * 2);
-        }
-        return shape;
-    }
-
-    private static List<FixedWidthKeyLayout.Carrier> carriers(int shape, int arity)
-    {
-        ArrayList<FixedWidthKeyLayout.Carrier> carriers = new ArrayList<>(arity);
-        FixedWidthKeyLayout.Carrier[] values = FixedWidthKeyLayout.Carrier.values();
-        for (int index = 0; index < arity; index++) {
-            int carrier = (shape >>> (index * 2)) & 0x3;
-            if (carrier >= values.length) {
-                throw new IllegalArgumentException("Unknown fixed-width carrier code: " + carrier);
-            }
-            carriers.add(values[carrier]);
-        }
-        return List.copyOf(carriers);
-    }
-
-    private static MethodHandle generate(int shape)
-    {
-        int arity = shape & 0xFF;
-        int compactRetainedColumns = (shape >>> 8) & 0xFF;
-        List<FixedWidthKeyLayout.Carrier> carriers = carriers(shape >>> 16, arity);
-        ClassDesc thisClass = ClassDesc.of("org.weakref.nitro.operator.GeneratedMultiLongGroupingTable" + Integer.toUnsignedString(shape));
+        int arity = shape.layout().laneCount();
+        int compactRetainedColumns = shape.compactRetainedColumns();
+        ClassDesc thisClass = ClassDesc.of("org.weakref.nitro.operator.GeneratedFixedWidthKeyTable" + nextClassId.incrementAndGet());
         MethodTypeDesc assignGroupType = assignGroupType(arity);
         MethodTypeDesc findGroupType = assignGroupType;
 
@@ -249,11 +199,12 @@ final class MultiLongGroupingTableGenerator
             builder.withMethodBody("assignDistinctGroup", assignGroupType, ClassFile.ACC_PRIVATE, code -> emitAssignGroup(code, arity, thisClass, false, false, 0, false, true));
             builder.withMethodBody("findGroup", findGroupType, ClassFile.ACC_PRIVATE, code -> emitAssignGroup(code, arity, thisClass, true, true, compactRetainedColumns, true, false));
             builder.withMethodBody("assignBatch", assignBatchType(), ClassFile.ACC_PUBLIC, code -> emitAssignBatch(code, arity, thisClass, assignGroupType, "assignGroup", false, false, true));
-            builder.withMethodBody("assignPhysicalBatch", assignPhysicalBatchType(false), ClassFile.ACC_PUBLIC, code -> emitAssignPhysicalBatch(code, carriers, thisClass, assignGroupType, false, false));
-            builder.withMethodBody("assignPhysicalNonNullBatch", assignPhysicalBatchType(false), ClassFile.ACC_PUBLIC, code -> emitAssignPhysicalBatch(code, carriers, thisClass, assignGroupType, false, true));
-            builder.withMethodBody("assignPhysicalDistinctBatch", assignPhysicalBatchType(true), ClassFile.ACC_PUBLIC, code -> emitAssignPhysicalBatch(code, carriers, thisClass, assignGroupType, true, true));
-            builder.withMethodBody("assignPhysicalDistinctRetainingNullBatch", assignPhysicalBatchType(true), ClassFile.ACC_PUBLIC, code -> emitAssignPhysicalBatch(code, carriers, thisClass, assignGroupType, true, false));
-            builder.withMethodBody("findPhysicalBatch", findPhysicalBatchType(), ClassFile.ACC_PUBLIC, code -> emitFindPhysicalBatch(code, carriers, thisClass, findGroupType));
+            builder.withMethodBody("assignPhysicalBatch", assignPhysicalBatchType(false), ClassFile.ACC_PUBLIC, code -> emitAssignPhysicalBatch(code, shape, thisClass, assignGroupType, false, false));
+            builder.withMethodBody("assignPhysicalNonNullBatch", assignPhysicalBatchType(false), ClassFile.ACC_PUBLIC, code -> emitAssignPhysicalBatch(code, shape, thisClass, assignGroupType, false, true));
+            builder.withMethodBody("assignPhysicalDistinctBatch", assignPhysicalBatchType(true), ClassFile.ACC_PUBLIC, code -> emitAssignPhysicalBatch(code, shape, thisClass, assignGroupType, true, true));
+            builder.withMethodBody("assignPhysicalDistinctRetainingNullBatch", assignPhysicalBatchType(true), ClassFile.ACC_PUBLIC, code -> emitAssignPhysicalBatch(code, shape, thisClass, assignGroupType, true, false));
+            builder.withMethodBody("findPhysicalBatch", findPhysicalBatchType(), ClassFile.ACC_PUBLIC, code -> emitFindPhysicalBatch(code, shape, thisClass, findGroupType));
+            builder.withMethodBody("extractPhysicalKey", extractPhysicalKeyType(), ClassFile.ACC_PUBLIC, code -> emitExtractPhysicalKey(code, shape));
             builder.withMethodBody("assignBatchDiscardingResults", assignBatchDiscardingResultsType(), ClassFile.ACC_PUBLIC, code -> emitAssignBatchDiscardingResults(code, thisClass));
             builder.withMethodBody("assignBatchWithoutResults", assignBatchType(), ClassFile.ACC_PRIVATE, code -> emitAssignBatch(code, arity, thisClass, assignGroupType, "assignGroup", false, false, false));
             builder.withMethodBody("assignRetainedBatchWithoutResults", assignBatchType(), ClassFile.ACC_PRIVATE, code -> emitAssignBatch(code, arity, thisClass, assignGroupType, "assignRetainedGroup", false, false, false));
@@ -264,7 +215,7 @@ final class MultiLongGroupingTableGenerator
 
         try {
             MethodHandles.Lookup lookup = MethodHandles.lookup()
-                    .defineHiddenClass(bytes, true, MethodHandles.Lookup.ClassOption.NESTMATE);
+                    .defineHiddenClassWithClassData(bytes, shape.layout().projections(), true, MethodHandles.Lookup.ClassOption.NESTMATE);
             return lookup.findConstructor(
                     lookup.lookupClass(),
                     MethodType.methodType(
@@ -278,6 +229,14 @@ final class MultiLongGroupingTableGenerator
         }
         catch (ReflectiveOperationException e) {
             throw new RuntimeException("Failed to generate grouping table for arity " + arity, e);
+        }
+    }
+
+    private record GenerationShape(FixedWidthKeyTableLayout layout, int compactRetainedColumns)
+    {
+        private GenerationShape
+        {
+            requireNonNull(layout, "layout is null");
         }
     }
 
@@ -313,6 +272,15 @@ final class MultiLongGroupingTableGenerator
                 CD_OBJECT_ARRAY, CD_INT_ARRAY_2D, CD_INT_ARRAY, CD_INT_ARRAY,
                 CD_BOOLEAN_ARRAY.arrayType(), CD_INT_ARRAY_2D, CD_INT_ARRAY, CD_INT_ARRAY,
                 CD_INT_ARRAY, CD_int, CD_LONG_ARRAY);
+    }
+
+    private static MethodTypeDesc extractPhysicalKeyType()
+    {
+        return MethodTypeDesc.of(
+                CD_byte,
+                CD_OBJECT_ARRAY, CD_INT_ARRAY_2D, CD_INT_ARRAY, CD_INT_ARRAY,
+                CD_BOOLEAN_ARRAY.arrayType(), CD_INT_ARRAY_2D, CD_INT_ARRAY, CD_INT_ARRAY,
+                CD_INT_ARRAY, CD_INT_ARRAY, CD_LONG_ARRAY);
     }
 
     private static MethodTypeDesc assignDistinctBatchType()
@@ -466,14 +434,14 @@ final class MultiLongGroupingTableGenerator
             code.laload();
         }
         else {
-            code.loadConstant(AbstractMultiLongGroupingTable.EMPTY_GROUP_ID);
+            code.loadConstant(AbstractFixedWidthKeyTable.EMPTY_GROUP_ID);
         }
         code.lreturn();
 
         // ---- empty slot: insert new group ----
         code.labelBinding(empty);
         if (!insertOnMiss) {
-            code.loadConstant(AbstractMultiLongGroupingTable.EMPTY_GROUP_ID);
+            code.loadConstant(AbstractFixedWidthKeyTable.EMPTY_GROUP_ID);
             code.lreturn();
         }
         if (!identityGroupIdSlots) {
@@ -747,17 +715,18 @@ final class MultiLongGroupingTableGenerator
     // primitive/mapping loads and the generated exact probe, with no VectorAccess or interface invocation.
     private static void emitAssignPhysicalBatch(
             CodeBuilder code,
-            List<FixedWidthKeyLayout.Carrier> carriers,
+            GenerationShape shape,
             ClassDesc thisClass,
             MethodTypeDesc assignGroupType,
             boolean distinct,
             boolean skipNulls)
     {
-        int arity = carriers.size();
+        int arity = shape.layout().laneSourceCounts().size();
+        int sourceCount = shape.layout().sourceCarriers().size();
         int arrayBase = 14;
-        int nullBase = arrayBase + arity;
+        int nullBase = arrayBase + sourceCount;
         int keyMappingBase = nullBase + arity;
-        int nullMappingBase = keyMappingBase + arity;
+        int nullMappingBase = keyMappingBase + sourceCount;
         int index = nullMappingBase + arity;
         int position = index + 1;
         int physicalPosition = position + 1;
@@ -766,23 +735,25 @@ final class MultiLongGroupingTableGenerator
         int groupId = nullMask + 1;
         int distinctCount = groupId + 2;
 
-        for (int lane = 0; lane < arity; lane++) {
+        for (int source = 0; source < sourceCount; source++) {
             code.aload(1);
-            code.loadConstant(lane);
+            code.loadConstant(source);
             code.aaload();
-            code.checkcast(switch (carriers.get(lane)) {
+            code.checkcast(switch (shape.layout().sourceCarriers().get(source)) {
                 case I32 -> CD_RAW_INT_ARRAY;
                 case I64 -> CD_LONG_ARRAY;
                 case F64 -> CD_DOUBLE_ARRAY;
                 case BOOLEAN -> CD_BOOLEAN_ARRAY;
             });
-            code.astore(arrayBase + lane);
+            code.astore(arrayBase + source);
 
             code.aload(2);
-            code.loadConstant(lane);
+            code.loadConstant(source);
             code.aaload();
-            code.astore(keyMappingBase + lane);
+            code.astore(keyMappingBase + source);
+        }
 
+        for (int lane = 0; lane < arity; lane++) {
             code.aload(5);
             code.loadConstant(lane);
             code.aaload();
@@ -822,6 +793,7 @@ final class MultiLongGroupingTableGenerator
 
         code.loadConstant(0);
         code.istore(nullMask);
+        int sourceOffset = 0;
         for (int lane = 0; lane < arity; lane++) {
             Label notNull = code.newLabel();
             Label loaded = code.newLabel();
@@ -840,29 +812,10 @@ final class MultiLongGroupingTableGenerator
             code.lstore(keyBase + 2 * lane);
             code.goto_(loaded);
             code.labelBinding(notNull);
-            emitPhysicalPosition(code, position, physicalPosition, keyMappingBase + lane, 3, 4, lane);
-            code.aload(arrayBase + lane);
-            code.iload(physicalPosition);
-            switch (carriers.get(lane)) {
-                case I32 -> {
-                    code.iaload();
-                    code.i2l();
-                }
-                case I64 -> code.laload();
-                case F64 -> {
-                    code.daload();
-                    code.invokestatic(
-                            ClassDesc.of("java.lang.Double"),
-                            "doubleToRawLongBits",
-                            MethodTypeDesc.of(CD_long, java.lang.constant.ConstantDescs.CD_double));
-                }
-                case BOOLEAN -> {
-                    code.baload();
-                    code.i2l();
-                }
-            }
+            emitProjectedLane(code, shape, lane, sourceOffset, position, physicalPosition, arrayBase, keyMappingBase, 3, 4);
             code.lstore(keyBase + 2 * lane);
             code.labelBinding(loaded);
+            sourceOffset += shape.layout().laneSourceCounts().get(lane);
         }
 
         Label next = code.newLabel();
@@ -873,7 +826,7 @@ final class MultiLongGroupingTableGenerator
             if (!distinct) {
                 code.aload(11);
                 code.iload(position);
-                code.loadConstant(AbstractMultiLongGroupingTable.EMPTY_GROUP_ID);
+                code.loadConstant(AbstractFixedWidthKeyTable.EMPTY_GROUP_ID);
                 code.lastore();
             }
             code.goto_(next);
@@ -930,15 +883,16 @@ final class MultiLongGroupingTableGenerator
 
     private static void emitFindPhysicalBatch(
             CodeBuilder code,
-            List<FixedWidthKeyLayout.Carrier> carriers,
+            GenerationShape shape,
             ClassDesc thisClass,
             MethodTypeDesc findGroupType)
     {
-        int arity = carriers.size();
+        int arity = shape.layout().laneSourceCounts().size();
+        int sourceCount = shape.layout().sourceCarriers().size();
         int arrayBase = 12;
-        int nullBase = arrayBase + arity;
+        int nullBase = arrayBase + sourceCount;
         int keyMappingBase = nullBase + arity;
-        int nullMappingBase = keyMappingBase + arity;
+        int nullMappingBase = keyMappingBase + sourceCount;
         int index = nullMappingBase + arity;
         int position = index + 1;
         int physicalPosition = position + 1;
@@ -947,23 +901,25 @@ final class MultiLongGroupingTableGenerator
         int groupId = nullMask + 1;
         int matchCount = groupId + 2;
 
-        for (int lane = 0; lane < arity; lane++) {
+        for (int source = 0; source < sourceCount; source++) {
             code.aload(1);
-            code.loadConstant(lane);
+            code.loadConstant(source);
             code.aaload();
-            code.checkcast(switch (carriers.get(lane)) {
+            code.checkcast(switch (shape.layout().sourceCarriers().get(source)) {
                 case I32 -> CD_RAW_INT_ARRAY;
                 case I64 -> CD_LONG_ARRAY;
                 case F64 -> CD_DOUBLE_ARRAY;
                 case BOOLEAN -> CD_BOOLEAN_ARRAY;
             });
-            code.astore(arrayBase + lane);
+            code.astore(arrayBase + source);
 
             code.aload(2);
-            code.loadConstant(lane);
+            code.loadConstant(source);
             code.aaload();
-            code.astore(keyMappingBase + lane);
+            code.astore(keyMappingBase + source);
+        }
 
+        for (int lane = 0; lane < arity; lane++) {
             code.aload(5);
             code.loadConstant(lane);
             code.aaload();
@@ -1001,6 +957,7 @@ final class MultiLongGroupingTableGenerator
 
         code.loadConstant(0);
         code.istore(nullMask);
+        int sourceOffset = 0;
         for (int lane = 0; lane < arity; lane++) {
             Label notNull = code.newLabel();
             Label loaded = code.newLabel();
@@ -1019,36 +976,17 @@ final class MultiLongGroupingTableGenerator
             code.lstore(keyBase + 2 * lane);
             code.goto_(loaded);
             code.labelBinding(notNull);
-            emitPhysicalPosition(code, position, physicalPosition, keyMappingBase + lane, 3, 4, lane);
-            code.aload(arrayBase + lane);
-            code.iload(physicalPosition);
-            switch (carriers.get(lane)) {
-                case I32 -> {
-                    code.iaload();
-                    code.i2l();
-                }
-                case I64 -> code.laload();
-                case F64 -> {
-                    code.daload();
-                    code.invokestatic(
-                            ClassDesc.of("java.lang.Double"),
-                            "doubleToRawLongBits",
-                            MethodTypeDesc.of(CD_long, java.lang.constant.ConstantDescs.CD_double));
-                }
-                case BOOLEAN -> {
-                    code.baload();
-                    code.i2l();
-                }
-            }
+            emitProjectedLane(code, shape, lane, sourceOffset, position, physicalPosition, arrayBase, keyMappingBase, 3, 4);
             code.lstore(keyBase + 2 * lane);
             code.labelBinding(loaded);
+            sourceOffset += shape.layout().laneSourceCounts().get(lane);
         }
 
         Label lookup = code.newLabel();
         Label next = code.newLabel();
         code.iload(nullMask);
         code.ifeq(lookup);
-        code.loadConstant(AbstractMultiLongGroupingTable.EMPTY_GROUP_ID);
+        code.loadConstant(AbstractFixedWidthKeyTable.EMPTY_GROUP_ID);
         code.lstore(groupId);
         code.goto_(next);
 
@@ -1069,7 +1007,7 @@ final class MultiLongGroupingTableGenerator
         code.lload(groupId);
         code.lastore();
         code.lload(groupId);
-        code.loadConstant(AbstractMultiLongGroupingTable.EMPTY_GROUP_ID);
+        code.loadConstant(AbstractFixedWidthKeyTable.EMPTY_GROUP_ID);
         code.lcmp();
         Label miss = code.newLabel();
         code.ifeq(miss);
@@ -1080,6 +1018,150 @@ final class MultiLongGroupingTableGenerator
         code.labelBinding(end);
         code.iload(matchCount);
         code.ireturn();
+    }
+
+    private static void emitExtractPhysicalKey(CodeBuilder code, GenerationShape shape)
+    {
+        int arity = shape.layout().laneSourceCounts().size();
+        int sourceCount = shape.layout().sourceCarriers().size();
+        int arrayBase = 12;
+        int nullBase = arrayBase + sourceCount;
+        int keyMappingBase = nullBase + arity;
+        int nullMappingBase = keyMappingBase + sourceCount;
+        int logicalPosition = nullMappingBase + arity;
+        int physicalPosition = logicalPosition + 1;
+        int nullMask = physicalPosition + 1;
+
+        for (int source = 0; source < sourceCount; source++) {
+            code.aload(1);
+            code.loadConstant(source);
+            code.aaload();
+            code.checkcast(switch (shape.layout().sourceCarriers().get(source)) {
+                case I32 -> CD_RAW_INT_ARRAY;
+                case I64 -> CD_LONG_ARRAY;
+                case F64 -> CD_DOUBLE_ARRAY;
+                case BOOLEAN -> CD_BOOLEAN_ARRAY;
+            });
+            code.astore(arrayBase + source);
+            code.aload(2);
+            code.loadConstant(source);
+            code.aaload();
+            code.astore(keyMappingBase + source);
+        }
+        for (int lane = 0; lane < arity; lane++) {
+            code.aload(5);
+            code.loadConstant(lane);
+            code.aaload();
+            code.astore(nullBase + lane);
+            code.aload(6);
+            code.loadConstant(lane);
+            code.aaload();
+            code.astore(nullMappingBase + lane);
+        }
+
+        code.loadConstant(0);
+        code.istore(nullMask);
+        int sourceOffset = 0;
+        for (int lane = 0; lane < arity; lane++) {
+            code.aload(9);
+            code.aload(10);
+            code.loadConstant(lane);
+            code.iaload();
+            code.iaload();
+            code.istore(logicalPosition);
+
+            Label notNull = code.newLabel();
+            Label loaded = code.newLabel();
+            code.aload(nullBase + lane);
+            code.ifnull(notNull);
+            emitPhysicalPosition(code, logicalPosition, physicalPosition, nullMappingBase + lane, 7, 8, lane);
+            code.aload(nullBase + lane);
+            code.iload(physicalPosition);
+            code.baload();
+            code.ifeq(notNull);
+            code.iload(nullMask);
+            code.loadConstant(1 << lane);
+            code.ior();
+            code.istore(nullMask);
+            code.aload(11);
+            code.loadConstant(lane);
+            code.loadConstant(0L);
+            code.lastore();
+            code.goto_(loaded);
+
+            code.labelBinding(notNull);
+            code.aload(11);
+            code.loadConstant(lane);
+            emitProjectedLane(code, shape, lane, sourceOffset, logicalPosition, physicalPosition, arrayBase, keyMappingBase, 3, 4);
+            code.lastore();
+            code.labelBinding(loaded);
+            sourceOffset += shape.layout().laneSourceCounts().get(lane);
+        }
+        code.iload(nullMask);
+        code.i2b();
+        code.ireturn();
+    }
+
+    private static void emitProjectedLane(
+            CodeBuilder code,
+            GenerationShape shape,
+            int lane,
+            int sourceOffset,
+            int logicalPosition,
+            int physicalPosition,
+            int arrayBase,
+            int keyMappingBase,
+            int mappingOffsetsParameter,
+            int baseOffsetsParameter)
+    {
+        int sourceCount = shape.layout().laneSourceCounts().get(lane);
+        List<ClassDesc> parameters = new ArrayList<>(sourceCount);
+        for (int sourceInLane = 0; sourceInLane < sourceCount; sourceInLane++) {
+            int source = sourceOffset + sourceInLane;
+            FixedWidthKeyLayout.Carrier carrier = shape.layout().sourceCarriers().get(source);
+            emitPhysicalPosition(
+                    code,
+                    logicalPosition,
+                    physicalPosition,
+                    keyMappingBase + source,
+                    mappingOffsetsParameter,
+                    baseOffsetsParameter,
+                    source);
+            code.aload(arrayBase + source);
+            code.iload(physicalPosition);
+            switch (carrier) {
+                case I32 -> code.iaload();
+                case I64 -> code.laload();
+                case F64 -> code.daload();
+                case BOOLEAN -> code.baload();
+            }
+            parameters.add(carrierDescriptor(carrier));
+        }
+        if (shape.layout().projections().get(lane).isPresent()) {
+            code.invokedynamic(DynamicCallSiteDesc.of(
+                    BSM_PROJECTION,
+                    "projection" + lane,
+                    MethodTypeDesc.of(CD_long, parameters.toArray(ClassDesc[]::new))));
+            return;
+        }
+        switch (shape.layout().sourceCarriers().get(sourceOffset)) {
+            case I32, BOOLEAN -> code.i2l();
+            case I64 -> {}
+            case F64 -> code.invokestatic(
+                    ClassDesc.of("java.lang.Double"),
+                    "doubleToRawLongBits",
+                    MethodTypeDesc.of(CD_long, CD_double));
+        }
+    }
+
+    private static ClassDesc carrierDescriptor(FixedWidthKeyLayout.Carrier carrier)
+    {
+        return switch (carrier) {
+            case I32 -> CD_int;
+            case I64 -> CD_long;
+            case F64 -> CD_double;
+            case BOOLEAN -> CD_boolean;
+        };
     }
 
     private static void emitPhysicalPosition(
@@ -1138,7 +1220,7 @@ final class MultiLongGroupingTableGenerator
         code.i2l();
         for (int key = 0; key < arity; key++) {
             keyLoader.accept(key);
-            code.loadConstant(AbstractMultiLongGroupingTable.HASH_PRIMES[key]);
+            code.loadConstant(AbstractFixedWidthKeyTable.HASH_PRIMES[key]);
             code.lmul();
             code.ladd();
         }
