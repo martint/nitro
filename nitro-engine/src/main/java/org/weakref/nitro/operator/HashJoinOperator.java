@@ -1674,7 +1674,7 @@ public class HashJoinOperator
                     releaseCollectedBuildKeys();
                     buildKeyValues = null;
                 }
-                boolean collectKeys = buildKeysViable && !buildKeysAbandoned;
+                boolean collectKeys = buildKeysViable && !buildKeysAbandoned && !(joinIndex instanceof FixedWidthJoinIndex);
                 VectorAccess.LongValues[] buildKeyAccessors = null;
                 if (collectKeys) {
                     buildKeyAccessors = new VectorAccess.LongValues[joinValues.length];
@@ -2067,7 +2067,7 @@ public class HashJoinOperator
                     genericJoinIndexes.shouldUseDirectRangeBuild(batch, joinValues, expectedRows));
         }
 
-        boolean collectKeys = buildKeysViable && !buildKeysAbandoned;
+        boolean collectKeys = buildKeysViable && !buildKeysAbandoned && !(joinIndex instanceof FixedWidthJoinIndex);
         VectorAccess.LongValues[] buildKeyAccessors = null;
         if (collectKeys) {
             if (buildKeyValues == null) {
@@ -2180,6 +2180,18 @@ public class HashJoinOperator
                     java.util.Arrays.stream(joinValues).map(value -> value.getClass().getSimpleName() + '(' + value.length() + ')').toList());
         }
         if (!allowsLegacyKeyShortcuts) {
+            ResolvedFixedWidthKeyLayout fixedWidth = ResolvedFixedWidthKeyLayout.tryCreate(
+                    flatJoinKeyTypes,
+                    structuralKeyKernels,
+                    joinValues);
+            if (fixedWidth != null) {
+                return new FixedWidthJoinIndex(
+                        fixedWidth,
+                        expectedSize,
+                        arrayPool,
+                        operatorResources.codeGeneration(),
+                        operatorResources.adaptiveLongGroupingPolicy());
+            }
             return genericJoinIndexes.structural(structuralKeyKernels);
         }
         if (joinValues.length == 1 && isSingleLongJoinCandidate(joinValues[0])) {
@@ -2269,6 +2281,7 @@ public class HashJoinOperator
         if (!(joinIndex instanceof LongJoinIndex) &&
                 !(joinIndex instanceof LongPairJoinIndex) &&
                 !(joinIndex instanceof LongTripleJoinIndex) &&
+                !(joinIndex instanceof FixedWidthJoinIndex) &&
                 !(joinIndex instanceof StructuralHashJoinIndex) &&
                 !(joinIndex instanceof FlatJoinIndex)) {
             return null;
@@ -2292,6 +2305,9 @@ public class HashJoinOperator
         }
         if (joinIndex instanceof LongTripleJoinIndex longTripleJoinIndex) {
             return longTripleJoinIndex.newProbeView();
+        }
+        if (joinIndex instanceof FixedWidthJoinIndex fixedWidthJoinIndex) {
+            return fixedWidthJoinIndex.newProbeView();
         }
         if (joinIndex instanceof StructuralHashJoinIndex structuralHashJoinIndex) {
             return structuralHashJoinIndex.newProbeView();

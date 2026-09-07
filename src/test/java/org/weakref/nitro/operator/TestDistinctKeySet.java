@@ -14,6 +14,7 @@
 package org.weakref.nitro.operator;
 
 import org.junit.jupiter.api.Test;
+import org.weakref.nitro.core.type.FixedWidthKeyLayout;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.core.type.TypeIdentity;
@@ -32,6 +33,7 @@ import org.weakref.nitro.execution.EngineResources;
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -44,6 +46,130 @@ class TestDistinctKeySet
     private final OperatorCodeGenerationResources codeGeneration = engineResources.operatorCodeGeneration();
     private final AdaptiveLongGroupingPolicy adaptiveLongGroupingPolicy = engineResources.operatorResources().adaptiveLongGroupingPolicy();
     private final FlatKeyTablePolicy flatKeyTablePolicy = engineResources.operatorResources().flatKeyTablePolicy();
+
+    @Test
+    void testFixedWidthStructuralDistinctUsesFlatPrimitiveLanes()
+    {
+        StructVector pairs = fixedWidthPairs(
+                new long[] {1, 1, 2, 3, 2},
+                new long[] {10, 10, 20, 30, 20});
+        Vector[] values = {pairs};
+        Vector[] nulls = {null};
+
+        try (Allocator allocator = new Allocator(engineResources)) {
+            DistinctKeySet keys = DistinctKeySet.create(
+                    values,
+                    List.of(fixedWidthPairType()),
+                    allocator,
+                    new Allocator.Context("fixed-width-flat-distinct"),
+                    arrayPool,
+                    codeGeneration,
+                    DistinctKeySetPolicy.defaults(),
+                    adaptiveLongGroupingPolicy,
+                    flatKeyTablePolicy);
+            try {
+                int[] positions = new int[pairs.length()];
+                int distinct = keys.addBatch(values, nulls, Mask.all(pairs.length()), positions);
+                assertThat(Arrays.copyOf(positions, distinct)).containsExactly(0, 2, 3);
+                assertThat(keys.addBatch(values, nulls, Mask.all(pairs.length()), positions)).isZero();
+            }
+            finally {
+                keys.releaseBuffers();
+            }
+        }
+    }
+
+    @Test
+    void testFixedWidthStructuralDistinctComposesNestedDictionaryMappingsAndNullModes()
+    {
+        StructVector domain = fixedWidthPairs(
+                new long[] {10, 20, 30},
+                new long[] {100, 200, 300});
+        int[] innerIds = {2, 0, 1, 2};
+        int[] outerIds = {1, 3, 0, 2, 3, 1};
+        DictionaryVector rows = DictionaryVector.wrapNested(
+                outerIds,
+                outerIds.length,
+                DictionaryVector.wrapNested(innerIds, innerIds.length, domain));
+        DictionaryVector rowNulls = nestedBooleanDictionary(
+                outerIds,
+                innerIds,
+                new boolean[] {false, false, true});
+        Mask sparse = Mask.sparse(new int[] {0, 1, 3, 5}, rows.length());
+
+        try (Allocator allocator = new Allocator(engineResources)) {
+            DistinctKeySet droppingNulls = createFixedWidthDistinct(rows, false, allocator, "fixed-width-nested-drop-null");
+            try {
+                int[] positions = new int[rows.length()];
+                int distinct = droppingNulls.addBatch(
+                        new Vector[] {rows},
+                        new Vector[] {rowNulls},
+                        sparse,
+                        positions);
+                assertThat(Arrays.copyOf(positions, distinct)).containsExactly(0, 3);
+                assertThat(droppingNulls.addBatch(
+                        new Vector[] {rows},
+                        new Vector[] {rowNulls},
+                        sparse,
+                        positions)).isZero();
+            }
+            finally {
+                droppingNulls.releaseBuffers();
+            }
+
+            DistinctKeySet retainingNulls = createFixedWidthDistinct(rows, true, allocator, "fixed-width-nested-retain-null");
+            try {
+                int[] positions = new int[rows.length()];
+                int distinct = retainingNulls.addBatch(
+                        new Vector[] {rows},
+                        new Vector[] {rowNulls},
+                        sparse,
+                        positions);
+                assertThat(Arrays.copyOf(positions, distinct)).containsExactly(0, 1, 3);
+                assertThat(retainingNulls.addBatch(
+                        new Vector[] {rows},
+                        new Vector[] {rowNulls},
+                        sparse,
+                        positions)).isZero();
+            }
+            finally {
+                retainingNulls.releaseBuffers();
+            }
+        }
+    }
+
+    @Test
+    void testGroupedFixedWidthStructuralDistinctIncludesGroupLane()
+    {
+        I64Vector groups = new I64Vector(new long[] {0, 0, 1, 1, 0, 1});
+        StructVector pairs = fixedWidthPairs(
+                new long[] {1, 1, 1, 2, 2, 1},
+                new long[] {10, 10, 10, 20, 20, 10});
+        Vector[] values = {groups, pairs};
+        Vector[] nulls = {null, null};
+
+        try (Allocator allocator = new Allocator(engineResources)) {
+            DistinctKeySet keys = DistinctKeySet.createGroupedLong(
+                    values,
+                    List.of(fixedWidthPairType()),
+                    allocator,
+                    new Allocator.Context("grouped-fixed-width-distinct"),
+                    arrayPool,
+                    codeGeneration,
+                    DistinctKeySetPolicy.defaults(),
+                    adaptiveLongGroupingPolicy,
+                    flatKeyTablePolicy);
+            try {
+                int[] positions = new int[groups.length()];
+                int distinct = keys.addGroupedBatch(values, nulls, Mask.all(groups.length()), 2, positions);
+                assertThat(Arrays.copyOf(positions, distinct)).containsExactly(0, 2, 3, 4);
+                assertThat(keys.addGroupedBatch(values, nulls, Mask.all(groups.length()), 2, positions)).isZero();
+            }
+            finally {
+                keys.releaseBuffers();
+            }
+        }
+    }
 
     @Test
     void testStructuralDistinctReusesProbeAcrossRepeatedRows()
@@ -947,6 +1073,67 @@ class TestDistinctKeySet
             vector.setBytes(position, encoded[position]);
         }
         return vector;
+    }
+
+    private DistinctKeySet createFixedWidthDistinct(Vector sample, boolean retainNulls, Allocator allocator, String context)
+    {
+        return DistinctKeySet.create(
+                new Vector[] {sample},
+                retainNulls,
+                List.of(fixedWidthPairType()),
+                allocator,
+                new Allocator.Context(context),
+                arrayPool,
+                codeGeneration,
+                DistinctKeySetPolicy.defaults(),
+                adaptiveLongGroupingPolicy,
+                flatKeyTablePolicy);
+    }
+
+    private static StructVector fixedWidthPairs(long[] high, long[] low)
+    {
+        StructVector pairs = new StructVector(high.length);
+        pairs.setField("high", Streams.ofValues(new I64Vector(high)));
+        pairs.setField("low", Streams.ofValues(new I64Vector(low)));
+        return pairs;
+    }
+
+    private static TypeBinding fixedWidthPairType()
+    {
+        return new TypeBinding()
+        {
+            @Override
+            public TypeIdentity identity()
+            {
+                return new TypeIdentity("testing:fixed-width-distinct-pair");
+            }
+
+            @Override
+            public Class<?> carrierType()
+            {
+                return Object.class;
+            }
+
+            @Override
+            public TypeOperators operators()
+            {
+                return TypeOperators.UNSPECIFIED;
+            }
+
+            @Override
+            public Optional<FixedWidthKeyLayout> fixedWidthKeyLayout()
+            {
+                return Optional.of(new FixedWidthKeyLayout(List.of(
+                        FixedWidthKeyLayout.Lane.i64(List.of("high")),
+                        FixedWidthKeyLayout.Lane.i64(List.of("low")))));
+            }
+
+            @Override
+            public Set<Class<? extends Vector>> supportedVectorTypes()
+            {
+                return Set.of(StructVector.class, DictionaryVector.class);
+            }
+        };
     }
 
     private record TestingStructType(List<TypeBinding> nestedValueTypes)

@@ -71,6 +71,18 @@ public interface TypeBinding
         return Optional.empty();
     }
 
+    /**
+     * Optional provider proof that logical key identity is the declared tuple of fixed-width primitive lanes.
+     *
+     * <p>Generated key consumers resolve the current physical vector shape once per batch and specialize their hot
+     * loops from this provider-owned logical layout. The proof is deliberately separate from raw-vector identity:
+     * the current vector may be structural, dictionary encoded, region backed, or run length encoded.
+     */
+    default Optional<FixedWidthKeyLayout> fixedWidthKeyLayout()
+    {
+        return Optional.empty();
+    }
+
     /// Optional exact normalized ordering key for physical domains that fit in 64 bits.
     ///
     /// Unsigned key comparison must agree with this binding's logical comparison for every

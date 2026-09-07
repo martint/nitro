@@ -146,6 +146,11 @@ A physical carrier does not imply a logical type. An I64 carrier may hold BIGINT
 timestamp representation. Binary storage does not imply UTF-8. The type registry supplies equality, hashing,
 comparison, coercion, display, and function semantics.
 
+A type provider may describe a logical key as an ordered fixed-width tuple of primitive lanes selected by structural
+field paths. The paths and carriers are physical layout metadata only; Nitro does not infer field meaning, a composite
+carrier type, or logical semantics from them. Logical nullness belongs to the enclosing value, and every selected
+component must be non-null whenever that value is non-null.
+
 Physical traits describe facts a producer can prove, such as ASCII-only bytes, valid UTF-8, sortedness, exact range,
 cardinality, null shape, or stable dictionary identity. Traits refine an already-bound logical type; they never create
 logical meaning from a physical vector.
@@ -225,6 +230,13 @@ when the binding also publishes richer logical hash or comparison operations for
 to the provider and must be absent when normalization, canonicalization, unordered-value semantics, or any other
 logical rule makes raw physical equality insufficient. Consumers retain the provider's exact semantic operations when
 the proof is absent.
+
+A provider may give the narrower structural proof that logical key identity is exactly raw equality of an ordered
+`I32`, `I64`, `F64`, or `BOOLEAN` lane tuple. Each lane selects either the value itself or a path of named structural
+fields. Generated key consumers resolve supported wrapper mappings once per batch and load the exact primitive arrays
+directly. A declared layout that does not match its admitted vector, selects an independently nullable component, or
+exceeds a consumer's supported generated shape is an admission error; it is not permission to enter a row-wise
+semantic bridge. Types without this proof retain their exact semantic key operations.
 
 Stateful registry implementations may also request a composed key binder. Each bound vector exposes opaque hashing
 and cross-vector identity over positions, allowing retained indexes such as map construction state to span owned
@@ -525,6 +537,12 @@ Grouping is a physical key-to-group operation. It can select flat, packed, dicti
 other general representations based on observed shape and immutable policy. It cannot recognize aggregate functions
 or SQL types. Partial aggregation considers retained work, cardinality, state size, and reduction.
 
+Provider-described fixed-width keys use one shared generated table contract for grouping and distinct. Batch binding
+resolves primitive arrays, offsets, and flat/region/dictionary/nested-dictionary/RLE mappings outside the row loop;
+the generated loop performs direct carrier loads, hashing, and exact probing without value-access interfaces or
+provider dispatch. Grouping separately retains logical representatives for output, while distinct separately applies
+its requested null-dropping or null-retaining semantics.
+
 ### 12.2 Pattern recognition
 
 Pattern recognition is an engine-owned Nitro operator, not a host Page operator embedded inside an island. Planning
@@ -547,6 +565,11 @@ reports a compatibility provider as native.
 
 Join algorithms are separate from key semantics. Type bindings and registry functions provide exact hashing,
 comparison, and residual predicates. Physical key layouts may be generated from resolved lanes.
+
+A join over a provider-described fixed-width key uses the same generated exact table and physical binder as grouping
+and distinct. Build insertion skips every row with a null logical key, preserves duplicate row references, and probe
+lookup does not mutate the table. Prepared probe views share immutable build state but own their batch-binding scratch.
+No row-wise structural comparison or accessor interface is an execution bridge for an admitted fixed-width layout.
 
 Build state and prepared membership are task-owned capabilities shareable across compatible probe drivers. Join output
 preserves mappings and encodings when this avoids copies and satisfies ownership.
@@ -609,6 +632,11 @@ Specialization can generate expression loops, grouping layouts, hash/probe kerne
 updates. Generated code derives from interfaces and physical layouts—not function names, queries, tables, or fixed SQL
 arities. Adaptive mechanisms report admission, strategy, transitions, and achieved reduction.
 
+Fixed-width key generation specializes the ordered carrier sequence. Primitive-array casts and mapping references are
+hoisted before the logical-row loop; the loop contains carrier-specific array loads and the generated exact probe.
+Static shape validation and batch binding may inspect vector wrappers, but hot rows do not invoke method handles,
+virtual provider operations, or polymorphic value-access interfaces.
+
 Generated-kernel reuse requires exact equality of every physical property that changes emitted loads, mappings,
 null handling, or loop structure. A hash may index a cache but must not itself prove compatibility. The hot batch
 path compares a previously captured structural descriptor without allocation; it captures a new immutable descriptor
@@ -664,6 +692,10 @@ cancellation, memory pressure, and spill coordination; and observability and rol
 
 Adding a type, operator, calling convention, or physical path adds functional and benchmark coverage. Unsupported
 entries fail at admission and are not silently delegated inside an island.
+
+A provider-declared fixed-width key layout has cross-consumer coverage for grouping, distinct, and joins, including
+encoded mappings, sparse masks, null behavior, duplicate multiplicity, and prepared build sharing. Mismatched carriers,
+nullable selected components, unsupported representations, and unsupported generated lane counts fail loudly.
 
 Rollout begins with plans whose complete region is supported, retains explicit host fallback at island admission, and
 expands by closing gaps. Once admitted, an island executes wholly in Nitro or fails; runtime decomposition is not a

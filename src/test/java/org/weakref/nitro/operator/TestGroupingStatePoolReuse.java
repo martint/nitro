@@ -15,6 +15,8 @@ package org.weakref.nitro.operator;
 
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.core.type.BoundTypeKey;
+import org.weakref.nitro.core.type.FixedWidthKeyLayout;
+import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.core.type.TypeIdentity;
 import org.weakref.nitro.core.type.TypeKeyBinder;
@@ -23,12 +25,15 @@ import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.F64Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
+import org.weakref.nitro.data.StructVector;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.execution.EngineResources;
 
 import java.lang.invoke.MethodHandles;
@@ -50,6 +55,208 @@ public class TestGroupingStatePoolReuse
     private final GroupingStateResources groupingResources = engineResources.groupingState();
     private final AdaptiveLongGroupingPolicy adaptiveLongGroupingPolicy = engineResources.operatorResources().adaptiveLongGroupingPolicy();
     private final FlatKeyTablePolicy flatKeyTablePolicy = engineResources.operatorResources().flatKeyTablePolicy();
+
+    @Test
+    public void testFixedWidthKeyLayoutUsesGeneratedTupleTable()
+    {
+        TypeBinding longType = Schema.unspecified(1).field(0).type();
+        TypeBinding canonicalPair = new TypeBinding()
+        {
+            @Override
+            public TypeIdentity identity()
+            {
+                return new TypeIdentity("testing:canonical-long-pair");
+            }
+
+            @Override
+            public Class<?> carrierType()
+            {
+                return Object.class;
+            }
+
+            @Override
+            public TypeOperators operators()
+            {
+                return TypeOperators.UNSPECIFIED;
+            }
+
+            @Override
+            public Optional<FixedWidthKeyLayout> fixedWidthKeyLayout()
+            {
+                return Optional.of(new FixedWidthKeyLayout(List.of(
+                        FixedWidthKeyLayout.Lane.i64(List.of("high")),
+                        FixedWidthKeyLayout.Lane.i64(List.of("low")))));
+            }
+
+            @Override
+            public List<TypeBinding> nestedValueTypes()
+            {
+                return List.of(longType, longType);
+            }
+
+            @Override
+            public Set<Class<? extends Vector>> supportedVectorTypes()
+            {
+                return Set.of(StructVector.class, DictionaryVector.class);
+            }
+        };
+
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            allocator.beginExecution();
+            Allocator.Context context = new Allocator.Context("fixedWidthKeyLayout");
+            GroupingState state = new GroupingState(
+                    resources.primitiveArrays(),
+                    resources.operatorCodeGeneration(),
+                    resources.groupingState(),
+                    resources.operatorResources().adaptiveLongGroupingPolicy(),
+                    resources.operatorResources().flatKeyTablePolicy(),
+                    List.of(longType, canonicalPair),
+                    allocator,
+                    context);
+
+            StructVector pairs = new StructVector(6);
+            pairs.setField("high", Streams.ofValues(new I64Vector(new long[] {1, 1, 1, 2, 1, 2})));
+            pairs.setField("low", Streams.ofValues(new I64Vector(new long[] {2, 2, 3, 0, 2, 0})));
+            I64Vector groups = new I64Vector(6);
+            state.assignGroups(
+                    new Vector[] {new I64Vector(new long[] {9, 9, 9, 9, 9, 9}), pairs},
+                    new Vector[] {null, new BooleanVector(new boolean[] {false, false, false, false, true, false})},
+                    Mask.all(6),
+                    groups);
+
+            assertThat(groups.values()).containsExactly(0, 0, 1, 2, 3, 2);
+            assertThat(state.groupCount()).isEqualTo(4);
+
+            Streams groupedPairs = state.groupedValues(1, Mask.all(4), null, allocator, context);
+            assertThat(VectorAccess.longValue(VectorAccess.structFieldValues(groupedPairs.values(), "high"), 0)).isEqualTo(1);
+            assertThat(VectorAccess.longValue(VectorAccess.structFieldValues(groupedPairs.values(), "low"), 1)).isEqualTo(3);
+            assertThat(VectorAccess.longValue(VectorAccess.structFieldValues(groupedPairs.values(), "high"), 2)).isEqualTo(2);
+            assertThat(VectorAccess.booleanValues(groupedPairs.get(Stream.NULLS)).value(3)).isTrue();
+
+            I64Vector encodedGroups = new I64Vector(3);
+            state.assignGroups(
+                    new Vector[] {
+                            new I64Vector(new long[] {9, 9, 9}),
+                            new DictionaryVector(new int[] {2, 0, 3}, pairs)},
+                    new Vector[] {null, null},
+                    Mask.all(3),
+                    encodedGroups);
+            assertThat(encodedGroups.values()).containsExactly(1, 0, 2);
+
+            state.releaseBuffers();
+            allocator.release(context);
+        }
+    }
+
+    @Test
+    public void testMixedFixedWidthLayoutSupportsHashesAndMembership()
+    {
+        TypeBinding mixedType = new TypeBinding()
+        {
+            @Override
+            public TypeIdentity identity()
+            {
+                return new TypeIdentity("testing:mixed-fixed-width-key");
+            }
+
+            @Override
+            public Class<?> carrierType()
+            {
+                return Object.class;
+            }
+
+            @Override
+            public TypeOperators operators()
+            {
+                return TypeOperators.UNSPECIFIED;
+            }
+
+            @Override
+            public Optional<FixedWidthKeyLayout> fixedWidthKeyLayout()
+            {
+                return Optional.of(new FixedWidthKeyLayout(List.of(
+                        FixedWidthKeyLayout.Lane.i64(List.of("number")),
+                        FixedWidthKeyLayout.Lane.f64(List.of("fraction")),
+                        FixedWidthKeyLayout.Lane.bool(List.of("flag")))));
+            }
+
+            @Override
+            public Set<Class<? extends Vector>> supportedVectorTypes()
+            {
+                return Set.of(StructVector.class, DictionaryVector.class);
+            }
+        };
+
+        double firstNaN = Double.longBitsToDouble(0x7FF8_0000_0000_0001L);
+        double secondNaN = Double.longBitsToDouble(0x7FF8_0000_0000_0002L);
+        StructVector values = new StructVector(8);
+        values.setField("number", Streams.ofValues(new I64Vector(new long[] {1, 1, 1, 1, 2, 2, 2, 9})));
+        values.setField("fraction", Streams.ofValues(new F64Vector(new double[] {1.5, 1.5, -0.0, 0.0, firstNaN, firstNaN, secondNaN, 7.0})));
+        values.setField("flag", Streams.ofValues(new BooleanVector(new boolean[] {true, true, true, true, false, false, false, true})));
+        BooleanVector nulls = new BooleanVector(new boolean[] {false, false, false, false, false, false, false, true});
+
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            allocator.beginExecution();
+            Allocator.Context context = new Allocator.Context("mixedFixedWidthKeyLayout");
+            GroupingState state = new GroupingState(
+                    resources.primitiveArrays(),
+                    resources.operatorCodeGeneration(),
+                    resources.groupingState(),
+                    resources.operatorResources().adaptiveLongGroupingPolicy(),
+                    resources.operatorResources().flatKeyTablePolicy(),
+                    List.of(mixedType),
+                    allocator,
+                    context);
+
+            I64Vector groups = new I64Vector(8);
+            assertThat(state.assignGroupsWithAuthoritativeHashes(
+                    new Vector[] {values},
+                    new Vector[] {nulls},
+                    Mask.all(8),
+                    groups,
+                    new I64Vector(new long[] {91, 91, 92, 93, 94, 94, 95, 96}))).isTrue();
+            assertThat(groups.values()).containsExactly(0, 0, 1, 2, 3, 3, 4, 5);
+
+            state.beginContainsBatch(values, nulls);
+            assertThat(state.contains(values, nulls, 0)).isTrue();
+            assertThat(state.contains(values, nulls, 7)).isFalse();
+            state.endContainsBatch();
+
+            StructVector absent = new StructVector(1);
+            absent.setField("number", Streams.ofValues(new I64Vector(new long[] {7})));
+            absent.setField("fraction", Streams.ofValues(new F64Vector(new double[] {1.5})));
+            absent.setField("flag", Streams.ofValues(new BooleanVector(new boolean[] {true})));
+            assertThat(state.contains(absent, null, 0)).isFalse();
+
+            I64Vector groupedHashes = state.groupedHashRange(0, 6, null, allocator, context);
+            assertThat(groupedHashes).isNotNull();
+            Streams grouped = state.groupedValues(0, Mask.all(6), null, allocator, context);
+
+            GroupingState merged = new GroupingState(
+                    resources.primitiveArrays(),
+                    resources.operatorCodeGeneration(),
+                    resources.groupingState(),
+                    resources.operatorResources().adaptiveLongGroupingPolicy(),
+                    resources.operatorResources().flatKeyTablePolicy(),
+                    List.of(mixedType),
+                    allocator,
+                    context);
+            I64Vector mergedGroups = new I64Vector(6);
+            assertThat(merged.assignGroupsWithAuthoritativeHashes(
+                    new Vector[] {grouped.values()},
+                    new Vector[] {grouped.getOrNull(Stream.NULLS)},
+                    Mask.all(6),
+                    mergedGroups,
+                    groupedHashes)).isTrue();
+            assertThat(mergedGroups.values()).containsExactly(0, 1, 2, 3, 4, 5);
+
+            merged.releaseBuffers();
+            state.releaseBuffers();
+            allocator.release(context);
+        }
+    }
 
     @Test
     public void testStructuralGroupingBindsProviderKeyAccessOncePerVector()

@@ -188,6 +188,24 @@ final class DistinctKeySet
         StructuralKeyKernel[] kernels = structuralKeyKernels(samples.length, 1, keyTypes, codeGeneration);
         boolean rawLongKeyIdentity = keyTypes.size() == 1 && keyTypes.getFirst().supportsRawLongKeyIdentity();
         if (!allowsLegacyPhysicalShortcuts(kernels) && !rawLongKeyIdentity) {
+            ResolvedFixedWidthKeyLayout fixedWidth = ResolvedFixedWidthKeyLayout.tryCreate(
+                    flatKeyTypes(samples.length, keyTypes, 1),
+                    kernels,
+                    samples);
+            if (fixedWidth != null) {
+                return new DistinctKeySet(
+                        new FixedWidthDistinctIndex(
+                                fixedWidth,
+                                false,
+                                expectedSize,
+                                arrayPool,
+                                codeGeneration,
+                                adaptiveLongGroupingPolicy),
+                        keyTypes,
+                        1,
+                        allocator,
+                        allocationContext);
+            }
             return new DistinctKeySet(
                     new StructuralDistinctIndex(
                             requireNonNull(allocator, "allocator is null"),
@@ -343,6 +361,24 @@ final class DistinctKeySet
         validateKeyVectors(keyTypes, unboundKeyPrefix, samples);
         StructuralKeyKernel[] kernels = structuralKeyKernels(samples.length, unboundKeyPrefix, keyTypes, codeGeneration);
         if (!allowsLegacyPhysicalShortcuts(kernels)) {
+            ResolvedFixedWidthKeyLayout fixedWidth = ResolvedFixedWidthKeyLayout.tryCreate(
+                    flatKeyTypes(samples.length, keyTypes, unboundKeyPrefix),
+                    kernels,
+                    samples);
+            if (fixedWidth != null) {
+                return new DistinctKeySet(
+                        new FixedWidthDistinctIndex(
+                                fixedWidth,
+                                retainNulls,
+                                expectedSize,
+                                arrayPool,
+                                codeGeneration,
+                                adaptiveLongGroupingPolicy),
+                        keyTypes,
+                        unboundKeyPrefix,
+                        allocator,
+                        allocationContext);
+            }
             return new DistinctKeySet(
                     new StructuralDistinctIndex(
                             requireNonNull(allocator, "allocator is null"),
@@ -3432,6 +3468,135 @@ final class DistinctKeySet
             allocator.primitiveArrays().release(domainPositions);
             firstLogicalPositions = new int[0];
             domainPositions = new int[0];
+        }
+    }
+
+    private static final class FixedWidthDistinctIndex
+            implements DistinctIndex
+    {
+        private final boolean retainNulls;
+        private final AbstractMultiLongGroupingTable table;
+        private final FixedWidthKeyBatchBindings bindings;
+        private final int[] singlePosition = new int[1];
+        private final int[] singleDistinct = new int[1];
+
+        private FixedWidthDistinctIndex(
+                ResolvedFixedWidthKeyLayout layout,
+                boolean retainNulls,
+                int expectedSize,
+                PrimitiveArrayPool arrayPool,
+                OperatorCodeGenerationResources codeGeneration,
+                AdaptiveLongGroupingPolicy policy)
+        {
+            this.retainNulls = retainNulls;
+            table = codeGeneration.multiLongGrouping().createDistinct(
+                    Arrays.stream(layout.lanes()).map(ResolvedFixedWidthKeyLayout.Lane::carrier).toList(),
+                    Math.max(16, expectedSize),
+                    arrayPool,
+                    policy);
+            bindings = new FixedWidthKeyBatchBindings(layout, arrayPool);
+        }
+
+        @Override
+        public void reserveAdditional(int additionalEntries)
+        {
+            table.ensureCapacity(table.size + Math.max(0, additionalEntries));
+        }
+
+        @Override
+        public boolean add(Vector[] values, Vector[] nulls, int position)
+        {
+            singlePosition[0] = position;
+            return addPositions(values, nulls, singlePosition, 1, singleDistinct) == 1;
+        }
+
+        @Override
+        public int addBatch(Vector[] values, Vector[] nulls, Mask mask, int[] distinctPositions)
+        {
+            int[] positions = mask.all() ? null : mask.selectedPositions();
+            return addPositions(values, nulls, positions, mask.count(), distinctPositions);
+        }
+
+        @Override
+        public int addNonNullBatch(Vector[] values, Vector[] nulls, int[] positions, int positionCount, int[] distinctPositions)
+        {
+            return addPositions(values, nulls, positions, positionCount, distinctPositions, false);
+        }
+
+        @Override
+        public int addNonNullDenseBatch(Vector[] values, Vector[] nulls, int positionCount, int[] positions, int[] distinctPositions)
+        {
+            return addPositions(values, nulls, null, positionCount, distinctPositions, false);
+        }
+
+        @Override
+        public int addRetainingNullBatch(Vector[] values, Vector[] nulls, Mask mask, int[] distinctPositions)
+        {
+            int[] positions = mask.all() ? null : mask.selectedPositions();
+            return addPositions(values, nulls, positions, mask.count(), distinctPositions, true);
+        }
+
+        private int addPositions(Vector[] values, Vector[] nulls, int[] positions, int positionCount, int[] distinctPositions)
+        {
+            return addPositions(values, nulls, positions, positionCount, distinctPositions, retainNulls);
+        }
+
+        private int addPositions(
+                Vector[] values,
+                Vector[] nulls,
+                int[] positions,
+                int positionCount,
+                int[] distinctPositions,
+                boolean retainNullKeys)
+        {
+            bindings.bind(values, nulls);
+            try {
+                table.ensureCapacity(table.size + positionCount);
+                if (retainNullKeys) {
+                    return table.assignPhysicalDistinctRetainingNullBatch(
+                            bindings.keyArrays(),
+                            bindings.keyMappings(),
+                            bindings.keyMappingOffsets(),
+                            bindings.keyBaseOffsets(),
+                            bindings.nullArrays(),
+                            bindings.nullMappings(),
+                            bindings.nullMappingOffsets(),
+                            bindings.nullBaseOffsets(),
+                            positions,
+                            positionCount,
+                            distinctPositions,
+                            table.size);
+                }
+                return table.assignPhysicalDistinctBatch(
+                        bindings.keyArrays(),
+                        bindings.keyMappings(),
+                        bindings.keyMappingOffsets(),
+                        bindings.keyBaseOffsets(),
+                        bindings.nullArrays(),
+                        bindings.nullMappings(),
+                        bindings.nullMappingOffsets(),
+                        bindings.nullBaseOffsets(),
+                        positions,
+                        positionCount,
+                        distinctPositions,
+                        table.size);
+            }
+            finally {
+                bindings.release();
+            }
+        }
+
+        @Override
+        public long retainedBytes()
+        {
+            return table.retainedBytes();
+        }
+
+        @Override
+        public void releaseBuffers()
+        {
+            bindings.release();
+            table.releaseBuffers();
         }
     }
 

@@ -147,6 +147,81 @@ abstract class AbstractMultiLongGroupingTable
             long[] result,
             long startGroupId);
 
+    /**
+     * Assigns a flat fixed-width batch through carrier-specific array loads emitted with the table probe. A null
+     * {@code positions} denotes the dense range and null entries in {@code nullArrays} are proven non-null lanes.
+     */
+    abstract long assignPhysicalBatch(
+            Object[] keyArrays,
+            int[][] keyMappings,
+            int[] keyMappingOffsets,
+            int[] keyBaseOffsets,
+            boolean[][] nullArrays,
+            int[][] nullMappings,
+            int[] nullMappingOffsets,
+            int[] nullBaseOffsets,
+            int[] positions,
+            int positionCount,
+            long[] result,
+            long startGroupId);
+
+    /** Assigns only rows whose complete logical key is non-null; skipped rows receive {@link #EMPTY_GROUP_ID}. */
+    abstract long assignPhysicalNonNullBatch(
+            Object[] keyArrays,
+            int[][] keyMappings,
+            int[] keyMappingOffsets,
+            int[] keyBaseOffsets,
+            boolean[][] nullArrays,
+            int[][] nullMappings,
+            int[] nullMappingOffsets,
+            int[] nullBaseOffsets,
+            int[] positions,
+            int positionCount,
+            long[] result,
+            long startGroupId);
+
+    /** Finds complete non-null logical keys without mutating the table; misses and null rows receive {@link #EMPTY_GROUP_ID}. */
+    abstract int findPhysicalBatch(
+            Object[] keyArrays,
+            int[][] keyMappings,
+            int[] keyMappingOffsets,
+            int[] keyBaseOffsets,
+            boolean[][] nullArrays,
+            int[][] nullMappings,
+            int[] nullMappingOffsets,
+            int[] nullBaseOffsets,
+            int[] positions,
+            int positionCount,
+            long[] result);
+
+    abstract int assignPhysicalDistinctBatch(
+            Object[] keyArrays,
+            int[][] keyMappings,
+            int[] keyMappingOffsets,
+            int[] keyBaseOffsets,
+            boolean[][] nullArrays,
+            int[][] nullMappings,
+            int[] nullMappingOffsets,
+            int[] nullBaseOffsets,
+            int[] positions,
+            int positionCount,
+            int[] distinctPositions,
+            long startGroupId);
+
+    abstract int assignPhysicalDistinctRetainingNullBatch(
+            Object[] keyArrays,
+            int[][] keyMappings,
+            int[] keyMappingOffsets,
+            int[] keyBaseOffsets,
+            boolean[][] nullArrays,
+            int[][] nullMappings,
+            int[] nullMappingOffsets,
+            int[] nullBaseOffsets,
+            int[] positions,
+            int positionCount,
+            int[] distinctPositions,
+            long startGroupId);
+
     @Override
     public abstract long assignBatchDiscardingResults(
             VectorAccess.LongValues[] keyAccessors,
@@ -265,6 +340,104 @@ abstract class AbstractMultiLongGroupingTable
         for (int column = 0; column < arity; column++) {
             hash += groupedValue(column, groupId) * HASH_PRIMES[column];
         }
+        return finishHash(hash);
+    }
+
+    final int groupedHash(int groupId)
+    {
+        return hashRetainedGroup(groupId);
+    }
+
+    /** Exact cold/single-position probe used by membership and unaligned-key consumers. */
+    final long findGroup(long[] keys, byte nullMask)
+    {
+        if (keys.length < arity) {
+            throw new IllegalArgumentException("Key array is shorter than grouping arity");
+        }
+        int hash = hash(keys, nullMask);
+        byte fragment = controlFragment(hash);
+        int slot = hash & mask;
+        while (control[slot] != 0) {
+            if (control[slot] == fragment) {
+                int groupId = identityGroupIdSlots ? groupIds[slot] : -1;
+                if (sameKey(slot, groupId, keys, nullMask)) {
+                    if (identityGroupIdSlots) {
+                        return groupId;
+                    }
+                    return storesGroupIds ? entries[slot * stride + arity] : EMPTY_GROUP_ID;
+                }
+            }
+            slot = (slot + 1) & mask;
+        }
+        return EMPTY_GROUP_ID;
+    }
+
+    /** Exact cold/single-position insertion using the same layout and hash as the generated batch probe. */
+    final long assignKey(long[] keys, byte nullMask, long newGroupId)
+    {
+        long existing = findGroup(keys, nullMask);
+        if (existing != EMPTY_GROUP_ID) {
+            return existing;
+        }
+        if (newGroupId > Integer.MAX_VALUE) {
+            throw new IllegalStateException("Grouping id exceeds fixed-width table capacity: " + newGroupId);
+        }
+        int groupId = (int) newGroupId;
+        int hash = hash(keys, nullMask);
+        int slot = hash & mask;
+        while (control[slot] != 0) {
+            slot = (slot + 1) & mask;
+        }
+        if (identityGroupIdSlots) {
+            ensureReverseCapacity(groupId);
+            for (int column = 0; column < arity; column++) {
+                storeCompactRetainedKey(column, groupId, keys[column]);
+            }
+            nullMasksByGroup[groupId] = nullMask;
+            groupIds[slot] = groupId;
+        }
+        else {
+            int base = slot * stride;
+            System.arraycopy(keys, 0, entries, base, arity);
+            if (storesGroupIds) {
+                entries[base + arity] = newGroupId;
+            }
+            nullMasks[slot] = nullMask;
+        }
+        control[slot] = controlFragment(hash);
+        size++;
+        if (size >= maxFill) {
+            rehash();
+        }
+        return newGroupId;
+    }
+
+    private boolean sameKey(int slot, int groupId, long[] keys, byte nullMask)
+    {
+        if ((identityGroupIdSlots ? nullMasksByGroup[groupId] : nullMasks[slot]) != nullMask) {
+            return false;
+        }
+        int base = slot * stride;
+        for (int column = 0; column < arity; column++) {
+            long stored = identityGroupIdSlots ? groupedValue(column, groupId) : entries[base + column];
+            if (stored != keys[column]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private int hash(long[] keys, byte nullMask)
+    {
+        long hash = nullMask;
+        for (int column = 0; column < arity; column++) {
+            hash += keys[column] * HASH_PRIMES[column];
+        }
+        return finishHash(hash);
+    }
+
+    private static int finishHash(long hash)
+    {
         hash ^= hash >>> 33;
         hash *= 0xFF51AFD7ED558CCDL;
         hash ^= hash >>> 33;
