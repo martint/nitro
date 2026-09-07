@@ -56,24 +56,24 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 
 | Spec section | Principal decisions |
 |---|---|
-| §1–2 Purpose and scope | 0002, 0003, 0005, 0006, 0009, 0024, 0029, 0039, 0044 |
+| §1–2 Purpose and scope | 0002, 0003, 0005, 0006, 0009, 0024, 0029, 0039, 0044, 0090 |
 | §3 Vocabulary | 0003, 0007, 0008, 0012, 0023 |
 | §4 Composition and modules | 0005, 0006, 0048 |
 | §5 Vectors, streams, types | 0006, 0008, 0012, 0021, 0022, 0023, 0054, 0064, 0068, 0070, 0073, 0089 |
 | §6 Masks and conditions | 0008, 0012, 0020, 0034, 0064 |
 | §7 Evaluation IR | 0010, 0011, 0012, 0040, 0067 |
-| §8 Function conventions | 0006, 0011, 0013–0016, 0037, 0038, 0040, 0049–0054, 0062, 0063, 0066–0068, 0070, 0071, 0073, 0075–0077, 0089 |
+| §8 Function conventions | 0006, 0011, 0013–0016, 0037, 0038, 0040, 0049–0054, 0062, 0063, 0066–0068, 0070, 0071, 0073, 0075–0077, 0089, 0090 |
 | §9 Operators and islands | 0003, 0010, 0017, 0024, 0044–0047, 0072, 0079–0081 |
 | §10 Cooperative execution | 0004, 0044, 0045 |
 | §11 Allocation and memory | 0007, 0014, 0017–0019, 0041, 0066, 0072, 0075, 0077 |
-| §12 Aggregation, windows, patterns, table functions | 0011–0013, 0015, 0016, 0022, 0036, 0045, 0046, 0055–0061, 0064, 0075–0081, 0089 |
-| §13 Joins and dynamic filters | 0006, 0012, 0018, 0025, 0035, 0036, 0089 |
+| §12 Aggregation, windows, patterns, table functions | 0011–0013, 0015, 0016, 0022, 0036, 0045, 0046, 0055–0061, 0064, 0075–0081, 0089, 0090 |
+| §13 Joins and dynamic filters | 0006, 0012, 0018, 0025, 0035, 0036, 0089, 0090 |
 | §14 Sources and Parquet | 0009, 0020–0023, 0031, 0068 |
 | §15 Host boundaries | 0003, 0017, 0019, 0024, 0033, 0044, 0046, 0071 |
-| §16 Adaptivity and generation | 0011, 0012, 0027, 0032, 0036, 0037, 0054–0061, 0068, 0071–0073, 0075, 0089 |
+| §16 Adaptivity and generation | 0011, 0012, 0027, 0032, 0036, 0037, 0054–0061, 0068, 0071–0073, 0075, 0089, 0090 |
 | §17 Correctness and tests | 0026, 0029, 0043, 0047 |
 | §18 Performance evidence | 0026–0028, 0032, 0041, 0042, 0087 |
-| §19 Coverage and productization | 0029–0031, 0033–0035, 0042, 0046, 0047, 0089 |
+| §19 Coverage and productization | 0029–0031, 0033–0035, 0042, 0046, 0047, 0089, 0090 |
 | §20 Change protocol | 0001, 0002, 0039 |
 
 ## Index
@@ -165,7 +165,8 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | [0083](0083-match-generated-kernel-shapes-exactly.md) | Match generated-kernel physical shapes exactly | accepted |
 | [0084](0084-prove-constant-window-bounds-across-sources.md) | Prove constant window bounds across retained sources | accepted |
 | [0085](0085-preserve-rle-through-row-concatenation.md) | Preserve RLE through row concatenation | accepted |
-| [0086](0086-prove-raw-key-identity-through-type-providers.md) | Prove raw key identity through type providers | accepted |
+| [0086](0086-prove-raw-key-identity-through-type-providers.md) | Prove raw key identity through type providers | amended |
 | [0087](0087-reuse-one-benchmark-jvm-per-suite.md) | Reuse one benchmark JVM per suite | accepted |
 | [0088](0088-measure-serial-query-bundles-as-benchmark-points.md) | Measure serial query bundles as benchmark points | accepted |
-| [0089](0089-generate-fixed-width-key-kernels-from-provider-layouts.md) | Generate fixed-width key kernels from provider layouts | accepted |
+| [0089](0089-generate-fixed-width-key-kernels-from-provider-layouts.md) | Generate fixed-width key kernels from provider layouts | amended |
+| [0090](0090-reject-row-wise-semantic-key-tables.md) | Reject row-wise semantic key tables | accepted |

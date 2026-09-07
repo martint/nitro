@@ -1,6 +1,6 @@
 # ADR-0086: Prove raw key identity through type providers
 
-- **Status:** accepted
+- **Status:** amended by [ADR-0090](0090-reject-row-wise-semantic-key-tables.md)
 - **Date:** 2026-09-05
 - **Spec:** §8, §11, §12
 - **Depends on:** [ADR-0011](0011-generate-specializations-from-physical-capabilities.md), [ADR-0036](0036-share-physical-key-contracts-across-consumers.md), [ADR-0041](0041-target-zero-row-proportional-steady-state-allocation.md)

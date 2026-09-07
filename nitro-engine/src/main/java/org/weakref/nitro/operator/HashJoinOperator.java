@@ -2192,7 +2192,7 @@ public class HashJoinOperator
                         operatorResources.codeGeneration(),
                         operatorResources.adaptiveLongGroupingPolicy());
             }
-            return genericJoinIndexes.structural(structuralKeyKernels);
+            throw PersistentKeyTableSupport.unsupportedLayout("hash join", flatJoinKeyTypes, joinValues);
         }
         if (joinValues.length == 1 && isSingleLongJoinCandidate(joinValues[0])) {
             // When no build output or residual filter can observe a physical row, preserve duplicate multiplicity
@@ -2282,7 +2282,6 @@ public class HashJoinOperator
                 !(joinIndex instanceof LongPairJoinIndex) &&
                 !(joinIndex instanceof LongTripleJoinIndex) &&
                 !(joinIndex instanceof FixedWidthJoinIndex) &&
-                !(joinIndex instanceof StructuralHashJoinIndex) &&
                 !(joinIndex instanceof FlatJoinIndex)) {
             return null;
         }
@@ -2308,9 +2307,6 @@ public class HashJoinOperator
         }
         if (joinIndex instanceof FixedWidthJoinIndex fixedWidthJoinIndex) {
             return fixedWidthJoinIndex.newProbeView();
-        }
-        if (joinIndex instanceof StructuralHashJoinIndex structuralHashJoinIndex) {
-            return structuralHashJoinIndex.newProbeView();
         }
         if (joinIndex instanceof FlatJoinIndex flatJoinIndex) {
             return flatJoinIndex.newProbeView();

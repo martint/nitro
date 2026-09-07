@@ -172,7 +172,7 @@ class TestDistinctKeySet
     }
 
     @Test
-    void testStructuralDistinctReusesProbeAcrossRepeatedRows()
+    void testSemanticStructuralDistinctIsRejectedWithoutPhysicalLayout()
     {
         StructVector rows = new StructVector(8);
         rows.setField("first", Streams.ofValues(new I64Vector(new long[] {1, 1, 2, 1, 2, 2, 1, 2})));
@@ -181,7 +181,7 @@ class TestDistinctKeySet
         TypeBinding rowType = new TestingStructType(List.of(scalar, scalar));
 
         try (Allocator allocator = new Allocator(engineResources)) {
-            DistinctKeySet keys = DistinctKeySet.create(
+            assertThatThrownBy(() -> DistinctKeySet.create(
                     new Vector[] {rows},
                     List.of(rowType),
                     allocator,
@@ -190,65 +190,11 @@ class TestDistinctKeySet
                     codeGeneration,
                     DistinctKeySetPolicy.defaults(),
                     adaptiveLongGroupingPolicy,
-                    flatKeyTablePolicy);
-            try {
-                int[] positions = new int[rows.length()];
-                int distinct = keys.addBatch(
-                        new Vector[] {rows},
-                        new Vector[] {null},
-                        Mask.all(rows.length()),
-                        positions);
-                assertThat(Arrays.copyOf(positions, distinct)).containsExactly(0, 2);
-                assertThat(keys.addBatch(
-                        new Vector[] {rows},
-                        new Vector[] {null},
-                        Mask.all(rows.length()),
-                        positions)).isZero();
-            }
-            finally {
-                keys.releaseBuffers();
-            }
-        }
-    }
-
-    @Test
-    void testStructuralDistinctConsumesSharedDictionaryDomain()
-    {
-        StructVector domain = new StructVector(3);
-        domain.setField("first", Streams.ofValues(new I64Vector(new long[] {10, 20, 30})));
-        domain.setField("second", Streams.ofValues(new I64Vector(new long[] {100, 200, 300})));
-        DictionaryVector rows = DictionaryVector.wrap(new int[] {2, 0, 2, 1, 0, 1}, domain);
-        TypeBinding scalar = Schema.unspecified(1).field(0).type();
-        TypeBinding rowType = new TestingStructType(List.of(scalar, scalar));
-
-        try (Allocator allocator = new Allocator(engineResources)) {
-            DistinctKeySet keys = DistinctKeySet.create(
-                    new Vector[] {rows},
-                    List.of(rowType),
-                    allocator,
-                    new Allocator.Context("dictionary-structural-distinct"),
-                    arrayPool,
-                    codeGeneration,
-                    DistinctKeySetPolicy.defaults(),
-                    adaptiveLongGroupingPolicy,
-                    flatKeyTablePolicy);
-            try {
-                int[] positions = new int[rows.length()];
-                int distinct = keys.addBatch(
-                        new Vector[] {rows},
-                        new Vector[] {null},
-                        Mask.all(rows.length()),
-                        positions);
-                assertThat(Arrays.copyOf(positions, distinct)).containsExactly(1, 3, 0);
-                assertThat(keys.addBatch(
-                        new Vector[] {rows},
-                        new Vector[] {null},
-                        Mask.sparse(new int[] {0, 2, 4}, rows.length()),
-                        positions)).isZero();
-            }
-            finally {
-                keys.releaseBuffers();
-            }
+                    flatKeyTablePolicy))
+                    .isInstanceOf(UnsupportedOperationException.class)
+                    .hasMessageContaining("distinct")
+                    .hasMessageContaining("direct physical or generated fixed-width")
+                    .hasMessageContaining("ADR-0090");
         }
     }
 

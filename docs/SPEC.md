@@ -225,18 +225,21 @@ provider proof, independent of carrier width and raw identity. Consumers must re
 or inapplicable binders and handle null placement separately.
 
 A type provider may separately prove that raw equality of every admitted non-null physical representation is the
-logical key identity. This proof lets generic grouping, join, and distinct tables use their physical key kernels even
-when the binding also publishes richer logical hash or comparison operations for other consumers. The proof belongs
-to the provider and must be absent when normalization, canonicalization, unordered-value semantics, or any other
-logical rule makes raw physical equality insufficient. Consumers retain the provider's exact semantic operations when
-the proof is absent.
+logical key identity. This proof lets generic grouping, join, distinct, and membership tables use their physical key
+kernels even when the binding also publishes richer logical hash or comparison operations for other consumers. The
+proof belongs to the provider and must be absent when normalization, canonicalization, unordered-value semantics, or
+any other logical rule makes raw physical equality insufficient. Persistent key-table consumers reject the type when
+neither this proof nor another supported physical key layout is available; they do not use row-wise semantic hashing
+and equality as an execution bridge.
 
 A provider may give the narrower structural proof that logical key identity is exactly raw equality of an ordered
 `I32`, `I64`, `F64`, or `BOOLEAN` lane tuple. Each lane selects either the value itself or a path of named structural
 fields. Generated key consumers resolve supported wrapper mappings once per batch and load the exact primitive arrays
 directly. A declared layout that does not match its admitted vector, selects an independently nullable component, or
 exceeds a consumer's supported generated shape is an admission error; it is not permission to enter a row-wise
-semantic bridge. Types without this proof retain their exact semantic key operations.
+semantic bridge. Types without this proof retain their exact semantic key operations for scalar and other semantic
+consumers, but grouping, distinct, hash join, and membership reject unless another direct physical key capability is
+available.
 
 Stateful registry implementations may also request a composed key binder. Each bound vector exposes opaque hashing
 and cross-vector identity over positions, allowing retained indexes such as map construction state to span owned
@@ -543,6 +546,9 @@ the generated loop performs direct carrier loads, hashing, and exact probing wit
 provider dispatch. Grouping separately retains logical representatives for output, while distinct separately applies
 its requested null-dropping or null-retaining semantics.
 
+Grouping and distinct do not retain object tables that invoke provider semantic hashing or equality per row. A key
+without a compatible direct or generated physical layout is rejected as unsupported coverage.
+
 ### 12.2 Pattern recognition
 
 Pattern recognition is an engine-owned Nitro operator, not a host Page operator embedded inside an island. Planning
@@ -570,6 +576,7 @@ A join over a provider-described fixed-width key uses the same generated exact t
 and distinct. Build insertion skips every row with a null logical key, preserves duplicate row references, and probe
 lookup does not mutate the table. Prepared probe views share immutable build state but own their batch-binding scratch.
 No row-wise structural comparison or accessor interface is an execution bridge for an admitted fixed-width layout.
+Hash joins and semi-join membership likewise reject keys that would require a row-wise semantic object table.
 
 Build state and prepared membership are task-owned capabilities shareable across compatible probe drivers. Join output
 preserves mappings and encodings when this avoids copies and satisfies ownership.
@@ -637,6 +644,9 @@ hoisted before the logical-row loop; the loop contains carrier-specific array lo
 Static shape validation and batch binding may inspect vector wrappers, but hot rows do not invoke method handles,
 virtual provider operations, or polymorphic value-access interfaces.
 
+There is no semantic object-table fallback for grouping, distinct, hash join, or membership. Missing physical-key
+coverage is rejected at planning when capabilities suffice and otherwise at physical binding before rows are added.
+
 Generated-kernel reuse requires exact equality of every physical property that changes emitted loads, mappings,
 null handling, or loop structure. A hash may index a cache but must not itself prove compatibility. The hot batch
 path compares a previously captured structural descriptor without allocation; it captures a new immutable descriptor
@@ -696,6 +706,9 @@ entries fail at admission and are not silently delegated inside an island.
 A provider-declared fixed-width key layout has cross-consumer coverage for grouping, distinct, and joins, including
 encoded mappings, sparse masks, null behavior, duplicate multiplicity, and prepared build sharing. Mismatched carriers,
 nullable selected components, unsupported representations, and unsupported generated lane counts fail loudly.
+
+Key types and mixed key shapes without one direct or generated physical implementation are explicit coverage gaps.
+They are not admitted through row-wise semantic key tables.
 
 Rollout begins with plans whose complete region is supported, retains explicit host fallback at island admission, and
 expands by closing gaps. Once admitted, an island executes wholly in Nitro or fails; runtime decomposition is not a

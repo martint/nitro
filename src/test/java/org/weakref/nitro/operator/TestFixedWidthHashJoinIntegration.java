@@ -30,15 +30,53 @@ import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.execution.EngineResources;
 
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class TestFixedWidthHashJoinIntegration
 {
+    @Test
+    void testSemanticHashJoinKeyIsRejectedWithoutPhysicalLayout()
+            throws ReflectiveOperationException
+    {
+        TypeBinding pairType = semanticPairType();
+        Schema schema = new Schema(List.of(new Field(pairType, false)));
+        StructVector buildKeys = pairs(new long[] {1}, new long[] {10});
+        TableOperator build = new TableOperator(
+                schema,
+                List.of(TableOperator.Page.values(
+                        buildKeys.length(),
+                        new Vector[] {buildKeys},
+                        Mask.all(buildKeys.length()))));
+
+        try (EngineResources resources = EngineResources.createDefault();
+                org.weakref.nitro.data.Allocator allocator = new org.weakref.nitro.data.Allocator(resources);
+                HashJoinSession session = new HashJoinSession(
+                        resources.operatorResources(),
+                        allocator,
+                        schema,
+                        new int[] {0},
+                        build,
+                        new int[] {0},
+                        false)) {
+            allocator.beginExecution();
+            StructVector probeKeys = pairs(new long[] {1}, new long[] {10});
+            session.addInput(new Batch(Mask.all(1), Output.of(Streams.ofValues(probeKeys))));
+            assertThatThrownBy(session::hasOutput)
+                    .isInstanceOf(UnsupportedOperationException.class)
+                    .hasMessageContaining("hash join")
+                    .hasMessageContaining("direct physical or generated fixed-width")
+                    .hasMessageContaining("ADR-0090");
+        }
+    }
+
     @Test
     void testProviderLayoutDrivesHashJoinBuildAndProbe()
     {
@@ -134,5 +172,62 @@ class TestFixedWidthHashJoinIntegration
                 return Set.of(StructVector.class, DictionaryVector.class);
             }
         };
+    }
+
+    private static TypeBinding semanticPairType()
+            throws ReflectiveOperationException
+    {
+        TypeOperators operators = new TypeOperators(
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.of(MethodHandles.lookup().findStatic(
+                        TestFixedWidthHashJoinIntegration.class,
+                        "unexpectedPairIdentical",
+                        MethodType.methodType(boolean.class, Vector.class, int.class, Vector.class, int.class))),
+                Optional.of(MethodHandles.lookup().findStatic(
+                        TestFixedWidthHashJoinIntegration.class,
+                        "unexpectedPairHash",
+                        MethodType.methodType(long.class, Vector.class, int.class))),
+                Optional.empty());
+        return new TypeBinding()
+        {
+            @Override
+            public TypeIdentity identity()
+            {
+                return new TypeIdentity("testing:semantic-hash-join-pair");
+            }
+
+            @Override
+            public Class<?> carrierType()
+            {
+                return Object.class;
+            }
+
+            @Override
+            public TypeOperators operators()
+            {
+                return operators;
+            }
+
+            @Override
+            public Set<Class<? extends Vector>> supportedVectorTypes()
+            {
+                return Set.of(StructVector.class);
+            }
+        };
+    }
+
+    public static boolean unexpectedPairIdentical(Vector left, int leftPosition, Vector right, int rightPosition)
+    {
+        throw new AssertionError("row-wise vector identity must not be used by a persistent key table");
+    }
+
+    public static long unexpectedPairHash(Vector vector, int position)
+    {
+        throw new AssertionError("row-wise vector hash must not be used by a persistent key table");
     }
 }

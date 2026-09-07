@@ -14,6 +14,7 @@
 package org.weakref.nitro.operator;
 
 import org.junit.jupiter.api.Test;
+import org.weakref.nitro.core.type.FixedWidthKeyLayout;
 import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.core.type.TypeIdentity;
 import org.weakref.nitro.core.type.TypeOperators;
@@ -23,9 +24,14 @@ import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.Streams;
+import org.weakref.nitro.data.StructVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.execution.EngineResources;
 
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
@@ -34,6 +40,69 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class TestMembershipSet
 {
+    @Test
+    void membershipRejectsSemanticKeyWithoutPhysicalLayout()
+            throws ReflectiveOperationException
+    {
+        try (EngineResources engineResources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(engineResources)) {
+            allocator.beginExecution();
+            Allocator.Context allocationContext = new Allocator.Context("semantic-membership");
+            TypeBinding semanticType = semanticLongType();
+            MembershipSet set = new MembershipSet(
+                    allocator,
+                    allocationContext,
+                    engineResources.operatorResources(),
+                    engineResources.operatorResources().semiJoinPolicy().membershipSet(),
+                    Optional.of(semanticType));
+            try {
+                assertThatThrownBy(() -> set.addBatch(new I64Vector(new long[] {1}), null, Mask.all(1)))
+                        .isInstanceOf(UnsupportedOperationException.class)
+                        .hasMessageContaining("semi-join membership")
+                        .hasMessageContaining("direct physical or generated fixed-width")
+                        .hasMessageContaining("ADR-0090");
+            }
+            finally {
+                set.releaseBuffers();
+                allocator.release(allocationContext);
+            }
+        }
+    }
+
+    @Test
+    void fixedWidthProviderLayoutDrivesMembership()
+    {
+        try (EngineResources engineResources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(engineResources)) {
+            allocator.beginExecution();
+            Allocator.Context allocationContext = new Allocator.Context("fixed-width-membership");
+            TypeBinding pairType = fixedWidthPairType();
+            MembershipSet set = new MembershipSet(
+                    allocator,
+                    allocationContext,
+                    engineResources.operatorResources(),
+                    engineResources.operatorResources().semiJoinPolicy().membershipSet(),
+                    Optional.of(pairType));
+            try {
+                set.addBatch(pairVector(new long[] {1, 2}, new long[] {10, 20}), null, Mask.all(2));
+                StructVector probe = pairVector(new long[] {2, 3, 1}, new long[] {20, 30, 11});
+                set.beginProbeBatch(probe, null);
+                try {
+                    assertThat(set.contains(0)).isTrue();
+                    assertThat(set.contains(1)).isFalse();
+                    assertThat(set.contains(2)).isFalse();
+                }
+                finally {
+                    set.endProbeBatch();
+                }
+            }
+            finally {
+                set.releaseBuffers();
+                allocator.release(allocationContext);
+            }
+        }
+    }
+
     @Test
     void membershipRejectsVectorOutsidePlanTimeTypeBinding()
     {
@@ -263,5 +332,108 @@ class TestMembershipSet
         {
             return TypeOperators.UNSPECIFIED;
         }
+    }
+
+    private static StructVector pairVector(long[] high, long[] low)
+    {
+        StructVector vector = new StructVector(high.length);
+        vector.setField("high", Streams.ofValues(new I64Vector(high)));
+        vector.setField("low", Streams.ofValues(new I64Vector(low)));
+        return vector;
+    }
+
+    private static TypeBinding fixedWidthPairType()
+    {
+        return new TypeBinding()
+        {
+            @Override
+            public TypeIdentity identity()
+            {
+                return new TypeIdentity("testing:fixed-width-membership-pair");
+            }
+
+            @Override
+            public Class<?> carrierType()
+            {
+                return Object.class;
+            }
+
+            @Override
+            public TypeOperators operators()
+            {
+                return TypeOperators.UNSPECIFIED;
+            }
+
+            @Override
+            public Optional<FixedWidthKeyLayout> fixedWidthKeyLayout()
+            {
+                return Optional.of(new FixedWidthKeyLayout(List.of(
+                        FixedWidthKeyLayout.Lane.i64(List.of("high")),
+                        FixedWidthKeyLayout.Lane.i64(List.of("low")))));
+            }
+
+            @Override
+            public Set<Class<? extends Vector>> supportedVectorTypes()
+            {
+                return Set.of(StructVector.class);
+            }
+        };
+    }
+
+    private static TypeBinding semanticLongType()
+            throws ReflectiveOperationException
+    {
+        TypeOperators operators = new TypeOperators(
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.of(MethodHandles.lookup().findStatic(
+                        TestMembershipSet.class,
+                        "longIdentical",
+                        MethodType.methodType(boolean.class, Vector.class, int.class, Vector.class, int.class))),
+                Optional.of(MethodHandles.lookup().findStatic(
+                        TestMembershipSet.class,
+                        "longHash",
+                        MethodType.methodType(long.class, Vector.class, int.class))),
+                Optional.empty());
+        return new TypeBinding()
+        {
+            @Override
+            public TypeIdentity identity()
+            {
+                return new TypeIdentity("testing:semantic-membership");
+            }
+
+            @Override
+            public Class<?> carrierType()
+            {
+                return long.class;
+            }
+
+            @Override
+            public TypeOperators operators()
+            {
+                return operators;
+            }
+
+            @Override
+            public Set<Class<? extends Vector>> supportedVectorTypes()
+            {
+                return Set.of(I64Vector.class);
+            }
+        };
+    }
+
+    public static boolean longIdentical(Vector left, int leftPosition, Vector right, int rightPosition)
+    {
+        return ((I64Vector) left).values()[leftPosition] == ((I64Vector) right).values()[rightPosition];
+    }
+
+    public static long longHash(Vector vector, int position)
+    {
+        return Long.hashCode(((I64Vector) vector).values()[position]);
     }
 }

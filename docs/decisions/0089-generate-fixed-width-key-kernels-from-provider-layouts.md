@@ -1,6 +1,6 @@
 # ADR-0089: Generate fixed-width key kernels from provider layouts
 
-- **Status:** accepted
+- **Status:** amended by [ADR-0090](0090-reject-row-wise-semantic-key-tables.md)
 - **Date:** 2026-09-08
 - **Spec:** §5, §8, §12, §13, §16, §19
 - **Depends on:** [ADR-0011](0011-generate-specializations-from-physical-capabilities.md),

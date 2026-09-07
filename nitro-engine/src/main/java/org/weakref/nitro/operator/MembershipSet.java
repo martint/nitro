@@ -20,15 +20,12 @@ import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.PrimitiveArrayPool;
-import org.weakref.nitro.data.Stream;
-import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
 
 import java.util.Arrays;
-import java.util.HashSet;
+import java.util.List;
 import java.util.Optional;
-import java.util.Set;
 
 import static java.lang.Math.toIntExact;
 import static java.util.Objects.requireNonNull;
@@ -79,7 +76,11 @@ final class MembershipSet
         validateKeyType(values);
         if (index == null) {
             if (!keyKernel.allowsLegacyPhysicalShortcuts()) {
-                index = new StructuralIndex(allocator, allocationContext, keyKernel);
+                TypeBinding type = keyType.orElseThrow();
+                if (type.fixedWidthKeyLayout().isEmpty()) {
+                    throw PersistentKeyTableSupport.unsupportedLayout("semi-join membership", List.of(type), new Vector[] {values});
+                }
+                index = new GroupingIndex(allocator, allocationContext, operatorResources, keyType);
             }
             else {
                 FlatTypeHandler handler = FlatTypeHandlers.forVector(values);
@@ -314,144 +315,6 @@ final class MembershipSet
         {
             grouping.releaseBuffers();
             scratch = null;
-        }
-    }
-
-    private static final class StructuralIndex
-            implements Index
-    {
-        private final Allocator allocator;
-        private final Allocator.Context allocationContext;
-        private final StructuralKeyKernel kernel;
-        private final Set<StructuralMembershipKey> keys;
-        private final StructuralMembershipKey probeKey;
-        private final boolean ownsStorage;
-
-        private StructuralIndex(
-                Allocator allocator,
-                Allocator.Context allocationContext,
-                StructuralKeyKernel kernel)
-        {
-            this.allocator = allocator;
-            this.allocationContext = allocationContext;
-            this.kernel = kernel;
-            this.keys = new HashSet<>();
-            this.probeKey = new StructuralMembershipKey(kernel);
-            this.ownsStorage = true;
-        }
-
-        private StructuralIndex(StructuralIndex prepared)
-        {
-            this.allocator = prepared.allocator;
-            this.allocationContext = prepared.allocationContext;
-            this.kernel = prepared.kernel;
-            this.keys = prepared.keys;
-            this.probeKey = new StructuralMembershipKey(kernel);
-            this.ownsStorage = false;
-        }
-
-        @Override
-        public void addBatch(Vector values, Vector nulls, Mask mask)
-        {
-            Streams copied = allocator.copyStreams(
-                    allocationContext,
-                    Streams.of(values, nulls, null),
-                    mask);
-            Vector copiedValues = copied.values();
-            Vector copiedNulls = copied.getOrNull(Stream.NULLS);
-            for (int position = 0; position < copiedValues.length(); position++) {
-                if (!OperatorVectorSupport.isNull(copiedNulls, position)) {
-                    keys.add(new StructuralMembershipKey(kernel, copiedValues, copiedNulls, position));
-                }
-            }
-        }
-
-        @Override
-        public void beginProbeBatch(Vector values, Vector nulls)
-        {
-            probeKey.set(values, nulls, 0);
-        }
-
-        @Override
-        public boolean contains(int position)
-        {
-            if (OperatorVectorSupport.isNull(probeKey.nulls, position)) {
-                return false;
-            }
-            probeKey.position = position;
-            return keys.contains(probeKey);
-        }
-
-        @Override
-        public void endProbeBatch()
-        {
-            probeKey.clear();
-        }
-
-        @Override
-        public Optional<Index> newProbeView()
-        {
-            return Optional.of(new StructuralIndex(this));
-        }
-
-        @Override
-        public void releaseBuffers()
-        {
-            if (ownsStorage) {
-                keys.clear();
-            }
-            probeKey.clear();
-        }
-    }
-
-    private static final class StructuralMembershipKey
-    {
-        private final StructuralKeyKernel kernel;
-        private Vector values;
-        private Vector nulls;
-        private int position;
-
-        private StructuralMembershipKey(StructuralKeyKernel kernel)
-        {
-            this.kernel = kernel;
-        }
-
-        private StructuralMembershipKey(
-                StructuralKeyKernel kernel,
-                Vector values,
-                Vector nulls,
-                int position)
-        {
-            this.kernel = kernel;
-            set(values, nulls, position);
-        }
-
-        private void set(Vector values, Vector nulls, int position)
-        {
-            this.values = requireNonNull(values, "values is null");
-            this.nulls = nulls;
-            this.position = position;
-        }
-
-        private void clear()
-        {
-            values = null;
-            nulls = null;
-            position = 0;
-        }
-
-        @Override
-        public int hashCode()
-        {
-            return Long.hashCode(kernel.hash(values, nulls, position));
-        }
-
-        @Override
-        public boolean equals(Object object)
-        {
-            return object instanceof StructuralMembershipKey other &&
-                    kernel == other.kernel &&
-                    kernel.identical(values, nulls, position, other.values, other.nulls, other.position);
         }
     }
 

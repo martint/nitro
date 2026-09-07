@@ -52,11 +52,6 @@ final class GenericJoinIndexFactory
         this.executionPolicy = requireNonNull(executionPolicy, "executionPolicy is null");
     }
 
-    JoinIndex structural(StructuralKeyKernel[] kernels)
-    {
-        return new StructuralHashJoinIndex(kernels);
-    }
-
     JoinIndex create(
             Vector[] values,
             List<TypeBinding> keyTypes,

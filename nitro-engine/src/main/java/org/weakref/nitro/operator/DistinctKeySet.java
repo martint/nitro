@@ -31,7 +31,6 @@ import java.util.Arrays;
 import java.util.List;
 
 import static java.lang.Math.toIntExact;
-import static java.util.Objects.requireNonNull;
 
 final class DistinctKeySet
 {
@@ -206,14 +205,10 @@ final class DistinctKeySet
                         allocator,
                         allocationContext);
             }
-            return new DistinctKeySet(
-                    new StructuralDistinctIndex(
-                            requireNonNull(allocator, "allocator is null"),
-                            requireNonNull(allocationContext, "allocationContext is null"),
-                            kernels,
-                            false),
-                    keyTypes,
-                    1);
+            throw PersistentKeyTableSupport.unsupportedLayout(
+                    "grouped distinct",
+                    flatKeyTypes(samples.length, keyTypes, 1),
+                    samples);
         }
         return new DistinctKeySet(
                 new GroupedLongDistinctIndex(arrayPool, policy),
@@ -379,14 +374,10 @@ final class DistinctKeySet
                         allocator,
                         allocationContext);
             }
-            return new DistinctKeySet(
-                    new StructuralDistinctIndex(
-                            requireNonNull(allocator, "allocator is null"),
-                            requireNonNull(allocationContext, "allocationContext is null"),
-                            kernels,
-                            retainNulls),
-                    keyTypes,
-                    unboundKeyPrefix);
+            throw PersistentKeyTableSupport.unsupportedLayout(
+                    "distinct",
+                    flatKeyTypes(samples.length, keyTypes, unboundKeyPrefix),
+                    samples);
         }
         DistinctIndex index = createIndex(
                 samples,
@@ -1199,7 +1190,7 @@ final class DistinctKeySet
             }
             else if (nulls[0] instanceof DictionaryVector nullDictionary &&
                     nullDictionary.dictionaryDepth() == 1 &&
-                    StructuralDistinctIndex.sameMapping(dictionary, nullDictionary)) {
+                    sameDictionaryMapping(dictionary, nullDictionary)) {
                 baseNulls = nullDictionary.values();
             }
             else if (VectorAccess.isAllFalseNulls(nulls[0])) {
@@ -3261,216 +3252,6 @@ final class DistinctKeySet
         }
     }
 
-    private static final class StructuralDistinctIndex
-            implements DistinctIndex
-    {
-        private final Allocator allocator;
-        private final Allocator.Context allocationContext;
-        private final StructuralKeyKernel[] kernels;
-        private final boolean retainNulls;
-        private final ObjectOpenHashSet<StructuralDistinctKey> keys = new ObjectOpenHashSet<>();
-        private final ObjectOpenHashSet<StructuralDistinctKey> batchKeys = new ObjectOpenHashSet<>();
-        private final StructuralDistinctKey probe;
-        private int[] firstLogicalPositions = new int[0];
-        private int[] domainPositions = new int[0];
-        private Vector[] domainValues = new Vector[0];
-        private Vector[] domainNulls = new Vector[0];
-
-        private StructuralDistinctIndex(
-                Allocator allocator,
-                Allocator.Context allocationContext,
-                StructuralKeyKernel[] kernels,
-                boolean retainNulls)
-        {
-            this.allocator = allocator;
-            this.allocationContext = allocationContext;
-            this.kernels = kernels.clone();
-            this.retainNulls = retainNulls;
-            this.probe = new StructuralDistinctKey(this.kernels);
-        }
-
-        @Override
-        public void reserveAdditional(int additionalEntries)
-        {
-            keys.ensureCapacity(keys.size() + Math.max(0, additionalEntries));
-        }
-
-        @Override
-        public boolean add(Vector[] values, Vector[] nulls, int position)
-        {
-            if (!retainNulls && hasNull(nulls, position)) {
-                return false;
-            }
-            probe.reset(values, nulls, position);
-            if (keys.contains(probe)) {
-                return false;
-            }
-            int[] selectedPosition = {position};
-            Vector[] ownedValues = copyVectors(values, selectedPosition);
-            Vector[] ownedNulls = copyNullableVectors(nulls, selectedPosition);
-            keys.add(new StructuralDistinctKey(kernels, ownedValues, ownedNulls, 0));
-            return true;
-        }
-
-        @Override
-        public int addBatch(Vector[] values, Vector[] nulls, Mask mask, int[] distinctPositions)
-        {
-            int encodedCount = addSharedDictionaryBatch(values, nulls, mask, distinctPositions);
-            if (encodedCount >= 0) {
-                return encodedCount;
-            }
-            return addPhysicalBatch(values, nulls, mask, distinctPositions);
-        }
-
-        private int addSharedDictionaryBatch(Vector[] values, Vector[] nulls, Mask mask, int[] distinctPositions)
-        {
-            if (values.length == 0 || !(values[0] instanceof DictionaryVector first) || first.dictionaryDepth() != 1) {
-                return -1;
-            }
-            int[] ids = first.ids();
-            for (int key = 1; key < values.length; key++) {
-                if (!(values[key] instanceof DictionaryVector dictionary) ||
-                        dictionary.dictionaryDepth() != 1 ||
-                        !sameMapping(first, dictionary)) {
-                    return -1;
-                }
-            }
-            for (Vector nullVector : nulls) {
-                if (nullVector == null || VectorAccess.isAllFalseNulls(nullVector)) {
-                    continue;
-                }
-                if (!(nullVector instanceof DictionaryVector dictionary) ||
-                        dictionary.dictionaryDepth() != 1 ||
-                        !sameMapping(first, dictionary)) {
-                    return -1;
-                }
-            }
-
-            int domainSize = first.values().length();
-            if (firstLogicalPositions.length < domainSize) {
-                int[] previousFirstPositions = firstLogicalPositions;
-                int[] previousDomainPositions = domainPositions;
-                firstLogicalPositions = allocator.primitiveArrays().borrowInts(domainSize);
-                domainPositions = allocator.primitiveArrays().borrowInts(domainSize);
-                allocator.primitiveArrays().release(previousFirstPositions);
-                allocator.primitiveArrays().release(previousDomainPositions);
-            }
-            Arrays.fill(firstLogicalPositions, 0, domainSize, -1);
-            int domainCount = 0;
-            for (int logicalPosition : mask) {
-                int domainPosition = ids[logicalPosition];
-                if (firstLogicalPositions[domainPosition] < 0) {
-                    firstLogicalPositions[domainPosition] = logicalPosition;
-                    domainPositions[domainCount++] = domainPosition;
-                }
-            }
-            if (domainCount == 0) {
-                return 0;
-            }
-            if (domainValues.length != values.length) {
-                domainValues = new Vector[values.length];
-                domainNulls = new Vector[values.length];
-            }
-            for (int key = 0; key < values.length; key++) {
-                domainValues[key] = ((DictionaryVector) values[key]).values();
-                Vector nullVector = nulls[key];
-                domainNulls[key] = nullVector instanceof DictionaryVector dictionary ? dictionary.values() : null;
-            }
-            Mask domainMask;
-            if (domainCount == domainSize) {
-                domainMask = Mask.all(domainSize);
-            }
-            else {
-                int[] selectedDomainPositions = Arrays.copyOf(domainPositions, domainCount);
-                Arrays.sort(selectedDomainPositions);
-                domainMask = Mask.sparse(selectedDomainPositions, domainSize);
-            }
-            int distinctCount;
-            try {
-                distinctCount = addPhysicalBatch(
-                        domainValues,
-                        domainNulls,
-                        domainMask,
-                        distinctPositions);
-            }
-            finally {
-                Arrays.fill(domainValues, null);
-                Arrays.fill(domainNulls, null);
-            }
-            for (int index = 0; index < distinctCount; index++) {
-                distinctPositions[index] = firstLogicalPositions[distinctPositions[index]];
-            }
-            return distinctCount;
-        }
-
-        private static boolean sameMapping(DictionaryVector left, DictionaryVector right)
-        {
-            return left.length() == right.length() &&
-                    (left.ids() == right.ids() ||
-                            Arrays.mismatch(left.ids(), 0, left.length(), right.ids(), 0, right.length()) < 0);
-        }
-
-        private int addPhysicalBatch(Vector[] values, Vector[] nulls, Mask mask, int[] distinctPositions)
-        {
-            batchKeys.clear();
-            int distinctCount = 0;
-            for (int position : mask) {
-                if (!retainNulls && hasNull(nulls, position)) {
-                    continue;
-                }
-                probe.reset(values, nulls, position);
-                if (!keys.contains(probe) && !batchKeys.contains(probe)) {
-                    batchKeys.add(new StructuralDistinctKey(kernels, values, nulls, position));
-                    distinctPositions[distinctCount++] = position;
-                }
-            }
-            if (distinctCount == 0) {
-                batchKeys.clear();
-                return 0;
-            }
-
-            int[] selectedPositions = Arrays.copyOf(distinctPositions, distinctCount);
-            Vector[] ownedValues = copyVectors(values, selectedPositions);
-            Vector[] ownedNulls = copyNullableVectors(nulls, selectedPositions);
-            for (int position = 0; position < distinctCount; position++) {
-                keys.add(new StructuralDistinctKey(kernels, ownedValues, ownedNulls, position));
-            }
-            batchKeys.clear();
-            return distinctCount;
-        }
-
-        private Vector[] copyVectors(Vector[] vectors, int[] positions)
-        {
-            Vector[] copies = new Vector[vectors.length];
-            for (int index = 0; index < vectors.length; index++) {
-                copies[index] = allocator.copyVector(allocationContext, vectors[index], positions);
-            }
-            return copies;
-        }
-
-        private Vector[] copyNullableVectors(Vector[] vectors, int[] positions)
-        {
-            Vector[] copies = new Vector[vectors.length];
-            for (int index = 0; index < vectors.length; index++) {
-                if (vectors[index] != null) {
-                    copies[index] = allocator.copyVector(allocationContext, vectors[index], positions);
-                }
-            }
-            return copies;
-        }
-
-        @Override
-        public void releaseBuffers()
-        {
-            keys.clear();
-            batchKeys.clear();
-            allocator.primitiveArrays().release(firstLogicalPositions);
-            allocator.primitiveArrays().release(domainPositions);
-            firstLogicalPositions = new int[0];
-            domainPositions = new int[0];
-        }
-    }
-
     private static final class FixedWidthDistinctIndex
             implements DistinctIndex
     {
@@ -3597,81 +3378,6 @@ final class DistinctKeySet
         {
             bindings.release();
             table.releaseBuffers();
-        }
-    }
-
-    private static final class StructuralDistinctKey
-    {
-        private static final int NULL_HASH = 0x9E3779B9;
-
-        private final StructuralKeyKernel[] kernels;
-        private Vector[] values;
-        private Vector[] nulls;
-        private int position;
-
-        private StructuralDistinctKey(StructuralKeyKernel[] kernels)
-        {
-            this.kernels = kernels;
-        }
-
-        private StructuralDistinctKey(
-                StructuralKeyKernel[] kernels,
-                Vector[] values,
-                Vector[] nulls,
-                int position)
-        {
-            this.kernels = kernels;
-            this.values = values;
-            this.nulls = nulls;
-            this.position = position;
-        }
-
-        private void reset(Vector[] values, Vector[] nulls, int position)
-        {
-            this.values = values;
-            this.nulls = nulls;
-            this.position = position;
-        }
-
-        @Override
-        public int hashCode()
-        {
-            int hash = 1;
-            for (int keyIndex = 0; keyIndex < kernels.length; keyIndex++) {
-                int keyHash = OperatorVectorSupport.isNull(nulls[keyIndex], position)
-                        ? NULL_HASH
-                        : Long.hashCode(kernels[keyIndex].hash(values[keyIndex], nulls[keyIndex], position));
-                hash = 31 * hash + keyHash;
-            }
-            return hash;
-        }
-
-        @Override
-        public boolean equals(Object object)
-        {
-            if (!(object instanceof StructuralDistinctKey other) || kernels != other.kernels) {
-                return false;
-            }
-            for (int keyIndex = 0; keyIndex < kernels.length; keyIndex++) {
-                boolean leftNull = OperatorVectorSupport.isNull(nulls[keyIndex], position);
-                boolean rightNull = OperatorVectorSupport.isNull(other.nulls[keyIndex], other.position);
-                if (leftNull || rightNull) {
-                    if (leftNull != rightNull) {
-                        return false;
-                    }
-                    continue;
-                }
-                if (!kernels[keyIndex].identical(
-                        values[keyIndex],
-                        nulls[keyIndex],
-                        position,
-                        other.values[keyIndex],
-                        other.nulls[keyIndex],
-                        other.position)) {
-                    return false;
-                }
-            }
-            return true;
         }
     }
 
@@ -3928,6 +3634,13 @@ final class DistinctKeySet
             }
         }
         return false;
+    }
+
+    private static boolean sameDictionaryMapping(DictionaryVector left, DictionaryVector right)
+    {
+        return left.length() == right.length() &&
+                (left.ids() == right.ids() ||
+                        Arrays.mismatch(left.ids(), 0, left.length(), right.ids(), 0, right.length()) < 0);
     }
 
     private static int capacity(int expectedSize)

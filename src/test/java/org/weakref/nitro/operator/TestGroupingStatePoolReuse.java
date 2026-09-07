@@ -14,12 +14,10 @@
 package org.weakref.nitro.operator;
 
 import org.junit.jupiter.api.Test;
-import org.weakref.nitro.core.type.BoundTypeKey;
 import org.weakref.nitro.core.type.FixedWidthKeyLayout;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.core.type.TypeIdentity;
-import org.weakref.nitro.core.type.TypeKeyBinder;
 import org.weakref.nitro.core.type.TypeOperators;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
@@ -39,13 +37,12 @@ import org.weakref.nitro.execution.EngineResources;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.nio.charset.StandardCharsets;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
-import java.util.stream.LongStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 public class TestGroupingStatePoolReuse
 {
@@ -259,11 +256,10 @@ public class TestGroupingStatePoolReuse
     }
 
     @Test
-    public void testStructuralGroupingBindsProviderKeyAccessOncePerVector()
+    public void testGroupingRejectsSemanticKeyBinderWithoutPhysicalLayout()
             throws ReflectiveOperationException
     {
-        BindingSemantics semantics = new BindingSemantics();
-        TypeBinding type = boundKeyType(semantics);
+        TypeBinding type = semanticLongType();
 
         try (EngineResources resources = EngineResources.createDefault();
                 Allocator allocator = new Allocator(resources)) {
@@ -278,16 +274,15 @@ public class TestGroupingStatePoolReuse
                     List.of(type),
                     allocator,
                     context);
-            I64Vector result = new I64Vector(4);
-            state.assignGroups(
+            assertThatThrownBy(() -> state.assignGroups(
                     new Vector[] {new I64Vector(new long[] {-2, 1, 2, -1})},
                     new Vector[] {null},
                     Mask.all(4),
-                    result);
-
-            assertThat(result.values()).containsExactly(0, 1, 0, 1);
-            assertThat(state.groupCount()).isEqualTo(2);
-            assertThat(semantics.bindCalls).isEqualTo(2);
+                    new I64Vector(4)))
+                    .isInstanceOf(UnsupportedOperationException.class)
+                    .hasMessageContaining("grouping")
+                    .hasMessageContaining("direct physical or generated fixed-width")
+                    .hasMessageContaining("ADR-0090");
 
             state.releaseBuffers();
             allocator.release(context);
@@ -385,311 +380,7 @@ public class TestGroupingStatePoolReuse
         }
     }
 
-    @Test
-    public void testStructuralRunReuseIsAdmittedOnlyForClusteredInput()
-            throws ReflectiveOperationException
-    {
-        int rows = 1_024;
-        long[] clustered = new long[rows];
-        Arrays.fill(clustered, 0, rows / 2, 11);
-        Arrays.fill(clustered, rows / 2, rows, 22);
-        long[] distinct = LongStream.range(0, rows).toArray();
-
-        try (EngineResources resources = EngineResources.createDefault();
-                Allocator allocator = new Allocator(resources)) {
-            allocator.beginExecution();
-            BindingSemantics clusteredSemantics = new BindingSemantics();
-            Allocator.Context clusteredContext = new Allocator.Context("clusteredBoundKeyTest");
-            GroupingState clusteredState = new GroupingState(
-                    resources.primitiveArrays(),
-                    resources.operatorCodeGeneration(),
-                    resources.groupingState(),
-                    resources.operatorResources().adaptiveLongGroupingPolicy(),
-                    resources.operatorResources().flatKeyTablePolicy(),
-                    List.of(boundKeyType(clusteredSemantics)),
-                    allocator,
-                    clusteredContext);
-            clusteredState.assignGroups(
-                    new Vector[] {new I64Vector(clustered)},
-                    new Vector[] {null},
-                    Mask.all(rows),
-                    new I64Vector(rows));
-            assertThat(clusteredState.groupCount()).isEqualTo(2);
-            assertThat(clusteredSemantics.hashCalls).isLessThan(rows / 4);
-
-            BindingSemantics distinctSemantics = new BindingSemantics();
-            Allocator.Context distinctContext = new Allocator.Context("distinctBoundKeyTest");
-            GroupingState distinctState = new GroupingState(
-                    resources.primitiveArrays(),
-                    resources.operatorCodeGeneration(),
-                    resources.groupingState(),
-                    resources.operatorResources().adaptiveLongGroupingPolicy(),
-                    resources.operatorResources().flatKeyTablePolicy(),
-                    List.of(boundKeyType(distinctSemantics)),
-                    allocator,
-                    distinctContext);
-            distinctState.assignGroups(
-                    new Vector[] {new I64Vector(distinct)},
-                    new Vector[] {null},
-                    Mask.all(rows),
-                    new I64Vector(rows));
-            assertThat(distinctState.groupCount()).isEqualTo(rows);
-            assertThat(distinctSemantics.hashCalls).isGreaterThanOrEqualTo(rows);
-
-            clusteredState.releaseBuffers();
-            distinctState.releaseBuffers();
-            allocator.release(clusteredContext);
-            allocator.release(distinctContext);
-        }
-    }
-
-    @Test
-    public void testStructuralDictionaryDomainUsesRegisteredSemantics()
-            throws ReflectiveOperationException
-    {
-        TypeOperators operators = new TypeOperators(
-                Optional.empty(),
-                Optional.empty(),
-                Optional.empty(),
-                Optional.empty(),
-                Optional.empty(),
-                Optional.empty(),
-                Optional.of(MethodHandles.lookup().findStatic(
-                        TestGroupingStatePoolReuse.class,
-                        "vectorAbsoluteIdentical",
-                        MethodType.methodType(boolean.class, Vector.class, int.class, Vector.class, int.class))),
-                Optional.of(MethodHandles.lookup().findStatic(
-                        TestGroupingStatePoolReuse.class,
-                        "vectorAbsoluteHash",
-                        MethodType.methodType(long.class, Vector.class, int.class))),
-                Optional.empty());
-        TypeBinding type = new TypeBinding()
-        {
-            @Override
-            public TypeIdentity identity()
-            {
-                return new TypeIdentity("testing:structural-dictionary-domain");
-            }
-
-            @Override
-            public Class<?> carrierType()
-            {
-                return long.class;
-            }
-
-            @Override
-            public TypeOperators operators()
-            {
-                return operators;
-            }
-
-            @Override
-            public Set<Class<? extends Vector>> supportedVectorTypes()
-            {
-                return Set.of(I64Vector.class);
-            }
-
-            @Override
-            public boolean supportsVector(Vector vector)
-            {
-                return vector instanceof I64Vector ||
-                        (vector instanceof DictionaryVector dictionary && dictionary.values() instanceof I64Vector);
-            }
-        };
-
-        try (EngineResources resources = EngineResources.createDefault();
-                Allocator allocator = new Allocator(resources)) {
-            allocator.beginExecution();
-            Allocator.Context context = new Allocator.Context("structuralDictionaryDomainTest");
-            GroupingState state = new GroupingState(
-                    resources.primitiveArrays(),
-                    resources.operatorCodeGeneration(),
-                    resources.groupingState(),
-                    resources.operatorResources().adaptiveLongGroupingPolicy(),
-                    resources.operatorResources().flatKeyTablePolicy(),
-                    List.of(type),
-                    allocator,
-                    context);
-            DictionaryVector dictionary = new DictionaryVector(
-                    new int[] {0, 1, 2, 3, 0, 2},
-                    new I64Vector(new long[] {1, -1, 2, -2}));
-            BooleanVector nulls = new BooleanVector(new boolean[] {false, false, false, false, true, false});
-            state.initializeSchema(new Vector[] {dictionary}, new Vector[] {nulls}, Mask.all(dictionary.length()));
-
-            int[] counts = new int[5];
-            int[] domainGroups = new int[5];
-            int[] representatives = new int[5];
-            assertThat(state.assignSingleDictionaryDomain(
-                    dictionary,
-                    nulls,
-                    Mask.all(dictionary.length()),
-                    counts,
-                    domainGroups,
-                    representatives)).isEqualTo(5);
-            assertThat(counts).containsExactly(1, 1, 2, 1, 1);
-            assertThat(domainGroups).startsWith(0, 0, 1, 1);
-            assertThat(domainGroups[4]).isEqualTo(2);
-            assertThat(state.groupCount()).isEqualTo(3);
-
-            Streams grouped = state.groupedValues(0, Mask.all(3), null, allocator, context);
-            assertThat(((I64Vector) grouped.values()).values()).containsExactly(1, 2, 1);
-            assertThat(((BooleanVector) grouped.get(Stream.NULLS)).values()).containsExactly(false, false, true);
-
-            state.releaseBuffers();
-            allocator.release(context);
-        }
-    }
-
-    @Test
-    public void testSingleLongInitializationPreservesCompactDictionarySelection()
-    {
-        GroupingState state = new GroupingState(arrayPool, codeGeneration, groupingResources, adaptiveLongGroupingPolicy, flatKeyTablePolicy);
-        DictionaryVector dictionary = DictionaryVector.ofTrustedIdsWithDomainFrequencies(
-                new int[] {0, 1, 2, 3, 0, 1, 2, 3},
-                8,
-                new I64Vector(new long[] {11, 22, 33, 44}),
-                new int[] {2, 2, 2, 2});
-        Mask mask = Mask.all(dictionary.length());
-        mask.retainDictionaryComparison(dictionary, new boolean[] {true, false, true, false});
-
-        state.initializeSchema(new Vector[] {dictionary}, new Vector[] {null}, mask);
-
-        assertThat(mask.dictionaryDomainSelection(dictionary)).isNotNull();
-        state.releaseBuffers();
-    }
-
-    @Test
-    public void testIndependentStructuralDictionaryKeysHashPhysicalCombinationsOnly()
-            throws ReflectiveOperationException
-    {
-        CountingLongSemantics firstSemantics = new CountingLongSemantics();
-        CountingLongSemantics secondSemantics = new CountingLongSemantics();
-        CountingLongSemantics thirdSemantics = new CountingLongSemantics();
-        TypeBinding firstType = countingLongType("first", firstSemantics);
-        TypeBinding secondType = countingLongType("second", secondSemantics);
-        TypeBinding thirdType = countingLongType("third", thirdSemantics);
-        int rows = 10_000;
-        int[] firstIds = new int[rows];
-        int[] secondIds = new int[rows];
-        int[] thirdIds = new int[rows];
-        for (int position = 0; position < rows; position++) {
-            firstIds[position] = position & 1;
-            secondIds[position] = position % 4 < 2 ? 0 : 1;
-            thirdIds[position] = position % 8 < 4 ? 0 : 1;
-        }
-
-        try (EngineResources resources = EngineResources.createDefault();
-                Allocator allocator = new Allocator(resources)) {
-            allocator.beginExecution();
-            Allocator.Context context = new Allocator.Context("shared-structural-dictionary-test");
-            GroupingState state = new GroupingState(
-                    resources.primitiveArrays(),
-                    resources.operatorCodeGeneration(),
-                    resources.groupingState(),
-                    resources.operatorResources().adaptiveLongGroupingPolicy(),
-                    resources.operatorResources().flatKeyTablePolicy(),
-                    List.of(firstType, secondType, thirdType),
-                    allocator,
-                    context);
-            I64Vector groups = new I64Vector(rows);
-            state.assignGroups(
-                    new Vector[] {
-                            DictionaryVector.wrap(firstIds, new I64Vector(new long[] {1, 2})),
-                            DictionaryVector.wrap(secondIds, new I64Vector(new long[] {10, 20})),
-                            DictionaryVector.wrap(thirdIds, new I64Vector(new long[] {100, 200}))},
-                    new Vector[] {null, null, null},
-                    Mask.all(rows),
-                    groups);
-
-            for (int position = 0; position < rows; position++) {
-                assertThat(groups.values()[position]).isEqualTo(position % 8);
-            }
-            assertThat(state.groupCount()).isEqualTo(8);
-            assertThat(firstSemantics.hashCalls + secondSemantics.hashCalls + thirdSemantics.hashCalls).isLessThan(200);
-
-            state.releaseBuffers();
-            allocator.release(context);
-        }
-    }
-
-    @Test
-    public void testIndependentStructuralDictionaryKeysRejectUnprofitableDomain()
-            throws ReflectiveOperationException
-    {
-        CountingLongSemantics firstSemantics = new CountingLongSemantics();
-        CountingLongSemantics secondSemantics = new CountingLongSemantics();
-        CountingLongSemantics thirdSemantics = new CountingLongSemantics();
-        int rows = 16;
-        int[] firstIds = new int[rows];
-        int[] secondIds = new int[rows];
-        int[] thirdIds = new int[rows];
-        for (int position = 0; position < rows; position++) {
-            firstIds[position] = position & 1;
-            secondIds[position] = position % 4 < 2 ? 0 : 1;
-            thirdIds[position] = position % 8 < 4 ? 0 : 1;
-        }
-
-        try (EngineResources resources = EngineResources.createDefault();
-                Allocator allocator = new Allocator(resources)) {
-            allocator.beginExecution();
-            Allocator.Context context = new Allocator.Context("unprofitable-structural-dictionary-test");
-            GroupingState state = new GroupingState(
-                    resources.primitiveArrays(),
-                    resources.operatorCodeGeneration(),
-                    resources.groupingState(),
-                    resources.operatorResources().adaptiveLongGroupingPolicy(),
-                    resources.operatorResources().flatKeyTablePolicy(),
-                    List.of(
-                            countingLongType("first-small", firstSemantics),
-                            countingLongType("second-small", secondSemantics),
-                            countingLongType("third-small", thirdSemantics)),
-                    allocator,
-                    context);
-            I64Vector groups = new I64Vector(rows);
-            state.assignGroups(
-                    new Vector[] {
-                            DictionaryVector.wrap(firstIds, new I64Vector(new long[] {1, 2})),
-                            DictionaryVector.wrap(secondIds, new I64Vector(new long[] {10, 20})),
-                            DictionaryVector.wrap(thirdIds, new I64Vector(new long[] {100, 200}))},
-                    new Vector[] {null, null, null},
-                    Mask.all(rows),
-                    groups);
-
-            assertThat(state.groupCount()).isEqualTo(8);
-            assertThat(firstSemantics.hashCalls + secondSemantics.hashCalls + thirdSemantics.hashCalls)
-                    .isGreaterThanOrEqualTo(rows * 3);
-
-            state.releaseBuffers();
-            allocator.release(context);
-        }
-    }
-
-    public static boolean vectorAbsoluteIdentical(
-            Vector left,
-            int leftPosition,
-            Vector right,
-            int rightPosition)
-    {
-        return Math.abs(((I64Vector) left).values()[leftPosition]) ==
-                Math.abs(((I64Vector) right).values()[rightPosition]);
-    }
-
-    public static long vectorAbsoluteHash(Vector vector, int position)
-    {
-        return Long.hashCode(Math.abs(((I64Vector) vector).values()[position]));
-    }
-
-    public static boolean unexpectedVectorIdentical(Vector left, int leftPosition, Vector right, int rightPosition)
-    {
-        throw new AssertionError("row-wise vector identity must not be used after binding");
-    }
-
-    public static long unexpectedVectorHash(Vector vector, int position)
-    {
-        throw new AssertionError("row-wise vector hash must not be used after binding");
-    }
-
-    private static TypeBinding boundKeyType(BindingSemantics semantics)
+    private static TypeBinding semanticLongType()
             throws ReflectiveOperationException
     {
         TypeOperators operators = new TypeOperators(
@@ -713,103 +404,7 @@ public class TestGroupingStatePoolReuse
             @Override
             public TypeIdentity identity()
             {
-                return new TypeIdentity("testing:bound-key");
-            }
-
-            @Override
-            public Class<?> carrierType()
-            {
-                return long.class;
-            }
-
-            @Override
-            public TypeOperators operators()
-            {
-                return operators;
-            }
-
-            @Override
-            public Optional<TypeKeyBinder> keyBinder()
-            {
-                return Optional.of(semantics::bind);
-            }
-
-            @Override
-            public Set<Class<? extends Vector>> supportedVectorTypes()
-            {
-                return Set.of(I64Vector.class);
-            }
-        };
-    }
-
-    private static final class BindingSemantics
-    {
-        private int bindCalls;
-        private int hashCalls;
-        private int identicalCalls;
-
-        private BoundTypeKey bind(Vector vector)
-        {
-            bindCalls++;
-            return new AbsoluteBoundKey(this, ((I64Vector) vector).values());
-        }
-    }
-
-    private static final class AbsoluteBoundKey
-            implements BoundTypeKey
-    {
-        private final BindingSemantics semantics;
-        private final long[] values;
-
-        private AbsoluteBoundKey(BindingSemantics semantics, long[] values)
-        {
-            this.semantics = semantics;
-            this.values = values;
-        }
-
-        @Override
-        public long hash(int position)
-        {
-            semantics.hashCalls++;
-            return Long.hashCode(Math.abs(values[position]));
-        }
-
-        @Override
-        public boolean identical(int position, BoundTypeKey other, int otherPosition)
-        {
-            semantics.identicalCalls++;
-            AbsoluteBoundKey right = (AbsoluteBoundKey) other;
-            return Math.abs(values[position]) == Math.abs(right.values[otherPosition]);
-        }
-    }
-
-    private static TypeBinding countingLongType(String name, CountingLongSemantics semantics)
-            throws ReflectiveOperationException
-    {
-        TypeOperators operators = new TypeOperators(
-                Optional.empty(),
-                Optional.empty(),
-                Optional.empty(),
-                Optional.empty(),
-                Optional.empty(),
-                Optional.empty(),
-                Optional.of(MethodHandles.lookup().findVirtual(
-                                CountingLongSemantics.class,
-                                "identical",
-                                MethodType.methodType(boolean.class, Vector.class, int.class, Vector.class, int.class))
-                        .bindTo(semantics)),
-                Optional.of(MethodHandles.lookup().findVirtual(
-                                CountingLongSemantics.class,
-                                "hash",
-                                MethodType.methodType(long.class, Vector.class, int.class))
-                        .bindTo(semantics)),
-                Optional.empty());
-        return new TypeBinding()
-        {
-            @Override
-            public TypeIdentity identity()
-            {
-                return new TypeIdentity("testing:counting-structural-" + name);
+                return new TypeIdentity("testing:semantic-long-key");
             }
 
             @Override
@@ -829,38 +424,35 @@ public class TestGroupingStatePoolReuse
             {
                 return Set.of(I64Vector.class);
             }
-
-            @Override
-            public boolean supportsVector(Vector vector)
-            {
-                return vector instanceof I64Vector ||
-                        (vector instanceof DictionaryVector dictionary && dictionary.values() instanceof I64Vector);
-            }
         };
     }
 
-    private static final class CountingLongSemantics
+    public static boolean unexpectedVectorIdentical(Vector left, int leftPosition, Vector right, int rightPosition)
     {
-        private int hashCalls;
+        throw new AssertionError("row-wise vector identity must not be used by a persistent key table");
+    }
 
-        private boolean identical(Vector left, int leftPosition, Vector right, int rightPosition)
-        {
-            return valueAt(left, leftPosition) == valueAt(right, rightPosition);
-        }
+    public static long unexpectedVectorHash(Vector vector, int position)
+    {
+        throw new AssertionError("row-wise vector hash must not be used by a persistent key table");
+    }
 
-        private long hash(Vector vector, int position)
-        {
-            hashCalls++;
-            return Long.hashCode(valueAt(vector, position));
-        }
+    @Test
+    public void testSingleLongInitializationPreservesCompactDictionarySelection()
+    {
+        GroupingState state = new GroupingState(arrayPool, codeGeneration, groupingResources, adaptiveLongGroupingPolicy, flatKeyTablePolicy);
+        DictionaryVector dictionary = DictionaryVector.ofTrustedIdsWithDomainFrequencies(
+                new int[] {0, 1, 2, 3, 0, 1, 2, 3},
+                8,
+                new I64Vector(new long[] {11, 22, 33, 44}),
+                new int[] {2, 2, 2, 2});
+        Mask mask = Mask.all(dictionary.length());
+        mask.retainDictionaryComparison(dictionary, new boolean[] {true, false, true, false});
 
-        private static long valueAt(Vector vector, int position)
-        {
-            if (vector instanceof DictionaryVector dictionary) {
-                return ((I64Vector) dictionary.values()).values()[dictionary.ids()[position]];
-            }
-            return ((I64Vector) vector).values()[position];
-        }
+        state.initializeSchema(new Vector[] {dictionary}, new Vector[] {null}, mask);
+
+        assertThat(mask.dictionaryDomainSelection(dictionary)).isNotNull();
+        state.releaseBuffers();
     }
 
     @Test
