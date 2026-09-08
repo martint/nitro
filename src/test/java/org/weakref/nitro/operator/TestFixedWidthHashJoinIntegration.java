@@ -229,7 +229,9 @@ class TestFixedWidthHashJoinIntegration
                     new String[] {"a", "b", "c", "ignored"},
                     new boolean[] {false, false, false, true},
                     new boolean[] {false, false, false, true});
-            Vector probeKeys = DictionaryVector.wrap(new int[] {1, 0, 3, 2}, probeDomain);
+            Vector probeKeys = DictionaryVector.wrap(
+                    new int[] {1, 0, 3, 2, 1, 0, 3, 2, 1, 0, 3, 2, 1, 0, 3, 2},
+                    probeDomain);
             session.addInput(new Batch(
                     Mask.all(probeKeys.length()),
                     Output.of(Streams.ofValues(probeKeys))));
@@ -243,7 +245,11 @@ class TestFixedWidthHashJoinIntegration
                     }
                 }
             }
-            assertThat(payloads).containsExactly(200L, 100L, 101L);
+            assertThat(payloads).containsExactly(
+                    200L, 100L, 101L,
+                    200L, 100L, 101L,
+                    200L, 100L, 101L,
+                    200L, 100L, 101L);
         }
     }
 

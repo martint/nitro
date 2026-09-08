@@ -287,9 +287,7 @@ final class FlatJoinIndex
             LongList[] matches,
             SingleLongList[] singleMatches)
     {
-        int[] dictionaryGroups = batchBindingRequired
-                ? null
-                : dictionaryProbeCache.prepare(table, values, positionCount, nextGroupId);
+        int[] dictionaryGroups = dictionaryProbeCache.prepare(table, values, nulls, positionCount, nextGroupId);
         DictionaryVector dictionary = dictionaryGroups == null ? null : (DictionaryVector) values[0];
         int dictionaryDepth = dictionary == null ? 0 : dictionary.dictionaryDepth();
         int[] dictionaryIds = dictionaryDepth == 1 ? dictionary.ids() : null;
@@ -300,7 +298,7 @@ final class FlatJoinIndex
         try {
             for (int index = 0; index < positionCount; index++) {
                 int position = positions[index];
-                if (keyHasNull(nulls, position, hasNulls)) {
+                if (dictionaryGroups == null && keyHasNull(nulls, position, hasNulls)) {
                     matches[index] = LongLists.emptyList();
                     continue;
                 }
@@ -364,9 +362,7 @@ final class FlatJoinIndex
                     values.length,
                     Arrays.stream(values).map(FlatJoinIndex::probeShape).toList());
         }
-        int[] dictionaryGroups = batchBindingRequired
-                ? null
-                : dictionaryProbeCache.prepare(table, values, positionCount, nextGroupId);
+        int[] dictionaryGroups = dictionaryProbeCache.prepare(table, values, nulls, positionCount, nextGroupId);
         DictionaryVector dictionary = dictionaryGroups == null ? null : (DictionaryVector) values[0];
         int dictionaryDepth = dictionary == null ? 0 : dictionary.dictionaryDepth();
         int[] dictionaryIds = dictionaryDepth == 1 ? dictionary.ids() : null;
@@ -377,7 +373,7 @@ final class FlatJoinIndex
         try {
             for (int index = 0; index < positionCount; index++) {
                 int position = positions[index];
-                if (keyHasNull(nulls, position, hasNulls)) {
+                if (dictionaryGroups == null && keyHasNull(nulls, position, hasNulls)) {
                     refs[index] = NO_MATCH_ROW_REFERENCE;
                     continue;
                 }

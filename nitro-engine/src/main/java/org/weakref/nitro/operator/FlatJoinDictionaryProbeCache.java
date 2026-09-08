@@ -13,10 +13,12 @@
  */
 package org.weakref.nitro.operator;
 
-import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.data.VectorAccess;
+
+import java.util.Arrays;
 
 import static java.util.Objects.requireNonNull;
 
@@ -30,10 +32,10 @@ final class FlatJoinDictionaryProbeCache
     private final int maxCardinality;
     private final int minRowsPerEntry;
     private final boolean debug;
-    private final Vector[] probeValues = new Vector[1];
+    private Vector[] probeValues = new Vector[0];
 
-    private Vector identity;
-    private long generation = -1;
+    private Vector[] identities = new Vector[0];
+    private long[] generations = new long[0];
     private int[] groups;
     private boolean debugPrinted;
 
@@ -49,49 +51,82 @@ final class FlatJoinDictionaryProbeCache
 
     /**
      * Resolves a small encoded domain once, then maps probe rows through dictionary ids. The exact flat table
-     * remains authoritative for each base entry's first lookup. Identity alone is insufficient because pooled
-     * binary vectors are reused; a cache generation is valid only while both identity and content generation
-     * match. Large or weakly reused dictionaries retain the ordinary row-at-a-time probe path.
+     * remains authoritative for each base entry's first lookup. Any number of fields may participate when they
+     * share the exact row mapping; the bound layout still owns their complete recursive identity and null policy.
+     * Identity alone is insufficient because pooled vectors are reused, so cross-batch reuse requires immutable
+     * content plus a matching generation. Other structural domains are recomputed once per batch. Large or weakly
+     * reused dictionaries retain the ordinary row-at-a-time probe path.
      */
-    int[] prepare(FlatGroupingTable table, Vector[] values, int positionCount, long groupCount)
+    int[] prepare(FlatGroupingTable table, Vector[] values, Vector[] nulls, int positionCount, long groupCount)
     {
         requireNonNull(table, "table is null");
         if (!enabled ||
-                values.length != 1 ||
+                values.length == 0 ||
                 !(values[0] instanceof DictionaryVector dictionary)) {
             return null;
         }
-        Vector base = dictionary.baseValues();
-        if (!(base instanceof BinaryVector binary) || !binary.contentImmutable()) {
-            return null;
+        if (nulls != null) {
+            for (Vector nullVector : nulls) {
+                if (!VectorAccess.isAllFalseNulls(nullVector)) {
+                    return null;
+                }
+            }
         }
-        int cardinality = base.length();
-        long contentGeneration = base.contentGeneration();
-        if (contentGeneration < 0 ||
-                cardinality == 0 ||
+        if (probeValues.length != values.length) {
+            probeValues = new Vector[values.length];
+            identities = new Vector[values.length];
+            generations = new long[values.length];
+            Arrays.fill(generations, -1);
+        }
+        probeValues[0] = dictionary.baseValues();
+        for (int field = 1; field < values.length; field++) {
+            if (!(values[field] instanceof DictionaryVector fieldDictionary) ||
+                    !dictionary.hasSameRowMapping(fieldDictionary)) {
+                return null;
+            }
+            probeValues[field] = fieldDictionary.baseValues();
+        }
+        int cardinality = probeValues[0].length();
+        if (cardinality == 0 ||
                 cardinality > maxCardinality ||
                 (long) cardinality * minRowsPerEntry > positionCount) {
             return null;
         }
+        for (int field = 1; field < probeValues.length; field++) {
+            if (probeValues[field].length() != cardinality) {
+                return null;
+            }
+        }
         if (groups == null || groups.length < cardinality) {
             arrayPool.release(groups);
             groups = arrayPool.borrowInts(cardinality);
-            identity = null;
-            generation = -1;
+            Arrays.fill(identities, null);
+            Arrays.fill(generations, -1);
         }
-        if (base != identity || contentGeneration != generation) {
-            probeValues[0] = base;
+        boolean cacheable = true;
+        boolean current = true;
+        for (int field = 0; field < probeValues.length; field++) {
+            Vector base = probeValues[field];
+            long generation = base.contentGeneration();
+            cacheable &= base.contentImmutable() && generation >= 0;
+            current &= base == identities[field] && generation == generations[field];
+        }
+        if (!cacheable || !current) {
             table.beginBatch(probeValues, null);
             try {
                 for (int dictionaryId = 0; dictionaryId < cardinality; dictionaryId++) {
-                    groups[dictionaryId] = (int) table.findGroup(probeValues, dictionaryId);
+                    groups[dictionaryId] = table.boundInputHasAnyNull(dictionaryId)
+                            ? -1
+                            : (int) table.findGroup(probeValues, dictionaryId);
                 }
             }
             finally {
                 table.endBatch();
             }
-            identity = base;
-            generation = contentGeneration;
+            for (int field = 0; field < probeValues.length; field++) {
+                identities[field] = cacheable ? probeValues[field] : null;
+                generations[field] = cacheable ? probeValues[field].contentGeneration() : -1;
+            }
         }
         if (debug && !debugPrinted) {
             debugPrinted = true;
@@ -113,7 +148,7 @@ final class FlatJoinDictionaryProbeCache
     {
         arrayPool.release(groups);
         groups = null;
-        identity = null;
-        generation = -1;
+        Arrays.fill(identities, null);
+        Arrays.fill(generations, -1);
     }
 }

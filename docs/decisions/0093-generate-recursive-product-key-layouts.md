@@ -44,6 +44,16 @@ Grouping, DISTINCT, hash join, and membership share the resolved contract while 
 payload and null policies. A recursive value whose identity cannot be expressed as a finite product of supported leaf
 identities rejects admission; arrays and maps therefore remain explicit gaps rather than entering a semantic bridge.
 
+An encoded probe domain does not lose its amortization merely because the resolved layout requires batch binding.
+When every key field is dictionary-wrapped over the same exact row mapping, a join binds the complete generated
+layout over that aligned physical domain and performs the authoritative table lookup once per domain position. The
+logical-row loop maps the cached result through the shared IDs. Nested product null rejection is evaluated while the
+domain layout is bound, so a cached rejected position never requires access to cleared binding state. Reuse across
+batches additionally requires immutable domain content with matching vector identities and content generations;
+otherwise the domain results are recomputed for the batch. Unaligned fields, non-empty top-level null streams, large
+or weakly reused domains, and unsupported encodings retain the ordinary generated probe path rather than weakening
+the mapping proof.
+
 ## Consequences
 
 - Fixed-width, canonical, variable-width, and nested product fields compose in one generated persistent table.
@@ -53,6 +63,8 @@ identities rejects admission; arrays and maps therefore remain explicit gaps rat
 - Generated shapes grow with the physical descriptor, not with a source-level matrix of logical or carrier cases.
 - Product-valued grouped output retains one logical representative per new group until direct reconstruction has a
   separately proven implementation.
+- Generated product joins retain dictionary-domain probe amortization when every field proves one aligned mapping;
+  batch binding is not a reason to perform the same authoritative lookup once per logical row.
 - Variable-length collections remain unsupported persistent keys until they receive an efficient physical layout.
 
 ## Alternatives considered

@@ -192,6 +192,12 @@ final class FlatGroupingTable
         }
     }
 
+    /** Whether the currently bound logical key contains any null at any provider-described structural boundary. */
+    boolean boundInputHasAnyNull(int position)
+    {
+        return layout.inputHasAnyNull(position);
+    }
+
     /**
      * Hook wrapper so callers that drive per-position {@link #assignGroup}/{@link #findGroup} in a
      * tight loop can declare a batch boundary — lets the underlying {@link FlatKeyLayout} hoist

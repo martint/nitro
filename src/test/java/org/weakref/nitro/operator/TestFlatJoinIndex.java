@@ -17,6 +17,7 @@ import org.junit.jupiter.api.Test;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.execution.EngineResources;
 
@@ -29,6 +30,43 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class TestFlatJoinIndex
 {
+    @Test
+    void testBatchBoundLayoutProbesDictionaryDomainOnce()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            BinaryVector buildKeys = binaryVector("a", "b");
+            CountingBatchLayout layout = new CountingBatchLayout(resources, buildKeys);
+            FlatJoinIndex owner = new FlatJoinIndex(HashJoinIndexPolicy.defaults(), layout, 2);
+            owner.add(new Vector[] {buildKeys}, new Vector[] {null}, 0, 10);
+            owner.add(new Vector[] {buildKeys}, new Vector[] {null}, 1, 11);
+
+            int size = 300;
+            int[] ids = new int[size];
+            int[] positions = new int[size];
+            for (int position = 0; position < size; position++) {
+                ids[position] = position % 3;
+                positions[position] = position;
+            }
+            BinaryVector domain = binaryVector("a", "b", "missing");
+            domain.freezeContent();
+            Vector[] values = {DictionaryVector.wrap(ids, domain)};
+            long[] references = new long[size];
+            layout.resetHashCalls();
+
+            owner.newProbeView().matchSingleRows(values, new Vector[] {null}, false, positions, size, references);
+
+            assertThat(layout.hashCalls()).isEqualTo(3);
+            for (int position = 0; position < size; position++) {
+                assertThat(references[position]).isEqualTo(switch (position % 3) {
+                    case 0 -> 10;
+                    case 1 -> 11;
+                    default -> -1;
+                });
+            }
+        }
+    }
+
     @Test
     void testPreparedProbeViewsDoNotShareBatchState()
             throws Exception
@@ -102,5 +140,46 @@ class TestFlatJoinIndex
             offset += value.length;
         }
         return new BinaryVector(values.length, offsets, data);
+    }
+
+    private static final class CountingBatchLayout
+            extends FlatKeyLayout
+    {
+        private int hashCalls;
+
+        private CountingBatchLayout(EngineResources resources, Vector sample)
+        {
+            super(FlatKeyLayout.construction(
+                    new Vector[] {sample},
+                    new int[] {0},
+                    new FlatTypeHandler[] {FlatTypeHandlers.BINARY},
+                    true,
+                    resources.primitiveArrays(),
+                    resources.operatorResources().codeGeneration(),
+                    resources.operatorResources().flatKeyTablePolicy()));
+        }
+
+        @Override
+        public long hash(Vector[] values, Vector[] nulls, int position)
+        {
+            hashCalls++;
+            return super.hash(values, nulls, position);
+        }
+
+        @Override
+        boolean requiresBatchBinding()
+        {
+            return true;
+        }
+
+        private void resetHashCalls()
+        {
+            hashCalls = 0;
+        }
+
+        private int hashCalls()
+        {
+            return hashCalls;
+        }
     }
 }
