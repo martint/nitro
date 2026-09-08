@@ -85,7 +85,12 @@ record ResolvedPersistentKeyLayout(
                 continue;
             }
 
-            if (!type.supportsRawKeyIdentity() || FlatTypeHandlers.forVector(values[key], type) == null) {
+            // Unbound engine-owned prefix channels (for example a dense group id in grouped DISTINCT) carry the
+            // compatibility binding and an exact legacy physical kernel. They are physical consumer metadata, not
+            // a logical-type inference. Registry-bound logical fields still require the provider proof.
+            boolean directIdentity = type.supportsRawKeyIdentity() ||
+                    (!type.isSpecified() && kernels[key].allowsLegacyPhysicalShortcuts());
+            if (!directIdentity || FlatTypeHandlers.forVector(values[key], type) == null) {
                 return null;
             }
             directFieldByLogicalKey[key] = fields.size();

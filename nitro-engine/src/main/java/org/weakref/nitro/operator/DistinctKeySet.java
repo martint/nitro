@@ -205,6 +205,23 @@ final class DistinctKeySet
                         allocator,
                         allocationContext);
             }
+            DistinctIndex projectedFlat = tryCreateProjectedFlatIndex(
+                    samples,
+                    flatKeyTypes(samples.length, keyTypes, 1),
+                    kernels,
+                    false,
+                    expectedSize,
+                    arrayPool,
+                    codeGeneration,
+                    flatKeyTablePolicy);
+            if (projectedFlat != null) {
+                return new DistinctKeySet(
+                        projectedFlat,
+                        keyTypes,
+                        1,
+                        allocator,
+                        allocationContext);
+            }
             throw PersistentKeyTableSupport.unsupportedLayout(
                     "grouped distinct",
                     flatKeyTypes(samples.length, keyTypes, 1),
@@ -374,6 +391,23 @@ final class DistinctKeySet
                         allocator,
                         allocationContext);
             }
+            DistinctIndex projectedFlat = tryCreateProjectedFlatIndex(
+                    samples,
+                    flatKeyTypes(samples.length, keyTypes, unboundKeyPrefix),
+                    kernels,
+                    retainNulls,
+                    expectedSize,
+                    arrayPool,
+                    codeGeneration,
+                    flatKeyTablePolicy);
+            if (projectedFlat != null) {
+                return new DistinctKeySet(
+                        projectedFlat,
+                        keyTypes,
+                        unboundKeyPrefix,
+                        allocator,
+                        allocationContext);
+            }
             throw PersistentKeyTableSupport.unsupportedLayout(
                     "distinct",
                     flatKeyTypes(samples.length, keyTypes, unboundKeyPrefix),
@@ -393,6 +427,30 @@ final class DistinctKeySet
             index = new RetainNullsDistinctIndex(index, samples.length, arrayPool, policy);
         }
         return new DistinctKeySet(index, keyTypes, unboundKeyPrefix, allocator, allocationContext);
+    }
+
+    private static DistinctIndex tryCreateProjectedFlatIndex(
+            Vector[] samples,
+            List<TypeBinding> types,
+            StructuralKeyKernel[] kernels,
+            boolean retainNulls,
+            int expectedSize,
+            PrimitiveArrayPool arrayPool,
+            OperatorCodeGenerationResources codeGeneration,
+            FlatKeyTablePolicy policy)
+    {
+        ResolvedPersistentKeyLayout persistentLayout = ResolvedPersistentKeyLayout.tryCreate(types, kernels, samples);
+        if (persistentLayout == null) {
+            return null;
+        }
+        ProjectedFlatKeyLayout layout = codeGeneration.projectedFlatKeyLayouts().create(
+                persistentLayout,
+                samples,
+                types,
+                arrayPool,
+                codeGeneration,
+                policy);
+        return new ProjectedFlatDistinctIndex(layout, retainNulls, Math.max(16, expectedSize));
     }
 
     private static StructuralKeyKernel[] structuralKeyKernels(
@@ -1359,6 +1417,161 @@ final class DistinctKeySet
             arrayPool.release(dictionaryDomainPositions);
             dictionaryFirstLogicalPositions = new int[0];
             dictionaryDomainPositions = new int[0];
+        }
+    }
+
+    /** Payload-free DISTINCT over one generated composition of direct flat fields and canonical projected lanes. */
+    private static final class ProjectedFlatDistinctIndex
+            implements DistinctIndex
+    {
+        private final boolean retainNulls;
+        private final FlatGroupingTable table;
+        private final int[] singlePosition = new int[1];
+        private final int[] singleDistinct = new int[1];
+
+        private ProjectedFlatDistinctIndex(ProjectedFlatKeyLayout layout, boolean retainNulls, int expectedSize)
+        {
+            this.retainNulls = retainNulls;
+            table = new FlatGroupingTable(layout, expectedSize, true);
+        }
+
+        @Override
+        public void reserveAdditional(int additionalEntries)
+        {
+            table.ensureCapacity(table.recordCount() + Math.max(0, additionalEntries));
+        }
+
+        @Override
+        public boolean add(Vector[] values, Vector[] nulls, int position)
+        {
+            singlePosition[0] = position;
+            return addPositions(values, nulls, singlePosition, 1, singleDistinct, retainNulls) == 1;
+        }
+
+        @Override
+        public int addBatch(Vector[] values, Vector[] nulls, Mask mask, int[] distinctPositions)
+        {
+            table.beginBatch(values, nulls, mask);
+            try {
+                table.ensureCapacity(table.recordCount() + mask.selectedCount());
+                table.prepareBatchHashes(values, nulls, mask);
+                return addBoundPositions(
+                        values,
+                        nulls,
+                        mask.all() ? null : mask.selectedPositions(),
+                        mask.selectedCount(),
+                        distinctPositions,
+                        retainNulls);
+            }
+            finally {
+                table.endBatch();
+            }
+        }
+
+        @Override
+        public int addNonNullBatch(Vector[] values, Vector[] nulls, int[] positions, int positionCount, int[] distinctPositions)
+        {
+            return addPositions(values, nulls, positions, positionCount, distinctPositions, true);
+        }
+
+        @Override
+        public int addNonNullDenseBatch(Vector[] values, Vector[] nulls, int positionCount, int[] positions, int[] distinctPositions)
+        {
+            return addPositions(values, nulls, null, positionCount, distinctPositions, true);
+        }
+
+        @Override
+        public int addRetainingNullBatch(Vector[] values, Vector[] nulls, Mask mask, int[] distinctPositions)
+        {
+            table.beginBatch(values, nulls, mask);
+            try {
+                table.ensureCapacity(table.recordCount() + mask.selectedCount());
+                table.prepareBatchHashes(values, nulls, mask);
+                return addBoundPositions(
+                        values,
+                        nulls,
+                        mask.all() ? null : mask.selectedPositions(),
+                        mask.selectedCount(),
+                        distinctPositions,
+                        true);
+            }
+            finally {
+                table.endBatch();
+            }
+        }
+
+        private int addPositions(
+                Vector[] values,
+                Vector[] nulls,
+                int[] positions,
+                int positionCount,
+                int[] distinctPositions,
+                boolean retainNullKeys)
+        {
+            table.beginBatch(values, nulls);
+            try {
+                table.ensureCapacity(table.recordCount() + positionCount);
+                if (positions == null) {
+                    table.prepareBatchHashes(values, nulls, Mask.all(positionCount));
+                }
+                else {
+                    table.prepareBatchHashes(values, nulls, positions, positionCount);
+                }
+                return addBoundPositions(
+                        values,
+                        nulls,
+                        positions,
+                        positionCount,
+                        distinctPositions,
+                        retainNullKeys);
+            }
+            finally {
+                table.endBatch();
+            }
+        }
+
+        private int addBoundPositions(
+                Vector[] values,
+                Vector[] nulls,
+                int[] positions,
+                int positionCount,
+                int[] distinctPositions,
+                boolean retainNullKeys)
+        {
+            int count = 0;
+            for (int index = 0; index < positionCount; index++) {
+                int position = positions == null ? index : positions[index];
+                if (!retainNullKeys && hasNull(nulls, position)) {
+                    continue;
+                }
+                int recordCount = table.recordCount();
+                if (table.assignGroup(values, nulls, position, recordCount) == recordCount) {
+                    distinctPositions[count++] = position;
+                }
+            }
+            return count;
+        }
+
+        @Override
+        public long retainedBytes()
+        {
+            return table.retainedBytes();
+        }
+
+        @Override
+        public void releaseBuffers()
+        {
+            table.releaseBuffers();
+        }
+
+        private static boolean hasNull(Vector[] nulls, int position)
+        {
+            for (Vector nullVector : nulls) {
+                if (OperatorVectorSupport.isNull(nullVector, position)) {
+                    return true;
+                }
+            }
+            return false;
         }
     }
 

@@ -129,6 +129,60 @@ class TestDistinctKeySet
     }
 
     @Test
+    void testProjectedFlatDistinctComposesDirectAndCanonicalFields()
+    {
+        Vector[] values = {
+                utf8(new String[] {"alpha", "alpha", "beta", "beta", "ignored", "ignored"}),
+                new I64Vector(new long[] {
+                        CanonicalFixedWidthKeyTestType.pack(100, 1),
+                        CanonicalFixedWidthKeyTestType.pack(100, 2),
+                        CanonicalFixedWidthKeyTestType.pack(200, 3),
+                        CanonicalFixedWidthKeyTestType.pack(200, 4),
+                        CanonicalFixedWidthKeyTestType.pack(300, 5),
+                        CanonicalFixedWidthKeyTestType.pack(300, 6)})};
+        Vector[] nulls = {
+                new BooleanVector(new boolean[] {false, false, false, false, true, true}),
+                null};
+        List<TypeBinding> types = List.of(rawBinaryType(), CanonicalFixedWidthKeyTestType.INSTANCE);
+
+        try (Allocator allocator = new Allocator(engineResources)) {
+            DistinctKeySet keys = DistinctKeySet.create(
+                    values,
+                    true,
+                    types,
+                    allocator,
+                    new Allocator.Context("projected-flat-distinct"),
+                    arrayPool,
+                    codeGeneration,
+                    DistinctKeySetPolicy.defaults(),
+                    adaptiveLongGroupingPolicy,
+                    flatKeyTablePolicy);
+            try {
+                int[] positions = new int[values[0].length()];
+                int distinct = keys.addBatch(values, nulls, Mask.all(values[0].length()), positions);
+                assertThat(Arrays.copyOf(positions, distinct)).containsExactly(0, 2, 4);
+
+                Vector[] wrappedValues = {
+                        DictionaryVector.wrap(new int[] {0, 0, 1}, utf8(new String[] {"alpha", "gamma"})),
+                        new RleVector(
+                                new int[] {2, 1},
+                                new I64Vector(new long[] {
+                                        CanonicalFixedWidthKeyTestType.pack(100, 9),
+                                        CanonicalFixedWidthKeyTestType.pack(300, 7)}))};
+                distinct = keys.addBatch(
+                        wrappedValues,
+                        new Vector[] {null, null},
+                        Mask.sparse(new int[] {0, 2}, 3),
+                        positions);
+                assertThat(Arrays.copyOf(positions, distinct)).containsExactly(2);
+            }
+            finally {
+                keys.releaseBuffers();
+            }
+        }
+    }
+
+    @Test
     void testFixedWidthStructuralDistinctComposesNestedDictionaryMappingsAndNullModes()
     {
         StructVector domain = fixedWidthPairs(
@@ -1127,6 +1181,42 @@ class TestDistinctKeySet
             public Set<Class<? extends Vector>> supportedVectorTypes()
             {
                 return Set.of(StructVector.class, DictionaryVector.class);
+            }
+        };
+    }
+
+    private static TypeBinding rawBinaryType()
+    {
+        return new TypeBinding()
+        {
+            @Override
+            public TypeIdentity identity()
+            {
+                return new TypeIdentity("testing:raw-binary-distinct-key");
+            }
+
+            @Override
+            public Class<?> carrierType()
+            {
+                return Object.class;
+            }
+
+            @Override
+            public TypeOperators operators()
+            {
+                return TypeOperators.UNSPECIFIED;
+            }
+
+            @Override
+            public boolean supportsRawKeyIdentity()
+            {
+                return true;
+            }
+
+            @Override
+            public Set<Class<? extends Vector>> supportedVectorTypes()
+            {
+                return Set.of(BinaryVector.class, DictionaryVector.class, RleVector.class);
             }
         };
     }

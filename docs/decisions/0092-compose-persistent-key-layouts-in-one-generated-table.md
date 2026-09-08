@@ -12,8 +12,11 @@
   [ADR-0091](0091-generate-canonical-fixed-width-key-projections.md)
 - **Amends:** [ADR-0091](0091-generate-canonical-fixed-width-key-projections.md)
 - **Evidence:** strict TPC-H q10 rejection in
-  `/home/ubuntu/nitro-bench/results/functional-adr0091-from-q42-20260908T0958Z/results/tpch/run.log` and mixed-layout
-  grouping coverage in `TestFlatGroupingTable.testGeneratedProjectedFlatLayoutComposesVariableWidthAndCanonicalFields`
+  `/home/ubuntu/nitro-bench/results/functional-adr0091-from-q42-20260908T0958Z/results/tpch/run.log`, strict TPC-DS
+  q49 DISTINCT rejection in
+  `/home/ubuntu/nitro-bench/results/functional-adr0092-from-q11-20260908T1042Z/results/tpcds/run.log`, and mixed-layout
+  grouping/DISTINCT coverage in `TestFlatGroupingTable.testGeneratedProjectedFlatLayoutComposesVariableWidthAndCanonicalFields`
+  and `TestDistinctKeySet.testProjectedFlatDistinctComposesDirectAndCanonicalFields`
 
 ## Context
 
@@ -61,8 +64,9 @@ semantic object table or another correctness-first bridge.
 - Generated code remains monomorphic for each exact physical shape without requiring source-level shape classes.
 - Representative retention is proportional to new groups and only applies to logical fields whose canonical storage
   cannot reproduce the original representative.
-- Consumers adopt the composed descriptor independently. A consumer that has not implemented a compatible generated
-  table continues to reject the layout; it does not fall back to row-wise semantics.
+- Grouping and DISTINCT use the composed generated flat table. Other consumers adopt the descriptor independently;
+  a consumer that has not implemented a compatible generated table continues to reject the layout and does not fall
+  back to row-wise semantics.
 
 ## Alternatives considered
 
