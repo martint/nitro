@@ -15,6 +15,7 @@ package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.PrimitiveArrayPool;
+import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
 
@@ -23,9 +24,9 @@ import java.util.Arrays;
 import static java.util.Objects.requireNonNull;
 
 /**
- * Reusable dictionary-to-group probe state for a flat join index.
+ * Reusable encoded-domain-to-group probe state for a flat join index.
  */
-final class FlatJoinDictionaryProbeCache
+final class FlatJoinEncodedProbeCache
 {
     private final PrimitiveArrayPool arrayPool;
     private final boolean enabled;
@@ -39,7 +40,7 @@ final class FlatJoinDictionaryProbeCache
     private int[] groups;
     private boolean debugPrinted;
 
-    FlatJoinDictionaryProbeCache(PrimitiveArrayPool arrayPool, HashJoinIndexPolicy policy)
+    FlatJoinEncodedProbeCache(PrimitiveArrayPool arrayPool, HashJoinIndexPolicy policy)
     {
         this.arrayPool = requireNonNull(arrayPool, "arrayPool is null");
         requireNonNull(policy, "policy is null");
@@ -50,19 +51,17 @@ final class FlatJoinDictionaryProbeCache
     }
 
     /**
-     * Resolves a small encoded domain once, then maps probe rows through dictionary ids. The exact flat table
-     * remains authoritative for each base entry's first lookup. Any number of fields may participate when they
-     * share the exact row mapping; the bound layout still owns their complete recursive identity and null policy.
-     * Identity alone is insufficient because pooled vectors are reused, so cross-batch reuse requires immutable
-     * content plus a matching generation. Other structural domains are recomputed once per batch. Large or weakly
-     * reused dictionaries retain the ordinary row-at-a-time probe path.
+     * Resolves a small aligned encoded domain once, then maps probe rows through its physical mapping. Dictionary
+     * fields may share one exact row mapping and may be combined with single-run RLE constants; all-RLE keys form a
+     * one-entry domain. The exact flat table remains authoritative for every domain entry's first lookup, and the
+     * bound layout still owns complete recursive identity and null policy. Identity alone is insufficient because
+     * pooled vectors are reused, so cross-batch reuse requires immutable content plus a matching generation. Other
+     * structural domains are recomputed once per batch. Large or weakly reused domains retain the ordinary probe.
      */
-    int[] prepare(FlatGroupingTable table, Vector[] values, Vector[] nulls, int positionCount, long groupCount)
+    Prepared prepare(FlatGroupingTable table, Vector[] values, Vector[] nulls, int positionCount, long groupCount)
     {
         requireNonNull(table, "table is null");
-        if (!enabled ||
-                values.length == 0 ||
-                !(values[0] instanceof DictionaryVector dictionary)) {
+        if (!enabled || values.length == 0) {
             return null;
         }
         if (nulls != null) {
@@ -78,24 +77,53 @@ final class FlatJoinDictionaryProbeCache
             generations = new long[values.length];
             Arrays.fill(generations, -1);
         }
-        probeValues[0] = dictionary.baseValues();
-        for (int field = 1; field < values.length; field++) {
-            if (!(values[field] instanceof DictionaryVector fieldDictionary) ||
-                    !dictionary.hasSameRowMapping(fieldDictionary)) {
-                return null;
+
+        DictionaryVector dictionary = null;
+        for (Vector value : values) {
+            if (value instanceof DictionaryVector candidate) {
+                dictionary = candidate;
+                break;
             }
-            probeValues[field] = fieldDictionary.baseValues();
         }
-        int cardinality = probeValues[0].length();
+        int[] rowIds = null;
+        int cardinality;
+        if (dictionary != null) {
+            cardinality = dictionary.values().length();
+            rowIds = dictionary.ids();
+            for (int field = 0; field < values.length; field++) {
+                Vector value = values[field];
+                if (value instanceof DictionaryVector fieldDictionary) {
+                    if (!dictionary.hasSameRowMapping(fieldDictionary) ||
+                            fieldDictionary.values().length() != cardinality) {
+                        return null;
+                    }
+                    // Bind the immediate aligned domain. Nested mappings remain part of the generated field binding.
+                    probeValues[field] = fieldDictionary.values();
+                }
+                else if (value instanceof RleVector rle &&
+                        rle.counts().length == 1 &&
+                        rle.length() >= cardinality) {
+                    // A single-run value is constant over every position in the dictionary domain.
+                    probeValues[field] = rle;
+                }
+                else {
+                    return null;
+                }
+            }
+        }
+        else {
+            cardinality = 1;
+            for (int field = 0; field < values.length; field++) {
+                if (!(values[field] instanceof RleVector rle) || rle.counts().length != 1) {
+                    return null;
+                }
+                probeValues[field] = rle.values();
+            }
+        }
         if (cardinality == 0 ||
                 cardinality > maxCardinality ||
                 (long) cardinality * minRowsPerEntry > positionCount) {
             return null;
-        }
-        for (int field = 1; field < probeValues.length; field++) {
-            if (probeValues[field].length() != cardinality) {
-                return null;
-            }
         }
         if (groups == null || groups.length < cardinality) {
             arrayPool.release(groups);
@@ -114,10 +142,10 @@ final class FlatJoinDictionaryProbeCache
         if (!cacheable || !current) {
             table.beginBatch(probeValues, null);
             try {
-                for (int dictionaryId = 0; dictionaryId < cardinality; dictionaryId++) {
-                    groups[dictionaryId] = table.boundInputHasAnyNull(dictionaryId)
+                for (int domainPosition = 0; domainPosition < cardinality; domainPosition++) {
+                    groups[domainPosition] = table.boundInputHasAnyNull(domainPosition)
                             ? -1
-                            : (int) table.findGroup(probeValues, dictionaryId);
+                            : (int) table.findGroup(probeValues, domainPosition);
                 }
             }
             finally {
@@ -130,13 +158,13 @@ final class FlatJoinDictionaryProbeCache
         }
         if (debug && !debugPrinted) {
             debugPrinted = true;
-            System.err.printf("[flat-join-dictionary-cache] groups=%d rows=%d cardinality=%d depth=%d%n",
+            System.err.printf("[flat-join-encoded-cache] groups=%d rows=%d cardinality=%d mapping=%s%n",
                     groupCount,
                     positionCount,
                     cardinality,
-                    dictionary.dictionaryDepth());
+                    dictionary == null ? "single-run-rle" : "dictionary");
         }
-        return groups;
+        return new Prepared(groups, rowIds);
     }
 
     long retainedBytes()
@@ -151,4 +179,6 @@ final class FlatJoinDictionaryProbeCache
         Arrays.fill(identities, null);
         Arrays.fill(generations, -1);
     }
+
+    record Prepared(int[] groups, int[] rowIds) {}
 }

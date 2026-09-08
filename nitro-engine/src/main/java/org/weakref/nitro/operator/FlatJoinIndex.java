@@ -34,7 +34,7 @@ final class FlatJoinIndex
     private final PrimitiveArrayPool arrayPool;
     private final FlatKeyLayout layout;
     private final FlatGroupingTable table;
-    private final FlatJoinDictionaryProbeCache dictionaryProbeCache;
+    private final FlatJoinEncodedProbeCache encodedProbeCache;
     private final boolean batchBindingRequired;
     private final boolean primitiveSingleRows;
     private long[] singleRows;
@@ -51,7 +51,7 @@ final class FlatJoinIndex
         this.policy = requireNonNull(policy, "policy is null");
         this.arrayPool = layout.primitiveArrays();
         this.layout = layout;
-        this.dictionaryProbeCache = new FlatJoinDictionaryProbeCache(arrayPool, policy);
+        this.encodedProbeCache = new FlatJoinEncodedProbeCache(arrayPool, policy);
         this.batchBindingRequired = layout.requiresBatchBinding();
         int initialSize = Math.max(16, expectedSize);
         this.primitiveSingleRows = policy.flatPrimitiveSingleRows();
@@ -74,7 +74,7 @@ final class FlatJoinIndex
         this.arrayPool = prepared.arrayPool;
         this.layout = prepared.layout;
         this.table = prepared.table;
-        this.dictionaryProbeCache = new FlatJoinDictionaryProbeCache(arrayPool, policy);
+        this.encodedProbeCache = new FlatJoinEncodedProbeCache(arrayPool, policy);
         this.batchBindingRequired = prepared.batchBindingRequired;
         this.primitiveSingleRows = prepared.primitiveSingleRows;
         this.singleRows = prepared.singleRows;
@@ -287,24 +287,23 @@ final class FlatJoinIndex
             LongList[] matches,
             SingleLongList[] singleMatches)
     {
-        int[] dictionaryGroups = dictionaryProbeCache.prepare(table, values, nulls, positionCount, nextGroupId);
-        DictionaryVector dictionary = dictionaryGroups == null ? null : (DictionaryVector) values[0];
-        int dictionaryDepth = dictionary == null ? 0 : dictionary.dictionaryDepth();
-        int[] dictionaryIds = dictionaryDepth == 1 ? dictionary.ids() : null;
-        if (dictionaryGroups == null) {
+        FlatJoinEncodedProbeCache.Prepared encodedProbe = encodedProbeCache.prepare(table, values, nulls, positionCount, nextGroupId);
+        int[] encodedGroups = encodedProbe == null ? null : encodedProbe.groups();
+        int[] encodedIds = encodedProbe == null ? null : encodedProbe.rowIds();
+        if (encodedProbe == null) {
             table.beginBatch(values, nulls);
             table.prepareBatchHashes(values, nulls, positions, positionCount);
         }
         try {
             for (int index = 0; index < positionCount; index++) {
                 int position = positions[index];
-                if (dictionaryGroups == null && keyHasNull(nulls, position, hasNulls)) {
+                if (encodedProbe == null && keyHasNull(nulls, position, hasNulls)) {
                     matches[index] = LongLists.emptyList();
                     continue;
                 }
-                long groupId = dictionaryGroups == null
+                long groupId = encodedProbe == null
                         ? table.findGroup(values, position)
-                        : dictionaryGroups[dictionaryDepth == 1 ? dictionaryIds[position] : dictionary.basePosition(position, dictionaryDepth)];
+                        : encodedGroups[encodedIds == null ? 0 : encodedIds[position]];
                 if (groupId < 0 || groupId >= nextGroupId) {
                     matches[index] = LongLists.emptyList();
                     continue;
@@ -320,7 +319,7 @@ final class FlatJoinIndex
             }
         }
         finally {
-            if (dictionaryGroups == null) {
+            if (encodedProbe == null) {
                 table.endBatch();
             }
         }
@@ -362,23 +361,22 @@ final class FlatJoinIndex
                     values.length,
                     Arrays.stream(values).map(FlatJoinIndex::probeShape).toList());
         }
-        int[] dictionaryGroups = dictionaryProbeCache.prepare(table, values, nulls, positionCount, nextGroupId);
-        DictionaryVector dictionary = dictionaryGroups == null ? null : (DictionaryVector) values[0];
-        int dictionaryDepth = dictionary == null ? 0 : dictionary.dictionaryDepth();
-        int[] dictionaryIds = dictionaryDepth == 1 ? dictionary.ids() : null;
-        if (dictionaryGroups == null) {
+        FlatJoinEncodedProbeCache.Prepared encodedProbe = encodedProbeCache.prepare(table, values, nulls, positionCount, nextGroupId);
+        int[] encodedGroups = encodedProbe == null ? null : encodedProbe.groups();
+        int[] encodedIds = encodedProbe == null ? null : encodedProbe.rowIds();
+        if (encodedProbe == null) {
             table.beginBatch(values, nulls);
             table.prepareBatchHashes(values, nulls, positions, positionCount);
         }
         try {
             for (int index = 0; index < positionCount; index++) {
                 int position = positions[index];
-                if (dictionaryGroups == null && keyHasNull(nulls, position, hasNulls)) {
+                if (encodedProbe == null && keyHasNull(nulls, position, hasNulls)) {
                     refs[index] = NO_MATCH_ROW_REFERENCE;
                     continue;
                 }
-                if (dictionaryGroups != null) {
-                    int groupId = dictionaryGroups[dictionaryDepth == 1 ? dictionaryIds[position] : dictionary.basePosition(position, dictionaryDepth)];
+                if (encodedProbe != null) {
+                    int groupId = encodedGroups[encodedIds == null ? 0 : encodedIds[position]];
                     refs[index] = groupId < 0 || groupId >= nextGroupId
                             ? NO_MATCH_ROW_REFERENCE
                             : singleRows[groupId];
@@ -392,7 +390,7 @@ final class FlatJoinIndex
             }
         }
         finally {
-            if (dictionaryGroups == null) {
+            if (encodedProbe == null) {
                 table.endBatch();
             }
         }
@@ -420,7 +418,7 @@ final class FlatJoinIndex
     @Override
     long retainedBytes()
     {
-        long bytes = dictionaryProbeCache.retainedBytes();
+        long bytes = encodedProbeCache.retainedBytes();
         if (!ownsStorage) {
             return bytes;
         }
@@ -456,7 +454,7 @@ final class FlatJoinIndex
         if (singleRows != null) {
             arrayPool.release(singleRows);
         }
-        dictionaryProbeCache.release();
+        encodedProbeCache.release();
         singleRows = null;
         duplicateRows = null;
         legacyRowsByGroup = null;
@@ -465,6 +463,6 @@ final class FlatJoinIndex
     @Override
     void releaseProbeBuffers()
     {
-        dictionaryProbeCache.release();
+        encodedProbeCache.release();
     }
 }

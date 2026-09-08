@@ -18,6 +18,7 @@ import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.execution.EngineResources;
 
@@ -64,6 +65,33 @@ class TestFlatJoinIndex
                     default -> -1;
                 });
             }
+        }
+    }
+
+    @Test
+    void testBatchBoundLayoutProbesSingleRunDomainOnce()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            BinaryVector buildKeys = binaryVector("a", "b");
+            CountingBatchLayout layout = new CountingBatchLayout(resources, buildKeys);
+            FlatJoinIndex owner = new FlatJoinIndex(HashJoinIndexPolicy.defaults(), layout, 2);
+            owner.add(new Vector[] {buildKeys}, new Vector[] {null}, 0, 10);
+            owner.add(new Vector[] {buildKeys}, new Vector[] {null}, 1, 11);
+
+            int size = 300;
+            int[] positions = new int[size];
+            for (int position = 0; position < size; position++) {
+                positions[position] = position;
+            }
+            Vector[] values = {new RleVector(new int[] {size}, binaryVector("a"))};
+            long[] references = new long[size];
+            layout.resetHashCalls();
+
+            owner.newProbeView().matchSingleRows(values, new Vector[] {null}, false, positions, size, references);
+
+            assertThat(layout.hashCalls()).isEqualTo(1);
+            assertThat(references).containsOnly(10);
         }
     }
 
