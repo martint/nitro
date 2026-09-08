@@ -1358,6 +1358,7 @@ final class GroupingState
                         arrayPool,
                         codeGeneration,
                         flatKeyTablePolicy,
+                        compositePolicy,
                         persistentLayout,
                         keyTypes,
                         values,
@@ -4324,6 +4325,7 @@ final class GroupingState
         private final Allocator.Context allocationContext;
         private final PrimitiveArrayPool arrayPool;
         private final ResolvedPersistentKeyLayout layout;
+        private final CompositeGroupingPolicy groupingPolicy;
         private final ProjectedFlatKeyLayout flatLayout;
         private final FlatGroupingTable table;
         private final ArrayList<RepresentativeSegment> representatives = new ArrayList<>();
@@ -4335,6 +4337,7 @@ final class GroupingState
                 PrimitiveArrayPool arrayPool,
                 OperatorCodeGenerationResources codeGeneration,
                 FlatKeyTablePolicy policy,
+                CompositeGroupingPolicy groupingPolicy,
                 ResolvedPersistentKeyLayout layout,
                 List<TypeBinding> keyTypes,
                 Vector[] initialValues,
@@ -4344,6 +4347,7 @@ final class GroupingState
             this.allocationContext = allocationContext;
             this.arrayPool = arrayPool;
             this.layout = layout;
+            this.groupingPolicy = requireNonNull(groupingPolicy, "groupingPolicy is null");
             flatLayout = codeGeneration.projectedFlatKeyLayouts().create(
                     layout,
                     initialValues,
@@ -4366,6 +4370,11 @@ final class GroupingState
             long firstGroupId = nextGroupId;
             table.beginBatch(values, nulls, mask);
             try {
+                if (admitsRunReuse(mask)) {
+                    long updated = assignRunAwareBatch(values, nulls, mask, result, nextGroupId);
+                    retainNewGroups(values, nulls, mask, result.values(), firstGroupId, updated);
+                    return updated;
+                }
                 table.prepareBatchHashes(values, nulls, mask);
                 long updated = table.assignPreparedPhysicalBatch(values, nulls, mask, result, nextGroupId);
                 if (updated < 0) {
@@ -4410,36 +4419,26 @@ final class GroupingState
                 throw new IllegalStateException("A dictionary domain requires exactly one logical key");
             }
 
+            long firstGroupId = nextGroupId;
             int domainSize = dictionaryValues.length();
-            int selected = 0;
-            for (int domain = 0; domain < domainSize; domain++) {
-                selected += counts[domain] == 0 ? 0 : 1;
-            }
-            int[] positions = arrayPool.borrowInts(selected);
-            long[] groups = arrayPool.borrowLongs(domainSize);
+            Vector[] values = {dictionaryValues};
+            Vector[] nulls = {null};
+            table.beginBatch(values, nulls);
             try {
-                int index = 0;
                 for (int domain = 0; domain < domainSize; domain++) {
                     if (counts[domain] != 0) {
-                        positions[index++] = domain;
+                        long groupId = table.assignGroup(values, nulls, domain, nextGroupId);
+                        if (groupId == nextGroupId) {
+                            nextGroupId++;
+                        }
+                        domainGroups[domain] = toIntExact(groupId);
                     }
                 }
-                I64Vector result = new I64Vector(groups);
-                Mask mask = Mask.sparse(Arrays.copyOf(positions, selected), domainSize);
-                long updated = assignGroups(
-                        new Vector[] {dictionaryValues},
-                        new Vector[] {null},
-                        mask,
-                        result,
-                        nextGroupId);
-                for (int position : mask) {
-                    domainGroups[position] = toIntExact(result.values()[position]);
-                }
-                return updated;
+                retainNewDictionaryGroups(dictionaryValues, counts, domainGroups, firstGroupId, nextGroupId);
+                return nextGroupId;
             }
             finally {
-                arrayPool.release(positions);
-                arrayPool.release(groups);
+                table.endBatch();
             }
         }
 
@@ -4596,6 +4595,65 @@ final class GroupingState
             representatives.clear();
         }
 
+        private boolean admitsRunReuse(Mask mask)
+        {
+            int rowCount = mask.count();
+            if (!groupingPolicy.structuralRunReuse() ||
+                    rowCount < 2 ||
+                    rowCount < groupingPolicy.structuralRunReuseMinRows()) {
+                return false;
+            }
+            int comparisons = Math.min(groupingPolicy.structuralRunReuseSampleSize(), rowCount - 1);
+            int equal = 0;
+            for (int sample = 0; sample < comparisons; sample++) {
+                int selectedIndex = (int) ((long) sample * (rowCount - 1) / comparisons);
+                if (flatLayout.inputPositionsIdentical(
+                        mask.position(selectedIndex),
+                        mask.position(selectedIndex + 1))) {
+                    equal++;
+                }
+            }
+            return (long) equal * 100 >=
+                    (long) comparisons * groupingPolicy.structuralRunReuseMinEqualPercent();
+        }
+
+        private long assignRunAwareBatch(
+                Vector[] values,
+                Vector[] nulls,
+                Mask mask,
+                I64Vector result,
+                long nextGroupId)
+        {
+            int count = mask.count();
+            int[] positions = mask.selectedPositions();
+            long[] output = result.values();
+            int firstPosition = positions == null ? 0 : positions[0];
+            int previousPosition = firstPosition;
+            long previousGroupId = table.assignGroupWithoutNormalization(values, nulls, firstPosition, nextGroupId);
+            if (previousGroupId == nextGroupId) {
+                nextGroupId++;
+            }
+            output[firstPosition] = previousGroupId;
+
+            for (int index = 1; index < count; index++) {
+                int position = positions == null ? index : positions[index];
+                long groupId;
+                if (flatLayout.inputPositionsIdentical(previousPosition, position)) {
+                    groupId = previousGroupId;
+                }
+                else {
+                    groupId = table.assignGroupWithoutNormalization(values, nulls, position, nextGroupId);
+                    if (groupId == nextGroupId) {
+                        nextGroupId++;
+                    }
+                }
+                output[position] = groupId;
+                previousGroupId = groupId;
+                previousPosition = position;
+            }
+            return nextGroupId;
+        }
+
         private void retainNewGroups(
                 Vector[] values,
                 Vector[] nulls,
@@ -4658,6 +4716,46 @@ final class GroupingState
                 }
             }
             representatives.add(new RepresentativeSegment(groupId, ownedValues, ownedNulls, 1));
+        }
+
+        private void retainNewDictionaryGroups(
+                Vector dictionaryValues,
+                int[] counts,
+                int[] domainGroups,
+                long firstGroupId,
+                long nextGroupId)
+        {
+            int count = toIntExact(nextGroupId - firstGroupId);
+            if (count == 0) {
+                return;
+            }
+            int[] positions = arrayPool.borrowInts(count);
+            Arrays.fill(positions, -1);
+            for (int domain = 0; domain < dictionaryValues.length(); domain++) {
+                if (counts[domain] == 0) {
+                    continue;
+                }
+                long groupId = domainGroups[domain];
+                if (groupId >= firstGroupId && groupId < nextGroupId) {
+                    positions[toIntExact(groupId - firstGroupId)] = domain;
+                }
+            }
+            for (int position : positions) {
+                if (position < 0) {
+                    throw new IllegalStateException("Projected flat grouping did not retain every new dictionary group");
+                }
+            }
+            try {
+                Vector[] ownedValues = new Vector[layout.logicalKeyCount()];
+                Vector[] ownedNulls = new Vector[layout.logicalKeyCount()];
+                if (layout.directFieldByLogicalKey()[0] < 0) {
+                    ownedValues[0] = allocator.copyVector(allocationContext, dictionaryValues, positions);
+                }
+                representatives.add(new RepresentativeSegment(firstGroupId, ownedValues, ownedNulls, count));
+            }
+            finally {
+                arrayPool.release(positions);
+            }
         }
 
         private RepresentativeSegment representative(long groupId)

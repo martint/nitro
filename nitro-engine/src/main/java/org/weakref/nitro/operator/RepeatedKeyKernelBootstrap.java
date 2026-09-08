@@ -35,6 +35,7 @@ final class RepeatedKeyKernelBootstrap
             case "hash" -> kernel.hash();
             case "write" -> kernel.write();
             case "identical" -> kernel.identical();
+            case "identicalInputs" -> kernel.identicalInputs();
             default -> throw new IllegalArgumentException("Unknown repeated-key operation: " + operation);
         };
         return new ConstantCallSite(target.asType(type));

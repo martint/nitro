@@ -46,7 +46,7 @@ final class RepeatedKeyKernelGenerator
         }
     }
 
-    record Kernel(MethodHandle hash, MethodHandle write, MethodHandle identical) {}
+    record Kernel(MethodHandle hash, MethodHandle write, MethodHandle identical, MethodHandle identicalInputs) {}
 
     private static final String PACKAGE = "org.weakref.nitro.operator";
 
@@ -99,6 +99,11 @@ final class RepeatedKeyKernelGenerator
                             byte[].class,
                             int.class,
                             FlatGroupingTable.FlatVariableWidthArena.class,
+                            int.class)),
+                    lookup.findStatic(generated, "identicalInputs", MethodType.methodType(
+                            boolean.class,
+                            RepeatedKeyBatchBinding.class,
+                            int.class,
                             int.class)));
         }
         catch (ReflectiveOperationException e) {
@@ -119,6 +124,7 @@ final class RepeatedKeyKernelGenerator
                 .append("  private static void putLong(byte[] target, int offset, long value) { putInt(target, offset, (int) value); putInt(target, offset + 4, (int) (value >>> 32)); }\n")
                 .append("  private static long getLong(byte[] source, int offset) { return Integer.toUnsignedLong(getInt(source, offset)) | ((long) getInt(source, offset + 4) << 32); }\n");
         appendHash(out, shape);
+        appendInputIdentical(out, shape);
         if (shape.order() == RepeatedKeyLayout.Order.ORDERED) {
             appendOrderedWrite(out, shape);
             appendOrderedIdentical(out, shape);
@@ -129,6 +135,63 @@ final class RepeatedKeyKernelGenerator
             appendUnorderedIdentical(out);
         }
         return out.append("}\n").toString();
+    }
+
+    private static void appendInputIdentical(StringBuilder out, Shape shape)
+    {
+        out.append("  public static boolean identicalInputs(RepeatedKeyBatchBinding b, int left, int right) {\n")
+                .append("    int leftParent = physical(b.repeatedMapping, b.repeatedMappingOffset, b.repeatedBaseOffset, left);\n")
+                .append("    int rightParent = physical(b.repeatedMapping, b.repeatedMappingOffset, b.repeatedBaseOffset, right);\n")
+                .append("    if (leftParent == rightParent) return true;\n");
+        if (shape.order() != RepeatedKeyLayout.Order.ORDERED) {
+            // Distinct physical unordered values require canonicalization. The authoritative table remains the
+            // fallback until a two-input canonical comparator is generated; physical identity is always exact.
+            out.append("    return false;\n  }\n");
+            return;
+        }
+        out.append("    int leftStart = b.repeatedOffsets[leftParent]; int leftEnd = b.repeatedOffsets[leftParent + 1];\n")
+                .append("    int rightStart = b.repeatedOffsets[rightParent]; int rightEnd = b.repeatedOffsets[rightParent + 1];\n")
+                .append("    if (leftEnd - leftStart != rightEnd - rightStart) return false;\n");
+        appendBindings(out, shape, "    ");
+        out.append("    for (int leftEntry = leftStart, rightEntry = rightStart; leftEntry < leftEnd; leftEntry++, rightEntry++) {\n");
+        for (int output = 0; output < shape.outputs().size(); output++) {
+            ResolvedRepeatedKeyLayout.Storage storage = shape.outputs().get(output).storage();
+            out.append("      boolean leftNull").append(output).append(" = ")
+                    .append(nullExpression(shape, output, "leftEntry")).append(";\n")
+                    .append("      boolean rightNull").append(output).append(" = ")
+                    .append(nullExpression(shape, output, "rightEntry")).append(";\n")
+                    .append("      if (leftNull").append(output).append(" != rightNull").append(output).append(") return false;\n")
+                    .append("      if (!leftNull").append(output).append(") {");
+            if (storage != ResolvedRepeatedKeyLayout.Storage.PRESENCE) {
+                out.append(" int leftPosition").append(output).append(" = ")
+                        .append(positionExpression(output, "leftEntry")).append(";")
+                        .append(" int rightPosition").append(output).append(" = ")
+                        .append(positionExpression(output, "rightEntry")).append(";");
+            }
+            switch (storage) {
+                case PRESENCE -> {}
+                case I32, I64 -> out.append(" if (v").append(output).append("[leftPosition").append(output)
+                        .append("] != v").append(output).append("[rightPosition").append(output).append("]) return false;");
+                case BOOLEAN -> out.append(" if (v").append(output).append("[leftPosition").append(output)
+                        .append("] != v").append(output).append("[rightPosition").append(output).append("]) return false;");
+                case F64 -> out.append(" if (Double.doubleToLongBits(v").append(output).append("[leftPosition").append(output)
+                        .append("]) != Double.doubleToLongBits(v").append(output).append("[rightPosition").append(output)
+                        .append("])) return false;");
+                case BINARY -> out.append(" int leftLength").append(output).append(" = o").append(output)
+                        .append("[leftPosition").append(output).append(" + 1] - o").append(output).append("[leftPosition")
+                        .append(output).append("]; int rightLength").append(output).append(" = o").append(output)
+                        .append("[rightPosition").append(output).append(" + 1] - o").append(output).append("[rightPosition")
+                        .append(output).append("]; if (leftLength").append(output).append(" != rightLength").append(output)
+                        .append(" || !java.util.Arrays.equals(v").append(output).append(", o").append(output)
+                        .append("[leftPosition").append(output).append("], o").append(output).append("[leftPosition")
+                        .append(output).append("] + leftLength").append(output).append(", v").append(output).append(", o")
+                        .append(output).append("[rightPosition").append(output).append("], o").append(output)
+                        .append("[rightPosition").append(output).append("] + rightLength").append(output)
+                        .append(")) return false;");
+            }
+            out.append(" }\n");
+        }
+        out.append("    }\n    return true;\n  }\n");
     }
 
     private static void appendHash(StringBuilder out, Shape shape)
@@ -318,6 +381,11 @@ final class RepeatedKeyKernelGenerator
 
     private static String nullExpression(Shape shape, int output)
     {
+        return nullExpression(shape, output, "entry");
+    }
+
+    private static String nullExpression(Shape shape, int output, String entry)
+    {
         StringBuilder expression = new StringBuilder();
         for (int source = 0; source < shape.outputs().get(output).nullSourceCount(); source++) {
             if (!expression.isEmpty()) {
@@ -327,14 +395,19 @@ final class RepeatedKeyKernelGenerator
                     .append(" != null && n").append(output).append('_').append(source)
                     .append("[physical(nm").append(output).append('_').append(source)
                     .append(", nmo").append(output).append('_').append(source)
-                    .append(", nb").append(output).append('_').append(source).append(", entry)]");
+                    .append(", nb").append(output).append('_').append(source).append(", ").append(entry).append(")]");
         }
         return expression.isEmpty() ? "false" : "(" + expression + ")";
     }
 
     private static String positionExpression(int output)
     {
-        return "physical(m" + output + ", mo" + output + ", mb" + output + ", entry)";
+        return positionExpression(output, "entry");
+    }
+
+    private static String positionExpression(int output, String entry)
+    {
+        return "physical(m" + output + ", mo" + output + ", mb" + output + ", " + entry + ")";
     }
 
     private static String hashExpression(ResolvedRepeatedKeyLayout.Storage storage, int output)

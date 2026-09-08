@@ -265,6 +265,11 @@ abstract class ProjectedFlatKeyLayout
         return repeatedBindings[field];
     }
 
+    boolean inputPositionsIdentical(int leftPosition, int rightPosition)
+    {
+        return false;
+    }
+
     @Override
     final boolean requiresBatchBinding()
     {

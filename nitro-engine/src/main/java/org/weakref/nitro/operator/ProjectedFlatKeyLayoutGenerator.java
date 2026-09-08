@@ -94,6 +94,7 @@ final class ProjectedFlatKeyLayoutGenerator
     private static final MethodTypeDesc INPUT_FIELD_NULL_TYPE = MethodTypeDesc.of(
             CD_boolean, CD_int, CD_VECTOR_ARRAY, CD_int);
     private static final MethodTypeDesc INPUT_HAS_ANY_NULL_TYPE = MethodTypeDesc.of(CD_boolean, CD_int);
+    private static final MethodTypeDesc INPUT_POSITIONS_IDENTICAL_TYPE = MethodTypeDesc.of(CD_boolean, CD_int, CD_int);
 
     private final ConcurrentHashMap<GenerationShape, MethodHandle> constructors = new ConcurrentHashMap<>();
     private final RepeatedKeyKernelGenerator repeatedKeyGenerator = new RepeatedKeyKernelGenerator();
@@ -200,6 +201,7 @@ final class ProjectedFlatKeyLayoutGenerator
             builder.withMethodBody("identicalField", IDENTICAL_FIELD_TYPE, ClassFile.ACC_PUBLIC, code -> emitIdenticalField(code, shape, thisClass));
             builder.withMethodBody("inputFieldNull", INPUT_FIELD_NULL_TYPE, ClassFile.ACC_PUBLIC, code -> emitInputFieldNull(code, shape, thisClass));
             builder.withMethodBody("inputHasAnyNull", INPUT_HAS_ANY_NULL_TYPE, ClassFile.ACC_PUBLIC, code -> emitInputHasAnyNull(code, shape, thisClass));
+            builder.withMethodBody("inputPositionsIdentical", INPUT_POSITIONS_IDENTICAL_TYPE, ClassFile.ACC_PUBLIC, code -> emitInputPositionsIdentical(code, shape, thisClass));
         });
 
         try {
@@ -580,6 +582,92 @@ final class ProjectedFlatKeyLayoutGenerator
             code.labelBinding(nextSource);
         }
         code.loadConstant(0);
+        code.ireturn();
+    }
+
+    private static void emitInputPositionsIdentical(CodeBuilder code, GenerationShape shape, ClassDesc thisClass)
+    {
+        boolean[] supported = new boolean[shape.nullSourceCounts().size()];
+        for (int field : shape.canonicalFieldIndexes()) {
+            supported[field] = true;
+        }
+        for (int field : shape.presenceFieldIndexes()) {
+            supported[field] = true;
+        }
+        for (RepeatedFieldShape repeated : shape.repeatedFields()) {
+            supported[repeated.field()] = true;
+        }
+        for (boolean fieldSupported : supported) {
+            if (!fieldSupported) {
+                code.loadConstant(0);
+                code.ireturn();
+                return;
+            }
+        }
+
+        for (int field = 0; field < supported.length; field++) {
+            Label leftNotNull = code.newLabel();
+            Label compareValue = code.newLabel();
+            code.aload(0);
+            code.loadConstant(field);
+            code.aconst_null();
+            code.iload(1);
+            code.invokevirtual(thisClass, "inputFieldNull", INPUT_FIELD_NULL_TYPE);
+            code.ifeq(leftNotNull);
+            code.aload(0);
+            code.loadConstant(field);
+            code.aconst_null();
+            code.iload(2);
+            code.invokevirtual(thisClass, "inputFieldNull", INPUT_FIELD_NULL_TYPE);
+            Label nextField = code.newLabel();
+            code.ifne(nextField);
+            code.loadConstant(0);
+            code.ireturn();
+            code.labelBinding(leftNotNull);
+            code.aload(0);
+            code.loadConstant(field);
+            code.aconst_null();
+            code.iload(2);
+            code.invokevirtual(thisClass, "inputFieldNull", INPUT_FIELD_NULL_TYPE);
+            code.ifeq(compareValue);
+            code.loadConstant(0);
+            code.ireturn();
+            code.labelBinding(compareValue);
+
+            RepeatedFieldShape repeated = null;
+            for (RepeatedFieldShape candidate : shape.repeatedFields()) {
+                if (candidate.field() == field) {
+                    repeated = candidate;
+                    break;
+                }
+            }
+            if (repeated != null) {
+                int repeatedIndex = shape.repeatedFields().indexOf(repeated);
+                code.aload(0);
+                code.loadConstant(field);
+                code.invokevirtual(CD_BASE, "repeatedBinding", MethodTypeDesc.of(CD_REPEATED_BINDING, CD_int));
+                code.iload(1);
+                code.iload(2);
+                code.invokedynamic(DynamicCallSiteDesc.of(
+                        BSM_REPEATED,
+                        "identicalInputs_" + repeatedIndex,
+                        MethodTypeDesc.of(CD_boolean, CD_REPEATED_BINDING, CD_int, CD_int)));
+                code.ifne(nextField);
+                code.loadConstant(0);
+                code.ireturn();
+            }
+            else if (shape.canonicalFieldIndexes().contains(field)) {
+                int lane = shape.canonicalFieldIndexes().indexOf(field);
+                emitProjectedLane(code, shape, thisClass, lane, 1, 3);
+                emitProjectedLane(code, shape, thisClass, lane, 2, 3);
+                code.lcmp();
+                code.ifeq(nextField);
+                code.loadConstant(0);
+                code.ireturn();
+            }
+            code.labelBinding(nextField);
+        }
+        code.loadConstant(1);
         code.ireturn();
     }
 

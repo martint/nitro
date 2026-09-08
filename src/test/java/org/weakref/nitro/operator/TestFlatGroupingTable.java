@@ -283,6 +283,114 @@ class TestFlatGroupingTable
     }
 
     @Test
+    void testGeneratedRepeatedLayoutConsumesOnlyUsedDictionaryDomainPositions()
+    {
+        TypeBinding arrayType = orderedRepeatedType(rawLongType());
+        ArrayVector domain = new ArrayVector(5);
+        System.arraycopy(new int[] {0, 2, 4, 6, 8, 10}, 0, domain.offsets(), 0, 6);
+        domain.setElements(Streams.ofValues(new I64Vector(new long[] {
+                1, 2,
+                9, 9,
+                1, 2,
+                3, 4,
+                7, 8})));
+        int[] ids = {0, 2, 0, 3, 2, 3};
+        DictionaryVector keys = DictionaryVector.ofTrustedIdsWithDomainFrequencies(
+                ids,
+                ids.length,
+                domain,
+                new int[] {2, 0, 2, 2, 0});
+        int[] counts = new int[6];
+        int[] groups = new int[6];
+        int[] representatives = new int[6];
+
+        Allocator allocator = new Allocator(engineResources);
+        Allocator.Context context = new Allocator.Context("repeated-key-dictionary-domain");
+        GroupingState state = new GroupingState(
+                arrayPool,
+                codeGeneration,
+                groupingResources,
+                adaptiveLongGroupingPolicy,
+                flatKeyTablePolicy,
+                List.of(arrayType),
+                allocator,
+                context);
+        try {
+            state.initializeSchema(new Vector[] {keys}, new Vector[] {null}, Mask.all(ids.length));
+            assertThat(state.assignSingleDictionaryDomain(
+                    keys,
+                    null,
+                    Mask.all(ids.length),
+                    counts,
+                    groups,
+                    representatives))
+                    .isEqualTo(6);
+            assertThat(counts).containsExactly(2, 0, 2, 2, 0, 0);
+            assertThat(groups[0]).isZero();
+            assertThat(groups[2]).isZero();
+            assertThat(groups[3]).isEqualTo(1);
+            assertThat(state.groupCount()).isEqualTo(2);
+
+            Streams grouped = state.groupedValues(0, Mask.all(2), null, allocator, context);
+            assertThat(grouped.values()).isInstanceOf(ArrayVector.class);
+            ArrayVector groupedArrays = (ArrayVector) grouped.values();
+            assertThat(groupedArrays.offsets()).startsWith(0, 2, 4);
+            assertThat(((I64Vector) groupedArrays.elements().values()).values()).startsWith(1, 2, 3, 4);
+        }
+        finally {
+            state.releaseBuffers();
+            allocator.release(context);
+        }
+    }
+
+    @Test
+    void testGeneratedRepeatedLayoutReusesLongAdjacentRuns()
+    {
+        int positions = 300;
+        int firstRun = 256;
+        ArrayVector arrays = new ArrayVector(positions);
+        long[] elements = new long[firstRun * 2 + (positions - firstRun)];
+        int element = 0;
+        for (int position = 0; position < positions; position++) {
+            arrays.offsets()[position] = element;
+            if (position < firstRun) {
+                elements[element++] = 1;
+                elements[element++] = 2;
+            }
+            else {
+                elements[element++] = 3;
+            }
+        }
+        arrays.offsets()[positions] = element;
+        arrays.setElements(Streams.ofValues(new I64Vector(elements)));
+
+        TypeBinding arrayType = orderedRepeatedType(rawLongType());
+        Allocator allocator = new Allocator(engineResources);
+        Allocator.Context context = new Allocator.Context("repeated-key-run-reuse");
+        GroupingState state = new GroupingState(
+                arrayPool,
+                codeGeneration,
+                groupingResources,
+                adaptiveLongGroupingPolicy,
+                flatKeyTablePolicy,
+                List.of(arrayType),
+                allocator,
+                context);
+        try {
+            I64Vector groups = new I64Vector(positions);
+            state.assignGroups(new Vector[] {arrays}, new Vector[] {null}, Mask.all(positions), groups);
+            assertThat(groups.values()).startsWith(new long[firstRun]);
+            assertThat(Arrays.copyOfRange(groups.values(), firstRun, positions))
+                    .containsOnly(1);
+            assertThat(state.groupCount()).isEqualTo(2);
+        }
+        finally {
+            state.releaseBuffers();
+            allocator.release(context);
+        }
+    }
+
+    @Test
     void testOrderedRepeatedLongGroupingPreservesOrderNullsEmptyAndOuterMappings()
     {
         TypeBinding elementType = rawLongType();
