@@ -218,6 +218,68 @@ class TestFlatGroupingTable
     }
 
     @Test
+    void testGeneratedPersistentLayoutConsumesRecursiveProductDictionaryDomain()
+    {
+        TypeBinding timestamp = fixedWidthPairType();
+        TypeBinding label = rawBinaryType();
+        TypeBinding rowType = productType(timestamp, label);
+
+        StructVector timestampValues = new StructVector(4);
+        timestampValues.setField("high", Streams.ofValues(new I64Vector(new long[] {10, 10, 99, 77})));
+        timestampValues.setField("low", Streams.ofValues(new I64Vector(new long[] {1, 1, 9, 7})));
+        StructVector domain = new StructVector(4);
+        domain.setField("timestamp", Streams.builder()
+                .put(org.weakref.nitro.data.Stream.VALUES, timestampValues)
+                .put(org.weakref.nitro.data.Stream.NULLS, new BooleanVector(new boolean[] {false, false, true, false}))
+                .build());
+        domain.setField("label", Streams.builder()
+                .put(org.weakref.nitro.data.Stream.VALUES, utf8("same", "same", "ignored", "unused"))
+                .put(org.weakref.nitro.data.Stream.NULLS, new BooleanVector(new boolean[] {false, false, true, false}))
+                .build());
+        int[] ids = {0, 2, 0, 1, 2, 2};
+        DictionaryVector keys = DictionaryVector.ofTrustedIdsWithDomainFrequencies(
+                ids,
+                ids.length,
+                domain,
+                new int[] {2, 1, 3, 0});
+        int[] counts = new int[5];
+        int[] groups = new int[5];
+        int[] representatives = new int[5];
+
+        Allocator allocator = new Allocator(engineResources);
+        Allocator.Context context = new Allocator.Context("recursive-product-dictionary-domain");
+        GroupingState state = new GroupingState(
+                arrayPool,
+                codeGeneration,
+                groupingResources,
+                adaptiveLongGroupingPolicy,
+                flatKeyTablePolicy,
+                List.of(rowType),
+                allocator,
+                context);
+        try {
+            state.initializeSchema(new Vector[] {keys}, new Vector[] {null}, Mask.all(ids.length));
+            assertThat(state.assignSingleDictionaryDomain(
+                    keys,
+                    null,
+                    Mask.all(ids.length),
+                    counts,
+                    groups,
+                    representatives))
+                    .isEqualTo(5);
+            assertThat(counts).containsExactly(2, 1, 3, 0, 0);
+            assertThat(groups[0]).isZero();
+            assertThat(groups[1]).isZero();
+            assertThat(groups[2]).isEqualTo(1);
+            assertThat(state.groupCount()).isEqualTo(2);
+        }
+        finally {
+            state.releaseBuffers();
+            allocator.release(context);
+        }
+    }
+
+    @Test
     void testNullableBinaryGroupedOutputIgnoresNullPayloadMetadataWhenSizing()
     {
         Allocator allocator = new Allocator(engineResources);

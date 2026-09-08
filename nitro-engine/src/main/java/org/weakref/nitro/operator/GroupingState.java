@@ -4406,7 +4406,41 @@ final class GroupingState
         @Override
         public long assignDictionaryDomain(Vector dictionaryValues, int[] counts, int[] domainGroups, long nextGroupId)
         {
-            throw new UnsupportedOperationException("A composed persistent layout has more than one logical key");
+            if (layout.logicalKeyCount() != 1) {
+                throw new IllegalStateException("A dictionary domain requires exactly one logical key");
+            }
+
+            int domainSize = dictionaryValues.length();
+            int selected = 0;
+            for (int domain = 0; domain < domainSize; domain++) {
+                selected += counts[domain] == 0 ? 0 : 1;
+            }
+            int[] positions = arrayPool.borrowInts(selected);
+            long[] groups = arrayPool.borrowLongs(domainSize);
+            try {
+                int index = 0;
+                for (int domain = 0; domain < domainSize; domain++) {
+                    if (counts[domain] != 0) {
+                        positions[index++] = domain;
+                    }
+                }
+                I64Vector result = new I64Vector(groups);
+                Mask mask = Mask.sparse(Arrays.copyOf(positions, selected), domainSize);
+                long updated = assignGroups(
+                        new Vector[] {dictionaryValues},
+                        new Vector[] {null},
+                        mask,
+                        result,
+                        nextGroupId);
+                for (int position : mask) {
+                    domainGroups[position] = toIntExact(result.values()[position]);
+                }
+                return updated;
+            }
+            finally {
+                arrayPool.release(positions);
+                arrayPool.release(groups);
+            }
         }
 
         @Override
