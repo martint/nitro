@@ -257,6 +257,15 @@ the first logical representative when their stored identity cannot reproduce gro
 capabilities or generated shapes reject before table mutation rather than entering an interpreted field-accessor or
 row-wise semantic fallback.
 
+A provider may also prove that one logical key is an ordered finite product of independently nullable child
+identities. Each child declares a structural field path and its authoritative type binding and may recursively
+declare another product. Resolution flattens the tree into the same persistent descriptor while retaining an explicit
+presence boundary for every product node, all nullable ancestors of each leaf, and the leaf's direct or canonical
+physical identity. Generated loops bind concrete arrays, binary regions, projections, and wrapper mappings once per
+batch and skip descendant identity under a null product boundary. Nitro does not infer products from logical type
+names or vector classes. Recursive identities that are not finite products of supported leaves reject rather than
+entering a semantic object table.
+
 Stateful registry implementations may also request a composed key binder. Each bound vector exposes opaque hashing
 and cross-vector identity over positions, allowing retained indexes such as map construction state to span owned
 vector segments. The binder does not prescribe table layout, growth, payload retention, or duplicate policy.
@@ -655,8 +664,9 @@ Specialization can generate expression loops, grouping layouts, hash/probe kerne
 updates. Generated code derives from interfaces and physical layouts—not function names, queries, tables, or fixed SQL
 arities. Adaptive mechanisms report admission, strategy, transitions, and achieved reduction.
 
-Fixed-width key generation specializes one exact physical layout: its ordered source carriers, source partitioning
-into canonical lanes, constant projection targets, mappings, and table-storage policy. Primitive-array casts and
+Persistent-key generation specializes one exact physical layout: its ordered direct fields, product-presence
+boundaries, source carriers, source partitioning into canonical lanes, nullable ancestors, constant projection
+targets, mappings, and table-storage policy. Primitive-array casts and
 mapping references are hoisted before the logical-row loop; the loop contains carrier-specific array loads,
 constant-linked canonical projections, and the generated exact probe. Static shape validation and batch binding may
 inspect vector wrappers, but hot rows do not use generic method-handle invocation, virtual provider operations, or

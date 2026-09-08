@@ -37,7 +37,7 @@ record FixedWidthKeyTableLayout(
         sourceCarriers = List.copyOf(sourceCarriers);
         laneSourceCounts = List.copyOf(laneSourceCounts);
         projections = List.copyOf(projections);
-        if (laneSourceCounts.isEmpty() || laneSourceCounts.size() != projections.size()) {
+        if (laneSourceCounts.size() != projections.size()) {
             throw new IllegalArgumentException("Invalid fixed-width key table layout");
         }
         if (laneSourceCounts.stream().anyMatch(count -> count == null || count <= 0) ||

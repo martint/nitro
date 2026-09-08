@@ -33,7 +33,7 @@ import java.util.List;
 import java.util.Optional;
 
 /** One provider-neutral fixed-width key layout resolved across the logical key columns of a consumer. */
-record ResolvedFixedWidthKeyLayout(Lane[] lanes, int logicalKeyCount)
+record ResolvedFixedWidthKeyLayout(Lane[] lanes, int logicalKeyCount, boolean allowNullableComponents)
 {
     record Source(int logicalKey, List<String> fieldPath, FixedWidthKeyLayout.Carrier carrier) {}
 
@@ -44,6 +44,11 @@ record ResolvedFixedWidthKeyLayout(Lane[] lanes, int logicalKeyCount)
             sources = sources.clone();
             projection = Optional.ofNullable(projection.orElse(null));
         }
+    }
+
+    ResolvedFixedWidthKeyLayout(Lane[] lanes, int logicalKeyCount)
+    {
+        this(lanes, logicalKeyCount, false);
     }
 
     static ResolvedFixedWidthKeyLayout tryCreate(
@@ -64,7 +69,7 @@ record ResolvedFixedWidthKeyLayout(Lane[] lanes, int logicalKeyCount)
                             .map(source -> new Source(logicalKey, source.fieldPath(), source.carrier()))
                             .toArray(Source[]::new);
                     for (Source source : sources) {
-                        if (!supportsSource(values, source)) {
+                        if (!supportsSource(values, source, false)) {
                             throw new IllegalArgumentException("Type provider fixed-width key source is incompatible with the admitted vector: " + source);
                         }
                     }
@@ -100,7 +105,7 @@ record ResolvedFixedWidthKeyLayout(Lane[] lanes, int logicalKeyCount)
         int index = sourceIndex;
         for (Lane lane : lanes) {
             if (index < lane.sources().length) {
-                return sourceVector(values, lane.sources()[index]);
+                return sourceVector(values, lane.sources()[index], allowNullableComponents);
             }
             index -= lane.sources().length;
         }
@@ -133,9 +138,9 @@ record ResolvedFixedWidthKeyLayout(Lane[] lanes, int logicalKeyCount)
         return java.util.Arrays.stream(lanes).map(Lane::projection).toList();
     }
 
-    private static boolean supportsSource(Vector[] values, Source descriptor)
+    static boolean supportsSource(Vector[] values, Source descriptor, boolean allowNullableComponents)
     {
-        Vector vector = sourceVector(values, descriptor);
+        Vector vector = sourceVector(values, descriptor, allowNullableComponents);
         return switch (vector) {
             case I32Vector _ -> descriptor.carrier() == FixedWidthKeyLayout.Carrier.I32;
             case I64Vector _ -> descriptor.carrier() == FixedWidthKeyLayout.Carrier.I64;
@@ -180,10 +185,15 @@ record ResolvedFixedWidthKeyLayout(Lane[] lanes, int logicalKeyCount)
 
     private static Vector sourceVector(Vector[] values, Source descriptor)
     {
+        return sourceVector(values, descriptor, false);
+    }
+
+    private static Vector sourceVector(Vector[] values, Source descriptor, boolean allowNullableComponents)
+    {
         Vector vector = values[descriptor.logicalKey()];
         for (String field : descriptor.fieldPath()) {
             Streams component = VectorAccess.structField(vector, field);
-            if (!VectorAccess.isAllFalseNulls(component.getOrNull(Stream.NULLS))) {
+            if (!allowNullableComponents && !VectorAccess.isAllFalseNulls(component.getOrNull(Stream.NULLS))) {
                 throw new IllegalArgumentException("Fixed-width key component is nullable: " + descriptor.fieldPath());
             }
             vector = component.values();

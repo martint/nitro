@@ -16,6 +16,7 @@ package org.weakref.nitro.operator;
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.core.type.FixedWidthKeyLayout;
 import org.weakref.nitro.core.type.LongFlatKeyStorage;
+import org.weakref.nitro.core.type.PersistentKeyLayout;
 import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.core.type.TypeIdentity;
 import org.weakref.nitro.core.type.TypeOperators;
@@ -31,6 +32,7 @@ import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.RegionVector;
 import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Streams;
+import org.weakref.nitro.data.StructVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.execution.EngineResources;
 
@@ -158,6 +160,56 @@ class TestFlatGroupingTable
             assertThat(Double.doubleToRawLongBits(((F64Vector) groupedDouble.values()).values()[4]))
                     .isEqualTo(Double.doubleToRawLongBits(-0.0));
             assertThat(((F64Vector) groupedDouble.values()).values()[5]).isEqualTo(2.0);
+        }
+        finally {
+            state.releaseBuffers();
+            allocator.release(context);
+        }
+    }
+
+    @Test
+    void testGeneratedPersistentLayoutComposesRecursiveProductNullsAndMixedLeaves()
+    {
+        TypeBinding timestamp = fixedWidthPairType();
+        TypeBinding label = rawBinaryType();
+        TypeBinding rowType = productType(timestamp, label);
+
+        StructVector timestampValues = new StructVector(6);
+        timestampValues.setField("high", Streams.ofValues(new I64Vector(new long[] {10, 10, 99, 77, 88, 66})));
+        timestampValues.setField("low", Streams.ofValues(new I64Vector(new long[] {1, 1, 9, 7, 8, 6})));
+        StructVector rows = new StructVector(6);
+        rows.setField("timestamp", Streams.builder()
+                .put(org.weakref.nitro.data.Stream.VALUES, timestampValues)
+                .put(org.weakref.nitro.data.Stream.NULLS, new BooleanVector(new boolean[] {false, false, true, false, true, false}))
+                .build());
+        rows.setField("label", Streams.builder()
+                .put(org.weakref.nitro.data.Stream.VALUES, utf8("a", "a", "unused", "ignored", "other", "arbitrary"))
+                .put(org.weakref.nitro.data.Stream.NULLS, new BooleanVector(new boolean[] {false, false, true, false, true, false}))
+                .build());
+        Vector[] values = {rows};
+        Vector[] nulls = {new BooleanVector(new boolean[] {false, false, false, true, false, true})};
+
+        Allocator allocator = new Allocator(engineResources);
+        Allocator.Context context = new Allocator.Context("recursive-product-grouping");
+        GroupingState state = new GroupingState(
+                arrayPool,
+                codeGeneration,
+                groupingResources,
+                adaptiveLongGroupingPolicy,
+                flatKeyTablePolicy,
+                List.of(rowType),
+                allocator,
+                context);
+        try {
+            I64Vector groups = new I64Vector(rows.length());
+            state.assignGroups(values, nulls, Mask.all(rows.length()), groups);
+            assertThat(groups.values()).containsExactly(0, 0, 1, 2, 1, 2);
+            assertThat(state.groupCount()).isEqualTo(3);
+
+            Streams grouped = state.groupedValues(0, Mask.all(3), null, allocator, context);
+            assertThat(grouped.values()).isInstanceOf(StructVector.class);
+            assertThat(((BooleanVector) grouped.getOrNull(org.weakref.nitro.data.Stream.NULLS)).values())
+                    .containsExactly(false, false, true);
         }
         finally {
             state.releaseBuffers();
@@ -4238,6 +4290,88 @@ class TestFlatGroupingTable
             public Set<Class<? extends Vector>> supportedVectorTypes()
             {
                 return Set.of(BinaryVector.class, DictionaryVector.class, RegionVector.class, RleVector.class);
+            }
+        };
+    }
+
+    private static TypeBinding fixedWidthPairType()
+    {
+        return new TypeBinding()
+        {
+            @Override
+            public TypeIdentity identity()
+            {
+                return new TypeIdentity("testing:fixed-width-product-pair");
+            }
+
+            @Override
+            public Class<?> carrierType()
+            {
+                return Object.class;
+            }
+
+            @Override
+            public TypeOperators operators()
+            {
+                return TypeOperators.UNSPECIFIED;
+            }
+
+            @Override
+            public Optional<FixedWidthKeyLayout> fixedWidthKeyLayout()
+            {
+                return Optional.of(new FixedWidthKeyLayout(List.of(
+                        FixedWidthKeyLayout.Lane.i64(List.of("high")),
+                        FixedWidthKeyLayout.Lane.i64(List.of("low")))));
+            }
+
+            @Override
+            public Set<Class<? extends Vector>> supportedVectorTypes()
+            {
+                return Set.of(StructVector.class, DictionaryVector.class, RleVector.class);
+            }
+        };
+    }
+
+    private static TypeBinding productType(TypeBinding timestamp, TypeBinding label)
+    {
+        return new TypeBinding()
+        {
+            @Override
+            public TypeIdentity identity()
+            {
+                return new TypeIdentity("testing:recursive-product-key");
+            }
+
+            @Override
+            public Class<?> carrierType()
+            {
+                return Object.class;
+            }
+
+            @Override
+            public TypeOperators operators()
+            {
+                return TypeOperators.UNSPECIFIED;
+            }
+
+            @Override
+            public List<TypeBinding> nestedValueTypes()
+            {
+                return List.of(timestamp, label);
+            }
+
+            @Override
+            public Optional<PersistentKeyLayout> persistentKeyLayout()
+            {
+                return Optional.of(new PersistentKeyLayout(List.of(
+                        new PersistentKeyLayout.Field(List.of("timestamp"), timestamp),
+                        new PersistentKeyLayout.Field(List.of("label"), label))));
+            }
+
+            @Override
+            public Set<Class<? extends Vector>> supportedVectorTypes()
+            {
+                return Set.of(StructVector.class, DictionaryVector.class, RleVector.class);
             }
         };
     }

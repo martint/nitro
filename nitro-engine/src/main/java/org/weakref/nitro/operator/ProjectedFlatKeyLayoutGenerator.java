@@ -52,6 +52,7 @@ final class ProjectedFlatKeyLayoutGenerator
     private static final ClassDesc CD_FLAT_LAYOUT = ClassDesc.of("org.weakref.nitro.operator.FlatKeyLayout");
     private static final ClassDesc CD_CONSTRUCTION = ClassDesc.of("org.weakref.nitro.operator.FlatKeyLayout$Construction");
     private static final ClassDesc CD_RESOLVED_LAYOUT = ClassDesc.of("org.weakref.nitro.operator.ResolvedFixedWidthKeyLayout");
+    private static final ClassDesc CD_RESOLVED_PERSISTENT_LAYOUT = ClassDesc.of("org.weakref.nitro.operator.ResolvedPersistentKeyLayout");
     private static final ClassDesc CD_PRIMITIVE_ARRAY_POOL = ClassDesc.of("org.weakref.nitro.data.PrimitiveArrayPool");
     private static final ClassDesc CD_VECTOR = ClassDesc.of("org.weakref.nitro.data.Vector");
     private static final ClassDesc CD_VECTOR_ARRAY = CD_VECTOR.arrayType();
@@ -63,6 +64,7 @@ final class ProjectedFlatKeyLayoutGenerator
     private static final ClassDesc CD_LONG_ARRAY = CD_long.arrayType();
     private static final ClassDesc CD_DOUBLE_ARRAY = CD_double.arrayType();
     private static final ClassDesc CD_BOOLEAN_ARRAY = CD_boolean.arrayType();
+    private static final ClassDesc CD_BOOLEAN_ARRAY_2D = CD_BOOLEAN_ARRAY.arrayType();
     private static final ClassDesc CD_PROJECTION_BOOTSTRAP = ClassDesc.of("org.weakref.nitro.operator.FixedWidthKeyProjectionBootstrap");
     private static final DirectMethodHandleDesc BSM_PROJECTION = ofMethod(
             STATIC,
@@ -73,6 +75,7 @@ final class ProjectedFlatKeyLayoutGenerator
     private static final MethodTypeDesc CONSTRUCTOR_TYPE = MethodTypeDesc.of(
             CD_void,
             CD_CONSTRUCTION,
+            CD_RESOLVED_PERSISTENT_LAYOUT,
             CD_RESOLVED_LAYOUT,
             CD_PRIMITIVE_ARRAY_POOL);
     private static final MethodTypeDesc BATCH_TYPE = MethodTypeDesc.of(CD_void, CD_VECTOR_ARRAY, CD_VECTOR_ARRAY);
@@ -81,6 +84,8 @@ final class ProjectedFlatKeyLayoutGenerator
             CD_void, CD_int, CD_VECTOR, CD_int, CD_BYTE_ARRAY, CD_int, CD_ARENA, CD_int);
     private static final MethodTypeDesc IDENTICAL_FIELD_TYPE = MethodTypeDesc.of(
             CD_boolean, CD_int, CD_BYTE_ARRAY, CD_int, CD_ARENA, CD_VECTOR, CD_int, CD_int);
+    private static final MethodTypeDesc INPUT_FIELD_NULL_TYPE = MethodTypeDesc.of(
+            CD_boolean, CD_int, CD_VECTOR_ARRAY, CD_int);
 
     private final ConcurrentHashMap<GenerationShape, MethodHandle> constructors = new ConcurrentHashMap<>();
     private final AtomicInteger nextClassId = new AtomicInteger();
@@ -97,19 +102,17 @@ final class ProjectedFlatKeyLayoutGenerator
         if (closed) {
             throw new IllegalStateException("Projected flat-key layout generator is closed");
         }
-        Vector[] fieldValues = new Vector[layout.fields().length];
+        Vector[] fieldValues = layout.fieldValues(values);
         int[] inputChannels = new int[layout.fields().length];
         FlatTypeHandler[] handlers = new FlatTypeHandler[layout.fields().length];
         for (int field = 0; field < layout.fields().length; field++) {
             ResolvedPersistentKeyLayout.Field descriptor = layout.fields()[field];
-            int logicalKey = descriptor.logicalKey();
-            fieldValues[field] = values[logicalKey];
-            inputChannels[field] = logicalKey;
-            handlers[field] = descriptor.canonical()
+            inputChannels[field] = field;
+            handlers[field] = descriptor.canonical() || descriptor.presence()
                     ? FlatTypeHandlers.CANONICAL
-                    : FlatTypeHandlers.forVector(values[logicalKey], types.get(logicalKey), policy.layout(), false);
+                    : FlatTypeHandlers.forVector(fieldValues[field], descriptor.type(), policy.layout(), false);
             if (handlers[field] == null) {
-                throw new IllegalArgumentException("No direct flat-key handler for logical field " + logicalKey);
+                throw new IllegalArgumentException("No direct flat-key handler for field " + descriptor.fieldPath());
             }
         }
 
@@ -123,10 +126,12 @@ final class ProjectedFlatKeyLayoutGenerator
                 policy);
         GenerationShape shape = new GenerationShape(
                 FixedWidthKeyTableLayout.from(layout.canonicalLayout()),
-                Arrays.stream(layout.canonicalFieldIndexes()).boxed().toList());
+                Arrays.stream(layout.canonicalFieldIndexes()).boxed().toList(),
+                Arrays.stream(layout.presenceFieldIndexes()).boxed().toList(),
+                layout.nullSourceCounts());
         MethodHandle constructor = constructors.computeIfAbsent(shape, this::generate);
         try {
-            return (ProjectedFlatKeyLayout) constructor.invoke(construction, layout.canonicalLayout(), arrayPool);
+            return (ProjectedFlatKeyLayout) constructor.invoke(construction, layout, layout.canonicalLayout(), arrayPool);
         }
         catch (Throwable e) {
             throw new RuntimeException("Failed to instantiate generated projected flat-key layout", e);
@@ -152,11 +157,18 @@ final class ProjectedFlatKeyLayoutGenerator
                 builder.withField(mappingOffsetField(source), CD_int, ClassFile.ACC_PRIVATE);
                 builder.withField(baseOffsetField(source), CD_int, ClassFile.ACC_PRIVATE);
             }
+            for (int source = 0; source < shape.nullSourceCount(); source++) {
+                builder.withField(nullValuesField(source), CD_BOOLEAN_ARRAY, ClassFile.ACC_PRIVATE);
+                builder.withField(nullMappingField(source), CD_INT_ARRAY, ClassFile.ACC_PRIVATE);
+                builder.withField(nullMappingOffsetField(source), CD_int, ClassFile.ACC_PRIVATE);
+                builder.withField(nullBaseOffsetField(source), CD_int, ClassFile.ACC_PRIVATE);
+            }
             builder.withMethodBody("<init>", CONSTRUCTOR_TYPE, ClassFile.ACC_PUBLIC, code -> {
                 code.aload(0);
                 code.aload(1);
                 code.aload(2);
                 code.aload(3);
+                code.aload(4);
                 code.invokespecial(CD_BASE, "<init>", CONSTRUCTOR_TYPE);
                 code.return_();
             });
@@ -165,6 +177,7 @@ final class ProjectedFlatKeyLayoutGenerator
             builder.withMethodBody("fieldHash", FIELD_HASH_TYPE, ClassFile.ACC_PUBLIC, code -> emitFieldHash(code, shape, thisClass));
             builder.withMethodBody("writeFieldFlat", WRITE_FIELD_TYPE, ClassFile.ACC_PUBLIC, code -> emitWriteField(code, shape, thisClass));
             builder.withMethodBody("identicalField", IDENTICAL_FIELD_TYPE, ClassFile.ACC_PUBLIC, code -> emitIdenticalField(code, shape, thisClass));
+            builder.withMethodBody("inputFieldNull", INPUT_FIELD_NULL_TYPE, ClassFile.ACC_PUBLIC, code -> emitInputFieldNull(code, shape, thisClass));
         });
 
         try {
@@ -178,6 +191,7 @@ final class ProjectedFlatKeyLayoutGenerator
                     MethodType.methodType(
                             void.class,
                             FlatKeyLayout.Construction.class,
+                            ResolvedPersistentKeyLayout.class,
                             ResolvedFixedWidthKeyLayout.class,
                             PrimitiveArrayPool.class));
         }
@@ -222,6 +236,35 @@ final class ProjectedFlatKeyLayoutGenerator
             code.iaload();
             code.putfield(thisClass, baseOffsetField(source), CD_int);
         }
+        for (int source = 0; source < shape.nullSourceCount(); source++) {
+            code.aload(0);
+            code.aload(0);
+            code.invokevirtual(CD_BASE, "productNullArrays", MethodTypeDesc.of(CD_BOOLEAN_ARRAY_2D));
+            code.loadConstant(source);
+            code.aaload();
+            code.putfield(thisClass, nullValuesField(source), CD_BOOLEAN_ARRAY);
+
+            code.aload(0);
+            code.aload(0);
+            code.invokevirtual(CD_BASE, "productNullMappings", MethodTypeDesc.of(CD_INT_ARRAY_2D));
+            code.loadConstant(source);
+            code.aaload();
+            code.putfield(thisClass, nullMappingField(source), CD_INT_ARRAY);
+
+            code.aload(0);
+            code.aload(0);
+            code.invokevirtual(CD_BASE, "productNullMappingOffsets", MethodTypeDesc.of(CD_INT_ARRAY));
+            code.loadConstant(source);
+            code.iaload();
+            code.putfield(thisClass, nullMappingOffsetField(source), CD_int);
+
+            code.aload(0);
+            code.aload(0);
+            code.invokevirtual(CD_BASE, "productNullBaseOffsets", MethodTypeDesc.of(CD_INT_ARRAY));
+            code.loadConstant(source);
+            code.iaload();
+            code.putfield(thisClass, nullBaseOffsetField(source), CD_int);
+        }
         code.return_();
     }
 
@@ -235,6 +278,14 @@ final class ProjectedFlatKeyLayoutGenerator
             code.aconst_null();
             code.putfield(thisClass, mappingField(source), CD_INT_ARRAY);
         }
+        for (int source = 0; source < shape.nullSourceCount(); source++) {
+            code.aload(0);
+            code.aconst_null();
+            code.putfield(thisClass, nullValuesField(source), CD_BOOLEAN_ARRAY);
+            code.aload(0);
+            code.aconst_null();
+            code.putfield(thisClass, nullMappingField(source), CD_INT_ARRAY);
+        }
         code.aload(0);
         code.invokespecial(CD_BASE, "endBatch", MethodTypeDesc.of(CD_void));
         code.return_();
@@ -242,6 +293,15 @@ final class ProjectedFlatKeyLayoutGenerator
 
     private static void emitFieldHash(CodeBuilder code, GenerationShape shape, ClassDesc thisClass)
     {
+        for (int field : shape.presenceFieldIndexes()) {
+            Label next = code.newLabel();
+            code.iload(1);
+            code.loadConstant(field);
+            code.if_icmpne(next);
+            code.loadConstant(0L);
+            code.lreturn();
+            code.labelBinding(next);
+        }
         for (int lane = 0; lane < shape.canonicalFieldIndexes().size(); lane++) {
             Label next = code.newLabel();
             code.iload(1);
@@ -264,6 +324,18 @@ final class ProjectedFlatKeyLayoutGenerator
 
     private static void emitWriteField(CodeBuilder code, GenerationShape shape, ClassDesc thisClass)
     {
+        for (int field : shape.presenceFieldIndexes()) {
+            Label next = code.newLabel();
+            code.iload(1);
+            code.loadConstant(field);
+            code.if_icmpne(next);
+            code.aload(4);
+            code.iload(5);
+            code.loadConstant(0L);
+            code.invokestatic(CD_FLAT_LAYOUT, "writeCanonicalLong", MethodTypeDesc.of(CD_void, CD_BYTE_ARRAY, CD_int, CD_long));
+            code.return_();
+            code.labelBinding(next);
+        }
         for (int lane = 0; lane < shape.canonicalFieldIndexes().size(); lane++) {
             Label next = code.newLabel();
             code.iload(1);
@@ -290,6 +362,15 @@ final class ProjectedFlatKeyLayoutGenerator
 
     private static void emitIdenticalField(CodeBuilder code, GenerationShape shape, ClassDesc thisClass)
     {
+        for (int field : shape.presenceFieldIndexes()) {
+            Label next = code.newLabel();
+            code.iload(1);
+            code.loadConstant(field);
+            code.if_icmpne(next);
+            code.loadConstant(1);
+            code.ireturn();
+            code.labelBinding(next);
+        }
         for (int lane = 0; lane < shape.canonicalFieldIndexes().size(); lane++) {
             Label next = code.newLabel();
             code.iload(1);
@@ -318,6 +399,65 @@ final class ProjectedFlatKeyLayoutGenerator
         code.iload(6);
         code.iload(7);
         code.invokespecial(CD_BASE, "identicalField", IDENTICAL_FIELD_TYPE);
+        code.ireturn();
+    }
+
+    private static void emitInputFieldNull(CodeBuilder code, GenerationShape shape, ClassDesc thisClass)
+    {
+        int sourceOffset = 0;
+        for (int field = 0; field < shape.nullSourceCounts().size(); field++) {
+            Label nextField = code.newLabel();
+            code.iload(1);
+            code.loadConstant(field);
+            code.if_icmpne(nextField);
+            int sourceCount = shape.nullSourceCounts().get(field);
+            for (int source = sourceOffset; source < sourceOffset + sourceCount; source++) {
+                Label nextSource = code.newLabel();
+                Label direct = code.newLabel();
+                Label mapped = code.newLabel();
+                code.aload(0);
+                code.getfield(thisClass, nullValuesField(source), CD_BOOLEAN_ARRAY);
+                code.ifnull(nextSource);
+
+                code.aload(0);
+                code.getfield(thisClass, nullMappingField(source), CD_INT_ARRAY);
+                code.ifnull(direct);
+                code.aload(0);
+                code.getfield(thisClass, nullMappingField(source), CD_INT_ARRAY);
+                code.iload(3);
+                code.aload(0);
+                code.getfield(thisClass, nullMappingOffsetField(source), CD_int);
+                code.iadd();
+                code.iaload();
+                code.istore(4);
+                code.goto_(mapped);
+                code.labelBinding(direct);
+                code.iload(3);
+                code.istore(4);
+                code.labelBinding(mapped);
+
+                code.aload(0);
+                code.getfield(thisClass, nullValuesField(source), CD_BOOLEAN_ARRAY);
+                code.iload(4);
+                code.aload(0);
+                code.getfield(thisClass, nullBaseOffsetField(source), CD_int);
+                code.iadd();
+                code.baload();
+                code.ifeq(nextSource);
+                code.loadConstant(1);
+                code.ireturn();
+                code.labelBinding(nextSource);
+            }
+            code.loadConstant(0);
+            code.ireturn();
+            code.labelBinding(nextField);
+            sourceOffset += sourceCount;
+        }
+        code.aload(0);
+        code.iload(1);
+        code.aload(2);
+        code.iload(3);
+        code.invokespecial(CD_BASE, "inputFieldNull", INPUT_FIELD_NULL_TYPE);
         code.ireturn();
     }
 
@@ -439,11 +579,42 @@ final class ProjectedFlatKeyLayoutGenerator
         return "source" + source + "BaseOffset";
     }
 
-    private record GenerationShape(FixedWidthKeyTableLayout layout, List<Integer> canonicalFieldIndexes)
+    private static String nullValuesField(int source)
+    {
+        return "nullSource" + source + "Values";
+    }
+
+    private static String nullMappingField(int source)
+    {
+        return "nullSource" + source + "Mapping";
+    }
+
+    private static String nullMappingOffsetField(int source)
+    {
+        return "nullSource" + source + "MappingOffset";
+    }
+
+    private static String nullBaseOffsetField(int source)
+    {
+        return "nullSource" + source + "BaseOffset";
+    }
+
+    private record GenerationShape(
+            FixedWidthKeyTableLayout layout,
+            List<Integer> canonicalFieldIndexes,
+            List<Integer> presenceFieldIndexes,
+            List<Integer> nullSourceCounts)
     {
         private GenerationShape
         {
             canonicalFieldIndexes = List.copyOf(canonicalFieldIndexes);
+            presenceFieldIndexes = List.copyOf(presenceFieldIndexes);
+            nullSourceCounts = List.copyOf(nullSourceCounts);
+        }
+
+        int nullSourceCount()
+        {
+            return nullSourceCounts.stream().mapToInt(Integer::intValue).sum();
         }
     }
 }

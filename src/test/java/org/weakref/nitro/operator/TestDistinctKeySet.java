@@ -15,6 +15,7 @@ package org.weakref.nitro.operator;
 
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.core.type.FixedWidthKeyLayout;
+import org.weakref.nitro.core.type.PersistentKeyLayout;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.core.type.TypeIdentity;
@@ -222,6 +223,49 @@ class TestDistinctKeySet
                         Mask.all(repeated[0].length()),
                         positions);
                 assertThat(Arrays.copyOf(positions, distinct)).containsExactly(2);
+            }
+            finally {
+                keys.releaseBuffers();
+            }
+        }
+    }
+
+    @Test
+    void testProjectedFlatDistinctComposesRecursiveProductLayout()
+    {
+        TypeBinding pairType = fixedWidthPairType();
+        TypeBinding binaryType = rawBinaryType();
+        StructVector rows = new StructVector(6);
+        rows.setField("pair", Streams.builder()
+                .put(org.weakref.nitro.data.Stream.VALUES, fixedWidthPairs(
+                        new long[] {1, 1, 9, 7, 8, 6},
+                        new long[] {10, 10, 90, 70, 80, 60}))
+                .put(org.weakref.nitro.data.Stream.NULLS, new BooleanVector(new boolean[] {false, false, true, false, true, false}))
+                .build());
+        rows.setField("label", Streams.builder()
+                .put(org.weakref.nitro.data.Stream.VALUES, utf8(new String[] {"a", "a", "unused", "ignored", "other", "arbitrary"}))
+                .put(org.weakref.nitro.data.Stream.NULLS, new BooleanVector(new boolean[] {false, false, true, false, true, false}))
+                .build());
+        Vector[] values = {rows};
+        Vector[] nulls = {new BooleanVector(new boolean[] {false, false, false, true, false, true})};
+
+        try (Allocator allocator = new Allocator(engineResources)) {
+            DistinctKeySet keys = DistinctKeySet.create(
+                    values,
+                    true,
+                    List.of(productType(pairType, binaryType)),
+                    allocator,
+                    new Allocator.Context("recursive-product-distinct"),
+                    arrayPool,
+                    codeGeneration,
+                    DistinctKeySetPolicy.defaults(),
+                    adaptiveLongGroupingPolicy,
+                    flatKeyTablePolicy);
+            try {
+                int[] positions = new int[rows.length()];
+                int distinct = keys.addBatch(values, nulls, Mask.all(rows.length()), positions);
+                assertThat(Arrays.copyOf(positions, distinct)).containsExactly(0, 2, 3);
+                assertThat(keys.addBatch(values, nulls, Mask.all(rows.length()), positions)).isZero();
             }
             finally {
                 keys.releaseBuffers();
@@ -1228,6 +1272,50 @@ class TestDistinctKeySet
             public Set<Class<? extends Vector>> supportedVectorTypes()
             {
                 return Set.of(StructVector.class, DictionaryVector.class);
+            }
+        };
+    }
+
+    private static TypeBinding productType(TypeBinding pair, TypeBinding label)
+    {
+        return new TypeBinding()
+        {
+            @Override
+            public TypeIdentity identity()
+            {
+                return new TypeIdentity("testing:recursive-product-distinct-key");
+            }
+
+            @Override
+            public Class<?> carrierType()
+            {
+                return Object.class;
+            }
+
+            @Override
+            public TypeOperators operators()
+            {
+                return TypeOperators.UNSPECIFIED;
+            }
+
+            @Override
+            public List<TypeBinding> nestedValueTypes()
+            {
+                return List.of(pair, label);
+            }
+
+            @Override
+            public Optional<PersistentKeyLayout> persistentKeyLayout()
+            {
+                return Optional.of(new PersistentKeyLayout(List.of(
+                        new PersistentKeyLayout.Field(List.of("pair"), pair),
+                        new PersistentKeyLayout.Field(List.of("label"), label))));
+            }
+
+            @Override
+            public Set<Class<? extends Vector>> supportedVectorTypes()
+            {
+                return Set.of(StructVector.class, DictionaryVector.class, RleVector.class);
             }
         };
     }

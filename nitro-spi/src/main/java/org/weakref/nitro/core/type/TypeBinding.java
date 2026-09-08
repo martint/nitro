@@ -83,6 +83,18 @@ public interface TypeBinding
         return Optional.empty();
     }
 
+    /**
+     * Optional provider proof that logical key identity is an ordered product of child identities.
+     *
+     * <p>Persistent key consumers recursively compose the child bindings' direct, canonical, or product layouts into
+     * one generated physical table. The provider retains authority over the structural paths and child semantics;
+     * the engine does not infer a product from a logical type name or vector class.
+     */
+    default Optional<PersistentKeyLayout> persistentKeyLayout()
+    {
+        return Optional.empty();
+    }
+
     /// Optional exact normalized ordering key for physical domains that fit in 64 bits.
     ///
     /// Unsigned key comparison must agree with this binding's logical comparison for every
