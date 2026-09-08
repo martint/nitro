@@ -35,7 +35,7 @@ final class PersistentKeyTableSupport
                 .map(value -> value.getClass().getSimpleName())
                 .toList();
         return new UnsupportedOperationException(
-                "Nitro " + consumer + " requires a direct physical or generated fixed-width persistent key layout; " +
+                "Nitro " + consumer + " requires a direct physical or provider-described generated persistent key layout; " +
                         "unsupported key shape types=" + types + ", vectors=" + vectors + " (ADR-0090)");
     }
 }

@@ -266,6 +266,23 @@ batch and skip descendant identity under a null product boundary. Nitro does not
 names or vector classes. Recursive identities that are not finite products of supported leaves reject rather than
 entering a semantic object table.
 
+A provider may separately prove that one logical key is an ordered repetition over one or more aligned physical child
+streams. Each child output supplies its authoritative type binding and may recursively use direct identity, canonical
+lanes, a finite product, or ordered repetition. Generated consumers bind the parent offsets, wrapper mappings, child
+streams, null sources, primitive arrays, binary regions, and projections once per batch, then hash, write, and compare
+the ordered ranges through direct generated loops. They do not allocate row objects or dispatch through accessors,
+virtual child kernels, or method handles per element. Grouping retains the first logical representative when the
+stored physical identity cannot reconstruct the provider value. Repeated-vector shape alone is not a semantic proof:
+unordered identities such as maps require a distinct provider capability and remain unsupported until one exists.
+
+A provider may prove instead that one logical key is an unordered repeated multiset of aligned child-output tuples,
+with multiplicity contributing to identity. Generated consumers encode every recursively resolved entry tuple into
+exact physical bytes, sort reusable primitive entry references by those bytes, and store and hash the entries in that
+canonical order. Equality therefore does not depend on producer entry order or perform a quadratic entry search.
+Scratch ordering and offset storage is allocator-owned and reused; the hot path creates no entry objects and performs
+no per-entry virtual or method-handle dispatch. Nitro does not infer unordered semantics from a map vector, logical
+type name, or repeated-output arity.
+
 Stateful registry implementations may also request a composed key binder. Each bound vector exposes opaque hashing
 and cross-vector identity over positions, allowing retained indexes such as map construction state to span owned
 vector segments. The binder does not prescribe table layout, growth, payload retention, or duplicate policy.

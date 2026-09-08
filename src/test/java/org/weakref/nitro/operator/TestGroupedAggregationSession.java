@@ -1433,7 +1433,7 @@ class TestGroupedAggregationSession
                 assertThatThrownBy(() -> session.addInput(input))
                         .isInstanceOf(UnsupportedOperationException.class)
                         .hasMessageContaining("grouping")
-                        .hasMessageContaining("direct physical or generated fixed-width")
+                        .hasMessageContaining("direct physical or provider-described generated persistent key layout")
                         .hasMessageContaining("ADR-0090");
             }
         }

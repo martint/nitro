@@ -172,4 +172,6 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | [0090](0090-reject-row-wise-semantic-key-tables.md) | Reject row-wise semantic key tables | accepted |
 | [0091](0091-generate-canonical-fixed-width-key-projections.md) | Generate canonical fixed-width key projections | accepted |
 | [0092](0092-compose-persistent-key-layouts-in-one-generated-table.md) | Compose persistent key layouts in one generated table | accepted |
-| [0093](0093-generate-recursive-product-key-layouts.md) | Generate recursive product key layouts | accepted |
+| [0093](0093-generate-recursive-product-key-layouts.md) | Generate recursive product key layouts | amended |
+| [0094](0094-generate-ordered-repeated-key-layouts.md) | Generate ordered repeated key layouts | amended |
+| [0095](0095-generate-unordered-repeated-key-layouts.md) | Generate unordered repeated key layouts | accepted |

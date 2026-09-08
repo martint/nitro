@@ -17,14 +17,17 @@ import org.junit.jupiter.api.Test;
 import org.weakref.nitro.core.type.Field;
 import org.weakref.nitro.core.type.FixedWidthKeyLayout;
 import org.weakref.nitro.core.type.PersistentKeyLayout;
+import org.weakref.nitro.core.type.RepeatedKeyLayout;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.core.type.TypeIdentity;
 import org.weakref.nitro.core.type.TypeOperators;
+import org.weakref.nitro.data.ArrayVector;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I64Vector;
+import org.weakref.nitro.data.MapVector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.RegionVector;
 import org.weakref.nitro.data.Stream;
@@ -77,7 +80,7 @@ class TestFixedWidthHashJoinIntegration
             assertThatThrownBy(session::hasOutput)
                     .isInstanceOf(UnsupportedOperationException.class)
                     .hasMessageContaining("hash join")
-                    .hasMessageContaining("direct physical or generated fixed-width")
+                    .hasMessageContaining("direct physical or provider-described generated persistent key layout")
                     .hasMessageContaining("ADR-0090");
         }
     }
@@ -253,6 +256,212 @@ class TestFixedWidthHashJoinIntegration
         }
     }
 
+    @Test
+    void testOrderedRepeatedLayoutDrivesHashJoinBuildAndDictionaryProbe()
+    {
+        TypeBinding arrayType = orderedRepeatedType(rawLongType());
+        Schema probeSchema = new Schema(List.of(new Field(arrayType, false)));
+        Schema buildSchema = new Schema(List.of(new Field(arrayType, false), Schema.unspecified(1).field(0)));
+        ArrayVector buildKeys = arrays(new long[][] {{1, 2}, {1, 2}, {2, 1}, {}});
+        TableOperator build = new TableOperator(
+                buildSchema,
+                List.of(TableOperator.Page.values(
+                        buildKeys.length(),
+                        new Vector[] {buildKeys, new I64Vector(new long[] {100, 101, 200, 300})},
+                        Mask.all(buildKeys.length()))));
+
+        try (EngineResources resources = EngineResources.createDefault();
+                org.weakref.nitro.data.Allocator allocator = new org.weakref.nitro.data.Allocator(resources);
+                HashJoinSession session = new HashJoinSession(
+                        resources.operatorResources(),
+                        allocator,
+                        probeSchema,
+                        new int[] {0},
+                        build,
+                        new int[] {0},
+                        false)) {
+            allocator.beginExecution();
+            ArrayVector domain = arrays(new long[][] {{2, 1}, {1, 2}, {}, {9}});
+            Vector probeKeys = DictionaryVector.wrap(new int[] {0, 1, 2, 3, 0, 1, 2, 3}, domain);
+            session.addInput(new Batch(Mask.all(probeKeys.length()), Output.of(Streams.ofValues(probeKeys))));
+
+            List<Long> payloads = new ArrayList<>();
+            while (session.hasOutput()) {
+                try (Batch output = session.getOutput()) {
+                    VectorAccess.LongValues values = VectorAccess.longValues(output.output(2).borrow(Stream.VALUES));
+                    for (int position : output.borrowMask()) {
+                        payloads.add(values.value(position));
+                    }
+                }
+            }
+            assertThat(payloads).containsExactly(
+                    200L, 100L, 101L, 300L,
+                    200L, 100L, 101L, 300L);
+        }
+    }
+
+    @Test
+    void testOrderedRepeatedProductLayoutDrivesHashJoin()
+    {
+        TypeBinding rowType = productType(rawLongType(), rawBinaryType());
+        TypeBinding arrayType = orderedRepeatedType(rowType);
+        Schema probeSchema = new Schema(List.of(new Field(arrayType, false)));
+        Schema buildSchema = new Schema(List.of(new Field(arrayType, false), Schema.unspecified(1).field(0)));
+        ArrayVector buildKeys = productArrays(
+                new long[] {1, 1, 2, 0},
+                new String[] {"a", "a", "b", "ignored"},
+                new boolean[] {false, false, false, true});
+        TableOperator build = new TableOperator(
+                buildSchema,
+                List.of(TableOperator.Page.values(
+                        buildKeys.length(),
+                        new Vector[] {buildKeys, new I64Vector(new long[] {100, 101, 200, 300})},
+                        Mask.all(buildKeys.length()))));
+
+        try (EngineResources resources = EngineResources.createDefault();
+                org.weakref.nitro.data.Allocator allocator = new org.weakref.nitro.data.Allocator(resources);
+                HashJoinSession session = new HashJoinSession(
+                        resources.operatorResources(),
+                        allocator,
+                        probeSchema,
+                        new int[] {0},
+                        build,
+                        new int[] {0},
+                        false)) {
+            allocator.beginExecution();
+            ArrayVector probeKeys = productArrays(
+                    new long[] {2, 1, 1, 0},
+                    new String[] {"b", "a", "x", "ignored"},
+                    new boolean[] {false, false, false, true});
+            session.addInput(new Batch(Mask.all(probeKeys.length()), Output.of(Streams.ofValues(probeKeys))));
+
+            List<Long> payloads = new ArrayList<>();
+            while (session.hasOutput()) {
+                try (Batch output = session.getOutput()) {
+                    VectorAccess.LongValues values = VectorAccess.longValues(output.output(2).borrow(Stream.VALUES));
+                    for (int position : output.borrowMask()) {
+                        payloads.add(values.value(position));
+                    }
+                }
+            }
+            assertThat(payloads).containsExactly(200L, 100L, 101L, 300L);
+        }
+    }
+
+    @Test
+    void testUnorderedRepeatedLayoutDrivesHashJoinIndependentOfEntryOrder()
+    {
+        TypeBinding mapType = unorderedRepeatedMapType();
+        Schema probeSchema = new Schema(List.of(new Field(mapType, false)));
+        Schema buildSchema = new Schema(List.of(new Field(mapType, false), Schema.unspecified(1).field(0)));
+        MapVector buildKeys = maps(
+                new long[][] {{1, 2}, {2, 1}, {}, {3}, {1, 1}},
+                new String[][] {{"a", "b"}, {"b", "a"}, {}, {"ignored"}, {"a", "a"}},
+                new boolean[][] {{false, false}, {false, false}, {}, {true}, {false, false}});
+        TableOperator build = new TableOperator(
+                buildSchema,
+                List.of(TableOperator.Page.values(
+                        buildKeys.length(),
+                        new Vector[] {buildKeys, new I64Vector(new long[] {100, 101, 200, 300, 400})},
+                        Mask.all(buildKeys.length()))));
+
+        try (EngineResources resources = EngineResources.createDefault();
+                org.weakref.nitro.data.Allocator allocator = new org.weakref.nitro.data.Allocator(resources);
+                HashJoinSession session = new HashJoinSession(
+                        resources.operatorResources(),
+                        allocator,
+                        probeSchema,
+                        new int[] {0},
+                        build,
+                        new int[] {0},
+                        false)) {
+            allocator.beginExecution();
+            MapVector domain = maps(
+                    new long[][] {{2, 1}, {}, {3}, {1}, {1, 1}, {1, 2}},
+                    new String[][] {{"b", "a"}, {}, {"different-ignored"}, {"a"}, {"a", "a"}, {"a", "different"}},
+                    new boolean[][] {{false, false}, {}, {true}, {false}, {false, false}, {false, false}});
+            Vector probeKeys = DictionaryVector.wrap(new int[] {0, 1, 2, 3, 4, 5, 0}, domain);
+            session.addInput(new Batch(Mask.all(probeKeys.length()), Output.of(Streams.ofValues(probeKeys))));
+
+            List<Long> payloads = new ArrayList<>();
+            while (session.hasOutput()) {
+                try (Batch output = session.getOutput()) {
+                    VectorAccess.LongValues values = VectorAccess.longValues(output.output(2).borrow(Stream.VALUES));
+                    for (int position : output.borrowMask()) {
+                        payloads.add(values.value(position));
+                    }
+                }
+            }
+            assertThat(payloads).containsExactly(100L, 101L, 200L, 300L, 400L, 100L, 101L);
+        }
+    }
+
+    private static ArrayVector arrays(long[][] rows)
+    {
+        int elements = 0;
+        for (long[] row : rows) {
+            elements += row.length;
+        }
+        ArrayVector result = new ArrayVector(rows.length);
+        long[] values = new long[elements];
+        int offset = 0;
+        for (int row = 0; row < rows.length; row++) {
+            result.offsets()[row] = offset;
+            System.arraycopy(rows[row], 0, values, offset, rows[row].length);
+            offset += rows[row].length;
+        }
+        result.offsets()[rows.length] = offset;
+        result.setElements(Streams.ofValues(new I64Vector(values)));
+        return result;
+    }
+
+    private static ArrayVector productArrays(long[] ids, String[] labels, boolean[] nullRows)
+    {
+        assertThat(labels.length).isEqualTo(ids.length);
+        assertThat(nullRows.length).isEqualTo(ids.length);
+        StructVector rows = new StructVector(ids.length);
+        rows.setField("pair", Streams.ofValues(new I64Vector(ids)));
+        rows.setField("label", Streams.ofValues(utf8(labels)));
+        ArrayVector result = new ArrayVector(ids.length);
+        for (int position = 0; position <= ids.length; position++) {
+            result.offsets()[position] = position;
+        }
+        result.setElements(Streams.builder()
+                .put(Stream.VALUES, rows)
+                .put(Stream.NULLS, new BooleanVector(nullRows))
+                .build());
+        return result;
+    }
+
+    private static MapVector maps(long[][] keys, String[][] values, boolean[][] valueNulls)
+    {
+        assertThat(values.length).isEqualTo(keys.length);
+        assertThat(valueNulls.length).isEqualTo(keys.length);
+        int entryCount = java.util.Arrays.stream(keys).mapToInt(row -> row.length).sum();
+        long[] flatKeys = new long[entryCount];
+        String[] flatValues = new String[entryCount];
+        boolean[] flatNulls = new boolean[entryCount];
+        MapVector result = new MapVector(keys.length);
+        int offset = 0;
+        for (int row = 0; row < keys.length; row++) {
+            assertThat(values[row]).hasSize(keys[row].length);
+            assertThat(valueNulls[row]).hasSize(keys[row].length);
+            result.offsets()[row] = offset;
+            System.arraycopy(keys[row], 0, flatKeys, offset, keys[row].length);
+            System.arraycopy(values[row], 0, flatValues, offset, values[row].length);
+            System.arraycopy(valueNulls[row], 0, flatNulls, offset, valueNulls[row].length);
+            offset += keys[row].length;
+        }
+        result.offsets()[keys.length] = offset;
+        result.setEntries(
+                Streams.ofValues(new I64Vector(flatKeys)),
+                Streams.builder()
+                        .put(Stream.VALUES, utf8(flatValues))
+                        .put(Stream.NULLS, new BooleanVector(flatNulls))
+                        .build());
+        return result;
+    }
+
     private static StructVector pairs(long[] high, long[] low)
     {
         StructVector pairs = new StructVector(high.length);
@@ -362,6 +571,134 @@ class TestFixedWidthHashJoinIntegration
             public Set<Class<? extends Vector>> supportedVectorTypes()
             {
                 return Set.of(BinaryVector.class, DictionaryVector.class);
+            }
+        };
+    }
+
+    private static TypeBinding rawLongType()
+    {
+        return new TypeBinding()
+        {
+            @Override
+            public TypeIdentity identity()
+            {
+                return new TypeIdentity("testing:raw-long-hash-join-key");
+            }
+
+            @Override
+            public Class<?> carrierType()
+            {
+                return long.class;
+            }
+
+            @Override
+            public TypeOperators operators()
+            {
+                return TypeOperators.UNSPECIFIED;
+            }
+
+            @Override
+            public boolean supportsRawKeyIdentity()
+            {
+                return true;
+            }
+
+            @Override
+            public Set<Class<? extends Vector>> supportedVectorTypes()
+            {
+                return Set.of(I64Vector.class, DictionaryVector.class, RegionVector.class);
+            }
+        };
+    }
+
+    private static TypeBinding orderedRepeatedType(TypeBinding elements)
+    {
+        return new TypeBinding()
+        {
+            @Override
+            public TypeIdentity identity()
+            {
+                return new TypeIdentity("testing:ordered-repeated-hash-join-key");
+            }
+
+            @Override
+            public Class<?> carrierType()
+            {
+                return Object.class;
+            }
+
+            @Override
+            public TypeOperators operators()
+            {
+                return TypeOperators.UNSPECIFIED;
+            }
+
+            @Override
+            public List<TypeBinding> nestedValueTypes()
+            {
+                return List.of(elements);
+            }
+
+            @Override
+            public Optional<RepeatedKeyLayout> repeatedKeyLayout()
+            {
+                return Optional.of(new RepeatedKeyLayout(
+                        RepeatedKeyLayout.Order.ORDERED,
+                        List.of(new RepeatedKeyLayout.Output(0, elements))));
+            }
+
+            @Override
+            public Set<Class<? extends Vector>> supportedVectorTypes()
+            {
+                return Set.of(ArrayVector.class, DictionaryVector.class, RegionVector.class);
+            }
+        };
+    }
+
+    private static TypeBinding unorderedRepeatedMapType()
+    {
+        TypeBinding keys = rawLongType();
+        TypeBinding values = rawBinaryType();
+        return new TypeBinding()
+        {
+            @Override
+            public TypeIdentity identity()
+            {
+                return new TypeIdentity("testing:unordered-repeated-hash-join-key");
+            }
+
+            @Override
+            public Class<?> carrierType()
+            {
+                return Object.class;
+            }
+
+            @Override
+            public TypeOperators operators()
+            {
+                return TypeOperators.UNSPECIFIED;
+            }
+
+            @Override
+            public List<TypeBinding> nestedValueTypes()
+            {
+                return List.of(keys, values);
+            }
+
+            @Override
+            public Optional<RepeatedKeyLayout> repeatedKeyLayout()
+            {
+                return Optional.of(new RepeatedKeyLayout(
+                        RepeatedKeyLayout.Order.UNORDERED_MULTISET,
+                        List.of(
+                                new RepeatedKeyLayout.Output(0, keys),
+                                new RepeatedKeyLayout.Output(1, values))));
+            }
+
+            @Override
+            public Set<Class<? extends Vector>> supportedVectorTypes()
+            {
+                return Set.of(MapVector.class, DictionaryVector.class, RegionVector.class);
             }
         };
     }

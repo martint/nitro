@@ -41,6 +41,28 @@ public final class InMemoryCompiler
 
     public static Class<?> compile(String className, String source)
     {
+        Compilation compilation = compileBytes(className, source);
+        try {
+            return compilation.loader().loadClass(className);
+        }
+        catch (ClassNotFoundException e) {
+            throw new IllegalStateException("Compiled class not found: " + className, e);
+        }
+    }
+
+    /** Compiles one source unit and returns the named top-level class bytes for caller-controlled definition. */
+    public static byte[] compileToBytes(String className, String source)
+    {
+        Compilation compilation = compileBytes(className, source);
+        byte[] bytes = compilation.classes().get(className);
+        if (bytes == null) {
+            throw new IllegalStateException("Compiled class not found: " + className);
+        }
+        return bytes;
+    }
+
+    private static Compilation compileBytes(String className, String source)
+    {
         JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
         if (compiler == null) {
             throw new IllegalStateException("No system Java compiler available (run on a JDK, not a JRE)");
@@ -57,11 +79,26 @@ public final class InMemoryCompiler
             message.append("--- source ---\n").append(source);
             throw new IllegalStateException(message.toString());
         }
-        try {
-            return fileManager.loader().loadClass(className);
-        }
-        catch (ClassNotFoundException e) {
-            throw new IllegalStateException("Compiled class not found: " + className, e);
+        return new Compilation(fileManager.classes());
+    }
+
+    private record Compilation(Map<String, byte[]> classes)
+    {
+        ClassLoader loader()
+        {
+            return new ClassLoader(InMemoryCompiler.class.getClassLoader())
+            {
+                @Override
+                protected Class<?> findClass(String name)
+                        throws ClassNotFoundException
+                {
+                    byte[] definition = classes.get(name);
+                    if (definition == null) {
+                        throw new ClassNotFoundException(name);
+                    }
+                    return defineClass(name, definition, 0, definition.length);
+                }
+            };
         }
     }
 
@@ -108,23 +145,11 @@ public final class InMemoryCompiler
             };
         }
 
-        ClassLoader loader()
+        Map<String, byte[]> classes()
         {
             Map<String, byte[]> classes = new HashMap<>();
             bytecode.forEach((name, stream) -> classes.put(name, stream.toByteArray()));
-            return new ClassLoader(InMemoryCompiler.class.getClassLoader())
-            {
-                @Override
-                protected Class<?> findClass(String name)
-                        throws ClassNotFoundException
-                {
-                    byte[] definition = classes.get(name);
-                    if (definition == null) {
-                        throw new ClassNotFoundException(name);
-                    }
-                    return defineClass(name, definition, 0, definition.length);
-                }
-            };
+            return Map.copyOf(classes);
         }
     }
 }

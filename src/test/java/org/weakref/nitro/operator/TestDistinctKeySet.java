@@ -396,7 +396,7 @@ class TestDistinctKeySet
                     flatKeyTablePolicy))
                     .isInstanceOf(UnsupportedOperationException.class)
                     .hasMessageContaining("distinct")
-                    .hasMessageContaining("direct physical or generated fixed-width")
+                    .hasMessageContaining("direct physical or provider-described generated persistent key layout")
                     .hasMessageContaining("ADR-0090");
         }
     }

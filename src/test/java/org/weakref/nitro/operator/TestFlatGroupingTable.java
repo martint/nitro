@@ -17,16 +17,19 @@ import org.junit.jupiter.api.Test;
 import org.weakref.nitro.core.type.FixedWidthKeyLayout;
 import org.weakref.nitro.core.type.LongFlatKeyStorage;
 import org.weakref.nitro.core.type.PersistentKeyLayout;
+import org.weakref.nitro.core.type.RepeatedKeyLayout;
 import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.core.type.TypeIdentity;
 import org.weakref.nitro.core.type.TypeOperators;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.ArrayVector;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.F64Vector;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
+import org.weakref.nitro.data.MapVector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.RegionVector;
@@ -272,6 +275,223 @@ class TestFlatGroupingTable
             assertThat(groups[1]).isZero();
             assertThat(groups[2]).isEqualTo(1);
             assertThat(state.groupCount()).isEqualTo(2);
+        }
+        finally {
+            state.releaseBuffers();
+            allocator.release(context);
+        }
+    }
+
+    @Test
+    void testOrderedRepeatedLongGroupingPreservesOrderNullsEmptyAndOuterMappings()
+    {
+        TypeBinding elementType = rawLongType();
+        TypeBinding arrayType = orderedRepeatedType(elementType);
+        ArrayVector domain = new ArrayVector(6);
+        int[] offsets = {0, 2, 4, 6, 8, 8, 8};
+        System.arraycopy(offsets, 0, domain.offsets(), 0, offsets.length);
+        domain.setElements(Streams.builder()
+                .put(org.weakref.nitro.data.Stream.VALUES, new I64Vector(new long[] {1, 2, 1, 2, 1, 3, 0, 2}))
+                .put(org.weakref.nitro.data.Stream.NULLS, new BooleanVector(new boolean[] {false, false, false, false, false, false, true, false}))
+                .build());
+
+        Allocator allocator = new Allocator(engineResources);
+        Allocator.Context context = new Allocator.Context("ordered-repeated-grouping");
+        GroupingState state = new GroupingState(
+                arrayPool,
+                codeGeneration,
+                groupingResources,
+                adaptiveLongGroupingPolicy,
+                flatKeyTablePolicy,
+                List.of(arrayType),
+                allocator,
+                context);
+        try {
+            I64Vector groups = new I64Vector(domain.length());
+            state.assignGroups(
+                    new Vector[] {domain},
+                    new Vector[] {new BooleanVector(new boolean[] {false, false, false, false, false, true})},
+                    Mask.all(domain.length()),
+                    groups);
+            assertThat(groups.values()).containsExactly(0, 0, 1, 2, 3, 4);
+            assertThat(state.groupCount()).isEqualTo(5);
+
+            DictionaryVector dictionary = new DictionaryVector(new int[] {2, 0, 3, 4, 1}, domain);
+            I64Vector dictionaryGroups = new I64Vector(dictionary.length());
+            state.assignGroups(new Vector[] {dictionary}, new Vector[] {null}, Mask.all(dictionary.length()), dictionaryGroups);
+            assertThat(dictionaryGroups.values()).containsExactly(1, 0, 2, 3, 0);
+            assertThat(state.groupCount()).isEqualTo(5);
+
+            Streams grouped = state.groupedValues(0, Mask.all(5), null, allocator, context);
+            assertThat(grouped.values()).isInstanceOf(ArrayVector.class);
+            assertThat(((BooleanVector) grouped.getOrNull(org.weakref.nitro.data.Stream.NULLS)).values())
+                    .containsExactly(false, false, false, false, true);
+        }
+        finally {
+            state.releaseBuffers();
+            allocator.release(context);
+        }
+    }
+
+    @Test
+    void testGeneratedOrderedRepeatedKernelsCoverEveryDirectStorageKind()
+    {
+        assertOrderedRepeatedGroups(
+                new I32Vector(new int[] {1, 2, 1, 2, 2, 1}),
+                rawRepeatedElementType("testing:repeated-i32", long.class, Set.of(I32Vector.class)));
+        assertOrderedRepeatedGroups(
+                new BooleanVector(new boolean[] {false, true, false, true, true, false}),
+                rawRepeatedElementType("testing:repeated-boolean", boolean.class, Set.of(BooleanVector.class)));
+        assertOrderedRepeatedGroups(
+                new F64Vector(new double[] {Double.NaN, -0.0, Double.NaN, -0.0, -0.0, Double.NaN}),
+                rawRepeatedElementType("testing:repeated-f64", double.class, Set.of(F64Vector.class)));
+        assertOrderedRepeatedGroups(
+                utf8("a", "b", "a", "b", "b", "a"),
+                rawRepeatedElementType("testing:repeated-binary", Object.class, Set.of(BinaryVector.class)));
+    }
+
+    @Test
+    void testGeneratedOrderedRepeatedProductGroupingPreservesProductAndLeafNullBoundaries()
+    {
+        TypeBinding rowType = productType(rawLongType(), rawBinaryType());
+        StructVector rows = new StructVector(6);
+        rows.setField("timestamp", Streams.builder()
+                .put(org.weakref.nitro.data.Stream.VALUES, new I64Vector(new long[] {1, 1, 1, 0, 0, 1}))
+                .put(org.weakref.nitro.data.Stream.NULLS, new BooleanVector(new boolean[] {false, false, false, false, true, false}))
+                .build());
+        rows.setField("label", Streams.builder()
+                .put(org.weakref.nitro.data.Stream.VALUES, utf8("a", "a", "ignored", "ignored", "ignored", "a"))
+                .put(org.weakref.nitro.data.Stream.NULLS, new BooleanVector(new boolean[] {false, false, true, false, true, false}))
+                .build());
+
+        ArrayVector arrays = new ArrayVector(6);
+        System.arraycopy(new int[] {0, 1, 2, 3, 4, 5, 6}, 0, arrays.offsets(), 0, 7);
+        arrays.setElements(Streams.builder()
+                .put(org.weakref.nitro.data.Stream.VALUES, rows)
+                .put(org.weakref.nitro.data.Stream.NULLS, new BooleanVector(new boolean[] {false, false, false, true, false, false}))
+                .build());
+
+        Allocator allocator = new Allocator(engineResources);
+        Allocator.Context context = new Allocator.Context("ordered-repeated-product-grouping");
+        GroupingState state = new GroupingState(
+                arrayPool,
+                codeGeneration,
+                groupingResources,
+                adaptiveLongGroupingPolicy,
+                flatKeyTablePolicy,
+                List.of(orderedRepeatedType(rowType)),
+                allocator,
+                context);
+        try {
+            I64Vector groups = new I64Vector(arrays.length());
+            state.assignGroups(new Vector[] {arrays}, new Vector[] {null}, Mask.all(arrays.length()), groups);
+            assertThat(groups.values()).containsExactly(0, 0, 1, 2, 3, 0);
+            assertThat(state.groupCount()).isEqualTo(4);
+        }
+        finally {
+            state.releaseBuffers();
+            allocator.release(context);
+        }
+    }
+
+    private void assertOrderedRepeatedGroups(Vector elements, TypeBinding elementType)
+    {
+        ArrayVector arrays = new ArrayVector(3);
+        System.arraycopy(new int[] {0, 2, 4, 6}, 0, arrays.offsets(), 0, 4);
+        arrays.setElements(Streams.ofValues(elements));
+        Allocator allocator = new Allocator(engineResources);
+        Allocator.Context context = new Allocator.Context("generated-repeated-storage-kind");
+        GroupingState state = new GroupingState(
+                arrayPool,
+                codeGeneration,
+                groupingResources,
+                adaptiveLongGroupingPolicy,
+                flatKeyTablePolicy,
+                List.of(orderedRepeatedType(elementType)),
+                allocator,
+                context);
+        try {
+            I64Vector groups = new I64Vector(3);
+            state.assignGroups(new Vector[] {arrays}, new Vector[] {null}, Mask.all(3), groups);
+            assertThat(groups.values()).containsExactly(0, 0, 1);
+        }
+        finally {
+            state.releaseBuffers();
+            allocator.release(context);
+        }
+    }
+
+    @Test
+    void testUnorderedRepeatedMapGroupingCanonicalizesEntriesAndPreservesMultiplicityNullsAndWrappers()
+    {
+        TypeBinding mapType = unorderedRepeatedMapType();
+        MapVector domain = maps(
+                new long[][] {{1, 2}, {2, 1}, {1, 2}, {}, {1, 1}, {1}, {3}, {3}, {0}, {0x1_0000_0001L}, {}},
+                new String[][] {{"a", "b"}, {"b", "a"}, {"x", "b"}, {}, {"a", "a"}, {"a"}, {"ignored-a"}, {"ignored-b"}, {"collision"}, {"collision"}, {}},
+                new boolean[][] {{false, false}, {false, false}, {false, false}, {}, {false, false}, {false}, {true}, {true}, {false}, {false}, {}});
+
+        Allocator allocator = new Allocator(engineResources);
+        Allocator.Context context = new Allocator.Context("unordered-repeated-grouping");
+        GroupingState state = new GroupingState(
+                arrayPool,
+                codeGeneration,
+                groupingResources,
+                adaptiveLongGroupingPolicy,
+                flatKeyTablePolicy,
+                List.of(mapType),
+                allocator,
+                context);
+        try {
+            I64Vector groups = new I64Vector(domain.length());
+            state.assignGroups(
+                    new Vector[] {domain},
+                    new Vector[] {new BooleanVector(new boolean[] {false, false, false, false, false, false, false, false, false, false, true})},
+                    Mask.all(domain.length()),
+                    groups);
+            assertThat(groups.values()).containsExactly(0, 0, 1, 2, 3, 4, 5, 5, 6, 7, 8);
+            assertThat(state.groupCount()).isEqualTo(9);
+
+            Vector region = new RegionVector(domain, 1, 3);
+            I64Vector regionGroups = new I64Vector(region.length());
+            state.assignGroups(new Vector[] {region}, new Vector[] {null}, Mask.all(region.length()), regionGroups);
+            assertThat(regionGroups.values()).containsExactly(0, 1, 2);
+
+            Vector dictionary = DictionaryVector.wrap(new int[] {7, 0, 4, 3, 1}, domain);
+            I64Vector dictionaryGroups = new I64Vector(dictionary.length());
+            state.assignGroups(new Vector[] {dictionary}, new Vector[] {null}, Mask.all(dictionary.length()), dictionaryGroups);
+            assertThat(dictionaryGroups.values()).containsExactly(5, 0, 3, 2, 0);
+
+            Vector rle = new RleVector(
+                    new int[] {2, 3},
+                    DictionaryVector.wrap(new int[] {2, 6}, domain));
+            I64Vector rleGroups = new I64Vector(rle.length());
+            state.assignGroups(new Vector[] {rle}, new Vector[] {null}, Mask.all(rle.length()), rleGroups);
+            assertThat(rleGroups.values()).containsExactly(1, 1, 5, 5, 5);
+
+            MapVector dictionaryChildren = new MapVector(2);
+            System.arraycopy(new int[] {0, 2, 4}, 0, dictionaryChildren.offsets(), 0, 3);
+            dictionaryChildren.setEntries(
+                    Streams.ofValues(DictionaryVector.wrap(new int[] {0, 1, 1, 0}, new I64Vector(new long[] {11, 12}))),
+                    Streams.builder()
+                            .put(org.weakref.nitro.data.Stream.VALUES, DictionaryVector.wrap(new int[] {0, 1, 1, 0}, utf8("left", "right")))
+                            .put(org.weakref.nitro.data.Stream.NULLS, DictionaryVector.wrap(new int[] {0, 0, 0, 0}, new BooleanVector(new boolean[] {false})))
+                            .build());
+            I64Vector dictionaryChildGroups = new I64Vector(2);
+            state.assignGroups(new Vector[] {dictionaryChildren}, new Vector[] {null}, Mask.all(2), dictionaryChildGroups);
+            assertThat(dictionaryChildGroups.values()).containsExactly(9, 9);
+
+            MapVector rleChildren = new MapVector(2);
+            System.arraycopy(new int[] {0, 2, 4}, 0, rleChildren.offsets(), 0, 3);
+            rleChildren.setEntries(
+                    Streams.ofValues(new RleVector(new int[] {4}, new I64Vector(new long[] {7}))),
+                    Streams.builder()
+                            .put(org.weakref.nitro.data.Stream.VALUES, new RleVector(new int[] {4}, utf8("same")))
+                            .put(org.weakref.nitro.data.Stream.NULLS, new RleVector(new int[] {4}, new BooleanVector(new boolean[] {false})))
+                            .build());
+            I64Vector rleChildGroups = new I64Vector(2);
+            state.assignGroups(new Vector[] {rleChildren}, new Vector[] {null}, Mask.all(2), rleChildGroups);
+            assertThat(rleChildGroups.values()).containsExactly(10, 10);
+            assertThat(state.groupCount()).isEqualTo(11);
         }
         finally {
             state.releaseBuffers();
@@ -4284,6 +4504,35 @@ class TestFlatGroupingTable
         return vector;
     }
 
+    private static MapVector maps(long[][] keys, String[][] values, boolean[][] valueNulls)
+    {
+        assertThat(values.length).isEqualTo(keys.length);
+        assertThat(valueNulls.length).isEqualTo(keys.length);
+        int entryCount = Arrays.stream(keys).mapToInt(row -> row.length).sum();
+        long[] flatKeys = new long[entryCount];
+        String[] flatValues = new String[entryCount];
+        boolean[] flatNulls = new boolean[entryCount];
+        MapVector result = new MapVector(keys.length);
+        int offset = 0;
+        for (int row = 0; row < keys.length; row++) {
+            assertThat(values[row]).hasSize(keys[row].length);
+            assertThat(valueNulls[row]).hasSize(keys[row].length);
+            result.offsets()[row] = offset;
+            System.arraycopy(keys[row], 0, flatKeys, offset, keys[row].length);
+            System.arraycopy(values[row], 0, flatValues, offset, values[row].length);
+            System.arraycopy(valueNulls[row], 0, flatNulls, offset, valueNulls[row].length);
+            offset += keys[row].length;
+        }
+        result.offsets()[keys.length] = offset;
+        result.setEntries(
+                Streams.ofValues(new I64Vector(flatKeys)),
+                Streams.builder()
+                        .put(org.weakref.nitro.data.Stream.VALUES, utf8(flatValues))
+                        .put(org.weakref.nitro.data.Stream.NULLS, new BooleanVector(flatNulls))
+                        .build());
+        return result;
+    }
+
     private static TypeBinding longBinding(String identity, Optional<LongFlatKeyStorage> flatKeyStorage)
     {
         return new TypeBinding()
@@ -4352,6 +4601,173 @@ class TestFlatGroupingTable
             public Set<Class<? extends Vector>> supportedVectorTypes()
             {
                 return Set.of(BinaryVector.class, DictionaryVector.class, RegionVector.class, RleVector.class);
+            }
+        };
+    }
+
+    private static TypeBinding rawLongType()
+    {
+        return new TypeBinding()
+        {
+            @Override
+            public TypeIdentity identity()
+            {
+                return new TypeIdentity("testing:raw-long-key");
+            }
+
+            @Override
+            public Class<?> carrierType()
+            {
+                return long.class;
+            }
+
+            @Override
+            public TypeOperators operators()
+            {
+                return TypeOperators.UNSPECIFIED;
+            }
+
+            @Override
+            public boolean supportsRawKeyIdentity()
+            {
+                return true;
+            }
+
+            @Override
+            public Set<Class<? extends Vector>> supportedVectorTypes()
+            {
+                return Set.of(I32Vector.class, I64Vector.class, DictionaryVector.class, RegionVector.class, RleVector.class);
+            }
+        };
+    }
+
+    private static TypeBinding rawRepeatedElementType(
+            String identity,
+            Class<?> carrierType,
+            Set<Class<? extends Vector>> vectorTypes)
+    {
+        return new TypeBinding()
+        {
+            @Override
+            public TypeIdentity identity()
+            {
+                return new TypeIdentity(identity);
+            }
+
+            @Override
+            public Class<?> carrierType()
+            {
+                return carrierType;
+            }
+
+            @Override
+            public TypeOperators operators()
+            {
+                return TypeOperators.UNSPECIFIED;
+            }
+
+            @Override
+            public boolean supportsRawKeyIdentity()
+            {
+                return true;
+            }
+
+            @Override
+            public Set<Class<? extends Vector>> supportedVectorTypes()
+            {
+                return vectorTypes;
+            }
+        };
+    }
+
+    private static TypeBinding orderedRepeatedType(TypeBinding elements)
+    {
+        return new TypeBinding()
+        {
+            @Override
+            public TypeIdentity identity()
+            {
+                return new TypeIdentity("testing:ordered-repeated-key");
+            }
+
+            @Override
+            public Class<?> carrierType()
+            {
+                return Object.class;
+            }
+
+            @Override
+            public TypeOperators operators()
+            {
+                return TypeOperators.UNSPECIFIED;
+            }
+
+            @Override
+            public List<TypeBinding> nestedValueTypes()
+            {
+                return List.of(elements);
+            }
+
+            @Override
+            public Optional<RepeatedKeyLayout> repeatedKeyLayout()
+            {
+                return Optional.of(new RepeatedKeyLayout(
+                        RepeatedKeyLayout.Order.ORDERED,
+                        List.of(new RepeatedKeyLayout.Output(0, elements))));
+            }
+
+            @Override
+            public Set<Class<? extends Vector>> supportedVectorTypes()
+            {
+                return Set.of(ArrayVector.class, DictionaryVector.class, RegionVector.class, RleVector.class);
+            }
+        };
+    }
+
+    private static TypeBinding unorderedRepeatedMapType()
+    {
+        TypeBinding keys = rawLongType();
+        TypeBinding values = rawBinaryType();
+        return new TypeBinding()
+        {
+            @Override
+            public TypeIdentity identity()
+            {
+                return new TypeIdentity("testing:unordered-repeated-map-key");
+            }
+
+            @Override
+            public Class<?> carrierType()
+            {
+                return Object.class;
+            }
+
+            @Override
+            public TypeOperators operators()
+            {
+                return TypeOperators.UNSPECIFIED;
+            }
+
+            @Override
+            public List<TypeBinding> nestedValueTypes()
+            {
+                return List.of(keys, values);
+            }
+
+            @Override
+            public Optional<RepeatedKeyLayout> repeatedKeyLayout()
+            {
+                return Optional.of(new RepeatedKeyLayout(
+                        RepeatedKeyLayout.Order.UNORDERED_MULTISET,
+                        List.of(
+                                new RepeatedKeyLayout.Output(0, keys),
+                                new RepeatedKeyLayout.Output(1, values))));
+            }
+
+            @Override
+            public Set<Class<? extends Vector>> supportedVectorTypes()
+            {
+                return Set.of(MapVector.class, DictionaryVector.class, RegionVector.class, RleVector.class);
             }
         };
     }

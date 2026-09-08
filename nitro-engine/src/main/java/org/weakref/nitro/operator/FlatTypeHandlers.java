@@ -413,6 +413,46 @@ final class FlatTypeHandlers
         }
     };
 
+    /** Variable-width record storage owned by a generated ordered-repetition field. */
+    static final FlatTypeHandler ORDERED_REPEATED = new FlatTypeHandler()
+    {
+        @Override
+        public Kind kind()
+        {
+            return Kind.CANONICAL;
+        }
+
+        @Override
+        public int fixedSize()
+        {
+            return Integer.BYTES * 3;
+        }
+
+        @Override
+        public boolean variableWidth()
+        {
+            return true;
+        }
+
+        @Override
+        public long hashInput(Vector vector, int position)
+        {
+            throw new UnsupportedOperationException("Ordered repetition requires a generated physical layout");
+        }
+
+        @Override
+        public void writeFlat(Vector vector, int position, byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena variableWidthArena)
+        {
+            throw new UnsupportedOperationException("Ordered repetition requires a generated physical layout");
+        }
+
+        @Override
+        public boolean identicalFlatToInput(byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena variableWidthArena, Vector vector, int position)
+        {
+            throw new UnsupportedOperationException("Ordered repetition requires a generated physical layout");
+        }
+    };
+
     static final FlatTypeHandler BINARY = new FlatTypeHandler()
     {
         @Override

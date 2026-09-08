@@ -1,6 +1,6 @@
 # ADR-0093: Generate recursive product key layouts
 
-- **Status:** accepted
+- **Status:** amended by [ADR-0094](0094-generate-ordered-repeated-key-layouts.md)
 - **Date:** 2026-09-08
 - **Spec:** §5, §8, §12, §13, §16, §19
 - **Depends on:** [ADR-0022](0022-compose-recursive-structural-vectors.md),

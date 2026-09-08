@@ -77,7 +77,9 @@ final class MembershipSet
         if (index == null) {
             if (!keyKernel.allowsLegacyPhysicalShortcuts()) {
                 TypeBinding type = keyType.orElseThrow();
-                if (type.fixedWidthKeyLayout().isEmpty()) {
+                if (type.fixedWidthKeyLayout().isEmpty() &&
+                        type.persistentKeyLayout().isEmpty() &&
+                        type.repeatedKeyLayout().isEmpty()) {
                     throw PersistentKeyTableSupport.unsupportedLayout("semi-join membership", List.of(type), new Vector[] {values});
                 }
                 index = new GroupingIndex(allocator, allocationContext, operatorResources, keyType);

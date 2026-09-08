@@ -18,22 +18,25 @@ import java.lang.invoke.ConstantCallSite;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
-import java.util.List;
-import java.util.Optional;
 
-final class FixedWidthKeyProjectionBootstrap
+final class RepeatedKeyKernelBootstrap
 {
-    private FixedWidthKeyProjectionBootstrap() {}
+    private RepeatedKeyKernelBootstrap() {}
 
     static CallSite bootstrap(MethodHandles.Lookup lookup, String name, MethodType type)
             throws IllegalAccessException
     {
-        Object data = MethodHandles.classData(lookup, "_", Object.class);
-        List<Optional<MethodHandle>> projections = data instanceof ProjectedFlatKeyClassData projected
-                ? projected.projections()
-                : (List<Optional<MethodHandle>>) data;
-        int lane = Integer.parseInt(name, "projection".length(), name.length(), 10);
-        MethodHandle target = projections.get(lane).orElseThrow();
+        ProjectedFlatKeyClassData data = MethodHandles.classData(lookup, "_", ProjectedFlatKeyClassData.class);
+        int separator = name.indexOf('_');
+        String operation = name.substring(0, separator);
+        int index = Integer.parseInt(name, separator + 1, name.length(), 10);
+        RepeatedKeyKernelGenerator.Kernel kernel = data.repeatedKernels().get(index);
+        MethodHandle target = switch (operation) {
+            case "hash" -> kernel.hash();
+            case "write" -> kernel.write();
+            case "identical" -> kernel.identical();
+            default -> throw new IllegalArgumentException("Unknown repeated-key operation: " + operation);
+        };
         return new ConstantCallSite(target.asType(type));
     }
 }

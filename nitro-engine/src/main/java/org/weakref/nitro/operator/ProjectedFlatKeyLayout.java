@@ -26,6 +26,7 @@ abstract class ProjectedFlatKeyLayout
     private final ResolvedPersistentKeyLayout persistentLayout;
     private final FixedWidthKeyBatchBindings projectedBindings;
     private final ProductNullBatchBindings productNullBindings;
+    private final RepeatedKeyBatchBinding[] repeatedBindings;
     private Vector[] boundValues;
     private Vector[] boundNulls;
     private Vector[][] boundNullSources;
@@ -40,6 +41,13 @@ abstract class ProjectedFlatKeyLayout
         this.persistentLayout = persistentLayout;
         projectedBindings = new FixedWidthKeyBatchBindings(projectedLayout, arrayPool);
         productNullBindings = new ProductNullBatchBindings(persistentLayout, arrayPool);
+        repeatedBindings = new RepeatedKeyBatchBinding[persistentLayout.fields().length];
+        for (int field = 0; field < repeatedBindings.length; field++) {
+            ResolvedRepeatedKeyLayout repeated = persistentLayout.fields()[field].repeatedLayout();
+            if (repeated != null) {
+                repeatedBindings[field] = new RepeatedKeyBatchBinding(repeated, arrayPool);
+            }
+        }
     }
 
     @Override
@@ -48,6 +56,11 @@ abstract class ProjectedFlatKeyLayout
         projectedBindings.bind(values, nulls == null ? new Vector[0] : nulls);
         productNullBindings.bind(values, nulls);
         boundValues = persistentLayout.fieldValues(values);
+        for (int field = 0; field < repeatedBindings.length; field++) {
+            if (repeatedBindings[field] != null) {
+                repeatedBindings[field].bind(boundValues[field]);
+            }
+        }
         boundNullSources = persistentLayout.fieldNullSources(values, nulls);
         boundNulls = new Vector[boundNullSources.length];
         for (int field = 0; field < boundNullSources.length; field++) {
@@ -62,10 +75,52 @@ abstract class ProjectedFlatKeyLayout
         }
         catch (RuntimeException | Error e) {
             clearBoundFields();
+            releaseRepeatedBindings();
             productNullBindings.release();
             projectedBindings.release();
             throw e;
         }
+    }
+
+    @Override
+    long fieldHash(int fieldIndex, int channel, Vector value, int position)
+    {
+        RepeatedKeyBatchBinding repeated = repeatedBindings[fieldIndex];
+        return repeated == null ? super.fieldHash(fieldIndex, channel, value, position) : repeated.hash(position);
+    }
+
+    @Override
+    void writeFieldFlat(
+            int fieldIndex,
+            Vector value,
+            int position,
+            byte[] fixedChunk,
+            int fixedOffset,
+            FlatGroupingTable.FlatVariableWidthArena arena,
+            int recordIndex)
+    {
+        RepeatedKeyBatchBinding repeated = repeatedBindings[fieldIndex];
+        if (repeated == null) {
+            super.writeFieldFlat(fieldIndex, value, position, fixedChunk, fixedOffset, arena, recordIndex);
+            return;
+        }
+        repeated.write(position, fixedChunk, fixedOffset, arena);
+    }
+
+    @Override
+    boolean identicalField(
+            int fieldIndex,
+            byte[] fixedChunk,
+            int fixedOffset,
+            FlatGroupingTable.FlatVariableWidthArena arena,
+            Vector value,
+            int position,
+            int recordIndex)
+    {
+        RepeatedKeyBatchBinding repeated = repeatedBindings[fieldIndex];
+        return repeated == null
+                ? super.identicalField(fieldIndex, fixedChunk, fixedOffset, arena, value, position, recordIndex)
+                : repeated.identical(fixedChunk, fixedOffset, arena, position);
     }
 
     @Override
@@ -133,6 +188,7 @@ abstract class ProjectedFlatKeyLayout
         }
         finally {
             clearBoundFields();
+            releaseRepeatedBindings();
             productNullBindings.release();
             projectedBindings.release();
         }
@@ -142,6 +198,7 @@ abstract class ProjectedFlatKeyLayout
     void releaseBuffers()
     {
         clearBoundFields();
+        releaseRepeatedBindings();
         productNullBindings.release();
         projectedBindings.release();
         super.releaseBuffers();
@@ -152,6 +209,15 @@ abstract class ProjectedFlatKeyLayout
         boundValues = null;
         boundNulls = null;
         boundNullSources = null;
+    }
+
+    private void releaseRepeatedBindings()
+    {
+        for (RepeatedKeyBatchBinding binding : repeatedBindings) {
+            if (binding != null) {
+                binding.release();
+            }
+        }
     }
 
     final Object[] projectedKeyArrays()
@@ -192,6 +258,11 @@ abstract class ProjectedFlatKeyLayout
     final int[] productNullBaseOffsets()
     {
         return productNullBindings.baseOffsets();
+    }
+
+    final RepeatedKeyBatchBinding repeatedBinding(int field)
+    {
+        return repeatedBindings[field];
     }
 
     @Override

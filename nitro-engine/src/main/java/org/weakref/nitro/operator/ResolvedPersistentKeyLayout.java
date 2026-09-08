@@ -15,6 +15,7 @@ package org.weakref.nitro.operator;
 
 import org.weakref.nitro.core.type.FixedWidthKeyLayout;
 import org.weakref.nitro.core.type.PersistentKeyLayout;
+import org.weakref.nitro.core.type.RepeatedKeyLayout;
 import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
@@ -38,7 +39,8 @@ record ResolvedPersistentKeyLayout(
             TypeBinding type,
             int canonicalLane,
             boolean presence,
-            List<List<String>> nullPaths)
+            List<List<String>> nullPaths,
+            ResolvedRepeatedKeyLayout repeatedLayout)
     {
         Field
         {
@@ -53,7 +55,12 @@ record ResolvedPersistentKeyLayout(
 
         boolean direct()
         {
-            return !presence && !canonical();
+            return !presence && !canonical() && repeatedLayout == null;
+        }
+
+        boolean repeated()
+        {
+            return repeatedLayout != null;
         }
     }
 
@@ -79,9 +86,19 @@ record ResolvedPersistentKeyLayout(
 
         boolean hasDirect = false;
         boolean hasCanonical = false;
-        boolean hasProduct = false;
+        boolean hasComposed = false;
         for (int key = 0; key < values.length; key++) {
             TypeBinding type = keyTypes.get(key);
+            RepeatedKeyLayout repeated = type.repeatedKeyLayout().orElse(null);
+            if (repeated != null) {
+                ResolvedRepeatedKeyLayout resolved = ResolvedRepeatedKeyLayout.tryCreate(values[key], repeated);
+                if (resolved == null) {
+                    return null;
+                }
+                fields.add(new Field(key, List.of(), type, -1, false, List.of(List.of()), resolved));
+                hasComposed = true;
+                continue;
+            }
             PersistentKeyLayout product = type.persistentKeyLayout().orElse(null);
             if (product != null) {
                 int firstField = fields.size();
@@ -96,7 +113,7 @@ record ResolvedPersistentKeyLayout(
                         canonicalLanes)) {
                     return null;
                 }
-                hasProduct = true;
+                hasComposed = true;
                 for (int field = firstField; field < fields.size(); field++) {
                     hasDirect |= fields.get(field).direct();
                     hasCanonical |= fields.get(field).canonical();
@@ -127,18 +144,18 @@ record ResolvedPersistentKeyLayout(
                 return null;
             }
             directFieldByLogicalKey[key] = fields.size();
-            fields.add(new Field(key, List.of(), type, -1, false, List.of(List.of())));
+            fields.add(new Field(key, List.of(), type, -1, false, List.of(List.of()), null));
             hasDirect = true;
         }
 
         // Homogeneous top-level direct and fixed-width layouts retain their established generated paths. Products
         // always use this composed descriptor because their presence/null boundaries are part of identity.
-        if (!hasProduct && (!hasDirect || !hasCanonical)) {
+        if (!hasComposed && (!hasDirect || !hasCanonical)) {
             return null;
         }
         return new ResolvedPersistentKeyLayout(
                 fields.toArray(Field[]::new),
-                new ResolvedFixedWidthKeyLayout(canonicalLanes.toArray(ResolvedFixedWidthKeyLayout.Lane[]::new), values.length, hasProduct),
+                new ResolvedFixedWidthKeyLayout(canonicalLanes.toArray(ResolvedFixedWidthKeyLayout.Lane[]::new), values.length, hasComposed),
                 values.length,
                 directFieldByLogicalKey);
     }
@@ -154,11 +171,27 @@ record ResolvedPersistentKeyLayout(
             List<ResolvedFixedWidthKeyLayout.Lane> canonicalLanes)
     {
         // A generated presence field distinguishes a null product from a non-null product whose children are null.
-        fields.add(new Field(logicalKey, path, type, -1, true, enclosingNullPaths));
+        fields.add(new Field(logicalKey, path, type, -1, true, enclosingNullPaths, null));
         for (PersistentKeyLayout.Field child : product.fields()) {
             List<String> childPath = append(path, child.fieldPath());
             List<List<String>> childNullPaths = appendNullPath(enclosingNullPaths, childPath);
             TypeBinding childType = child.type();
+            RepeatedKeyLayout repeated = childType.repeatedKeyLayout().orElse(null);
+            if (repeated != null) {
+                Vector childValue;
+                try {
+                    childValue = valueAtPath(values[logicalKey], childPath);
+                }
+                catch (IllegalArgumentException e) {
+                    return false;
+                }
+                ResolvedRepeatedKeyLayout resolved = ResolvedRepeatedKeyLayout.tryCreate(childValue, repeated);
+                if (resolved == null) {
+                    return false;
+                }
+                fields.add(new Field(logicalKey, childPath, childType, -1, false, childNullPaths, resolved));
+                continue;
+            }
             PersistentKeyLayout nested = childType.persistentKeyLayout().orElse(null);
             if (nested != null) {
                 if (!resolveProduct(
@@ -199,7 +232,7 @@ record ResolvedPersistentKeyLayout(
             if (!childType.supportsRawKeyIdentity() || FlatTypeHandlers.forVector(childValue, childType) == null) {
                 return false;
             }
-            fields.add(new Field(logicalKey, childPath, childType, -1, false, childNullPaths));
+            fields.add(new Field(logicalKey, childPath, childType, -1, false, childNullPaths, null));
         }
         return true;
     }
@@ -228,7 +261,7 @@ record ResolvedPersistentKeyLayout(
             }
             int canonicalLane = canonicalLanes.size();
             canonicalLanes.add(new ResolvedFixedWidthKeyLayout.Lane(logicalKey, sources, lane.projection()));
-            fields.add(new Field(logicalKey, path, type, canonicalLane, false, nullPaths));
+            fields.add(new Field(logicalKey, path, type, canonicalLane, false, nullPaths, null));
         }
         return true;
     }
@@ -259,7 +292,7 @@ record ResolvedPersistentKeyLayout(
         Vector[] result = new Vector[fields.length];
         for (int field = 0; field < fields.length; field++) {
             Field descriptor = fields[field];
-            result[field] = descriptor.direct()
+            result[field] = descriptor.direct() || descriptor.repeated()
                     ? valueAtPath(values[descriptor.logicalKey()], descriptor.fieldPath())
                     : values[descriptor.logicalKey()];
         }

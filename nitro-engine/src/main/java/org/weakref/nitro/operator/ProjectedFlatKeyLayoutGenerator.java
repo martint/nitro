@@ -53,6 +53,7 @@ final class ProjectedFlatKeyLayoutGenerator
     private static final ClassDesc CD_CONSTRUCTION = ClassDesc.of("org.weakref.nitro.operator.FlatKeyLayout$Construction");
     private static final ClassDesc CD_RESOLVED_LAYOUT = ClassDesc.of("org.weakref.nitro.operator.ResolvedFixedWidthKeyLayout");
     private static final ClassDesc CD_RESOLVED_PERSISTENT_LAYOUT = ClassDesc.of("org.weakref.nitro.operator.ResolvedPersistentKeyLayout");
+    private static final ClassDesc CD_REPEATED_BINDING = ClassDesc.of("org.weakref.nitro.operator.RepeatedKeyBatchBinding");
     private static final ClassDesc CD_PRIMITIVE_ARRAY_POOL = ClassDesc.of("org.weakref.nitro.data.PrimitiveArrayPool");
     private static final ClassDesc CD_VECTOR = ClassDesc.of("org.weakref.nitro.data.Vector");
     private static final ClassDesc CD_VECTOR_ARRAY = CD_VECTOR.arrayType();
@@ -66,9 +67,15 @@ final class ProjectedFlatKeyLayoutGenerator
     private static final ClassDesc CD_BOOLEAN_ARRAY = CD_boolean.arrayType();
     private static final ClassDesc CD_BOOLEAN_ARRAY_2D = CD_BOOLEAN_ARRAY.arrayType();
     private static final ClassDesc CD_PROJECTION_BOOTSTRAP = ClassDesc.of("org.weakref.nitro.operator.FixedWidthKeyProjectionBootstrap");
+    private static final ClassDesc CD_REPEATED_BOOTSTRAP = ClassDesc.of("org.weakref.nitro.operator.RepeatedKeyKernelBootstrap");
     private static final DirectMethodHandleDesc BSM_PROJECTION = ofMethod(
             STATIC,
             CD_PROJECTION_BOOTSTRAP,
+            "bootstrap",
+            MethodTypeDesc.of(CD_CallSite, ClassDesc.of("java.lang.invoke.MethodHandles$Lookup"), ClassDesc.of("java.lang.String"), ClassDesc.of("java.lang.invoke.MethodType")));
+    private static final DirectMethodHandleDesc BSM_REPEATED = ofMethod(
+            STATIC,
+            CD_REPEATED_BOOTSTRAP,
             "bootstrap",
             MethodTypeDesc.of(CD_CallSite, ClassDesc.of("java.lang.invoke.MethodHandles$Lookup"), ClassDesc.of("java.lang.String"), ClassDesc.of("java.lang.invoke.MethodType")));
 
@@ -89,6 +96,7 @@ final class ProjectedFlatKeyLayoutGenerator
     private static final MethodTypeDesc INPUT_HAS_ANY_NULL_TYPE = MethodTypeDesc.of(CD_boolean, CD_int);
 
     private final ConcurrentHashMap<GenerationShape, MethodHandle> constructors = new ConcurrentHashMap<>();
+    private final RepeatedKeyKernelGenerator repeatedKeyGenerator = new RepeatedKeyKernelGenerator();
     private final AtomicInteger nextClassId = new AtomicInteger();
     private boolean closed;
 
@@ -109,9 +117,11 @@ final class ProjectedFlatKeyLayoutGenerator
         for (int field = 0; field < layout.fields().length; field++) {
             ResolvedPersistentKeyLayout.Field descriptor = layout.fields()[field];
             inputChannels[field] = field;
-            handlers[field] = descriptor.canonical() || descriptor.presence()
-                    ? FlatTypeHandlers.CANONICAL
-                    : FlatTypeHandlers.forVector(fieldValues[field], descriptor.type(), policy.layout(), false);
+            handlers[field] = descriptor.repeated()
+                    ? FlatTypeHandlers.ORDERED_REPEATED
+                    : descriptor.canonical() || descriptor.presence()
+                            ? FlatTypeHandlers.CANONICAL
+                            : FlatTypeHandlers.forVector(fieldValues[field], descriptor.type(), policy.layout(), false);
             if (handlers[field] == null) {
                 throw new IllegalArgumentException("No direct flat-key handler for field " + descriptor.fieldPath());
             }
@@ -129,7 +139,13 @@ final class ProjectedFlatKeyLayoutGenerator
                 FixedWidthKeyTableLayout.from(layout.canonicalLayout()),
                 Arrays.stream(layout.canonicalFieldIndexes()).boxed().toList(),
                 Arrays.stream(layout.presenceFieldIndexes()).boxed().toList(),
-                layout.nullSourceCounts());
+                layout.nullSourceCounts(),
+                java.util.stream.IntStream.range(0, layout.fields().length)
+                        .filter(field -> layout.fields()[field].repeated())
+                        .mapToObj(field -> new RepeatedFieldShape(
+                                field,
+                                RepeatedKeyKernelGenerator.Shape.from(layout.fields()[field].repeatedLayout())))
+                        .toList());
         MethodHandle constructor = constructors.computeIfAbsent(shape, this::generate);
         try {
             return (ProjectedFlatKeyLayout) constructor.invoke(construction, layout, layout.canonicalLayout(), arrayPool);
@@ -144,10 +160,14 @@ final class ProjectedFlatKeyLayoutGenerator
     {
         closed = true;
         constructors.clear();
+        repeatedKeyGenerator.close();
     }
 
     private MethodHandle generate(GenerationShape shape)
     {
+        List<RepeatedKeyKernelGenerator.Kernel> repeatedKernels = shape.repeatedFields().stream()
+                .map(field -> repeatedKeyGenerator.generate(field.shape()))
+                .toList();
         ClassDesc thisClass = ClassDesc.of("org.weakref.nitro.operator.GeneratedProjectedFlatKeyLayout" + nextClassId.incrementAndGet());
         byte[] bytes = ClassFile.of().build(thisClass, builder -> {
             builder.withSuperclass(CD_BASE);
@@ -185,7 +205,7 @@ final class ProjectedFlatKeyLayoutGenerator
         try {
             MethodHandles.Lookup lookup = MethodHandles.lookup().defineHiddenClassWithClassData(
                     bytes,
-                    shape.layout().projections(),
+                    new ProjectedFlatKeyClassData(shape.layout().projections(), repeatedKernels),
                     true,
                     MethodHandles.Lookup.ClassOption.NESTMATE);
             return lookup.findConstructor(
@@ -295,6 +315,23 @@ final class ProjectedFlatKeyLayoutGenerator
 
     private static void emitFieldHash(CodeBuilder code, GenerationShape shape, ClassDesc thisClass)
     {
+        for (int repeated = 0; repeated < shape.repeatedFields().size(); repeated++) {
+            RepeatedFieldShape field = shape.repeatedFields().get(repeated);
+            Label next = code.newLabel();
+            code.iload(1);
+            code.loadConstant(field.field());
+            code.if_icmpne(next);
+            code.aload(0);
+            code.loadConstant(field.field());
+            code.invokevirtual(CD_BASE, "repeatedBinding", MethodTypeDesc.of(CD_REPEATED_BINDING, CD_int));
+            code.iload(4);
+            code.invokedynamic(DynamicCallSiteDesc.of(
+                    BSM_REPEATED,
+                    "hash_" + repeated,
+                    MethodTypeDesc.of(CD_long, CD_REPEATED_BINDING, CD_int)));
+            code.lreturn();
+            code.labelBinding(next);
+        }
         for (int field : shape.presenceFieldIndexes()) {
             Label next = code.newLabel();
             code.iload(1);
@@ -326,6 +363,26 @@ final class ProjectedFlatKeyLayoutGenerator
 
     private static void emitWriteField(CodeBuilder code, GenerationShape shape, ClassDesc thisClass)
     {
+        for (int repeated = 0; repeated < shape.repeatedFields().size(); repeated++) {
+            RepeatedFieldShape field = shape.repeatedFields().get(repeated);
+            Label next = code.newLabel();
+            code.iload(1);
+            code.loadConstant(field.field());
+            code.if_icmpne(next);
+            code.aload(0);
+            code.loadConstant(field.field());
+            code.invokevirtual(CD_BASE, "repeatedBinding", MethodTypeDesc.of(CD_REPEATED_BINDING, CD_int));
+            code.iload(3);
+            code.aload(4);
+            code.iload(5);
+            code.aload(6);
+            code.invokedynamic(DynamicCallSiteDesc.of(
+                    BSM_REPEATED,
+                    "write_" + repeated,
+                    MethodTypeDesc.of(CD_void, CD_REPEATED_BINDING, CD_int, CD_BYTE_ARRAY, CD_int, CD_ARENA)));
+            code.return_();
+            code.labelBinding(next);
+        }
         for (int field : shape.presenceFieldIndexes()) {
             Label next = code.newLabel();
             code.iload(1);
@@ -364,6 +421,26 @@ final class ProjectedFlatKeyLayoutGenerator
 
     private static void emitIdenticalField(CodeBuilder code, GenerationShape shape, ClassDesc thisClass)
     {
+        for (int repeated = 0; repeated < shape.repeatedFields().size(); repeated++) {
+            RepeatedFieldShape field = shape.repeatedFields().get(repeated);
+            Label next = code.newLabel();
+            code.iload(1);
+            code.loadConstant(field.field());
+            code.if_icmpne(next);
+            code.aload(0);
+            code.loadConstant(field.field());
+            code.invokevirtual(CD_BASE, "repeatedBinding", MethodTypeDesc.of(CD_REPEATED_BINDING, CD_int));
+            code.aload(2);
+            code.iload(3);
+            code.aload(4);
+            code.iload(6);
+            code.invokedynamic(DynamicCallSiteDesc.of(
+                    BSM_REPEATED,
+                    "identical_" + repeated,
+                    MethodTypeDesc.of(CD_boolean, CD_REPEATED_BINDING, CD_BYTE_ARRAY, CD_int, CD_ARENA, CD_int)));
+            code.ireturn();
+            code.labelBinding(next);
+        }
         for (int field : shape.presenceFieldIndexes()) {
             Label next = code.newLabel();
             code.iload(1);
@@ -648,13 +725,15 @@ final class ProjectedFlatKeyLayoutGenerator
             FixedWidthKeyTableLayout layout,
             List<Integer> canonicalFieldIndexes,
             List<Integer> presenceFieldIndexes,
-            List<Integer> nullSourceCounts)
+            List<Integer> nullSourceCounts,
+            List<RepeatedFieldShape> repeatedFields)
     {
         private GenerationShape
         {
             canonicalFieldIndexes = List.copyOf(canonicalFieldIndexes);
             presenceFieldIndexes = List.copyOf(presenceFieldIndexes);
             nullSourceCounts = List.copyOf(nullSourceCounts);
+            repeatedFields = List.copyOf(repeatedFields);
         }
 
         int nullSourceCount()
@@ -662,4 +741,6 @@ final class ProjectedFlatKeyLayoutGenerator
             return nullSourceCounts.stream().mapToInt(Integer::intValue).sum();
         }
     }
+
+    private record RepeatedFieldShape(int field, RepeatedKeyKernelGenerator.Shape shape) {}
 }

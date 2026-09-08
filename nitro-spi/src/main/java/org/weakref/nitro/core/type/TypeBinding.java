@@ -95,6 +95,18 @@ public interface TypeBinding
         return Optional.empty();
     }
 
+    /**
+     * Optional provider proof that logical key identity is repetition of aligned physical child-output tuples.
+     *
+     * <p>The physical value must implement {@code RepeatedVector}. Persistent key consumers resolve every declared
+     * child through its direct, canonical, product, or repeated identity without assigning semantics to the vector
+     * class. The layout explicitly declares whether tuple order contributes to identity.
+     */
+    default Optional<RepeatedKeyLayout> repeatedKeyLayout()
+    {
+        return Optional.empty();
+    }
+
     /// Optional exact normalized ordering key for physical domains that fit in 64 bits.
     ///
     /// Unsigned key comparison must agree with this binding's logical comparison for every

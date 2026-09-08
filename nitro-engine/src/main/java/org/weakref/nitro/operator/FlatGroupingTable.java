@@ -2586,6 +2586,34 @@ final class FlatGroupingTable
             return pointer(chunkIndex, offset);
         }
 
+        /** Reserves one contiguous record region for a generated writer and returns its arena pointer. */
+        public long reserve(int length)
+        {
+            if (currentRecord < 0) {
+                throw new IllegalStateException("variable-width reserve has no current record");
+            }
+            if (length < 0 || length > CHUNK_SIZE) {
+                throw new IllegalArgumentException("variable-width record length is out of range: " + length);
+            }
+            if (chunkOffset + length > CHUNK_SIZE) {
+                chunkIndex++;
+                chunkOffset = 0;
+                if (chunkIndex >= chunks.length) {
+                    chunks = Arrays.copyOf(chunks, chunks.length * 2);
+                    int previousLength = lastRecordByChunk.length;
+                    lastRecordByChunk = Arrays.copyOf(lastRecordByChunk, chunks.length);
+                    Arrays.fill(lastRecordByChunk, previousLength, lastRecordByChunk.length, -1);
+                }
+                if (chunks[chunkIndex] == null) {
+                    chunks[chunkIndex] = borrowChunk();
+                }
+            }
+            int offset = chunkOffset;
+            chunkOffset += length;
+            lastRecordByChunk[chunkIndex] = currentRecord;
+            return pointer(chunkIndex, offset);
+        }
+
         private void releaseThroughRecord(int exclusiveRecordIndex, boolean releaseAll)
         {
             while (releasedChunks < chunks.length &&
