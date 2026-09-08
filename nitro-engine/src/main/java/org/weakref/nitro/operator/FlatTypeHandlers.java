@@ -370,6 +370,49 @@ final class FlatTypeHandlers
         }
     };
 
+    /**
+     * Record storage for one provider-projected canonical lane. The exact generated layout owns every hot
+     * operation; this handler supplies only the stable eight-byte flat-record shape.
+     */
+    static final FlatTypeHandler CANONICAL = new FlatTypeHandler()
+    {
+        @Override
+        public Kind kind()
+        {
+            return Kind.CANONICAL;
+        }
+
+        @Override
+        public int fixedSize()
+        {
+            return Long.BYTES;
+        }
+
+        @Override
+        public boolean variableWidth()
+        {
+            return false;
+        }
+
+        @Override
+        public long hashInput(Vector vector, int position)
+        {
+            throw new UnsupportedOperationException("Canonical lanes require a generated physical layout");
+        }
+
+        @Override
+        public void writeFlat(Vector vector, int position, byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena variableWidthArena)
+        {
+            throw new UnsupportedOperationException("Canonical lanes require a generated physical layout");
+        }
+
+        @Override
+        public boolean identicalFlatToInput(byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena variableWidthArena, Vector vector, int position)
+        {
+            throw new UnsupportedOperationException("Canonical lanes require a generated physical layout");
+        }
+    };
+
     static final FlatTypeHandler BINARY = new FlatTypeHandler()
     {
         @Override

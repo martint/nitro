@@ -14,6 +14,7 @@
 package org.weakref.nitro.operator;
 
 import org.junit.jupiter.api.Test;
+import org.weakref.nitro.core.type.FixedWidthKeyLayout;
 import org.weakref.nitro.core.type.LongFlatKeyStorage;
 import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.core.type.TypeIdentity;
@@ -33,6 +34,9 @@ import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.execution.EngineResources;
 
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -49,6 +53,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class TestFlatGroupingTable
 {
     private static final int DEFAULT_VALUE_ID_CEILING = 65_536;
+    private static final MethodHandle CANONICAL_DOUBLE = canonicalDoubleHandle();
     private static final LongFlatKeyStorage INTEGER_FLAT_KEY_STORAGE = new LongFlatKeyStorage()
     {
         @Override
@@ -83,6 +88,82 @@ class TestFlatGroupingTable
     private final GroupingStateResources groupingResources = engineResources.groupingState();
     private final AdaptiveLongGroupingPolicy adaptiveLongGroupingPolicy = engineResources.operatorResources().adaptiveLongGroupingPolicy();
     private final FlatKeyTablePolicy flatKeyTablePolicy = engineResources.operatorResources().flatKeyTablePolicy();
+
+    @Test
+    void testGeneratedProjectedFlatLayoutComposesVariableWidthAndCanonicalFields()
+    {
+        Allocator allocator = new Allocator(engineResources);
+        Allocator.Context context = new Allocator.Context("projected-flat-grouping");
+        GroupingState state = new GroupingState(
+                arrayPool,
+                codeGeneration,
+                groupingResources,
+                adaptiveLongGroupingPolicy,
+                flatKeyTablePolicy,
+                List.of(rawBinaryType(), canonicalDoubleType()),
+                allocator,
+                context);
+        try {
+            Vector[] firstValues = {
+                    utf8("alpha", "alpha", "beta", "beta", "skipped", "ignored"),
+                    new F64Vector(new double[] {0.0, -0.0, 1.5, 1.5, 99.0, 8.0})};
+            Vector[] firstNulls = {
+                    new BooleanVector(new boolean[] {false, false, false, false, false, true}),
+                    new BooleanVector(new boolean[] {false, false, false, false, false, true})};
+            I64Vector firstGroups = new I64Vector(6);
+            state.assignGroups(
+                    firstValues,
+                    firstNulls,
+                    Mask.sparse(new int[] {0, 1, 2, 3, 5}, 6),
+                    firstGroups);
+
+            assertThat(firstGroups.values()[0]).isZero();
+            assertThat(firstGroups.values()[1]).isZero();
+            assertThat(firstGroups.values()[2]).isEqualTo(1);
+            assertThat(firstGroups.values()[3]).isEqualTo(1);
+            assertThat(firstGroups.values()[5]).isEqualTo(2);
+
+            Vector[] wrappedValues = {
+                    DictionaryVector.ofTrustedIds(new int[] {1, 0, 1, 2}, utf8("alpha", "beta", "new")),
+                    new RegionVector(new F64Vector(new double[] {99.0, 1.5, -0.0, 1.5, 2.0}), 1, 4)};
+            I64Vector wrappedGroups = new I64Vector(4);
+            state.assignGroups(wrappedValues, new Vector[] {null, null}, Mask.all(4), wrappedGroups);
+
+            assertThat(wrappedGroups.values()).containsExactly(1, 0, 1, 3);
+            assertThat(state.groupCount()).isEqualTo(4);
+
+            Vector[] runValues = {
+                    DictionaryVector.ofTrustedIds(new int[] {0, 1, 0, 1}, utf8("alpha", "new")),
+                    new RleVector(new int[] {2, 4}, new F64Vector(new double[] {-0.0, 2.0}))};
+            I64Vector runGroups = new I64Vector(4);
+            state.assignGroups(runValues, new Vector[] {null, null}, Mask.all(4), runGroups);
+
+            assertThat(runGroups.values()).containsExactly(0, 4, 5, 3);
+            assertThat(state.groupCount()).isEqualTo(6);
+
+            Streams groupedBinary = state.groupedValues(0, Mask.all(6), null, allocator, context);
+            assertThat(OperatorVectorSupport.binaryEquals(groupedBinary.values(), 0, "alpha".getBytes(StandardCharsets.UTF_8))).isTrue();
+            assertThat(OperatorVectorSupport.binaryEquals(groupedBinary.values(), 1, "beta".getBytes(StandardCharsets.UTF_8))).isTrue();
+            assertThat(((BooleanVector) groupedBinary.getOrNull(org.weakref.nitro.data.Stream.NULLS)).values()[2]).isTrue();
+            assertThat(OperatorVectorSupport.binaryEquals(groupedBinary.values(), 3, "new".getBytes(StandardCharsets.UTF_8))).isTrue();
+            assertThat(OperatorVectorSupport.binaryEquals(groupedBinary.values(), 4, "new".getBytes(StandardCharsets.UTF_8))).isTrue();
+            assertThat(OperatorVectorSupport.binaryEquals(groupedBinary.values(), 5, "alpha".getBytes(StandardCharsets.UTF_8))).isTrue();
+
+            Streams groupedDouble = state.groupedValues(1, Mask.all(6), null, allocator, context);
+            assertThat(Double.doubleToRawLongBits(((F64Vector) groupedDouble.values()).values()[0]))
+                    .isEqualTo(Double.doubleToRawLongBits(0.0));
+            assertThat(((F64Vector) groupedDouble.values()).values()[1]).isEqualTo(1.5);
+            assertThat(((BooleanVector) groupedDouble.getOrNull(org.weakref.nitro.data.Stream.NULLS)).values()[2]).isTrue();
+            assertThat(((F64Vector) groupedDouble.values()).values()[3]).isEqualTo(2.0);
+            assertThat(Double.doubleToRawLongBits(((F64Vector) groupedDouble.values()).values()[4]))
+                    .isEqualTo(Double.doubleToRawLongBits(-0.0));
+            assertThat(((F64Vector) groupedDouble.values()).values()[5]).isEqualTo(2.0);
+        }
+        finally {
+            state.releaseBuffers();
+            allocator.release(context);
+        }
+    }
 
     @Test
     void testNullableBinaryGroupedOutputIgnoresNullPayloadMetadataWhenSizing()
@@ -4123,6 +4204,99 @@ class TestFlatGroupingTable
                 return Set.of(I32Vector.class, I64Vector.class, DictionaryVector.class);
             }
         };
+    }
+
+    private static TypeBinding rawBinaryType()
+    {
+        return new TypeBinding()
+        {
+            @Override
+            public TypeIdentity identity()
+            {
+                return new TypeIdentity("testing:raw-binary-key");
+            }
+
+            @Override
+            public Class<?> carrierType()
+            {
+                return Object.class;
+            }
+
+            @Override
+            public TypeOperators operators()
+            {
+                return TypeOperators.UNSPECIFIED;
+            }
+
+            @Override
+            public boolean supportsRawKeyIdentity()
+            {
+                return true;
+            }
+
+            @Override
+            public Set<Class<? extends Vector>> supportedVectorTypes()
+            {
+                return Set.of(BinaryVector.class, DictionaryVector.class, RegionVector.class, RleVector.class);
+            }
+        };
+    }
+
+    private static TypeBinding canonicalDoubleType()
+    {
+        FixedWidthKeyLayout layout = new FixedWidthKeyLayout(List.of(FixedWidthKeyLayout.Lane.projected(
+                List.of(new FixedWidthKeyLayout.Source(List.of(), FixedWidthKeyLayout.Carrier.F64)),
+                CANONICAL_DOUBLE)));
+        return new TypeBinding()
+        {
+            @Override
+            public TypeIdentity identity()
+            {
+                return new TypeIdentity("testing:canonical-double-key");
+            }
+
+            @Override
+            public Class<?> carrierType()
+            {
+                return double.class;
+            }
+
+            @Override
+            public TypeOperators operators()
+            {
+                return TypeOperators.UNSPECIFIED;
+            }
+
+            @Override
+            public Optional<FixedWidthKeyLayout> fixedWidthKeyLayout()
+            {
+                return Optional.of(layout);
+            }
+
+            @Override
+            public Set<Class<? extends Vector>> supportedVectorTypes()
+            {
+                return Set.of(F64Vector.class, DictionaryVector.class, RegionVector.class, RleVector.class);
+            }
+        };
+    }
+
+    private static MethodHandle canonicalDoubleHandle()
+    {
+        try {
+            return MethodHandles.lookup().findStatic(
+                    TestFlatGroupingTable.class,
+                    "canonicalDouble",
+                    MethodType.methodType(long.class, double.class));
+        }
+        catch (ReflectiveOperationException e) {
+            throw new ExceptionInInitializerError(e);
+        }
+    }
+
+    private static long canonicalDouble(double value)
+    {
+        return Double.doubleToLongBits(value == 0.0 ? 0.0 : value);
     }
 
     private record LongPair(long first, int second) {}

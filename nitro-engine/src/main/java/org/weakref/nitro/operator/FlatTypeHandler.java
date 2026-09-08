@@ -30,6 +30,7 @@ interface FlatTypeHandler
         BOOLEAN,
         DOUBLE,
         BINARY,
+        CANONICAL,
     }
 
     Kind kind();

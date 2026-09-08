@@ -343,6 +343,50 @@ class FlatKeyLayout
     private long preparedNormalizedFirst;
     private long preparedNormalizedSecond;
 
+    record Construction(
+            PrimitiveArrayPool arrayPool,
+            OperatorCodeGenerationResources codeGeneration,
+            FlatKeyTablePolicy keyTablePolicy,
+            Field[] fields,
+            int[] inputChannels,
+            FlatTypeHandler[] handlers,
+            int[] fixedOffsets,
+            int[] comparisonOrder,
+            int nullByteCount,
+            int fixedRecordSize,
+            boolean anyVariableWidth,
+            boolean compactEmbeddedBinaryRecords,
+            boolean[] adaptiveFlatValueIdFields)
+    {
+        Construction
+        {
+            fields = fields.clone();
+            inputChannels = inputChannels.clone();
+            handlers = handlers.clone();
+            fixedOffsets = fixedOffsets.clone();
+            comparisonOrder = comparisonOrder.clone();
+            adaptiveFlatValueIdFields = adaptiveFlatValueIdFields.clone();
+        }
+    }
+
+    FlatKeyLayout(Construction construction)
+    {
+        this(
+                construction.arrayPool(),
+                construction.codeGeneration(),
+                construction.keyTablePolicy(),
+                construction.fields(),
+                construction.inputChannels(),
+                construction.handlers(),
+                construction.fixedOffsets(),
+                construction.comparisonOrder(),
+                construction.nullByteCount(),
+                construction.fixedRecordSize(),
+                construction.anyVariableWidth(),
+                construction.compactEmbeddedBinaryRecords(),
+                construction.adaptiveFlatValueIdFields());
+    }
+
     FlatKeyLayout(
             PrimitiveArrayPool arrayPool,
             OperatorCodeGenerationResources codeGeneration,
@@ -423,14 +467,8 @@ class FlatKeyLayout
             List<TypeBinding> types)
     {
         FlatKeyTablePolicy.Layout layoutPolicy = policy.layout();
-        Field[] fields = new Field[values.length];
         int[] inputChannels = new int[values.length];
         FlatTypeHandler[] handlers = new FlatTypeHandler[values.length];
-        int[] fixedOffsets = new int[values.length];
-        int nullByteCount = nullable ? Math.max(1, (values.length + Byte.SIZE - 1) / Byte.SIZE) : 0;
-        boolean anyVariableWidth = false;
-        int binaryFields = 0;
-        int idBackedBinaryFields = 0;
         int dictionaryBackedBinaryFields = dictionaryBackedBinaryFields(values);
         boolean adaptiveCompactLongRecords = values.length >= 3 &&
                 dictionaryBackedBinaryFields > 0 &&
@@ -447,10 +485,58 @@ class FlatKeyLayout
             }
             inputChannels[index] = index;
             handlers[index] = handler;
+        }
+        Construction construction = construction(
+                values,
+                inputChannels,
+                handlers,
+                nullable,
+                arrayPool,
+                codeGeneration,
+                policy);
+        if (layoutPolicy.precomputeCompactBinaryPositionIds() && construction.compactEmbeddedBinaryRecords()) {
+            return new PositionIdFlatKeyLayout(
+                    construction.arrayPool(),
+                    construction.codeGeneration(),
+                    construction.keyTablePolicy(),
+                    construction.fields(),
+                    construction.inputChannels(),
+                    construction.handlers(),
+                    construction.fixedOffsets(),
+                    construction.comparisonOrder(),
+                    construction.nullByteCount(),
+                    construction.fixedRecordSize(),
+                    construction.anyVariableWidth(),
+                    construction.adaptiveFlatValueIdFields());
+        }
+        return new FlatKeyLayout(construction);
+    }
+
+    static Construction construction(
+            Vector[] fieldValues,
+            int[] inputChannels,
+            FlatTypeHandler[] handlers,
+            boolean nullable,
+            PrimitiveArrayPool arrayPool,
+            OperatorCodeGenerationResources codeGeneration,
+            FlatKeyTablePolicy policy)
+    {
+        if (fieldValues.length != inputChannels.length || fieldValues.length != handlers.length) {
+            throw new IllegalArgumentException("Flat-key construction arrays have different lengths");
+        }
+        FlatKeyTablePolicy.Layout layoutPolicy = policy.layout();
+        Field[] fields = new Field[fieldValues.length];
+        int[] fixedOffsets = new int[fieldValues.length];
+        int nullByteCount = nullable ? Math.max(1, (fieldValues.length + Byte.SIZE - 1) / Byte.SIZE) : 0;
+        boolean anyVariableWidth = false;
+        int binaryFields = 0;
+        int idBackedBinaryFields = 0;
+        for (int index = 0; index < handlers.length; index++) {
+            FlatTypeHandler handler = handlers[index];
             anyVariableWidth |= handler.variableWidth();
             binaryFields += handler.kind() == FlatTypeHandler.Kind.BINARY ? 1 : 0;
             idBackedBinaryFields += handler.kind() == FlatTypeHandler.Kind.BINARY &&
-                    values[index] instanceof DictionaryVector ? 1 : 0;
+                    fieldValues[index] instanceof DictionaryVector ? 1 : 0;
         }
         // A compact token is useful only when the first physical batch proves enough reusable fields and enough
         // possible groups to amortize query-stable value ids and the exact fallback sidecar. Dictionary fields
@@ -459,41 +545,43 @@ class FlatKeyLayout
         // than per group without adding work to every input position. Sampled per-field distinctness requires one
         // discriminating field and a large
         // product of distinct counts, so a tiny geographical cube does not optimize ten records.
-        CompactBinaryAdmission compactBinaryAdmission = compactBinaryAdmission(values, handlers, layoutPolicy);
+        CompactBinaryAdmission compactBinaryAdmission = compactBinaryAdmission(fieldValues, handlers, layoutPolicy);
         boolean compactEmbeddedBinaryRecords = layoutPolicy.compactEmbeddedBinaryRecords() &&
                 layoutPolicy.idOnlyBinaryRecords() &&
                 layoutPolicy.embedIdOnlyBinaryIds() &&
                 binaryFields >= layoutPolicy.compactBinaryMinFields() &&
                 (layoutPolicy.adaptiveFlatBinaryValueIds() ||
                         idBackedBinaryFields >= layoutPolicy.compactBinaryMinReusableFields()) &&
-                values.length > 0 &&
-                values[0].length() >= layoutPolicy.compactBinaryMinRows() &&
+                fieldValues.length > 0 &&
+                fieldValues[0].length() >= layoutPolicy.compactBinaryMinRows() &&
                 compactBinaryAdmission.admitted();
         int fixedOffset = nullByteCount;
-        for (int index = 0; index < values.length; index++) {
+        for (int index = 0; index < fieldValues.length; index++) {
             FlatTypeHandler handler = handlers[index];
-            fields[index] = new Field(index, handler, fixedOffset, OperatorVectorSupport.binaryTraits(values[index]));
+            fields[index] = new Field(
+                    inputChannels[index],
+                    handler,
+                    fixedOffset,
+                    OperatorVectorSupport.binaryTraits(fieldValues[index]));
             fixedOffsets[index] = fixedOffset;
             fixedOffset += compactEmbeddedBinaryRecords && handler.kind() == FlatTypeHandler.Kind.BINARY
                     ? Integer.BYTES
                     : handler.fixedSize();
         }
-        if (layoutPolicy.precomputeCompactBinaryPositionIds() && compactEmbeddedBinaryRecords) {
-            return new PositionIdFlatKeyLayout(
-                    arrayPool,
-                    codeGeneration,
-                    policy,
-                    fields,
-                    inputChannels,
-                    handlers,
-                    fixedOffsets,
-                    comparisonOrder(handlers),
-                    nullByteCount,
-                    fixedOffset,
-                    anyVariableWidth,
-                    compactBinaryAdmission.reusableFields());
-        }
-        return new FlatKeyLayout(arrayPool, codeGeneration, policy, fields, inputChannels, handlers, fixedOffsets, comparisonOrder(handlers), nullByteCount, fixedOffset, anyVariableWidth, compactEmbeddedBinaryRecords, compactBinaryAdmission.reusableFields());
+        return new Construction(
+                arrayPool,
+                codeGeneration,
+                policy,
+                fields,
+                inputChannels,
+                handlers,
+                fixedOffsets,
+                comparisonOrder(handlers),
+                nullByteCount,
+                fixedOffset,
+                anyVariableWidth,
+                compactEmbeddedBinaryRecords,
+                compactBinaryAdmission.reusableFields());
     }
 
     private static int dictionaryBackedBinaryFields(Vector[] values)
@@ -820,7 +908,7 @@ class FlatKeyLayout
                     }
                     fieldUsesIdOnlyRecords[field] = true;
                 }
-                case BOOLEAN, DOUBLE -> throw new IllegalStateException("Normalized key contains an unsupported field");
+                case BOOLEAN, DOUBLE, CANONICAL -> throw new IllegalStateException("Normalized key contains an unsupported field");
             }
         }
     }
@@ -850,7 +938,7 @@ class FlatKeyLayout
                         return false;
                     }
                 }
-                case BOOLEAN, DOUBLE -> throw new IllegalStateException("Normalized key contains an unsupported field");
+                case BOOLEAN, DOUBLE, CANONICAL -> throw new IllegalStateException("Normalized key contains an unsupported field");
             }
         }
         return true;
@@ -3101,7 +3189,7 @@ class FlatKeyLayout
         return false;
     }
 
-    private long fieldHash(int fieldIndex, int channel, Vector value, int position)
+    long fieldHash(int fieldIndex, int channel, Vector value, int position)
     {
         if (dictionaryHashedIds != null) {
             int[] ids = dictionaryHashedIds[fieldIndex];
@@ -3117,6 +3205,7 @@ class FlatKeyLayout
             case BINARY -> binaryFieldHash(fieldIndex, value, position);
             case BOOLEAN -> Boolean.hashCode(fieldBoolean[fieldIndex].value(position));
             case DOUBLE -> FlatTypeHandlers.DOUBLE.hashInput(value, position);
+            case CANONICAL -> throw new IllegalStateException("Canonical field requires generated hash code");
         };
     }
 
@@ -3156,7 +3245,7 @@ class FlatKeyLayout
         return ids == null ? position : ids[position];
     }
 
-    private void writeFieldFlat(int fieldIndex, Vector value, int position, byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena arena, int recordIndex)
+    void writeFieldFlat(int fieldIndex, Vector value, int position, byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena arena, int recordIndex)
     {
         if (!batchAccessorsReady) {
             handlers[fieldIndex].writeFlat(value, position, fixedChunk, fixedOffset, arena);
@@ -3167,6 +3256,7 @@ class FlatKeyLayout
             case BINARY -> writeBinaryField(fieldIndex, value, position, fixedChunk, fixedOffset, arena, recordIndex);
             case BOOLEAN -> fixedChunk[fixedOffset] = (byte) (fieldBoolean[fieldIndex].value(position) ? 1 : 0);
             case DOUBLE -> FlatTypeHandlers.DOUBLE.writeFlat(value, position, fixedChunk, fixedOffset, arena);
+            case CANONICAL -> throw new IllegalStateException("Canonical field requires generated record code");
         }
     }
 
@@ -3240,7 +3330,7 @@ class FlatKeyLayout
         GROUP_INT_HANDLE.set(fixedChunk, fixedOffset + Integer.BYTES * 2, base.length(entry));
     }
 
-    private boolean identicalField(int fieldIndex, byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena arena, Vector value, int position, int recordIndex)
+    boolean identicalField(int fieldIndex, byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena arena, Vector value, int position, int recordIndex)
     {
         if (!batchAccessorsReady) {
             return handlers[fieldIndex].identicalFlatToInput(fixedChunk, fixedOffset, arena, value, position);
@@ -3250,6 +3340,7 @@ class FlatKeyLayout
             case BINARY -> identicalBinaryField(fieldIndex, fixedChunk, fixedOffset, arena, value, position, recordIndex);
             case BOOLEAN -> (fixedChunk[fixedOffset] != 0) == fieldBoolean[fieldIndex].value(position);
             case DOUBLE -> FlatTypeHandlers.DOUBLE.identicalFlatToInput(fixedChunk, fixedOffset, arena, value, position);
+            case CANONICAL -> throw new IllegalStateException("Canonical field requires generated equality code");
         };
     }
 
@@ -3516,7 +3607,18 @@ class FlatKeyLayout
             case BINARY -> FlatTypeHandlers.BINARY.hashInput(value, position);
             case BOOLEAN -> FlatTypeHandlers.BOOLEAN.hashInput(value, position);
             case DOUBLE -> FlatTypeHandlers.DOUBLE.hashInput(value, position);
+            case CANONICAL -> throw new IllegalStateException("Canonical field requires generated hash code");
         };
+    }
+
+    static void writeCanonicalLong(byte[] target, int offset, long value)
+    {
+        GROUP_LONG_HANDLE.set(target, offset, value);
+    }
+
+    static long readCanonicalLong(byte[] source, int offset)
+    {
+        return (long) GROUP_LONG_HANDLE.get(source, offset);
     }
 
     public void writeRecord(byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena variableWidthArena, Vector[] values, Vector[] nulls, int position, int recordIndex)

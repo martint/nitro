@@ -1590,6 +1590,7 @@ final class FlatGroupingTable
                 case BOOLEAN -> VectorAccess.writableBooleanVector(allocator, allocationContext, existingValues, size);
                 case DOUBLE -> allocator.allocateOrGrow(allocationContext, (F64Vector) existingValues, F64Vector.class, size, F64Vector::new);
                 case BINARY -> throw new IllegalStateException("binary output was not prepared");
+                case CANONICAL -> throw new IllegalStateException("Canonical grouped values require retained representatives");
             };
         }
 
@@ -1607,6 +1608,7 @@ final class FlatGroupingTable
                     field, groupedColumnIndex, sourcePositions, sourceStart, sourceCount, (F64Vector) values, nulls);
             case BINARY -> copyGroupedBinaryPositions(
                     field, groupedColumnIndex, sourcePositions, sourceStart, sourceCount, (BinaryVector) values, nulls, idBackedBinary);
+            case CANONICAL -> throw new IllegalStateException("Canonical grouped values require retained representatives");
         }
         return Streams.ofValuesAndNulls(values, nulls);
     }

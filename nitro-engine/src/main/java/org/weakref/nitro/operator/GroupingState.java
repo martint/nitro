@@ -1072,6 +1072,7 @@ final class GroupingState
     private boolean assignIndependentDictionaryGroups(Vector[] values, Vector[] nulls, Mask mask, I64Vector result)
     {
         if (!compositePolicy.independentDictionaryTupleDomain() ||
+                !structuralGrouping.supportsIndependentPositions() ||
                 values.length < 2 ||
                 values.length > compositePolicy.sharedDictionaryMaxFields()) {
             return false;
@@ -1344,7 +1345,30 @@ final class GroupingState
                 }
             }
             else {
-                throw PersistentKeyTableSupport.unsupportedLayout("grouping", keyTypes, values);
+                ResolvedPersistentKeyLayout persistentLayout = ResolvedPersistentKeyLayout.tryCreate(
+                        keyTypes,
+                        structuralKeyKernels,
+                        values);
+                if (persistentLayout == null) {
+                    throw PersistentKeyTableSupport.unsupportedLayout("grouping", keyTypes, values);
+                }
+                structuralGrouping = new ProjectedFlatGroupingIndex(
+                        requireNonNull(allocator, "allocator is null"),
+                        requireNonNull(allocationContext, "allocationContext is null"),
+                        arrayPool,
+                        codeGeneration,
+                        flatKeyTablePolicy,
+                        persistentLayout,
+                        keyTypes,
+                        values,
+                        initialExpectedSize(values, mask));
+                if (compositePolicy.debugGroupingShapes()) {
+                    System.err.printf("[projected-flat-key-layout] logicalFields=%d physicalFields=%d canonicalLanes=%d rows=%d%n",
+                            values.length,
+                            persistentLayout.fields().length,
+                            persistentLayout.canonicalLayout().lanes().length,
+                            mask == null ? values[0].length() : mask.count());
+                }
             }
             int[] sharedIds = mask != null &&
                     compositePolicy.sharedDictionaryComposite() &&
@@ -4237,6 +4261,11 @@ final class GroupingState
 
     private interface StructuralGrouping
     {
+        default boolean supportsIndependentPositions()
+        {
+            return true;
+        }
+
         long assignGroups(Vector[] values, Vector[] nulls, Mask mask, I64Vector result, long nextGroupId);
 
         long assignGroupsWithAuthoritativeHashes(
@@ -4283,6 +4312,330 @@ final class GroupingState
                 Allocator.Context allocationContext);
 
         void releaseBuffers();
+    }
+
+    /** Generated canonical lanes composed with direct flat physical fields in one persistent table. */
+    private static final class ProjectedFlatGroupingIndex
+            implements StructuralGrouping
+    {
+        private record RepresentativeSegment(long firstGroupId, Vector[] values, Vector[] nulls, int count) {}
+
+        private final Allocator allocator;
+        private final Allocator.Context allocationContext;
+        private final PrimitiveArrayPool arrayPool;
+        private final ResolvedPersistentKeyLayout layout;
+        private final ProjectedFlatKeyLayout flatLayout;
+        private final FlatGroupingTable table;
+        private final ArrayList<RepresentativeSegment> representatives = new ArrayList<>();
+        private boolean containsBound;
+
+        private ProjectedFlatGroupingIndex(
+                Allocator allocator,
+                Allocator.Context allocationContext,
+                PrimitiveArrayPool arrayPool,
+                OperatorCodeGenerationResources codeGeneration,
+                FlatKeyTablePolicy policy,
+                ResolvedPersistentKeyLayout layout,
+                List<TypeBinding> keyTypes,
+                Vector[] initialValues,
+                int expectedSize)
+        {
+            this.allocator = allocator;
+            this.allocationContext = allocationContext;
+            this.arrayPool = arrayPool;
+            this.layout = layout;
+            flatLayout = codeGeneration.projectedFlatKeyLayouts().create(
+                    layout,
+                    initialValues,
+                    keyTypes,
+                    arrayPool,
+                    codeGeneration,
+                    policy);
+            table = new FlatGroupingTable(flatLayout, expectedSize, true);
+        }
+
+        @Override
+        public boolean supportsIndependentPositions()
+        {
+            return false;
+        }
+
+        @Override
+        public long assignGroups(Vector[] values, Vector[] nulls, Mask mask, I64Vector result, long nextGroupId)
+        {
+            long firstGroupId = nextGroupId;
+            table.beginBatch(values, nulls, mask);
+            try {
+                table.prepareBatchHashes(values, nulls, mask);
+                long updated = table.assignPreparedPhysicalBatch(values, nulls, mask, result, nextGroupId);
+                if (updated < 0) {
+                    int[] positions = mask.selectedPositions();
+                    for (int index = 0; index < mask.count(); index++) {
+                        int position = positions == null ? index : positions[index];
+                        long groupId = table.assignGroup(values, nulls, position, nextGroupId);
+                        if (groupId == nextGroupId) {
+                            nextGroupId++;
+                        }
+                        result.values()[position] = groupId;
+                    }
+                    updated = nextGroupId;
+                }
+                retainNewGroups(values, nulls, mask, result.values(), firstGroupId, updated);
+                return updated;
+            }
+            finally {
+                table.endBatch();
+                table.releasePositionIndexedScratchIfOversized(mask);
+            }
+        }
+
+        @Override
+        public long assignGroupsWithAuthoritativeHashes(
+                Vector[] values,
+                Vector[] nulls,
+                Mask mask,
+                I64Vector result,
+                Vector hashes,
+                long nextGroupId)
+        {
+            // Canonical-lane and direct-field hashes are one complete physical identity. Do not mix an upstream
+            // hash convention into the same table; complete equality remains authoritative.
+            return assignGroups(values, nulls, mask, result, nextGroupId);
+        }
+
+        @Override
+        public long assignDictionaryDomain(Vector dictionaryValues, int[] counts, int[] domainGroups, long nextGroupId)
+        {
+            throw new UnsupportedOperationException("A composed persistent layout has more than one logical key");
+        }
+
+        @Override
+        public long assignGroup(Vector[] values, Vector[] nulls, int position, long nextGroupId)
+        {
+            table.beginBatch(values, nulls);
+            try {
+                long groupId = table.assignGroup(values, nulls, position, nextGroupId);
+                if (groupId == nextGroupId) {
+                    retainSingleGroup(values, nulls, position, groupId);
+                }
+                return groupId;
+            }
+            finally {
+                table.endBatch();
+            }
+        }
+
+        @Override
+        public long assignGroup(Vector[] values, Vector[] nulls, int[] positions, long nextGroupId)
+        {
+            if (positions.length != layout.logicalKeyCount()) {
+                throw new IllegalArgumentException("Expected one position per logical key");
+            }
+            int position = positions[0];
+            for (int key = 1; key < positions.length; key++) {
+                if (positions[key] != position) {
+                    throw new IllegalArgumentException("Composed persistent layout requires aligned logical positions");
+                }
+            }
+            return assignGroup(values, nulls, position, nextGroupId);
+        }
+
+        @Override
+        public boolean contains(Vector[] values, Vector[] nulls, int position)
+        {
+            boolean temporaryBinding = !containsBound;
+            if (temporaryBinding) {
+                table.beginBatch(values, nulls);
+            }
+            try {
+                return table.findGroup(values, nulls, position) >= 0;
+            }
+            finally {
+                if (temporaryBinding) {
+                    table.endBatch();
+                }
+            }
+        }
+
+        @Override
+        public void beginContainsBatch(Vector[] values, Vector[] nulls)
+        {
+            table.beginBatch(values, nulls);
+            containsBound = true;
+        }
+
+        @Override
+        public void endContainsBatch()
+        {
+            containsBound = false;
+            table.endBatch();
+        }
+
+        @Override
+        public Streams groupedValues(
+                int groupedColumnIndex,
+                Mask mask,
+                Streams output,
+                Allocator allocator,
+                Allocator.Context allocationContext)
+        {
+            int directField = layout.directFieldByLogicalKey()[groupedColumnIndex];
+            if (directField >= 0) {
+                return table.groupedValues(directField, mask, output, allocator, allocationContext);
+            }
+
+            int size = mask.none() ? 0 : mask.maxPosition() + 1;
+            Vector outputValues = output == null ? null : output.values();
+            BooleanVector outputNulls = VectorAccess.writableBooleanVector(
+                    allocator,
+                    allocationContext,
+                    output == null ? null : output.getOrNull(Stream.NULLS),
+                    size);
+            Arrays.fill(outputNulls.values(), 0, size, true);
+            for (int groupId : mask) {
+                RepresentativeSegment segment = representative(groupId);
+                int position = toIntExact(groupId - segment.firstGroupId());
+                outputValues = segment.values()[groupedColumnIndex].copySinglePositionInto(
+                        allocator, allocationContext, outputValues, position, groupId, size);
+                outputNulls.values()[groupId] = OperatorVectorSupport.isNull(
+                        segment.nulls()[groupedColumnIndex], position);
+            }
+            return allocator.reuseValuesAndNulls(output, outputValues, outputNulls);
+        }
+
+        @Override
+        public I64Vector groupedHashRange(
+                int sourceStart,
+                int size,
+                I64Vector output,
+                Allocator allocator,
+                Allocator.Context allocationContext)
+        {
+            return table.groupedHashRange(sourceStart, size, output, allocator, allocationContext);
+        }
+
+        @Override
+        public Streams copyGroupedValuePosition(
+                int groupedColumnIndex,
+                Streams output,
+                int sourcePosition,
+                int outputPosition,
+                int size,
+                Allocator allocator,
+                Allocator.Context allocationContext)
+        {
+            int directField = layout.directFieldByLogicalKey()[groupedColumnIndex];
+            if (directField >= 0) {
+                return table.copyGroupedValuePosition(
+                        directField,
+                        output,
+                        sourcePosition,
+                        outputPosition,
+                        size,
+                        allocator,
+                        allocationContext);
+            }
+
+            RepresentativeSegment segment = representative(sourcePosition);
+            int position = toIntExact(sourcePosition - segment.firstGroupId());
+            Vector outputValues = segment.values()[groupedColumnIndex].copySinglePositionInto(
+                    allocator,
+                    allocationContext,
+                    output == null ? null : output.values(),
+                    position,
+                    outputPosition,
+                    size);
+            BooleanVector outputNulls = VectorAccess.writableBooleanVector(
+                    allocator,
+                    allocationContext,
+                    output == null ? null : output.getOrNull(Stream.NULLS),
+                    size);
+            outputNulls.values()[outputPosition] = OperatorVectorSupport.isNull(
+                    segment.nulls()[groupedColumnIndex], position);
+            return allocator.reuseValuesAndNulls(output, outputValues, outputNulls);
+        }
+
+        @Override
+        public void releaseBuffers()
+        {
+            table.releaseBuffers();
+            representatives.clear();
+        }
+
+        private void retainNewGroups(
+                Vector[] values,
+                Vector[] nulls,
+                Mask mask,
+                long[] result,
+                long firstGroupId,
+                long nextGroupId)
+        {
+            int count = toIntExact(nextGroupId - firstGroupId);
+            if (count == 0) {
+                return;
+            }
+            int[] positions = arrayPool.borrowInts(count);
+            Arrays.fill(positions, -1);
+            for (int position : mask) {
+                long groupId = result[position];
+                if (groupId >= firstGroupId && groupId < nextGroupId) {
+                    int group = toIntExact(groupId - firstGroupId);
+                    if (positions[group] == -1) {
+                        positions[group] = position;
+                    }
+                }
+            }
+            for (int position : positions) {
+                if (position < 0) {
+                    throw new IllegalStateException("Projected flat grouping did not retain every new group");
+                }
+            }
+            try {
+                Vector[] ownedValues = new Vector[layout.logicalKeyCount()];
+                Vector[] ownedNulls = new Vector[layout.logicalKeyCount()];
+                for (int key = 0; key < layout.logicalKeyCount(); key++) {
+                    if (layout.directFieldByLogicalKey()[key] >= 0) {
+                        continue;
+                    }
+                    ownedValues[key] = allocator.copyVector(allocationContext, values[key], positions);
+                    if (nulls[key] != null) {
+                        ownedNulls[key] = allocator.copyVector(allocationContext, nulls[key], positions);
+                    }
+                }
+                representatives.add(new RepresentativeSegment(firstGroupId, ownedValues, ownedNulls, count));
+            }
+            finally {
+                arrayPool.release(positions);
+            }
+        }
+
+        private void retainSingleGroup(Vector[] values, Vector[] nulls, int position, long groupId)
+        {
+            Vector[] ownedValues = new Vector[layout.logicalKeyCount()];
+            Vector[] ownedNulls = new Vector[layout.logicalKeyCount()];
+            int[] single = {position};
+            for (int key = 0; key < layout.logicalKeyCount(); key++) {
+                if (layout.directFieldByLogicalKey()[key] >= 0) {
+                    continue;
+                }
+                ownedValues[key] = allocator.copyVector(allocationContext, values[key], single);
+                if (nulls[key] != null) {
+                    ownedNulls[key] = allocator.copyVector(allocationContext, nulls[key], single);
+                }
+            }
+            representatives.add(new RepresentativeSegment(groupId, ownedValues, ownedNulls, 1));
+        }
+
+        private RepresentativeSegment representative(long groupId)
+        {
+            for (int index = representatives.size() - 1; index >= 0; index--) {
+                RepresentativeSegment segment = representatives.get(index);
+                if (groupId >= segment.firstGroupId() && groupId < segment.firstGroupId() + segment.count()) {
+                    return segment;
+                }
+            }
+            throw new IndexOutOfBoundsException("No projected flat representative for group " + groupId);
+        }
     }
 
     /** Generated primitive table for provider-described fixed-width logical keys. */

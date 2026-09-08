@@ -247,6 +247,16 @@ to enter a row-wise semantic bridge. Types without this proof retain their exact
 and other semantic consumers, but grouping, distinct, hash join, and membership reject unless another direct physical
 key capability is available.
 
+A persistent key consumer may compose an arbitrary ordered sequence of provider-proven physical identities in one
+resolved layout. Each logical field contributes either its direct flat representation, including variable-width
+storage, or its ordered canonical lanes. One generated table owns hashing, collision equality, fixed and
+variable-width storage, growth, and payload for the complete key; consumers do not coordinate separate tables or
+select an implementation from logical type identity, field count, or a named combination of representations.
+Generated field operations load the resolved concrete storage and constant-link projections. Canonical fields retain
+the first logical representative when their stored identity cannot reproduce grouped output. Unsupported field
+capabilities or generated shapes reject before table mutation rather than entering an interpreted field-accessor or
+row-wise semantic fallback.
+
 Stateful registry implementations may also request a composed key binder. Each bound vector exposes opaque hashing
 and cross-vector identity over positions, allowing retained indexes such as map construction state to span owned
 vector segments. The binder does not prescribe table layout, growth, payload retention, or duplicate policy.

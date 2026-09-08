@@ -31,6 +31,7 @@ public final class OperatorCodeGenerationResources
     private final FusedGroupingAggregationKernelGenerator fusedGrouping = new FusedGroupingAggregationKernelGenerator();
     private final DictionaryDomainGroupingKernelGenerator dictionaryDomainGrouping = new DictionaryDomainGroupingKernelGenerator();
     private final FixedWidthKeyTableGenerator fixedWidthKeyTables = new FixedWidthKeyTableGenerator();
+    private final ProjectedFlatKeyLayoutGenerator projectedFlatKeyLayouts = new ProjectedFlatKeyLayoutGenerator();
     private final AdaptiveLongGroupingTableGenerator adaptiveLongGrouping = new AdaptiveLongGroupingTableGenerator();
     private final DictionaryHashBatchKernelGenerator dictionaryHash = new DictionaryHashBatchKernelGenerator();
     private final MixedComposite3GroupingKernelGenerator mixedComposite3Grouping = new MixedComposite3GroupingKernelGenerator();
@@ -79,6 +80,12 @@ public final class OperatorCodeGenerationResources
     {
         checkOpen();
         return fixedWidthKeyTables;
+    }
+
+    ProjectedFlatKeyLayoutGenerator projectedFlatKeyLayouts()
+    {
+        checkOpen();
+        return projectedFlatKeyLayouts;
     }
 
     AdaptiveLongGroupingTableGenerator adaptiveLongGrouping()
@@ -135,6 +142,7 @@ public final class OperatorCodeGenerationResources
         fusedGrouping.close();
         dictionaryDomainGrouping.close();
         fixedWidthKeyTables.close();
+        projectedFlatKeyLayouts.close();
         adaptiveLongGrouping.close();
         dictionaryHash.close();
         mixedComposite3Grouping.close();
