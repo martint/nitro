@@ -4248,6 +4248,22 @@ class FlatKeyLayout
         return fieldNull(nulls, inputChannels[fieldIndex], position);
     }
 
+    /** Whether any physical field of the currently bound logical key is null. */
+    boolean inputHasAnyNull(int position)
+    {
+        for (int field = 0; field < handlers.length; field++) {
+            if (inputFieldNull(field, null, position)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    boolean requiresBatchBinding()
+    {
+        return false;
+    }
+
     private static int[] comparisonOrder(FlatTypeHandler[] handlers)
     {
         int[] order = new int[handlers.length];

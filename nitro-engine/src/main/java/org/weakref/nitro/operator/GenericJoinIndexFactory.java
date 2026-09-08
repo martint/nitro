@@ -92,6 +92,23 @@ final class GenericJoinIndexFactory
         return new ObjectJoinIndex(values.length);
     }
 
+    JoinIndex createProjected(
+            ResolvedPersistentKeyLayout persistentLayout,
+            Vector[] values,
+            List<TypeBinding> keyTypes,
+            PrimitiveArrayPool arrayPool,
+            int expectedSize)
+    {
+        ProjectedFlatKeyLayout layout = codeGeneration.projectedFlatKeyLayouts().create(
+                persistentLayout,
+                values,
+                keyTypes,
+                arrayPool,
+                codeGeneration,
+                flatKeyTablePolicy);
+        return new FlatJoinIndex(joinIndexPolicy, layout, expectedSize);
+    }
+
     boolean shouldCapInitialHash(
             BufferedJoinInput.InnerBatch batch,
             Vector[] values,

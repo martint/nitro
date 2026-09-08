@@ -32,8 +32,10 @@ final class FlatJoinIndex
 
     private final HashJoinIndexPolicy policy;
     private final PrimitiveArrayPool arrayPool;
+    private final FlatKeyLayout layout;
     private final FlatGroupingTable table;
     private final FlatJoinDictionaryProbeCache dictionaryProbeCache;
+    private final boolean batchBindingRequired;
     private final boolean primitiveSingleRows;
     private long[] singleRows;
     private LongArrayList[] duplicateRows;
@@ -48,7 +50,9 @@ final class FlatJoinIndex
     {
         this.policy = requireNonNull(policy, "policy is null");
         this.arrayPool = layout.primitiveArrays();
+        this.layout = layout;
         this.dictionaryProbeCache = new FlatJoinDictionaryProbeCache(arrayPool, policy);
+        this.batchBindingRequired = layout.requiresBatchBinding();
         int initialSize = Math.max(16, expectedSize);
         this.primitiveSingleRows = policy.flatPrimitiveSingleRows();
         this.ownsStorage = true;
@@ -68,8 +72,10 @@ final class FlatJoinIndex
     {
         this.policy = prepared.policy;
         this.arrayPool = prepared.arrayPool;
+        this.layout = prepared.layout;
         this.table = prepared.table;
         this.dictionaryProbeCache = new FlatJoinDictionaryProbeCache(arrayPool, policy);
+        this.batchBindingRequired = prepared.batchBindingRequired;
         this.primitiveSingleRows = prepared.primitiveSingleRows;
         this.singleRows = prepared.singleRows;
         this.duplicateRows = prepared.duplicateRows;
@@ -99,7 +105,22 @@ final class FlatJoinIndex
     @Override
     public void add(Vector[] values, Vector[] nulls, int position, long rowReference)
     {
-        if (JoinIndex.hasNull(nulls, position)) {
+        if (!batchBindingRequired) {
+            addBound(values, nulls, position, rowReference, true);
+            return;
+        }
+        table.beginBatch(values, nulls);
+        try {
+            addBound(values, nulls, position, rowReference, true);
+        }
+        finally {
+            table.endBatch();
+        }
+    }
+
+    private void addBound(Vector[] values, Vector[] nulls, int position, long rowReference, boolean checkNulls)
+    {
+        if (checkNulls && keyHasNull(nulls, position, true)) {
             return;
         }
         long newGroupId = nextGroupId;
@@ -132,7 +153,21 @@ final class FlatJoinIndex
     @Override
     public LongList matches(Vector[] values, Vector[] nulls, int position)
     {
-        if (JoinIndex.hasNull(nulls, position)) {
+        if (!batchBindingRequired) {
+            return matchesBound(values, nulls, position, true);
+        }
+        table.beginBatch(values, nulls);
+        try {
+            return matchesBound(values, nulls, position, true);
+        }
+        finally {
+            table.endBatch();
+        }
+    }
+
+    private LongList matchesBound(Vector[] values, Vector[] nulls, int position, boolean checkNulls)
+    {
+        if (checkNulls && keyHasNull(nulls, position, true)) {
             return LongLists.emptyList();
         }
         long groupId = table.findGroup(values, position);
@@ -163,12 +198,7 @@ final class FlatJoinIndex
             for (int logicalPosition = startPosition; logicalPosition < endPosition; logicalPosition++) {
                 int sourcePosition = sourcePositions == null ? logicalPosition : sourcePositions[logicalPosition];
                 long rowReference = JoinRowReference.pack(batchIndex, logicalPosition);
-                if (hasNulls) {
-                    add(values, nulls, sourcePosition, rowReference);
-                }
-                else {
-                    addNoNulls(values, sourcePosition, rowReference);
-                }
+                addBound(values, nulls, sourcePosition, rowReference, hasNulls || batchBindingRequired);
             }
         }
         finally {
@@ -192,12 +222,7 @@ final class FlatJoinIndex
             for (int logicalPosition = 0; logicalPosition < count; logicalPosition++) {
                 int sourcePosition = mask.all() ? logicalPosition : mask.position(logicalPosition);
                 long rowReference = JoinRowReference.pack(batchIndex, logicalPosition);
-                if (hasNulls) {
-                    add(values, nulls, sourcePosition, rowReference);
-                }
-                else {
-                    addNoNulls(values, sourcePosition, rowReference);
-                }
+                addBound(values, nulls, sourcePosition, rowReference, hasNulls || batchBindingRequired);
             }
         }
         finally {
@@ -262,7 +287,9 @@ final class FlatJoinIndex
             LongList[] matches,
             SingleLongList[] singleMatches)
     {
-        int[] dictionaryGroups = dictionaryProbeCache.prepare(table, values, positionCount, nextGroupId);
+        int[] dictionaryGroups = batchBindingRequired
+                ? null
+                : dictionaryProbeCache.prepare(table, values, positionCount, nextGroupId);
         DictionaryVector dictionary = dictionaryGroups == null ? null : (DictionaryVector) values[0];
         int dictionaryDepth = dictionary == null ? 0 : dictionary.dictionaryDepth();
         int[] dictionaryIds = dictionaryDepth == 1 ? dictionary.ids() : null;
@@ -273,7 +300,7 @@ final class FlatJoinIndex
         try {
             for (int index = 0; index < positionCount; index++) {
                 int position = positions[index];
-                if (hasNulls && JoinIndex.hasNull(nulls, position)) {
+                if (keyHasNull(nulls, position, hasNulls)) {
                     matches[index] = LongLists.emptyList();
                     continue;
                 }
@@ -337,7 +364,9 @@ final class FlatJoinIndex
                     values.length,
                     Arrays.stream(values).map(FlatJoinIndex::probeShape).toList());
         }
-        int[] dictionaryGroups = dictionaryProbeCache.prepare(table, values, positionCount, nextGroupId);
+        int[] dictionaryGroups = batchBindingRequired
+                ? null
+                : dictionaryProbeCache.prepare(table, values, positionCount, nextGroupId);
         DictionaryVector dictionary = dictionaryGroups == null ? null : (DictionaryVector) values[0];
         int dictionaryDepth = dictionary == null ? 0 : dictionary.dictionaryDepth();
         int[] dictionaryIds = dictionaryDepth == 1 ? dictionary.ids() : null;
@@ -348,7 +377,7 @@ final class FlatJoinIndex
         try {
             for (int index = 0; index < positionCount; index++) {
                 int position = positions[index];
-                if (hasNulls && JoinIndex.hasNull(nulls, position)) {
+                if (keyHasNull(nulls, position, hasNulls)) {
                     refs[index] = NO_MATCH_ROW_REFERENCE;
                     continue;
                 }
@@ -382,6 +411,14 @@ final class FlatJoinIndex
                     ",generation=" + base.contentGeneration() + "))";
         }
         return value.getClass().getSimpleName() + '(' + value.length() + ",generation=" + value.contentGeneration() + ')';
+    }
+
+    private boolean keyHasNull(Vector[] nulls, int position, boolean hasTopLevelNulls)
+    {
+        if (batchBindingRequired) {
+            return layout.inputHasAnyNull(position);
+        }
+        return hasTopLevelNulls && JoinIndex.hasNull(nulls, position);
     }
 
     @Override

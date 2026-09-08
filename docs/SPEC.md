@@ -597,10 +597,12 @@ reports a compatibility provider as native.
 Join algorithms are separate from key semantics. Type bindings and registry functions provide exact hashing,
 comparison, and residual predicates. Physical key layouts may be generated from resolved lanes.
 
-A join over a provider-described fixed-width key uses the same generated exact table and physical binder as grouping
-and distinct. Build insertion skips every row with a null logical key, preserves duplicate row references, and probe
+A join over a provider-described persistent key layout uses the same generated exact table and physical binder as
+grouping and distinct, including canonical fixed-width lanes and recursive finite products. Build insertion skips
+every row with a null logical key; for a product key, any null descendant makes the join key null even though grouping
+and distinct retain that nested null as part of identity. The join preserves duplicate row references, and probe
 lookup does not mutate the table. Prepared probe views share immutable build state but own their batch-binding scratch.
-No row-wise structural comparison or accessor interface is an execution bridge for an admitted fixed-width layout.
+No row-wise structural comparison or accessor interface is an execution bridge for an admitted persistent layout.
 Hash joins and semi-join membership likewise reject keys that would require a row-wise semantic object table.
 
 Build state and prepared membership are task-owned capabilities shareable across compatible probe drivers. Join output

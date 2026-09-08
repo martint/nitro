@@ -86,6 +86,7 @@ final class ProjectedFlatKeyLayoutGenerator
             CD_boolean, CD_int, CD_BYTE_ARRAY, CD_int, CD_ARENA, CD_VECTOR, CD_int, CD_int);
     private static final MethodTypeDesc INPUT_FIELD_NULL_TYPE = MethodTypeDesc.of(
             CD_boolean, CD_int, CD_VECTOR_ARRAY, CD_int);
+    private static final MethodTypeDesc INPUT_HAS_ANY_NULL_TYPE = MethodTypeDesc.of(CD_boolean, CD_int);
 
     private final ConcurrentHashMap<GenerationShape, MethodHandle> constructors = new ConcurrentHashMap<>();
     private final AtomicInteger nextClassId = new AtomicInteger();
@@ -178,6 +179,7 @@ final class ProjectedFlatKeyLayoutGenerator
             builder.withMethodBody("writeFieldFlat", WRITE_FIELD_TYPE, ClassFile.ACC_PUBLIC, code -> emitWriteField(code, shape, thisClass));
             builder.withMethodBody("identicalField", IDENTICAL_FIELD_TYPE, ClassFile.ACC_PUBLIC, code -> emitIdenticalField(code, shape, thisClass));
             builder.withMethodBody("inputFieldNull", INPUT_FIELD_NULL_TYPE, ClassFile.ACC_PUBLIC, code -> emitInputFieldNull(code, shape, thisClass));
+            builder.withMethodBody("inputHasAnyNull", INPUT_HAS_ANY_NULL_TYPE, ClassFile.ACC_PUBLIC, code -> emitInputHasAnyNull(code, shape, thisClass));
         });
 
         try {
@@ -458,6 +460,49 @@ final class ProjectedFlatKeyLayoutGenerator
         code.aload(2);
         code.iload(3);
         code.invokespecial(CD_BASE, "inputFieldNull", INPUT_FIELD_NULL_TYPE);
+        code.ireturn();
+    }
+
+    private static void emitInputHasAnyNull(CodeBuilder code, GenerationShape shape, ClassDesc thisClass)
+    {
+        for (int source = 0; source < shape.nullSourceCount(); source++) {
+            Label nextSource = code.newLabel();
+            Label direct = code.newLabel();
+            Label mapped = code.newLabel();
+            code.aload(0);
+            code.getfield(thisClass, nullValuesField(source), CD_BOOLEAN_ARRAY);
+            code.ifnull(nextSource);
+
+            code.aload(0);
+            code.getfield(thisClass, nullMappingField(source), CD_INT_ARRAY);
+            code.ifnull(direct);
+            code.aload(0);
+            code.getfield(thisClass, nullMappingField(source), CD_INT_ARRAY);
+            code.iload(1);
+            code.aload(0);
+            code.getfield(thisClass, nullMappingOffsetField(source), CD_int);
+            code.iadd();
+            code.iaload();
+            code.istore(2);
+            code.goto_(mapped);
+            code.labelBinding(direct);
+            code.iload(1);
+            code.istore(2);
+            code.labelBinding(mapped);
+
+            code.aload(0);
+            code.getfield(thisClass, nullValuesField(source), CD_BOOLEAN_ARRAY);
+            code.iload(2);
+            code.aload(0);
+            code.getfield(thisClass, nullBaseOffsetField(source), CD_int);
+            code.iadd();
+            code.baload();
+            code.ifeq(nextSource);
+            code.loadConstant(1);
+            code.ireturn();
+            code.labelBinding(nextSource);
+        }
+        code.loadConstant(0);
         code.ireturn();
     }
 

@@ -193,4 +193,10 @@ abstract class ProjectedFlatKeyLayout
     {
         return productNullBindings.baseOffsets();
     }
+
+    @Override
+    final boolean requiresBatchBinding()
+    {
+        return true;
+    }
 }

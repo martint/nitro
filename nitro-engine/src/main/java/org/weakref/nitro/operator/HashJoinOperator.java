@@ -2192,6 +2192,18 @@ public class HashJoinOperator
                         operatorResources.codeGeneration(),
                         operatorResources.adaptiveLongGroupingPolicy());
             }
+            ResolvedPersistentKeyLayout persistentLayout = ResolvedPersistentKeyLayout.tryCreate(
+                    flatJoinKeyTypes,
+                    structuralKeyKernels,
+                    joinValues);
+            if (persistentLayout != null) {
+                return genericJoinIndexes.createProjected(
+                        persistentLayout,
+                        joinValues,
+                        flatJoinKeyTypes,
+                        arrayPool,
+                        expectedSize);
+            }
             throw PersistentKeyTableSupport.unsupportedLayout("hash join", flatJoinKeyTypes, joinValues);
         }
         if (joinValues.length == 1 && isSingleLongJoinCandidate(joinValues[0])) {
