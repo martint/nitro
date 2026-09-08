@@ -183,6 +183,53 @@ class TestDistinctKeySet
     }
 
     @Test
+    void testProjectedFlatDistinctMapsOneNullableLogicalKeyToMultiplePhysicalLanes()
+    {
+        Vector[] values = {
+                utf8(new String[] {"alpha", "alpha", "beta", "beta", "beta", "gamma"}),
+                fixedWidthPairs(
+                        new long[] {1, 1, 2, 2, 99, 99},
+                        new long[] {10, 10, 20, 20, 999, 999})};
+        Vector[] nulls = {
+                null,
+                new BooleanVector(new boolean[] {false, false, false, false, true, true})};
+
+        try (Allocator allocator = new Allocator(engineResources)) {
+            DistinctKeySet keys = DistinctKeySet.create(
+                    values,
+                    true,
+                    List.of(rawBinaryType(), fixedWidthPairType()),
+                    allocator,
+                    new Allocator.Context("projected-flat-multi-lane-distinct"),
+                    arrayPool,
+                    codeGeneration,
+                    DistinctKeySetPolicy.defaults(),
+                    adaptiveLongGroupingPolicy,
+                    flatKeyTablePolicy);
+            try {
+                int[] positions = new int[values[0].length()];
+                int distinct = keys.addBatch(values, nulls, Mask.all(values[0].length()), positions);
+                assertThat(Arrays.copyOf(positions, distinct)).containsExactly(0, 2, 4, 5);
+
+                Vector[] repeated = {
+                        utf8(new String[] {"alpha", "beta", "delta"}),
+                        fixedWidthPairs(
+                                new long[] {1, 2, 7},
+                                new long[] {10, 20, 70})};
+                distinct = keys.addBatch(
+                        repeated,
+                        new Vector[] {null, new BooleanVector(new boolean[] {false, false, true})},
+                        Mask.all(repeated[0].length()),
+                        positions);
+                assertThat(Arrays.copyOf(positions, distinct)).containsExactly(2);
+            }
+            finally {
+                keys.releaseBuffers();
+            }
+        }
+    }
+
+    @Test
     void testFixedWidthStructuralDistinctComposesNestedDictionaryMappingsAndNullModes()
     {
         StructVector domain = fixedWidthPairs(

@@ -4227,7 +4227,7 @@ class FlatKeyLayout
      * is all-false (recorded in {@link #beginBatch}). Falls back to the real read when {@link #beginBatch} was
      * not called (the flags are absent) or the field may carry nulls this batch.
      */
-    private boolean inputFieldNull(int fieldIndex, Vector[] nulls, int position)
+    boolean inputFieldNull(int fieldIndex, Vector[] nulls, int position)
     {
         if (batchFieldAllNull != null && batchFieldAllNull[fieldIndex]) {
             return true;

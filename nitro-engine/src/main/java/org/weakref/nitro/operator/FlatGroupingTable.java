@@ -1879,7 +1879,7 @@ final class FlatGroupingTable
         layout.establishHashStrategy();
         if (nulls != null) {
             for (int fieldIndex = 0; fieldIndex < fieldHasNull.length; fieldIndex++) {
-                fieldHasNull[fieldIndex] |= OperatorVectorSupport.isNull(nulls[fieldIndex], position);
+                fieldHasNull[fieldIndex] |= layout.inputFieldNull(fieldIndex, nulls, position);
             }
         }
         int recordIndex = nextRecordIndex;
