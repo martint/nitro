@@ -1107,7 +1107,13 @@ class FlatKeyLayout
             fieldNullAccess[index] = fieldNulls != null && !batchFieldNullFree[index] && !batchFieldAllNull[index]
                     ? resolveNullAccessor(index, fieldNulls)
                     : null;
-            if (channel >= values.length || !(values[channel] instanceof DictionaryVector dictionary)) {
+            // Canonical and product-presence fields own wrapper resolution in their generated layout. The base
+            // dictionary cache can hash only direct physical fields; trying to pre-hash a canonical dictionary
+            // entry would bypass its provider projection. Leave these fields on the generated hash/write/equality
+            // path for every wrapper shape.
+            if (fieldKinds[index] == FlatTypeHandler.Kind.CANONICAL ||
+                    channel >= values.length ||
+                    !(values[channel] instanceof DictionaryVector dictionary)) {
                 dictionaryHashedIds[index] = null;
                 release(dictionaryEntryHashes[index]);
                 dictionaryEntryHashes[index] = null;

@@ -265,7 +265,16 @@ class TestDistinctKeySet
                 int[] positions = new int[rows.length()];
                 int distinct = keys.addBatch(values, nulls, Mask.all(rows.length()), positions);
                 assertThat(Arrays.copyOf(positions, distinct)).containsExactly(0, 2, 3);
-                assertThat(keys.addBatch(values, nulls, Mask.all(rows.length()), positions)).isZero();
+
+                int[] ids = {1, 0, 4, 2, 5, 3};
+                Vector[] dictionaryValues = {DictionaryVector.ofTrustedIds(ids, rows)};
+                Vector[] dictionaryNulls = {DictionaryVector.ofTrustedIds(ids, nulls[0])};
+                assertThat(keys.addBatch(
+                        dictionaryValues,
+                        dictionaryNulls,
+                        Mask.all(rows.length()),
+                        positions))
+                        .isZero();
             }
             finally {
                 keys.releaseBuffers();
