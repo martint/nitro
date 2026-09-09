@@ -342,6 +342,10 @@ class FlatKeyLayout
     private final long[] normalizedIntKeySamples;
     private long preparedNormalizedFirst;
     private long preparedNormalizedSecond;
+    private int[] packedDistinctFieldOrder;
+    private long[] packedDistinctFirst;
+    private long[] packedDistinctSecond;
+    private VectorAccess.LongValues[] packedDistinctAccessors;
 
     record Construction(
             PrimitiveArrayPool arrayPool,
@@ -685,6 +689,134 @@ class FlatKeyLayout
     boolean supportsNormalizedIntKeyShape()
     {
         return normalizedIntKeyShape;
+    }
+
+    boolean supportsPackedFlatPairDistinctShape()
+    {
+        if (fieldKinds.length != 3) {
+            return false;
+        }
+        for (FlatTypeHandler.Kind kind : fieldKinds) {
+            if (kind != FlatTypeHandler.Kind.LONG && kind != FlatTypeHandler.Kind.BINARY) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Binds an experimental exact two-lane DISTINCT projection. One source keeps its complete 64-bit identity;
+     * the remaining two sources are packed as raw signed-32 bits. Binary sources use the layout's query-stable
+     * value ids, so dictionary identity and flat/dictionary representation changes do not change the key.
+     *
+     * <p>The selected source order is frozen on the first admitted batch. A later out-of-domain source declines
+     * before the table is mutated; the experimental caller must either promote exactly or fail loudly.
+     */
+    boolean preparePackedFlatPairDistinct(
+            Vector[] values,
+            Vector[] nulls,
+            Mask mask,
+            VectorAccess.LongValues[] accessors)
+    {
+        if (!supportsPackedFlatPairDistinctShape() || !batchAccessorsReady || accessors.length != 2) {
+            return false;
+        }
+        int requiredSize = mask.none() ? 0 : mask.maxPosition() + 1;
+        if (packedDistinctAccessors == null) {
+            packedDistinctAccessors = new VectorAccess.LongValues[] {
+                    position -> packedDistinctFirst[position],
+                    position -> packedDistinctSecond[position]};
+        }
+        for (int field = 0; field < fieldKinds.length; field++) {
+            if (fieldKinds[field] != FlatTypeHandler.Kind.BINARY) {
+                continue;
+            }
+            int[] positioned = batchPositionGlobalId[field];
+            if (positioned == null || positioned.length < requiredSize) {
+                int[] previous = positioned;
+                positioned = borrowInts(requiredSize);
+                batchPositionGlobalId[field] = positioned;
+                release(previous);
+            }
+            for (int position : mask) {
+                int valueId = normalizedBinaryValueId(field, position);
+                if (valueId < 0) {
+                    return false;
+                }
+                positioned[position] = valueId;
+            }
+        }
+
+        if (packedDistinctFieldOrder == null) {
+            int fullWidthField = -1;
+            for (int field = 0; field < fieldKinds.length; field++) {
+                if (fieldKinds[field] != FlatTypeHandler.Kind.LONG || compactDistinctField(field, mask)) {
+                    continue;
+                }
+                if (fullWidthField >= 0) {
+                    return false;
+                }
+                fullWidthField = field;
+            }
+            if (fullWidthField < 0) {
+                fullWidthField = 0;
+            }
+            packedDistinctFieldOrder = new int[3];
+            packedDistinctFieldOrder[0] = fullWidthField;
+            int output = 1;
+            for (int field = 0; field < fieldKinds.length; field++) {
+                if (field != fullWidthField) {
+                    packedDistinctFieldOrder[output++] = field;
+                }
+            }
+        }
+        if (!compactDistinctField(packedDistinctFieldOrder[1], mask) ||
+                !compactDistinctField(packedDistinctFieldOrder[2], mask)) {
+            return false;
+        }
+        if (packedDistinctFirst == null || packedDistinctFirst.length < requiredSize) {
+            long[] previousFirst = packedDistinctFirst;
+            long[] previousSecond = packedDistinctSecond;
+            packedDistinctFirst = borrowLongs(requiredSize);
+            packedDistinctSecond = borrowLongs(requiredSize);
+            release(previousFirst);
+            release(previousSecond);
+        }
+        int full = packedDistinctFieldOrder[0];
+        int compactFirst = packedDistinctFieldOrder[1];
+        int compactSecond = packedDistinctFieldOrder[2];
+        for (int position : mask) {
+            packedDistinctFirst[position] = packedDistinctValue(full, position);
+            long first = packedDistinctValue(compactFirst, position);
+            long second = packedDistinctValue(compactSecond, position);
+            packedDistinctSecond[position] = (first & 0xFFFF_FFFFL) << Integer.SIZE |
+                    (second & 0xFFFF_FFFFL);
+        }
+        accessors[0] = packedDistinctAccessors[0];
+        accessors[1] = packedDistinctAccessors[1];
+        return true;
+    }
+
+    private long packedDistinctValue(int field, int position)
+    {
+        return fieldKinds[field] == FlatTypeHandler.Kind.LONG
+                ? fieldLong[field].value(position)
+                : Integer.toUnsignedLong(batchPositionGlobalId[field][position]);
+    }
+
+    private boolean compactDistinctField(int field, Mask mask)
+    {
+        if (fieldKinds[field] == FlatTypeHandler.Kind.BINARY) {
+            return true;
+        }
+        VectorAccess.LongValues values = fieldLong[field];
+        for (int position : mask) {
+            long value = values.value(position);
+            if (value != (int) value) {
+                return false;
+            }
+        }
+        return true;
     }
 
     boolean usesGeneratedDictionaryRecordEquality()
@@ -4023,6 +4155,10 @@ class FlatKeyLayout
         bytes += nestedIntArrayBytes(composedDictionaryIds);
         bytes += nestedIntArrayBytes(composedNullDictionaryIds);
         bytes += referenceArrayBytes(fieldNullAccess);
+        bytes += intArrayBytes(packedDistinctFieldOrder);
+        bytes += longArrayBytes(packedDistinctFirst);
+        bytes += longArrayBytes(packedDistinctSecond);
+        bytes += referenceArrayBytes(packedDistinctAccessors);
         return bytes;
     }
 
@@ -4073,6 +4209,11 @@ class FlatKeyLayout
         }
         release(packedRecordDictionaryIds);
         packedRecordDictionaryIds = null;
+        release(packedDistinctFirst);
+        packedDistinctFirst = null;
+        release(packedDistinctSecond);
+        packedDistinctSecond = null;
+        packedDistinctAccessors = null;
         if (dictionaryHashedIds != null) {
             Arrays.fill(dictionaryHashedIds, null);
             Arrays.fill(dictionaryHashedValues, null);

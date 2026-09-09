@@ -496,6 +496,55 @@ class TestDistinctKeySet
     }
 
     @Test
+    void testPackedFlatPairDistinctPreservesIdentityAcrossBinaryRepresentations()
+    {
+        long wideA = 1L << 40;
+        long wideB = 2L << 40;
+        long wideC = 3L << 40;
+        Vector[] firstValues = {
+                new I64Vector(new long[] {wideA, wideB, wideA, wideC}),
+                new I64Vector(new long[] {7, 8, 7, 9}),
+                dictionary(new String[] {"alpha", "beta", "gamma"}, new int[] {0, 1, 0, 2})};
+        Vector[] nulls = {null, null, null};
+
+        try (Allocator allocator = new Allocator(engineResources)) {
+            DistinctKeySet keys = DistinctKeySet.create(
+                    firstValues,
+                    List.of(),
+                    allocator,
+                    new Allocator.Context("packed-flat-pair-distinct"),
+                    arrayPool,
+                    codeGeneration,
+                    packedFlatPairPolicy(),
+                    adaptiveLongGroupingPolicy,
+                    flatKeyTablePolicy);
+            try {
+                int[] positions = new int[4];
+                assertThat(keys.addBatch(firstValues, nulls, Mask.all(4), positions)).isEqualTo(3);
+                assertThat(Arrays.copyOf(positions, 3)).containsExactly(0, 1, 3);
+
+                Vector[] laterValues = {
+                        new I64Vector(new long[] {wideA, 4L << 40, wideB}),
+                        new I64Vector(new long[] {7, 10, 8}),
+                        utf8(new String[] {"alpha", "delta", "beta"})};
+                assertThat(keys.addBatch(laterValues, nulls, Mask.all(3), positions)).isEqualTo(1);
+                assertThat(positions[0]).isEqualTo(1);
+
+                Vector[] outOfDomain = {
+                        new I64Vector(new long[] {5L << 40}),
+                        new I64Vector(new long[] {1L << 40}),
+                        utf8(new String[] {"epsilon"})};
+                assertThatThrownBy(() -> keys.addBatch(outOfDomain, nulls, Mask.all(1), positions))
+                        .isInstanceOf(UnsupportedOperationException.class)
+                        .hasMessageContaining("exact promotion is not implemented");
+            }
+            finally {
+                keys.releaseBuffers();
+            }
+        }
+    }
+
+    @Test
     void testFlatDistinctUsesProviderCanonicalLongStorage()
     {
         BinaryVector labels = new BinaryVector(3, 3);
@@ -1057,6 +1106,7 @@ class TestDistinctKeySet
                 defaults.sharedDictionaryNullResolver(),
                 defaults.sharedDictionaryBasePositionCache(),
                 defaults.adaptiveCompactMultiLong(),
+                defaults.packedFlatPairDistinct(),
                 defaults.adaptiveRetainNullsBatch(),
                 defaults.adaptiveCompactLongPair(),
                 defaults.adaptiveCompactLongPairSampleSize(),
@@ -1068,6 +1118,41 @@ class TestDistinctKeySet
                 defaults.filterSentinelBeforeHash(),
                 defaults.adaptiveDirectBatch(),
                 taggedHash,
+                defaults.longPairNullFreeBatch(),
+                defaults.adaptiveCompactLongPairStartBatch(),
+                defaults.inlineSmallGroupedLong(),
+                defaults.keyOnlyDictionaryDomain(),
+                defaults.keyOnlyDictionaryDomainMinimumReduction(),
+                defaults.keyOnlySparseRetentionMinPercent(),
+                defaults.keyOnlyReservationHeadroomPercent(),
+                defaults.keyOnlyMinimumReservation(),
+                defaults.independentDictionaryTupleDomain(),
+                defaults.independentDictionaryTupleDomainMinimumReduction(),
+                defaults.independentDictionaryTupleDomainMaxEntries());
+    }
+
+    private static DistinctKeySetPolicy packedFlatPairPolicy()
+    {
+        DistinctKeySetPolicy defaults = DistinctKeySetPolicy.defaults();
+        return new DistinctKeySetPolicy(
+                defaults.pooledLongHashSetPolicy(),
+                defaults.debugDistinctShapes(),
+                defaults.sharedDictionaryPositionResolver(),
+                defaults.sharedDictionaryNullResolver(),
+                defaults.sharedDictionaryBasePositionCache(),
+                defaults.adaptiveCompactMultiLong(),
+                true,
+                defaults.adaptiveRetainNullsBatch(),
+                defaults.adaptiveCompactLongPair(),
+                defaults.adaptiveCompactLongPairSampleSize(),
+                defaults.adaptiveCompactMultiLongMinArity(),
+                defaults.adaptivePagedLongBitmap(),
+                defaults.pagedLongBitmapMinKeys(),
+                defaults.pagedLongBitmapMaxBitsPerKey(),
+                defaults.emptyBinaryFastPath(),
+                defaults.filterSentinelBeforeHash(),
+                defaults.adaptiveDirectBatch(),
+                defaults.taggedLongPairHash(),
                 defaults.longPairNullFreeBatch(),
                 defaults.adaptiveCompactLongPairStartBatch(),
                 defaults.inlineSmallGroupedLong(),

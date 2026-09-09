@@ -537,7 +537,13 @@ final class DistinctKeySet
                 flatKeyTablePolicy,
                 flatKeyTypes(samples.length, keyTypes, unboundKeyPrefix));
         if (layout != null) {
-            return new FlatDistinctIndex(layout, Math.max(16, expectedSize), arrayPool, policy);
+            return new FlatDistinctIndex(
+                    layout,
+                    Math.max(16, expectedSize),
+                    arrayPool,
+                    codeGeneration,
+                    policy,
+                    adaptiveLongGroupingPolicy);
         }
         return new ObjectDistinctIndex(samples.length);
     }
@@ -1144,6 +1150,12 @@ final class DistinctKeySet
         private final FlatKeyLayout layout;
         private final DistinctKeySetPolicy policy;
         private final FlatGroupingTable table;
+        private final AbstractFixedWidthKeyTable packedPairTable;
+        private final VectorAccess.LongValues[] packedPairAccessors = new VectorAccess.LongValues[2];
+        private final int[] singlePosition = new int[1];
+        private final int[] singleDistinctPosition = new int[1];
+        private boolean packedPairAbandoned;
+        private boolean debugPackedPairPrinted;
         private int[] probePositions;
         private long[] generatedHashScratch;
         private int[] dictionaryFirstLogicalPositions = new int[0];
@@ -1152,7 +1164,13 @@ final class DistinctKeySet
         private final Vector[] dictionaryDomainNulls = new Vector[1];
         private boolean emptyBinarySeen;
 
-        private FlatDistinctIndex(FlatKeyLayout layout, int expectedSize, PrimitiveArrayPool arrayPool, DistinctKeySetPolicy policy)
+        private FlatDistinctIndex(
+                FlatKeyLayout layout,
+                int expectedSize,
+                PrimitiveArrayPool arrayPool,
+                OperatorCodeGenerationResources codeGeneration,
+                DistinctKeySetPolicy policy,
+                AdaptiveLongGroupingPolicy adaptiveLongGroupingPolicy)
         {
             this.arrayPool = arrayPool;
             this.layout = layout;
@@ -1161,6 +1179,13 @@ final class DistinctKeySet
             // reorders that ordinal. Record index is therefore the exact group id: let the general table's
             // identity mode avoid a redundant slot->group array and reverse group->record map.
             this.table = new FlatGroupingTable(layout, expectedSize, true);
+            this.packedPairTable = policy.packedFlatPairDistinct() && layout.supportsPackedFlatPairDistinctShape()
+                    ? codeGeneration.fixedWidthKeyTables().createDistinct(
+                            FixedWidthKeyTableLayout.rawI64(2),
+                            expectedSize,
+                            arrayPool,
+                            adaptiveLongGroupingPolicy)
+                    : null;
         }
 
         @Override
@@ -1168,6 +1193,26 @@ final class DistinctKeySet
         {
             if (hasNull(nulls, position)) {
                 return false;
+            }
+            if (packedPairTable != null && !packedPairAbandoned) {
+                singlePosition[0] = position;
+                Mask mask = Mask.sparse(singlePosition.clone(), values[0].length());
+                table.beginBatch(values, nulls);
+                try {
+                    if (layout.preparePackedFlatPairDistinct(values, nulls, mask, packedPairAccessors)) {
+                        return packedPairTable.assignDistinctBatchNullFree(
+                                packedPairAccessors,
+                                null,
+                                singlePosition,
+                                1,
+                                singleDistinctPosition,
+                                packedPairTable.size) == 1;
+                    }
+                    abandonOrRejectPackedPair();
+                }
+                finally {
+                    table.endBatch();
+                }
             }
             if (isTrackedSentinel(values, position)) {
                 if (emptyBinarySeen) {
@@ -1197,6 +1242,32 @@ final class DistinctKeySet
 
             table.beginBatch(values, nulls);
             try {
+                if (packedPairTable != null && !packedPairAbandoned) {
+                    if (nullFree && layout.preparePackedFlatPairDistinct(values, nulls, mask, packedPairAccessors)) {
+                        int[] positions;
+                        if (mask.all()) {
+                            for (int position = 0; position < mask.selectedCount(); position++) {
+                                distinctPositions[position] = position;
+                            }
+                            positions = distinctPositions;
+                        }
+                        else {
+                            positions = mask.selectedPositions();
+                        }
+                        if (policy.debugDistinctShapes() && !debugPackedPairPrinted) {
+                            debugPackedPairPrinted = true;
+                            System.err.printf("[packed-flat-pair-distinct] rows=%d selected=%d%n", mask.count(), mask.selectedCount());
+                        }
+                        return packedPairTable.assignDistinctBatchNullFree(
+                                packedPairAccessors,
+                                null,
+                                positions,
+                                mask.selectedCount(),
+                                distinctPositions,
+                                packedPairTable.size);
+                    }
+                    abandonOrRejectPackedPair();
+                }
                 layout.admitFrequentDictionarySentinel(values, mask);
                 if (policy.filterSentinelBeforeHash() && hasTrackedSentinel(values)) {
                     return addFlatBinaryBatch(values, nulls, mask, distinctPositions, nullFree);
@@ -1233,6 +1304,15 @@ final class DistinctKeySet
             finally {
                 table.endBatch();
             }
+        }
+
+        private void abandonOrRejectPackedPair()
+        {
+            if (packedPairTable.size != 0) {
+                throw new UnsupportedOperationException(
+                        "Experimental packed flat DISTINCT key left its admitted exact domain; exact promotion is not implemented");
+            }
+            packedPairAbandoned = true;
         }
 
         private int addSingleDictionaryBatch(Vector[] values, Vector[] nulls, Mask mask, int[] distinctPositions)
@@ -1399,6 +1479,7 @@ final class DistinctKeySet
         public long retainedBytes()
         {
             return table.retainedBytes() +
+                    (packedPairTable == null ? 0 : packedPairTable.retainedBytes()) +
                     (probePositions == null ? 0 : (long) probePositions.length * Integer.BYTES) +
                     (generatedHashScratch == null ? 0 : (long) generatedHashScratch.length * Long.BYTES) +
                     (long) dictionaryFirstLogicalPositions.length * Integer.BYTES +
@@ -1409,6 +1490,10 @@ final class DistinctKeySet
         public void releaseBuffers()
         {
             table.releaseBuffers();
+            if (packedPairTable != null) {
+                packedPairTable.releaseBuffers();
+            }
+            Arrays.fill(packedPairAccessors, null);
             arrayPool.release(probePositions);
             probePositions = null;
             arrayPool.release(generatedHashScratch);
