@@ -175,3 +175,4 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | [0093](0093-generate-recursive-product-key-layouts.md) | Generate recursive product key layouts | amended |
 | [0094](0094-generate-ordered-repeated-key-layouts.md) | Generate ordered repeated key layouts | amended |
 | [0095](0095-generate-unordered-repeated-key-layouts.md) | Generate unordered repeated key layouts | accepted |
+| [0096](0096-normalize-mixed-flat-distinct-keys.md) | Normalize mixed flat DISTINCT keys into generated fixed-width layouts | accepted |

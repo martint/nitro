@@ -588,6 +588,13 @@ the generated loop performs direct carrier loads, hashing, and exact probing wit
 provider dispatch. Grouping separately retains logical representatives for output, while distinct separately applies
 its requested null-dropping or null-retaining semantics.
 
+DISTINCT may normalize an eligible mixed flat key into that table without assigning logical meaning to its carriers.
+Full-width primitive sources remain full-width; exact query-stable I32 identities for binary values and direct I32
+sources may be bijectively packed into generated I64 lanes. The engine materializes no packed canonical lane vector:
+batch binding supplies concrete source arrays and mappings, and generated code performs packing in locals. Once the
+generated table contains a record, carrier mismatch, unsupported wrappers, value-ID exhaustion, or excessive lane
+count fails before further mutation rather than switching table representations.
+
 Grouping and distinct do not retain object tables that invoke provider semantic hashing or equality per row. A key
 without a compatible direct or generated physical layout is rejected as unsupported coverage.
 
@@ -691,6 +698,12 @@ constant-linked canonical projections, and the generated exact probe. Static sha
 inspect vector wrappers, but hot rows do not use generic method-handle invocation, virtual provider operations, or
 polymorphic value-access interfaces. Logical types do not select generator or table classes.
 
+Reversible DISTINCT normalization is one persistent-key physical policy. Its descriptor is derived from the complete
+ordered carrier layout, not a query or named logical type. Every specified direct field requires its provider's
+explicit raw-key-identity proof; a carrier, vector, or flat-handler kind does not establish admission. Binary value
+IDs are exact for the query lifetime across admitted representation changes; exhaustion rejects before table
+mutation. Diagnostic opt-outs may compare physical policies, but are not runtime correctness fallbacks.
+
 There is no semantic object-table fallback for grouping, distinct, hash join, or membership. Missing physical-key
 coverage is rejected at planning when capabilities suffice and otherwise at physical binding before rows are added.
 
@@ -754,6 +767,10 @@ A provider-declared fixed-width key layout has cross-consumer coverage for group
 including raw and projected lanes, mixed primitive sources, encoded mappings, sparse masks, null behavior, duplicate
 multiplicity, and prepared build sharing. Mismatched carriers, nullable selected components, incompatible projection
 signatures, unsupported representations, and unsupported generated lane counts fail loudly.
+
+Mixed flat DISTINCT normalization covers arbitrary admitted LONG/BINARY field orderings that fit the shared generated
+lane limit, including I32 packing, full-width I64 identity, binary dictionary-generation changes, sparse masks, and
+null-row filtering. Unsupported transitions fail loudly before persistent state changes.
 
 Key types and mixed key shapes without one direct or generated physical implementation are explicit coverage gaps.
 They are not admitted through row-wise semantic key tables.

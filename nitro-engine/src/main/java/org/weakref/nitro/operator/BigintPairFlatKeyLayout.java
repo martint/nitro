@@ -105,14 +105,20 @@ final class BigintPairFlatKeyLayout
         int firstOffset = nullByteCount;
         int secondOffset = firstOffset + handler0.fixedSize();
         Field[] fields = new Field[] {
-                new Field(0, handler0, firstOffset, Set.<BinaryVector.Trait>of()),
-                new Field(1, handler1, secondOffset, Set.<BinaryVector.Trait>of()),
+                new Field(0, handler0, firstOffset, Set.<BinaryVector.Trait>of(), rawKeyIdentity(types, 0)),
+                new Field(1, handler1, secondOffset, Set.<BinaryVector.Trait>of(), rawKeyIdentity(types, 1)),
         };
         int[] inputChannels = new int[] {0, 1};
         FlatTypeHandler[] handlers = new FlatTypeHandler[] {handler0, handler1};
         int[] fixedOffsets = new int[] {firstOffset, secondOffset};
         int[] comparisonOrder = new int[] {0, 1};
         return new BigintPairFlatKeyLayout(arrayPool, codeGeneration, policy, fields, inputChannels, handlers, fixedOffsets, comparisonOrder, nullByteCount, secondOffset + handler1.fixedSize());
+    }
+
+    private static boolean rawKeyIdentity(List<TypeBinding> types, int index)
+    {
+        TypeBinding type = index < types.size() ? types.get(index) : null;
+        return type == null || !type.isSpecified() || type.supportsRawKeyIdentity();
     }
 
     @Override

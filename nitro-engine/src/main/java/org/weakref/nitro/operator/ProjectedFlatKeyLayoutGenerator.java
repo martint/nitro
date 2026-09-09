@@ -135,7 +135,10 @@ final class ProjectedFlatKeyLayoutGenerator
                 true,
                 arrayPool,
                 codeGeneration,
-                policy);
+                policy,
+                Arrays.stream(layout.fields())
+                        .map(ResolvedPersistentKeyLayout.Field::type)
+                        .toList());
         GenerationShape shape = new GenerationShape(
                 FixedWidthKeyTableLayout.from(layout.canonicalLayout()),
                 Arrays.stream(layout.canonicalFieldIndexes()).boxed().toList(),

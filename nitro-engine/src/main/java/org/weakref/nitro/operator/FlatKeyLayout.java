@@ -496,7 +496,8 @@ class FlatKeyLayout
                 nullable,
                 arrayPool,
                 codeGeneration,
-                policy);
+                policy,
+                types);
         if (layoutPolicy.precomputeCompactBinaryPositionIds() && construction.compactEmbeddedBinaryRecords()) {
             return new PositionIdFlatKeyLayout(
                     construction.arrayPool(),
@@ -523,6 +524,27 @@ class FlatKeyLayout
             PrimitiveArrayPool arrayPool,
             OperatorCodeGenerationResources codeGeneration,
             FlatKeyTablePolicy policy)
+    {
+        return construction(
+                fieldValues,
+                inputChannels,
+                handlers,
+                nullable,
+                arrayPool,
+                codeGeneration,
+                policy,
+                List.of());
+    }
+
+    static Construction construction(
+            Vector[] fieldValues,
+            int[] inputChannels,
+            FlatTypeHandler[] handlers,
+            boolean nullable,
+            PrimitiveArrayPool arrayPool,
+            OperatorCodeGenerationResources codeGeneration,
+            FlatKeyTablePolicy policy,
+            List<TypeBinding> types)
     {
         if (fieldValues.length != inputChannels.length || fieldValues.length != handlers.length) {
             throw new IllegalArgumentException("Flat-key construction arrays have different lengths");
@@ -561,11 +583,13 @@ class FlatKeyLayout
         int fixedOffset = nullByteCount;
         for (int index = 0; index < fieldValues.length; index++) {
             FlatTypeHandler handler = handlers[index];
+            TypeBinding type = index < types.size() ? types.get(index) : null;
             fields[index] = new Field(
                     inputChannels[index],
                     handler,
                     fixedOffset,
-                    OperatorVectorSupport.binaryTraits(fieldValues[index]));
+                    OperatorVectorSupport.binaryTraits(fieldValues[index]),
+                    type == null || !type.isSpecified() || type.supportsRawKeyIdentity());
             fixedOffsets[index] = fixedOffset;
             fixedOffset += compactEmbeddedBinaryRecords && handler.kind() == FlatTypeHandler.Kind.BINARY
                     ? Integer.BYTES
@@ -693,7 +717,9 @@ class FlatKeyLayout
     /**
      * Describes the exact primitive sources available to a generated normalized DISTINCT table. Binary fields use
      * query-stable unsigned 32-bit value ids; integer fields retain their admitted physical carrier. The result is
-     * field-order neutral and does not select an implementation from logical type identity.
+     * field-order neutral and does not select an implementation from logical type identity. Every specified field
+     * must carry its provider's explicit proof that raw physical identity is authoritative; a carrier or handler
+     * kind alone is insufficient.
      */
     FixedWidthKeyLayout.Carrier[] normalizedFixedWidthDistinctCarriers(Vector[] samples)
     {
@@ -703,6 +729,9 @@ class FlatKeyLayout
         boolean binary = false;
         FixedWidthKeyLayout.Carrier[] carriers = new FixedWidthKeyLayout.Carrier[fieldKinds.length];
         for (int field = 0; field < fieldKinds.length; field++) {
+            if (!fields[field].rawKeyIdentity()) {
+                return null;
+            }
             if (fieldKinds[field] == FlatTypeHandler.Kind.BINARY) {
                 carriers[field] = FixedWidthKeyLayout.Carrier.I32;
                 binary = true;
@@ -4452,7 +4481,12 @@ class FlatKeyLayout
         }
     }
 
-    public record Field(int inputChannel, FlatTypeHandler handler, int fixedOffset, Set<BinaryVector.Trait> binaryTraits)
+    public record Field(
+            int inputChannel,
+            FlatTypeHandler handler,
+            int fixedOffset,
+            Set<BinaryVector.Trait> binaryTraits,
+            boolean rawKeyIdentity)
     {
     }
 }
