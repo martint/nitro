@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.core.type.FixedWidthKeyLayout;
 import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
@@ -218,6 +219,7 @@ class FlatKeyLayout
     private Vector[] batchEntryGlobalIdDict;
     private long[] batchEntryGlobalIdGeneration;
     private int[][] batchPositionGlobalId;
+    private I32Vector[] normalizedDistinctIdVectors;
     private DictionaryVector[] fieldDictionaryMapping;
     private DictionaryVector[] batchPositionDictionaryMapping;
     private boolean debugCompactBinaryPositionIdsPrinted;
@@ -343,10 +345,6 @@ class FlatKeyLayout
     private final long[] normalizedIntKeySamples;
     private long preparedNormalizedFirst;
     private long preparedNormalizedSecond;
-    private int[] packedDistinctFieldOrder;
-    private long[] packedDistinctFirst;
-    private long[] packedDistinctSecond;
-    private VectorAccess.LongValues[] packedDistinctAccessors;
 
     record Construction(
             PrimitiveArrayPool arrayPool,
@@ -692,135 +690,97 @@ class FlatKeyLayout
         return normalizedIntKeyShape;
     }
 
-    boolean supportsPackedFlatPairDistinctShape()
+    /**
+     * Describes the exact primitive sources available to a generated normalized DISTINCT table. Binary fields use
+     * query-stable unsigned 32-bit value ids; integer fields retain their admitted physical carrier. The result is
+     * field-order neutral and does not select an implementation from logical type identity.
+     */
+    FixedWidthKeyLayout.Carrier[] normalizedFixedWidthDistinctCarriers(Vector[] samples)
     {
-        if (fieldKinds.length != 3) {
-            return false;
+        if (fieldKinds.length < 2 || samples.length == 0) {
+            return null;
         }
-        for (FlatTypeHandler.Kind kind : fieldKinds) {
-            if (kind != FlatTypeHandler.Kind.LONG && kind != FlatTypeHandler.Kind.BINARY) {
-                return false;
+        boolean binary = false;
+        FixedWidthKeyLayout.Carrier[] carriers = new FixedWidthKeyLayout.Carrier[fieldKinds.length];
+        for (int field = 0; field < fieldKinds.length; field++) {
+            if (fieldKinds[field] == FlatTypeHandler.Kind.BINARY) {
+                carriers[field] = FixedWidthKeyLayout.Carrier.I32;
+                binary = true;
+                continue;
+            }
+            if (fieldKinds[field] != FlatTypeHandler.Kind.LONG) {
+                return null;
+            }
+            int channel = inputChannels[field];
+            if (channel >= samples.length) {
+                return null;
+            }
+            Vector base = OperatorVectorSupport.flatten(samples[channel]);
+            if (base instanceof I32Vector) {
+                carriers[field] = FixedWidthKeyLayout.Carrier.I32;
+            }
+            else if (base instanceof I64Vector) {
+                carriers[field] = FixedWidthKeyLayout.Carrier.I64;
+            }
+            else {
+                return null;
             }
         }
-        return true;
+        return binary ? carriers : null;
     }
 
     /**
-     * Binds an experimental exact two-lane DISTINCT projection. One source keeps its complete 64-bit identity;
-     * the remaining two sources are packed as raw signed-32 bits. Binary sources use the layout's query-stable
-     * value ids, so dictionary identity and flat/dictionary representation changes do not change the key.
-     *
-     * <p>The selected source order is frozen on the first admitted batch. A later out-of-domain source declines
-     * before the table is mutated; the experimental caller must either promote exactly or fail loudly.
+     * Binds normalized primitive sources for a generated DISTINCT probe. Only the selected, already-proven-non-null
+     * positions are interned. A value-id overflow is an unsupported exact-layout transition and fails before the
+     * generated table is mutated; it never enters the row-wise flat table.
      */
-    boolean preparePackedFlatPairDistinct(
+    void prepareNormalizedFixedWidthDistinct(
             Vector[] values,
-            Vector[] nulls,
-            Mask mask,
-            VectorAccess.LongValues[] accessors)
+            int[] positions,
+            int positionCount,
+            Vector[] normalizedValues)
     {
-        if (!supportsPackedFlatPairDistinctShape() || !batchAccessorsReady || accessors.length != 2) {
-            return false;
+        if (!batchAccessorsReady || normalizedValues.length != fieldKinds.length) {
+            throw new IllegalStateException("Normalized fixed-width DISTINCT sources are not bound");
         }
-        int requiredSize = mask.none() ? 0 : mask.maxPosition() + 1;
-        if (packedDistinctAccessors == null) {
-            packedDistinctAccessors = new VectorAccess.LongValues[] {
-                    position -> packedDistinctFirst[position],
-                    position -> packedDistinctSecond[position]};
+        int requiredSize = positionCount;
+        if (positions != null) {
+            requiredSize = 0;
+            for (int index = 0; index < positionCount; index++) {
+                requiredSize = Math.max(requiredSize, positions[index] + 1);
+            }
         }
         for (int field = 0; field < fieldKinds.length; field++) {
-            if (fieldKinds[field] != FlatTypeHandler.Kind.BINARY) {
+            int channel = inputChannels[field];
+            if (fieldKinds[field] == FlatTypeHandler.Kind.LONG) {
+                normalizedValues[field] = values[channel];
                 continue;
+            }
+            if (fieldKinds[field] != FlatTypeHandler.Kind.BINARY) {
+                throw new UnsupportedOperationException("No normalized fixed-width DISTINCT source for " + fieldKinds[field]);
             }
             int[] positioned = batchPositionGlobalId[field];
             if (positioned == null || positioned.length < requiredSize) {
                 int[] previous = positioned;
                 positioned = borrowInts(requiredSize);
                 batchPositionGlobalId[field] = positioned;
+                normalizedDistinctIdVectors[field] = new I32Vector(positioned);
                 release(previous);
             }
-            for (PrimitiveIterator.OfInt positions = mask.iterator(); positions.hasNext(); ) {
-                int position = positions.nextInt();
+            else if (normalizedDistinctIdVectors[field] == null || normalizedDistinctIdVectors[field].values() != positioned) {
+                normalizedDistinctIdVectors[field] = new I32Vector(positioned);
+            }
+            for (int index = 0; index < positionCount; index++) {
+                int position = positions == null ? index : positions[index];
                 int valueId = normalizedBinaryValueId(field, position);
                 if (valueId < 0) {
-                    return false;
+                    throw new UnsupportedOperationException(
+                            "Normalized fixed-width DISTINCT exhausted its exact binary value-id domain");
                 }
                 positioned[position] = valueId;
             }
+            normalizedValues[field] = normalizedDistinctIdVectors[field];
         }
-
-        if (packedDistinctFieldOrder == null) {
-            int fullWidthField = -1;
-            for (int field = 0; field < fieldKinds.length; field++) {
-                if (fieldKinds[field] != FlatTypeHandler.Kind.LONG || compactDistinctField(field, mask)) {
-                    continue;
-                }
-                if (fullWidthField >= 0) {
-                    return false;
-                }
-                fullWidthField = field;
-            }
-            if (fullWidthField < 0) {
-                fullWidthField = 0;
-            }
-            packedDistinctFieldOrder = new int[3];
-            packedDistinctFieldOrder[0] = fullWidthField;
-            int output = 1;
-            for (int field = 0; field < fieldKinds.length; field++) {
-                if (field != fullWidthField) {
-                    packedDistinctFieldOrder[output++] = field;
-                }
-            }
-        }
-        if (!compactDistinctField(packedDistinctFieldOrder[1], mask) ||
-                !compactDistinctField(packedDistinctFieldOrder[2], mask)) {
-            return false;
-        }
-        if (packedDistinctFirst == null || packedDistinctFirst.length < requiredSize) {
-            long[] previousFirst = packedDistinctFirst;
-            long[] previousSecond = packedDistinctSecond;
-            packedDistinctFirst = borrowLongs(requiredSize);
-            packedDistinctSecond = borrowLongs(requiredSize);
-            release(previousFirst);
-            release(previousSecond);
-        }
-        int full = packedDistinctFieldOrder[0];
-        int compactFirst = packedDistinctFieldOrder[1];
-        int compactSecond = packedDistinctFieldOrder[2];
-        for (PrimitiveIterator.OfInt positions = mask.iterator(); positions.hasNext(); ) {
-            int position = positions.nextInt();
-            packedDistinctFirst[position] = packedDistinctValue(full, position);
-            long first = packedDistinctValue(compactFirst, position);
-            long second = packedDistinctValue(compactSecond, position);
-            packedDistinctSecond[position] = (first & 0xFFFF_FFFFL) << Integer.SIZE |
-                    (second & 0xFFFF_FFFFL);
-        }
-        accessors[0] = packedDistinctAccessors[0];
-        accessors[1] = packedDistinctAccessors[1];
-        return true;
-    }
-
-    private long packedDistinctValue(int field, int position)
-    {
-        return fieldKinds[field] == FlatTypeHandler.Kind.LONG
-                ? fieldLong[field].value(position)
-                : Integer.toUnsignedLong(batchPositionGlobalId[field][position]);
-    }
-
-    private boolean compactDistinctField(int field, Mask mask)
-    {
-        if (fieldKinds[field] == FlatTypeHandler.Kind.BINARY) {
-            return true;
-        }
-        VectorAccess.LongValues values = fieldLong[field];
-        for (PrimitiveIterator.OfInt positions = mask.iterator(); positions.hasNext(); ) {
-            int position = positions.nextInt();
-            long value = values.value(position);
-            if (value != (int) value) {
-                return false;
-            }
-        }
-        return true;
     }
 
     boolean usesGeneratedDictionaryRecordEquality()
@@ -1138,6 +1098,7 @@ class FlatKeyLayout
             batchEntryGlobalIdDict = new Vector[handlers.length];
             batchEntryGlobalIdGeneration = new long[handlers.length];
             batchPositionGlobalId = new int[handlers.length][];
+            normalizedDistinctIdVectors = new I32Vector[handlers.length];
             fieldDictionaryMapping = new DictionaryVector[handlers.length];
             batchPositionDictionaryMapping = new DictionaryVector[handlers.length];
             fieldLazyIntern = new boolean[handlers.length];
@@ -4161,10 +4122,6 @@ class FlatKeyLayout
         bytes += nestedIntArrayBytes(composedDictionaryIds);
         bytes += nestedIntArrayBytes(composedNullDictionaryIds);
         bytes += referenceArrayBytes(fieldNullAccess);
-        bytes += intArrayBytes(packedDistinctFieldOrder);
-        bytes += longArrayBytes(packedDistinctFirst);
-        bytes += longArrayBytes(packedDistinctSecond);
-        bytes += referenceArrayBytes(packedDistinctAccessors);
         return bytes;
     }
 
@@ -4215,11 +4172,6 @@ class FlatKeyLayout
         }
         release(packedRecordDictionaryIds);
         packedRecordDictionaryIds = null;
-        release(packedDistinctFirst);
-        packedDistinctFirst = null;
-        release(packedDistinctSecond);
-        packedDistinctSecond = null;
-        packedDistinctAccessors = null;
         if (dictionaryHashedIds != null) {
             Arrays.fill(dictionaryHashedIds, null);
             Arrays.fill(dictionaryHashedValues, null);

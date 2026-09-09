@@ -16,6 +16,7 @@ package org.weakref.nitro.operator;
 import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.objects.ObjectOpenHashSet;
+import org.weakref.nitro.core.type.FixedWidthKeyLayout;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.data.Allocator;
@@ -27,8 +28,14 @@ import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
 
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Optional;
+import java.util.PrimitiveIterator;
 
 import static java.lang.Math.toIntExact;
 
@@ -537,13 +544,23 @@ final class DistinctKeySet
                 flatKeyTablePolicy,
                 flatKeyTypes(samples.length, keyTypes, unboundKeyPrefix));
         if (layout != null) {
+            if (policy.normalizedFixedWidthDistinct()) {
+                DistinctIndex normalized = NormalizedFixedWidthDistinctIndex.tryCreate(
+                        layout,
+                        samples,
+                        Math.max(16, expectedSize),
+                        arrayPool,
+                        codeGeneration,
+                        adaptiveLongGroupingPolicy);
+                if (normalized != null) {
+                    return normalized;
+                }
+            }
             return new FlatDistinctIndex(
                     layout,
                     Math.max(16, expectedSize),
                     arrayPool,
-                    codeGeneration,
-                    policy,
-                    adaptiveLongGroupingPolicy);
+                    policy);
         }
         return new ObjectDistinctIndex(samples.length);
     }
@@ -1143,6 +1160,230 @@ final class DistinctKeySet
         }
     }
 
+    /**
+     * DISTINCT over one generated normalized fixed-width layout. Concrete source arrays and wrapper mappings bind
+     * once per batch; the generated table loads them directly, constant-links lane projections, and keeps every
+     * normalized lane in locals through hash/probe. No row-wise accessor dispatch or materialized packed lane is
+     * retained.
+     */
+    private static final class NormalizedFixedWidthDistinctIndex
+            implements DistinctIndex
+    {
+        private static final MethodHandle PACK_I32_PAIR;
+        private static final Vector[] NO_NULLS = new Vector[0];
+
+        static {
+            try {
+                PACK_I32_PAIR = MethodHandles.lookup().findStatic(
+                        NormalizedFixedWidthDistinctIndex.class,
+                        "packI32Pair",
+                        MethodType.methodType(long.class, int.class, int.class));
+            }
+            catch (ReflectiveOperationException e) {
+                throw new ExceptionInInitializerError(e);
+            }
+        }
+
+        private final FlatKeyLayout flatLayout;
+        private final AbstractFixedWidthKeyTable table;
+        private final FixedWidthKeyBatchBindings bindings;
+        private final PrimitiveArrayPool arrayPool;
+        private final Vector[] normalizedValues;
+        private final int[] singlePosition = new int[1];
+        private final int[] singleDistinctPosition = new int[1];
+        private int[] nonNullPositions;
+
+        private NormalizedFixedWidthDistinctIndex(
+                FlatKeyLayout flatLayout,
+                ResolvedFixedWidthKeyLayout layout,
+                int expectedSize,
+                PrimitiveArrayPool arrayPool,
+                OperatorCodeGenerationResources codeGeneration,
+                AdaptiveLongGroupingPolicy adaptiveLongGroupingPolicy)
+        {
+            this.flatLayout = flatLayout;
+            this.arrayPool = arrayPool;
+            normalizedValues = new Vector[layout.logicalKeyCount()];
+            bindings = new FixedWidthKeyBatchBindings(layout, arrayPool);
+            table = codeGeneration.fixedWidthKeyTables().createDistinct(
+                    FixedWidthKeyTableLayout.from(layout),
+                    expectedSize,
+                    arrayPool,
+                    adaptiveLongGroupingPolicy);
+        }
+
+        static DistinctIndex tryCreate(
+                FlatKeyLayout flatLayout,
+                Vector[] samples,
+                int expectedSize,
+                PrimitiveArrayPool arrayPool,
+                OperatorCodeGenerationResources codeGeneration,
+                AdaptiveLongGroupingPolicy adaptiveLongGroupingPolicy)
+        {
+            FixedWidthKeyLayout.Carrier[] carriers = flatLayout.normalizedFixedWidthDistinctCarriers(samples);
+            if (carriers == null) {
+                return null;
+            }
+            ArrayList<ResolvedFixedWidthKeyLayout.Lane> lanes = new ArrayList<>();
+            for (int field = 0; field < carriers.length; field++) {
+                FixedWidthKeyLayout.Carrier carrier = carriers[field];
+                if (carrier == FixedWidthKeyLayout.Carrier.I32 &&
+                        field + 1 < carriers.length &&
+                        carriers[field + 1] == FixedWidthKeyLayout.Carrier.I32) {
+                    lanes.add(new ResolvedFixedWidthKeyLayout.Lane(
+                            field,
+                            new ResolvedFixedWidthKeyLayout.Source[] {
+                                    new ResolvedFixedWidthKeyLayout.Source(field, List.of(), carrier),
+                                    new ResolvedFixedWidthKeyLayout.Source(field + 1, List.of(), carrier)},
+                            Optional.of(PACK_I32_PAIR)));
+                    field++;
+                    continue;
+                }
+                lanes.add(new ResolvedFixedWidthKeyLayout.Lane(
+                        field,
+                        new ResolvedFixedWidthKeyLayout.Source[] {
+                                new ResolvedFixedWidthKeyLayout.Source(field, List.of(), carrier)},
+                        Optional.empty()));
+            }
+            if (lanes.size() > AbstractFixedWidthKeyTable.MAX_ARITY) {
+                return null;
+            }
+            return new NormalizedFixedWidthDistinctIndex(
+                    flatLayout,
+                    new ResolvedFixedWidthKeyLayout(lanes.toArray(ResolvedFixedWidthKeyLayout.Lane[]::new), carriers.length),
+                    expectedSize,
+                    arrayPool,
+                    codeGeneration,
+                    adaptiveLongGroupingPolicy);
+        }
+
+        @Override
+        public void reserveAdditional(int additionalEntries)
+        {
+            table.ensureCapacity(table.size + Math.max(0, additionalEntries));
+        }
+
+        @Override
+        public boolean add(Vector[] values, Vector[] nulls, int position)
+        {
+            if (hasNull(nulls, position)) {
+                return false;
+            }
+            singlePosition[0] = position;
+            return addPrepared(values, nulls, singlePosition, 1, singleDistinctPosition) == 1;
+        }
+
+        @Override
+        public int addBatch(Vector[] values, Vector[] nulls, Mask mask, int[] distinctPositions)
+        {
+            int positionCount = mask.selectedCount();
+            int[] positions = mask.all() ? null : mask.selectedPositions();
+            if (hasNullStream(nulls)) {
+                ensureNonNullCapacity(positionCount);
+                int nonNullCount = 0;
+                PrimitiveIterator.OfInt selected = mask.iterator();
+                while (selected.hasNext()) {
+                    int position = selected.nextInt();
+                    if (!hasNull(nulls, position)) {
+                        nonNullPositions[nonNullCount++] = position;
+                    }
+                }
+                positions = nonNullPositions;
+                positionCount = nonNullCount;
+            }
+            return addPrepared(values, nulls, positions, positionCount, distinctPositions);
+        }
+
+        @Override
+        public int addNonNullBatch(Vector[] values, Vector[] nulls, int[] positions, int positionCount, int[] distinctPositions)
+        {
+            return addPrepared(values, nulls, positions, positionCount, distinctPositions);
+        }
+
+        @Override
+        public int addNonNullDenseBatch(Vector[] values, Vector[] nulls, int positionCount, int[] positions, int[] distinctPositions)
+        {
+            return addPrepared(values, nulls, null, positionCount, distinctPositions);
+        }
+
+        private int addPrepared(
+                Vector[] values,
+                Vector[] nulls,
+                int[] positions,
+                int positionCount,
+                int[] distinctPositions)
+        {
+            if (positionCount == 0) {
+                return 0;
+            }
+            flatLayout.beginBatch(values, nulls);
+            try {
+                flatLayout.prepareNormalizedFixedWidthDistinct(values, positions, positionCount, normalizedValues);
+                bindings.bind(normalizedValues, NO_NULLS);
+                return table.assignPhysicalDistinctBatch(
+                        bindings.keyArrays(),
+                        bindings.keyMappings(),
+                        bindings.keyMappingOffsets(),
+                        bindings.keyBaseOffsets(),
+                        bindings.nullArrays(),
+                        bindings.nullMappings(),
+                        bindings.nullMappingOffsets(),
+                        bindings.nullBaseOffsets(),
+                        positions,
+                        positionCount,
+                        distinctPositions,
+                        table.size);
+            }
+            finally {
+                bindings.release();
+                Arrays.fill(normalizedValues, null);
+                flatLayout.endBatch();
+            }
+        }
+
+        private void ensureNonNullCapacity(int required)
+        {
+            if (nonNullPositions == null || nonNullPositions.length < required) {
+                int[] previous = nonNullPositions;
+                nonNullPositions = arrayPool.borrowInts(required);
+                arrayPool.release(previous);
+            }
+        }
+
+        private static boolean hasNullStream(Vector[] nulls)
+        {
+            for (Vector nullVector : nulls) {
+                if (!VectorAccess.isAllFalseNulls(nullVector)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static long packI32Pair(int first, int second)
+        {
+            return (Integer.toUnsignedLong(first) << Integer.SIZE) | Integer.toUnsignedLong(second);
+        }
+
+        @Override
+        public long retainedBytes()
+        {
+            return table.retainedBytes() +
+                    flatLayout.retainedBytes() +
+                    (nonNullPositions == null ? 0 : (long) nonNullPositions.length * Integer.BYTES);
+        }
+
+        @Override
+        public void releaseBuffers()
+        {
+            bindings.release();
+            table.releaseBuffers();
+            flatLayout.releaseBuffers();
+            arrayPool.release(nonNullPositions);
+            nonNullPositions = null;
+        }
+    }
+
     private static final class FlatDistinctIndex
             implements DistinctIndex
     {
@@ -1150,12 +1391,6 @@ final class DistinctKeySet
         private final FlatKeyLayout layout;
         private final DistinctKeySetPolicy policy;
         private final FlatGroupingTable table;
-        private final AbstractFixedWidthKeyTable packedPairTable;
-        private final VectorAccess.LongValues[] packedPairAccessors = new VectorAccess.LongValues[2];
-        private final int[] singlePosition = new int[1];
-        private final int[] singleDistinctPosition = new int[1];
-        private boolean packedPairAbandoned;
-        private boolean debugPackedPairPrinted;
         private int[] probePositions;
         private long[] generatedHashScratch;
         private int[] dictionaryFirstLogicalPositions = new int[0];
@@ -1168,9 +1403,7 @@ final class DistinctKeySet
                 FlatKeyLayout layout,
                 int expectedSize,
                 PrimitiveArrayPool arrayPool,
-                OperatorCodeGenerationResources codeGeneration,
-                DistinctKeySetPolicy policy,
-                AdaptiveLongGroupingPolicy adaptiveLongGroupingPolicy)
+                DistinctKeySetPolicy policy)
         {
             this.arrayPool = arrayPool;
             this.layout = layout;
@@ -1179,13 +1412,6 @@ final class DistinctKeySet
             // reorders that ordinal. Record index is therefore the exact group id: let the general table's
             // identity mode avoid a redundant slot->group array and reverse group->record map.
             this.table = new FlatGroupingTable(layout, expectedSize, true);
-            this.packedPairTable = policy.packedFlatPairDistinct() && layout.supportsPackedFlatPairDistinctShape()
-                    ? codeGeneration.fixedWidthKeyTables().createDistinct(
-                            FixedWidthKeyTableLayout.rawI64(2),
-                            expectedSize,
-                            arrayPool,
-                            adaptiveLongGroupingPolicy)
-                    : null;
         }
 
         @Override
@@ -1193,26 +1419,6 @@ final class DistinctKeySet
         {
             if (hasNull(nulls, position)) {
                 return false;
-            }
-            if (packedPairTable != null && !packedPairAbandoned) {
-                singlePosition[0] = position;
-                Mask mask = Mask.sparse(singlePosition.clone(), values[0].length());
-                table.beginBatch(values, nulls);
-                try {
-                    if (layout.preparePackedFlatPairDistinct(values, nulls, mask, packedPairAccessors)) {
-                        return packedPairTable.assignDistinctBatchNullFree(
-                                packedPairAccessors,
-                                null,
-                                singlePosition,
-                                1,
-                                singleDistinctPosition,
-                                packedPairTable.size) == 1;
-                    }
-                    abandonOrRejectPackedPair();
-                }
-                finally {
-                    table.endBatch();
-                }
             }
             if (isTrackedSentinel(values, position)) {
                 if (emptyBinarySeen) {
@@ -1242,32 +1448,6 @@ final class DistinctKeySet
 
             table.beginBatch(values, nulls);
             try {
-                if (packedPairTable != null && !packedPairAbandoned) {
-                    if (nullFree && layout.preparePackedFlatPairDistinct(values, nulls, mask, packedPairAccessors)) {
-                        int[] positions;
-                        if (mask.all()) {
-                            for (int position = 0; position < mask.selectedCount(); position++) {
-                                distinctPositions[position] = position;
-                            }
-                            positions = distinctPositions;
-                        }
-                        else {
-                            positions = mask.selectedPositions();
-                        }
-                        if (policy.debugDistinctShapes() && !debugPackedPairPrinted) {
-                            debugPackedPairPrinted = true;
-                            System.err.printf("[packed-flat-pair-distinct] rows=%d selected=%d%n", mask.count(), mask.selectedCount());
-                        }
-                        return packedPairTable.assignDistinctBatchNullFree(
-                                packedPairAccessors,
-                                null,
-                                positions,
-                                mask.selectedCount(),
-                                distinctPositions,
-                                packedPairTable.size);
-                    }
-                    abandonOrRejectPackedPair();
-                }
                 layout.admitFrequentDictionarySentinel(values, mask);
                 if (policy.filterSentinelBeforeHash() && hasTrackedSentinel(values)) {
                     return addFlatBinaryBatch(values, nulls, mask, distinctPositions, nullFree);
@@ -1304,15 +1484,6 @@ final class DistinctKeySet
             finally {
                 table.endBatch();
             }
-        }
-
-        private void abandonOrRejectPackedPair()
-        {
-            if (packedPairTable.size != 0) {
-                throw new UnsupportedOperationException(
-                        "Experimental packed flat DISTINCT key left its admitted exact domain; exact promotion is not implemented");
-            }
-            packedPairAbandoned = true;
         }
 
         private int addSingleDictionaryBatch(Vector[] values, Vector[] nulls, Mask mask, int[] distinctPositions)
@@ -1479,7 +1650,6 @@ final class DistinctKeySet
         public long retainedBytes()
         {
             return table.retainedBytes() +
-                    (packedPairTable == null ? 0 : packedPairTable.retainedBytes()) +
                     (probePositions == null ? 0 : (long) probePositions.length * Integer.BYTES) +
                     (generatedHashScratch == null ? 0 : (long) generatedHashScratch.length * Long.BYTES) +
                     (long) dictionaryFirstLogicalPositions.length * Integer.BYTES +
@@ -1490,10 +1660,6 @@ final class DistinctKeySet
         public void releaseBuffers()
         {
             table.releaseBuffers();
-            if (packedPairTable != null) {
-                packedPairTable.releaseBuffers();
-            }
-            Arrays.fill(packedPairAccessors, null);
             arrayPool.release(probePositions);
             probePositions = null;
             arrayPool.release(generatedHashScratch);

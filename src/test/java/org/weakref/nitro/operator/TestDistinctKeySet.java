@@ -24,9 +24,11 @@ import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.PrimitiveArrayPool;
+import org.weakref.nitro.data.RegionVector;
 import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.StructVector;
@@ -496,7 +498,7 @@ class TestDistinctKeySet
     }
 
     @Test
-    void testPackedFlatPairDistinctPreservesIdentityAcrossBinaryRepresentations()
+    void testGeneratedNormalizedFixedWidthDistinctPreservesFullWidthIdentityAcrossBinaryRepresentations()
     {
         long wideA = 1L << 40;
         long wideB = 2L << 40;
@@ -512,10 +514,10 @@ class TestDistinctKeySet
                     firstValues,
                     List.of(),
                     allocator,
-                    new Allocator.Context("packed-flat-pair-distinct"),
+                    new Allocator.Context("normalized-fixed-width-distinct"),
                     arrayPool,
                     codeGeneration,
-                    packedFlatPairPolicy(),
+                    normalizedFixedWidthDistinctPolicy(),
                     adaptiveLongGroupingPolicy,
                     flatKeyTablePolicy);
             try {
@@ -530,13 +532,225 @@ class TestDistinctKeySet
                 assertThat(keys.addBatch(laterValues, nulls, Mask.all(3), positions)).isEqualTo(1);
                 assertThat(positions[0]).isEqualTo(1);
 
-                Vector[] outOfDomain = {
+                Vector[] laterFullWidthValues = {
                         new I64Vector(new long[] {5L << 40}),
                         new I64Vector(new long[] {1L << 40}),
                         utf8(new String[] {"epsilon"})};
-                assertThatThrownBy(() -> keys.addBatch(outOfDomain, nulls, Mask.all(1), positions))
-                        .isInstanceOf(UnsupportedOperationException.class)
-                        .hasMessageContaining("exact promotion is not implemented");
+                assertThat(keys.addBatch(laterFullWidthValues, nulls, Mask.all(1), positions)).isEqualTo(1);
+                assertThat(positions[0]).isZero();
+            }
+            finally {
+                keys.releaseBuffers();
+            }
+        }
+    }
+
+    @Test
+    void testGeneratedNormalizedFixedWidthDistinctPacksI32SourcesWithSparseMaskAndNulls()
+    {
+        long wideA = 1L << 40;
+        long wideB = 2L << 40;
+        long wideC = 3L << 40;
+        long wideD = 4L << 40;
+        Vector[] values = {
+                dictionary(new String[] {"alpha", "beta", "gamma", "delta"}, new int[] {0, 1, 0, 2, 3, 1}),
+                new I32Vector(new int[] {7, 8, 7, 9, 10, 8}),
+                new I64Vector(new long[] {wideA, wideB, wideA, wideC, wideD, wideB})};
+        Vector[] nulls = {
+                null,
+                new BooleanVector(new boolean[] {false, false, false, false, true, false}),
+                null};
+
+        try (Allocator allocator = new Allocator(engineResources)) {
+            DistinctKeySet keys = DistinctKeySet.create(
+                    values,
+                    List.of(),
+                    allocator,
+                    new Allocator.Context("normalized-fixed-width-distinct"),
+                    arrayPool,
+                    codeGeneration,
+                    normalizedFixedWidthDistinctPolicy(),
+                    adaptiveLongGroupingPolicy,
+                    flatKeyTablePolicy);
+            try {
+                int[] positions = new int[values[0].length()];
+                int distinct = keys.addBatch(values, nulls, Mask.sparse(new int[] {0, 1, 2, 4, 5}, values[0].length()), positions);
+                assertThat(Arrays.copyOf(positions, distinct)).containsExactly(0, 1);
+
+                Vector[] laterValues = {
+                        utf8(new String[] {"alpha", "gamma", "beta"}),
+                        new I32Vector(new int[] {7, 9, 8}),
+                        new I64Vector(new long[] {wideA, wideC, wideB})};
+                Vector[] laterNulls = {null, null, null};
+                assertThat(keys.addBatch(laterValues, laterNulls, Mask.all(3), positions)).isEqualTo(1);
+                assertThat(positions[0]).isEqualTo(1);
+            }
+            finally {
+                keys.releaseBuffers();
+            }
+        }
+    }
+
+    @Test
+    void testGeneratedNormalizedFixedWidthDistinctHandlesMultipleBinaryFieldsAndNestedWrappers()
+    {
+        Vector firstBinary = DictionaryVector.wrapNested(
+                new int[] {2, 0, 1, 2},
+                4,
+                dictionary(new String[] {"alpha", "beta", "gamma"}, new int[] {0, 1, 2}));
+        Vector secondBinary = new RleVector(
+                new int[] {4},
+                utf8(new String[] {"left"}));
+        Vector[] firstValues = {
+                firstBinary,
+                new RegionVector(new I64Vector(new long[] {-1, 10, 20, 30, 10}), 1, 4),
+                secondBinary,
+                new I32Vector(new int[] {1, 2, 3, 4})};
+        Vector[] nulls = {null, null, null, null};
+
+        try (Allocator allocator = new Allocator(engineResources)) {
+            DistinctKeySet keys = DistinctKeySet.create(
+                    firstValues,
+                    List.of(),
+                    allocator,
+                    new Allocator.Context("normalized-fixed-width-nested-wrappers"),
+                    arrayPool,
+                    codeGeneration,
+                    normalizedFixedWidthDistinctPolicy(),
+                    adaptiveLongGroupingPolicy,
+                    flatKeyTablePolicy);
+            try {
+                int[] positions = new int[4];
+                assertThat(keys.addBatch(firstValues, nulls, Mask.all(4), positions)).isEqualTo(4);
+
+                Vector[] laterValues = {
+                        utf8(new String[] {"gamma", "alpha", "delta", "gamma"}),
+                        new I64Vector(new long[] {10, 20, 40, 10}),
+                        dictionary(new String[] {"left", "center"}, new int[] {0, 0, 1, 0}),
+                        new I32Vector(new int[] {1, 2, 4, 1})};
+                assertThat(keys.addBatch(laterValues, nulls, Mask.all(4), positions)).isEqualTo(1);
+                assertThat(positions[0]).isEqualTo(2);
+            }
+            finally {
+                keys.releaseBuffers();
+            }
+        }
+    }
+
+    @Test
+    void testGeneratedNormalizedFixedWidthDistinctRejectsCarrierChangeBeforeMutation()
+    {
+        Vector[] firstValues = {
+                new I32Vector(new int[] {1, 2}),
+                utf8(new String[] {"alpha", "beta"})};
+        Vector[] nulls = {null, null};
+
+        try (Allocator allocator = new Allocator(engineResources)) {
+            DistinctKeySet keys = DistinctKeySet.create(
+                    firstValues,
+                    List.of(),
+                    allocator,
+                    new Allocator.Context("normalized-fixed-width-carrier-change"),
+                    arrayPool,
+                    codeGeneration,
+                    normalizedFixedWidthDistinctPolicy(),
+                    adaptiveLongGroupingPolicy,
+                    flatKeyTablePolicy);
+            try {
+                int[] positions = new int[2];
+                assertThat(keys.addBatch(firstValues, nulls, Mask.all(2), positions)).isEqualTo(2);
+                assertThatThrownBy(() -> keys.addBatch(
+                        new Vector[] {
+                                new I64Vector(new long[] {1, 3}),
+                                utf8(new String[] {"alpha", "gamma"})},
+                        nulls,
+                        Mask.all(2),
+                        positions))
+                        .isInstanceOf(IllegalArgumentException.class)
+                        .hasMessageContaining("No generated fixed-width loader");
+                assertThat(keys.addBatch(firstValues, nulls, Mask.all(2), positions)).isZero();
+            }
+            finally {
+                keys.releaseBuffers();
+            }
+        }
+    }
+
+    @Test
+    void testGeneratedNormalizedFixedWidthDistinctFiltersWrappedNullsAndEmptyMasks()
+    {
+        Vector[] values = {
+                dictionary(new String[] {"alpha", "beta", "gamma"}, new int[] {0, 1, 0, 2}),
+                new I32Vector(new int[] {1, 2, 1, 3})};
+        Vector[] nulls = {
+                DictionaryVector.wrapNested(
+                        new int[] {0, 1, 0, 0},
+                        4,
+                        new BooleanVector(new boolean[] {false, true})),
+                null};
+
+        try (Allocator allocator = new Allocator(engineResources)) {
+            DistinctKeySet keys = DistinctKeySet.create(
+                    values,
+                    List.of(),
+                    allocator,
+                    new Allocator.Context("normalized-fixed-width-wrapped-nulls"),
+                    arrayPool,
+                    codeGeneration,
+                    normalizedFixedWidthDistinctPolicy(),
+                    adaptiveLongGroupingPolicy,
+                    flatKeyTablePolicy);
+            try {
+                int[] positions = new int[4];
+                assertThat(keys.addBatch(values, nulls, Mask.none(4), positions)).isZero();
+                assertThat(keys.addBatch(values, nulls, Mask.all(4), positions)).isEqualTo(2);
+                assertThat(Arrays.copyOf(positions, 2)).containsExactly(0, 3);
+                assertThat(keys.add(
+                        new Vector[] {utf8(new String[] {"beta"}), new I32Vector(new int[] {2})},
+                        new Vector[] {null, null},
+                        0)).isTrue();
+            }
+            finally {
+                keys.releaseBuffers();
+            }
+        }
+    }
+
+    @Test
+    void testGeneratedNormalizedFixedWidthDistinctSupportsMaximumLaneCount()
+    {
+        Vector[] values = new Vector[AbstractFixedWidthKeyTable.MAX_ARITY];
+        for (int field = 0; field < values.length - 1; field++) {
+            values[field] = new I64Vector(new long[] {field, field, field + 100});
+        }
+        values[values.length - 1] = utf8(new String[] {"same", "same", "different"});
+        Vector[] nulls = new Vector[values.length];
+
+        try (Allocator allocator = new Allocator(engineResources)) {
+            DistinctKeySet keys = DistinctKeySet.create(
+                    values,
+                    List.of(),
+                    allocator,
+                    new Allocator.Context("normalized-fixed-width-max-lanes"),
+                    arrayPool,
+                    codeGeneration,
+                    normalizedFixedWidthDistinctPolicy(),
+                    adaptiveLongGroupingPolicy,
+                    flatKeyTablePolicy);
+            try {
+                int[] positions = new int[3];
+                assertThat(keys.addBatch(values, nulls, Mask.all(3), positions)).isEqualTo(2);
+                assertThat(Arrays.copyOf(positions, 2)).containsExactly(0, 2);
+
+                Vector[] carrierMismatch = values.clone();
+                carrierMismatch[0] = new I32Vector(new int[] {0});
+                for (int field = 1; field < carrierMismatch.length - 1; field++) {
+                    carrierMismatch[field] = new I64Vector(new long[] {field});
+                }
+                carrierMismatch[carrierMismatch.length - 1] = utf8(new String[] {"same"});
+                assertThatThrownBy(() -> keys.addBatch(carrierMismatch, nulls, Mask.all(1), positions))
+                        .isInstanceOf(IllegalArgumentException.class)
+                        .hasMessageContaining("No generated fixed-width loader");
             }
             finally {
                 keys.releaseBuffers();
@@ -1106,7 +1320,7 @@ class TestDistinctKeySet
                 defaults.sharedDictionaryNullResolver(),
                 defaults.sharedDictionaryBasePositionCache(),
                 defaults.adaptiveCompactMultiLong(),
-                defaults.packedFlatPairDistinct(),
+                defaults.normalizedFixedWidthDistinct(),
                 defaults.adaptiveRetainNullsBatch(),
                 defaults.adaptiveCompactLongPair(),
                 defaults.adaptiveCompactLongPairSampleSize(),
@@ -1131,7 +1345,7 @@ class TestDistinctKeySet
                 defaults.independentDictionaryTupleDomainMaxEntries());
     }
 
-    private static DistinctKeySetPolicy packedFlatPairPolicy()
+    private static DistinctKeySetPolicy normalizedFixedWidthDistinctPolicy()
     {
         DistinctKeySetPolicy defaults = DistinctKeySetPolicy.defaults();
         return new DistinctKeySetPolicy(
