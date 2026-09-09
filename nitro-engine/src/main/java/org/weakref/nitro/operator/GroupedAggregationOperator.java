@@ -1711,7 +1711,7 @@ public class GroupedAggregationOperator
         boolean intKey = fusedBindings.intKey();
         boolean keyMapped = fusedBindings.keyMapped();
         boolean directGrouping = fusedLongDirectGrouping
-                && (keyMapped || fusedIntermediateMerge)
+                && (keyMapped || fusedIntermediateMerge || inlineGroupingState.usesLongDirectGrouping())
                 && inlineGroupingState.prepareSingleLongDirectGrouping(
                 mask,
                 keyValues,
@@ -1719,9 +1719,9 @@ public class GroupedAggregationOperator
                 keyIds,
                 fusedIntermediateMerge);
         if (inlineGroupingState.usesLongDirectGrouping() && !directGrouping) {
-            // A prior mapped batch may have migrated the canonical grouping state to direct indexing. Flat batches
-            // deliberately retain the staged path, whose direct-table loop handles that representation. Never run
-            // the generated hash-table shape against the direct table merely because fusion was committed earlier.
+            // A prior batch may have migrated the canonical grouping state to direct indexing. Never run the
+            // generated hash-table shape against that direct table when the current batch cannot bind the exact
+            // direct-index shape; retain the staged path that understands the live representation.
             return false;
         }
         long runSample = fusedLongRunCache ? fusedBindings.sampleKeyRuns(mask) : 0;

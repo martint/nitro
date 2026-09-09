@@ -316,7 +316,7 @@ class TestFusedGroupedAggregation
     }
 
     @Test
-    void fusedMappedDirectGroupingFallsBackForFlatKeys()
+    void fusedMappedDirectGroupingContinuesGeneratedForFlatKeys()
     {
         Map<Long, long[]> reference = new HashMap<>();
         List<TableOperator.Page> pages = new ArrayList<>();
@@ -360,7 +360,37 @@ class TestFusedGroupedAggregation
                 new Vector[] {new I64Vector(flatKeys), new I64Vector(flatValues)},
                 Mask.all(batchSize)));
 
-        assertGroupedSumAndCount(pages, List.of(new Sum(1), new CountAll()), reference, true);
+        EncodedGeneratedSum implementation = new EncodedGeneratedSum(true);
+        PhysicalAggregationProgram program = PhysicalAggregationProgram.singleUnit(
+                new GeneratedRegisteredAggregationUnit(
+                        implementation,
+                        RAW,
+                        FINAL,
+                        new int[] {1},
+                        -1,
+                        GroupedAggregationUpdate.inputValue(1, encodedGeneratedSumTarget())));
+        Map<Long, Long> actual = new HashMap<>();
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                Operator operator = new GroupedAggregationOperator(
+                        allocator,
+                        List.of(0),
+                        program,
+                        new TableOperator(2, pages))) {
+            while (operator.hasNext()) {
+                try (Batch result = operator.next()) {
+                    VectorAccess.LongValues resultKeys = VectorAccess.longValues(result.output(0).borrow(Stream.VALUES));
+                    VectorAccess.LongValues resultSums = VectorAccess.longValues(result.output(1).borrow(Stream.VALUES));
+                    for (int position : result.borrowMask()) {
+                        actual.put(resultKeys.value(position), resultSums.value(position));
+                    }
+                }
+            }
+        }
+
+        Map<Long, Long> expected = new HashMap<>();
+        reference.forEach((key, state) -> expected.put(key, state[0]));
+        assertThat(actual).isEqualTo(expected);
     }
 
     @Test
@@ -1834,7 +1864,18 @@ class TestFusedGroupedAggregation
     private static final class EncodedGeneratedSum
             implements AggregationImplementation
     {
+        private final boolean rejectStagedInput;
         private boolean encodedGroupsObserved;
+
+        private EncodedGeneratedSum()
+        {
+            this(false);
+        }
+
+        private EncodedGeneratedSum(boolean rejectStagedInput)
+        {
+            this.rejectStagedInput = rejectStagedInput;
+        }
 
         @Override
         public Object allocate(AggregationExecution execution, int groups)
@@ -1858,6 +1899,9 @@ class TestFusedGroupedAggregation
         @Override
         public void addRawInput(Object state, int group, Mask mask, AggregationInput input)
         {
+            if (rejectStagedInput) {
+                throw new AssertionError("generated aggregation unexpectedly used staged scalar input");
+            }
             VectorAccess.LongValues values = VectorAccess.longValues(input.stream(0, Stream.VALUES));
             for (int position : mask) {
                 ((EncodedGeneratedSumState) state).update(group, values.value(position));
@@ -1867,6 +1911,9 @@ class TestFusedGroupedAggregation
         @Override
         public void addRawInput(Object state, Vector groups, Mask mask, AggregationInput input)
         {
+            if (rejectStagedInput) {
+                throw new AssertionError("generated aggregation unexpectedly used staged grouped input");
+            }
             encodedGroupsObserved |= groups instanceof DictionaryVector;
             VectorAccess.LongValues groupValues = VectorAccess.longValues(groups);
             VectorAccess.LongValues values = VectorAccess.longValues(input.stream(0, Stream.VALUES));
