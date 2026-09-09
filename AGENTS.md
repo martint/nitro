@@ -35,3 +35,16 @@ of reported results—not only public Java APIs.
 - Preserve unrelated user changes and benchmark artifacts. Do not create JFR artifacts unless explicitly requested.
 - Use semantic navigation/refactoring for Java changes when available; do not substitute brittle textual architecture
   tests for capability and behavior assertions.
+
+## Command-output hygiene
+
+- Redirect long or noisy output—especially Maven/mvnd builds and tests, benchmarks, profilers, JVM diagnostics, and
+  large diffs—to a file rather than emitting the complete stream into the conversation.
+- Preserve the command's exit status. After completion, extract only the evidence needed with targeted tools such as
+  `rg`, `awk`, `sed`, or `tail`: summaries, failures, warnings, timings, and relevant counters.
+- Always report the retained output-file path so the complete evidence can be inspected later. Do not suppress useful
+  diagnostics with `/dev/null` merely to reduce context usage.
+- Store durable investigation output in the applicable `~/notes/nitro/` campaign directory and genuinely ephemeral
+  output in a uniquely named directory under `/tmp`. Keep multi-megabyte logs, benchmark results, profiles, and
+  `EXPLAIN` artifacts out of the repository working copy.
+- Short, bounded inspection commands may return directly when their output is already small and relevant.

@@ -65,6 +65,20 @@ leaving both. Prefer editing or sharpening an existing entry over adding a near-
 Java 26 with preview features enabled (`--enable-preview --add-modules
 jdk.incubator.vector`). The repo uses Jujutsu (`jj`) for version control.
 
+### Command-output hygiene
+
+- Redirect long or noisy command output to a file instead of returning the complete stream to the conversation. This
+  applies especially to Maven/mvnd builds and tests, benchmark sweeps, profilers, JVM diagnostics, and large diffs.
+- After the command completes, use targeted extraction (`rg`, `awk`, `sed`, `tail`, or the producing tool's summary
+  option) to surface only the status, failures, warnings, timing rows, or counters needed for the current decision.
+- Preserve the command's exit status; do not hide failures behind a pipeline. Record and report the output-file path so
+  the full evidence remains inspectable.
+- Put durable build and investigation logs under the applicable `~/notes/nitro/` campaign directory. Put genuinely
+  disposable output under a uniquely named `/tmp` directory. Do not add multi-megabyte logs, benchmark output, profiles,
+  or `EXPLAIN` artifacts to the repository working copy.
+- Do not discard diagnostic output to `/dev/null` merely to save context. Retain it in a file and extract the relevant
+  evidence. Short, bounded inspection commands may still return directly.
+
 ```bash
 # Build (main + tests)
 mvn test-compile
