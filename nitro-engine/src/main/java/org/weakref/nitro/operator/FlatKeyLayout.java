@@ -31,6 +31,7 @@ import java.lang.invoke.VarHandle;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.PrimitiveIterator;
 import java.util.Set;
 
 import static java.nio.ByteOrder.LITTLE_ENDIAN;
@@ -738,7 +739,8 @@ class FlatKeyLayout
                 batchPositionGlobalId[field] = positioned;
                 release(previous);
             }
-            for (int position : mask) {
+            for (PrimitiveIterator.OfInt positions = mask.iterator(); positions.hasNext(); ) {
+                int position = positions.nextInt();
                 int valueId = normalizedBinaryValueId(field, position);
                 if (valueId < 0) {
                     return false;
@@ -785,7 +787,8 @@ class FlatKeyLayout
         int full = packedDistinctFieldOrder[0];
         int compactFirst = packedDistinctFieldOrder[1];
         int compactSecond = packedDistinctFieldOrder[2];
-        for (int position : mask) {
+        for (PrimitiveIterator.OfInt positions = mask.iterator(); positions.hasNext(); ) {
+            int position = positions.nextInt();
             packedDistinctFirst[position] = packedDistinctValue(full, position);
             long first = packedDistinctValue(compactFirst, position);
             long second = packedDistinctValue(compactSecond, position);
@@ -810,7 +813,8 @@ class FlatKeyLayout
             return true;
         }
         VectorAccess.LongValues values = fieldLong[field];
-        for (int position : mask) {
+        for (PrimitiveIterator.OfInt positions = mask.iterator(); positions.hasNext(); ) {
+            int position = positions.nextInt();
             long value = values.value(position);
             if (value != (int) value) {
                 return false;
@@ -961,7 +965,8 @@ class FlatKeyLayout
                 batchPositionGlobalId[field] = positioned;
                 release(previous);
             }
-            for (int position : mask) {
+            for (PrimitiveIterator.OfInt positions = mask.iterator(); positions.hasNext(); ) {
+                int position = positions.nextInt();
                 if (!batchFieldNullFree[field] && fieldNullAccess[field].value(position)) {
                     continue;
                 }
@@ -2441,7 +2446,8 @@ class FlatKeyLayout
                 batchPositionDictionaryMapping[index] = fieldDictionaryMapping[index];
             }
             else {
-                for (int position : mask) {
+                for (PrimitiveIterator.OfInt selected = mask.iterator(); selected.hasNext(); ) {
+                    int position = selected.nextInt();
                     prepareCompactBinaryPositionId(index, position, dictionaryIds, entryGlobalIds, positioned);
                 }
             }
