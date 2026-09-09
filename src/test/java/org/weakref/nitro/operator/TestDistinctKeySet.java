@@ -546,6 +546,74 @@ class TestDistinctKeySet
     }
 
     @Test
+    void testGeneratedNormalizedFixedWidthDistinctDoesNotUseAdaptiveGroupingValueIdCeiling()
+    {
+        int count = (1 << 16) + 1;
+        Vector[] firstValues = {
+                utf8(new String[] {"repeat", "repeat", "repeat", "repeat"}),
+                new I32Vector(new int[] {0, 0, 0, 0})};
+        BinaryVector binary = new BinaryVector(count, count * Integer.BYTES);
+        byte[] value = new byte[Integer.BYTES];
+        for (int position = 0; position < count; position++) {
+            value[0] = (byte) position;
+            value[1] = (byte) (position >>> 8);
+            value[2] = (byte) (position >>> 16);
+            value[3] = (byte) (position >>> 24);
+            binary.setBytes(position, value);
+        }
+        Vector[] laterValues = {binary, new I32Vector(new int[count])};
+        try (Allocator allocator = new Allocator(engineResources)) {
+            DistinctKeySet keys = DistinctKeySet.create(
+                    firstValues,
+                    List.of(),
+                    allocator,
+                    new Allocator.Context("normalized-fixed-width-exact-value-ids"),
+                    arrayPool,
+                    codeGeneration,
+                    normalizedFixedWidthDistinctPolicy(),
+                    adaptiveLongGroupingPolicy,
+                    flatKeyTablePolicy);
+            try {
+                int[] positions = new int[count];
+                assertThat(keys.addBatch(
+                        firstValues,
+                        new Vector[] {null, null},
+                        Mask.all(firstValues[0].length()),
+                        positions)).isEqualTo(1);
+                assertThat(keys.addBatch(
+                        laterValues,
+                        new Vector[] {null, null},
+                        Mask.all(count),
+                        positions)).isEqualTo(count);
+            }
+            finally {
+                keys.releaseBuffers();
+            }
+        }
+    }
+
+    @Test
+    void testGeneratedNormalizedFixedWidthDistinctDeclinesHighCardinalityInitialBinaryDomain()
+    {
+        Vector[] values = {
+                utf8(new String[] {"alpha", "beta", "gamma", "delta"}),
+                new I32Vector(new int[] {1, 2, 3, 4})};
+        FlatKeyLayout layout = FlatKeyLayout.tryCreate(
+                values,
+                false,
+                arrayPool,
+                codeGeneration,
+                flatKeyTablePolicy,
+                List.of());
+        try {
+            assertThat(layout.normalizedFixedWidthDistinctCarriers(values)).isNull();
+        }
+        finally {
+            layout.releaseBuffers();
+        }
+    }
+
+    @Test
     void testGeneratedNormalizedFixedWidthDistinctPacksI32SourcesWithSparseMaskAndNulls()
     {
         long wideA = 1L << 40;
@@ -641,8 +709,8 @@ class TestDistinctKeySet
     void testGeneratedNormalizedFixedWidthDistinctRejectsCarrierChangeBeforeMutation()
     {
         Vector[] firstValues = {
-                new I32Vector(new int[] {1, 2}),
-                utf8(new String[] {"alpha", "beta"})};
+                new I32Vector(new int[] {1, 2, 1, 2}),
+                utf8(new String[] {"alpha", "beta", "alpha", "beta"})};
         Vector[] nulls = {null, null};
 
         try (Allocator allocator = new Allocator(engineResources)) {
@@ -657,8 +725,8 @@ class TestDistinctKeySet
                     adaptiveLongGroupingPolicy,
                     flatKeyTablePolicy);
             try {
-                int[] positions = new int[2];
-                assertThat(keys.addBatch(firstValues, nulls, Mask.all(2), positions)).isEqualTo(2);
+                int[] positions = new int[4];
+                assertThat(keys.addBatch(firstValues, nulls, Mask.all(4), positions)).isEqualTo(2);
                 assertThatThrownBy(() -> keys.addBatch(
                         new Vector[] {
                                 new I64Vector(new long[] {1, 3}),

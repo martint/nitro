@@ -215,6 +215,11 @@ class FlatKeyLayout
     // still enable the compact/array-mode group path) interned, while overflowing genuinely wide keys. Measured:
     // TPC-H q10 7031->3448ms (2.0x), no regression on q18/q03/q67/q65/q37; a lower ceiling (1<<14) regressed q18/q03.
     private ValueIdInterner[] fieldInterners;
+    // The ordinary flat table uses valueIdCeiling as an adaptive cutoff: once a high-cardinality binary field
+    // crosses it, records retain exact bytes instead. A generated normalized DISTINCT table has no direct-byte
+    // record tier after mutation, so selecting that table upgrades the same interner to the complete positive I32
+    // id domain before the first batch is bound. Do not let a grouping cost heuristic become an exact-key limit.
+    private boolean exactBinaryValueIdsRequired;
     private int[][] batchEntryGlobalId;
     private Vector[] batchEntryGlobalIdDict;
     private long[] batchEntryGlobalIdGeneration;
@@ -727,12 +732,25 @@ class FlatKeyLayout
             return null;
         }
         boolean binary = false;
+        long[] binaryHashes = null;
         FixedWidthKeyLayout.Carrier[] carriers = new FixedWidthKeyLayout.Carrier[fieldKinds.length];
         for (int field = 0; field < fieldKinds.length; field++) {
             if (!fields[field].rawKeyIdentity()) {
                 return null;
             }
             if (fieldKinds[field] == FlatTypeHandler.Kind.BINARY) {
+                int channel = inputChannels[field];
+                if (channel >= samples.length) {
+                    return null;
+                }
+                int sampleCount = Math.min(samples[channel].length(), COMPACT_BINARY_SAMPLE_SIZE);
+                if (binaryHashes == null) {
+                    binaryHashes = new long[COMPACT_BINARY_SAMPLE_SIZE];
+                }
+                int distinct = sampledBinaryDistinct(samples[channel], sampleCount, binaryHashes);
+                if ((long) distinct * 100 > (long) sampleCount * policy.compactBinaryReusePercent()) {
+                    return null;
+                }
                 carriers[field] = FixedWidthKeyLayout.Carrier.I32;
                 binary = true;
                 continue;
@@ -756,6 +774,18 @@ class FlatKeyLayout
             }
         }
         return binary ? carriers : null;
+    }
+
+    void requireExactBinaryValueIds()
+    {
+        if (fieldInterners != null) {
+            for (ValueIdInterner interner : fieldInterners) {
+                if (interner != null) {
+                    throw new IllegalStateException("Exact binary value ids must be selected before the first batch");
+                }
+            }
+        }
+        exactBinaryValueIdsRequired = true;
     }
 
     /**
@@ -912,7 +942,7 @@ class FlatKeyLayout
             int physicalPosition = binaryEntry(fieldIndex, position);
             ValueIdInterner interner = fieldInterners[fieldIndex];
             if (interner == null) {
-                interner = new ValueIdInterner(policy.valueIdCeiling(), keyTablePolicy.valueIds());
+                interner = newValueIdInterner();
                 fieldInterners[fieldIndex] = interner;
             }
             valueId = interner.intern(binary.data(), binary.startOffset(physicalPosition), binary.length(physicalPosition));
@@ -929,6 +959,12 @@ class FlatKeyLayout
                 binary.data(),
                 binary.startOffset(physicalPosition),
                 binary.length(physicalPosition));
+    }
+
+    private ValueIdInterner newValueIdInterner()
+    {
+        int maximumDistinct = exactBinaryValueIdsRequired ? Integer.MAX_VALUE : policy.valueIdCeiling();
+        return new ValueIdInterner(maximumDistinct, keyTablePolicy.valueIds());
     }
 
     long assignNormalizedIntBatch(
@@ -1223,7 +1259,7 @@ class FlatKeyLayout
                     if (policy.singleRunBinaryIdOnly() && policy.idOnlyBinaryRecords()) {
                         ValueIdInterner interner = fieldInterners[index];
                         if (interner == null) {
-                            interner = new ValueIdInterner(policy.valueIdCeiling(), keyTablePolicy.valueIds());
+                            interner = newValueIdInterner();
                             fieldInterners[index] = interner;
                         }
                         fieldBinaryConstantGlobalId[index] = interner.intern(
@@ -2277,7 +2313,7 @@ class FlatKeyLayout
         }
         ValueIdInterner interner = fieldInterners[fieldIndex];
         if (interner == null) {
-            interner = new ValueIdInterner(policy.valueIdCeiling(), keyTablePolicy.valueIds());
+            interner = newValueIdInterner();
             fieldInterners[fieldIndex] = interner;
         }
         int entryCount = dictionary.length();
@@ -3419,7 +3455,7 @@ class FlatKeyLayout
             int length = base.length(entry);
             ValueIdInterner interner = fieldInterners[fieldIndex];
             if (interner == null) {
-                interner = new ValueIdInterner(policy.valueIdCeiling(), keyTablePolicy.valueIds());
+                interner = newValueIdInterner();
                 fieldInterners[fieldIndex] = interner;
             }
             int globalId = interner.intern(base.data(), offset, length);

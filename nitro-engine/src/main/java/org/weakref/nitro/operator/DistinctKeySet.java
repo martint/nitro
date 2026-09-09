@@ -1202,6 +1202,7 @@ final class DistinctKeySet
                 AdaptiveLongGroupingPolicy adaptiveLongGroupingPolicy)
         {
             this.flatLayout = flatLayout;
+            flatLayout.requireExactBinaryValueIds();
             this.arrayPool = arrayPool;
             normalizedValues = new Vector[layout.logicalKeyCount()];
             bindings = new FixedWidthKeyBatchBindings(layout, arrayPool);

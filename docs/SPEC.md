@@ -701,8 +701,12 @@ polymorphic value-access interfaces. Logical types do not select generator or ta
 Reversible DISTINCT normalization is one persistent-key physical policy. Its descriptor is derived from the complete
 ordered carrier layout, not a query or named logical type. Every specified direct field requires its provider's
 explicit raw-key-identity proof; a carrier, vector, or flat-handler kind does not establish admission. Binary value
-IDs are exact for the query lifetime across admitted representation changes; exhaustion rejects before table
-mutation. Diagnostic opt-outs may compare physical policies, but are not runtime correctness fallbacks.
+IDs are exact for the query lifetime across admitted representation changes. A bounded initial physical sample may
+select normalization only when every binary field demonstrates sufficient reuse; otherwise the already-authorized
+direct flat physical table is selected before mutation. Once selected, normalization covers the complete positive
+I32 ID domain and is not limited by an adaptive grouping interner ceiling. True physical-domain exhaustion rejects
+before the affected batch mutates the table. Diagnostic opt-outs may compare physical policies, but are not runtime
+correctness fallbacks.
 
 There is no semantic object-table fallback for grouping, distinct, hash join, or membership. Missing physical-key
 coverage is rejected at planning when capabilities suffice and otherwise at physical binding before rows are added.
