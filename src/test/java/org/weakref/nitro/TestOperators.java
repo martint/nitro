@@ -6923,6 +6923,94 @@ public class TestOperators
     }
 
     @Test
+    void testTakenHashJoinProbeDictionaryDoesNotBorrowClosedInputStorage()
+    {
+        long[] keys = {1, 2, 3, 4};
+        BinaryVector payloadValues = new BinaryVector(2, 10);
+        payloadValues.setBytes(0, "alpha".getBytes(UTF_8));
+        payloadValues.setBytes(1, "bravo".getBytes(UTF_8));
+        DictionaryVector payload = DictionaryVector.wrap(new int[] {0, 1, 0, 1}, payloadValues);
+
+        Vector retained;
+        try (HashJoinOperator join = new HashJoinOperator(
+                allocator,
+                new TableOperator(2, List.of(TableOperator.Page.values(
+                        keys.length,
+                        new Vector[] {new I64Vector(keys.clone()), payload},
+                        Mask.all(keys.length)))),
+                0,
+                new TableOperator(1, List.of(TableOperator.Page.values(
+                        keys.length,
+                        new Vector[] {new I64Vector(keys.clone())},
+                        Mask.all(keys.length)))),
+                0).withOutputs(1);
+                Batch output = join.next()) {
+            retained = output.output(0).take(Stream.VALUES);
+        }
+
+        // Model an ordinary source advancing and reusing the just-closed batch's primitive storage. A taken join
+        // output must own its logical rows rather than retain the probe's dictionary domain through another wrapper.
+        payloadValues.setBytes(0, "gamma".getBytes(UTF_8));
+        payloadValues.setBytes(1, "delta".getBytes(UTF_8));
+
+        assertThat(readUtf8(retained, 0)).isEqualTo("alpha");
+        assertThat(readUtf8(retained, 1)).isEqualTo("bravo");
+        assertThat(readUtf8(retained, 2)).isEqualTo("alpha");
+        assertThat(readUtf8(retained, 3)).isEqualTo("bravo");
+    }
+
+    @Test
+    void testTakenHashJoinBuildDictionaryRetainsBuildOwnershipAcrossOutputBatches()
+    {
+        int rowCount = HashJoinExecutionPolicy.defaults().maxBatchRows();
+        long[] keys = new long[rowCount];
+        java.util.Arrays.setAll(keys, index -> index);
+        BinaryVector payload = new BinaryVector(rowCount, rowCount * 5);
+        for (int position = 0; position < rowCount; position++) {
+            payload.setBytes(position, (position % 2 == 0 ? "alpha" : "bravo").getBytes(UTF_8));
+        }
+
+        TableOperator.Page probePage = TableOperator.Page.values(
+                rowCount,
+                new Vector[] {new I64Vector(keys.clone())},
+                Mask.all(rowCount));
+        try (HashJoinOperator join = new HashJoinOperator(
+                allocator,
+                new TableOperator(1, List.of(probePage, probePage)),
+                0,
+                new TableOperator(2, List.of(TableOperator.Page.values(
+                        rowCount,
+                        new Vector[] {new I64Vector(keys.clone()), payload},
+                        Mask.all(rowCount)))),
+                0).withOutputs(2)) {
+            DictionaryVector firstValues;
+            Vector dictionaryValues;
+            try (Batch first = join.next()) {
+                firstValues = (DictionaryVector) first.output(0).take(Stream.VALUES);
+                dictionaryValues = firstValues.values();
+
+                assertThat(firstValues.length()).isEqualTo(rowCount);
+                assertThat(dictionaryValues).isInstanceOf(BinaryVector.class);
+                assertThat(dictionaryValues.length()).isEqualTo(2);
+                assertThat(allocator.ownsVectorTree(firstValues)).isTrue();
+                assertThat(readUtf8(firstValues, 128)).isEqualTo("alpha");
+                assertThat(readUtf8(firstValues, 129)).isEqualTo("bravo");
+            }
+
+            try (Batch second = join.next()) {
+                DictionaryVector secondValues = (DictionaryVector) second.output(0).borrow(Stream.VALUES);
+
+                assertThat(secondValues.values()).isSameAs(dictionaryValues);
+                assertThat(allocator.ownsVectorTree(secondValues)).isTrue();
+                assertThat(readUtf8(secondValues, 128)).isEqualTo("alpha");
+                assertThat(readUtf8(secondValues, 129)).isEqualTo("bravo");
+                assertThat(readUtf8(firstValues, 128)).isEqualTo("alpha");
+                assertThat(readUtf8(firstValues, 129)).isEqualTo("bravo");
+            }
+        }
+    }
+
+    @Test
     void testHashJoinAccountsScratchAndSingleLongIndexMemory()
     {
         Allocator.Context operatorContext = new Allocator.Context("HashJoinOperator");
@@ -8720,6 +8808,12 @@ public class TestOperators
     private static Reference values(Producer producer)
     {
         return new Reference(producer, Stream.VALUES);
+    }
+
+    private static String readUtf8(Vector vector, int position)
+    {
+        VectorAccess.BinarySlice slice = VectorAccess.binaryValues(vector).value(position);
+        return new String(slice.data(), slice.offset(), slice.length(), UTF_8);
     }
 
     /**
