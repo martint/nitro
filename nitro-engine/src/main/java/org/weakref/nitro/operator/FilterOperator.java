@@ -15,6 +15,7 @@ package org.weakref.nitro.operator;
 
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import org.weakref.nitro.core.execution.ExecutionDiagnostics;
+import org.weakref.nitro.core.function.mask.StaticBinaryEqualityProvider;
 import org.weakref.nitro.core.function.mask.StaticLongEqualityProvider;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
@@ -192,6 +193,20 @@ public class FilterOperator
                             source.pushStaticFilter(candidate.filter()),
                             null)));
         }
+        if (policy.pushStaticBinaryEquality()) {
+            staticBinaryEquality(evaluationPlan, predicateMask, primitiveRegistry).ifPresent(equality -> {
+                StaticDomainFilter filter = new StaticDomainFilter(
+                        equality.input(),
+                        new BinaryLiteralDomain(
+                                source.outputSchema().field(equality.input()).type(),
+                                equality.value(),
+                                equality.equal()));
+                pushdowns.add(new StaticPredicatePushdown(
+                        List.of(predicateMask),
+                        source.pushStaticFilter(filter),
+                        null));
+            });
+        }
         this.staticPredicatePushdowns = List.copyOf(pushdowns);
         PlanEvaluator.MaskExecutionDiagnostics evaluatorDiagnostics = planEvaluator.maskExecutionDiagnostics();
         diagnostics.record(PLANNED_ASSIGNMENTS, evaluatorDiagnostics.plannedAssignments());
@@ -330,6 +345,51 @@ public class FilterOperator
     }
 
     private record StaticLongEquality(int input, long value) {}
+
+    static Optional<StaticBinaryEquality> staticBinaryEquality(
+            EvaluationPlan plan,
+            MaskExpression predicateMask,
+            PrimitiveRegistry primitiveRegistry)
+    {
+        boolean equal = true;
+        MaskExpression expression = predicateMask;
+        if (expression instanceof org.weakref.nitro.operator.evaluator.ir.NotMask not) {
+            equal = false;
+            expression = not.source();
+        }
+        if (!(expression instanceof ReferenceMask(Reference(Variable predicate, Stream stream))) || stream != Stream.VALUES) {
+            return Optional.empty();
+        }
+        Assignment predicateAssignment = assignment(plan, predicate);
+        if (predicateAssignment == null || predicateAssignment.mask() != AllMask.ALL ||
+                !(predicateAssignment.operation() instanceof Call call)) {
+            return Optional.empty();
+        }
+        Optional<StaticBinaryEqualityProvider> provider = primitiveRegistry.capability(call, StaticBinaryEqualityProvider.class);
+        if (provider.isEmpty()) {
+            return Optional.empty();
+        }
+        boolean selectEqual = equal;
+        return provider.orElseThrow()
+                .staticBinaryEquality(new EvaluatorFunctionCallSite(call, plan, primitiveRegistry))
+                .filter(equality -> equality.inputArgument() < call.arguments().size())
+                .flatMap(equality -> inputIndex(call.arguments().get(equality.inputArgument()))
+                        .map(input -> new StaticBinaryEquality(input, equality.value(), selectEqual)));
+    }
+
+    record StaticBinaryEquality(int input, byte[] value, boolean equal)
+    {
+        StaticBinaryEquality
+        {
+            value = java.util.Arrays.copyOf(value, value.length);
+        }
+
+        @Override
+        public byte[] value()
+        {
+            return java.util.Arrays.copyOf(value, value.length);
+        }
+    }
 
     private static Assignment assignment(EvaluationPlan plan, Variable output)
     {
@@ -526,6 +586,12 @@ public class FilterOperator
     {
         // A filter only narrows rows; it leaves columns unchanged, so forward a pushed dynamic filter to the source.
         source.pushDynamicFilter(filter);
+    }
+
+    @Override
+    public StaticFilterEnforcement pushStaticFilter(StaticDomainFilter filter)
+    {
+        return source.pushStaticFilter(filter);
     }
 
     @Override

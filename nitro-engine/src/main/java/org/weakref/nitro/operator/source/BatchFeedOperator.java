@@ -24,6 +24,7 @@ import org.weakref.nitro.data.ValueDemand;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.DynamicFilter;
 import org.weakref.nitro.operator.Operator;
+import org.weakref.nitro.operator.StaticDomainFilter;
 import org.weakref.nitro.operator.StaticFilterEnforcement;
 
 import java.util.ArrayList;
@@ -220,7 +221,7 @@ public final class BatchFeedOperator
     public void pushDynamicFilter(DynamicFilter filter)
     {
         checkOpen();
-        dynamicFilters.add(new PushedFilter(requireNonNull(filter, "filter is null"), null));
+        dynamicFilters.add(new PushedFilter(requireNonNull(filter, "filter is null"), null, null));
     }
 
     @Override
@@ -228,7 +229,16 @@ public final class BatchFeedOperator
     {
         checkOpen();
         StaticFilterEnforcement enforcement = StaticFilterEnforcement.pending();
-        dynamicFilters.add(new PushedFilter(requireNonNull(filter, "filter is null"), enforcement));
+        dynamicFilters.add(new PushedFilter(requireNonNull(filter, "filter is null"), null, enforcement));
+        return enforcement;
+    }
+
+    @Override
+    public StaticFilterEnforcement pushStaticFilter(StaticDomainFilter filter)
+    {
+        checkOpen();
+        StaticFilterEnforcement enforcement = StaticFilterEnforcement.pending();
+        dynamicFilters.add(new PushedFilter(null, requireNonNull(filter, "filter is null"), enforcement));
         return enforcement;
     }
 
@@ -254,10 +264,20 @@ public final class BatchFeedOperator
         List<RuntimeFilterAcceptance> acceptances = new ArrayList<>(dynamicFilters.size());
         for (PushedFilter pushedFilter : dynamicFilters) {
             DynamicFilter filter = pushedFilter.filter();
+            StaticDomainFilter domainFilter = pushedFilter.domainFilter();
             RuntimeFilterAcceptance acceptance;
-            var column = source.column(filter.column());
-            if (!ingress.supportsRuntimeFilter(source, column) || !source.supportsRuntimeFilter(column)) {
+            int columnIndex = filter == null ? domainFilter.column() : filter.column();
+            var column = source.column(columnIndex);
+            if (!source.supportsRuntimeFilter(column) ||
+                    (filter != null && !ingress.supportsRuntimeFilter(source, column))) {
                 acceptance = RuntimeFilterAcceptance.REJECTED;
+            }
+            else if (domainFilter != null) {
+                acceptance = source.addRuntimeFilter(new org.weakref.nitro.core.source.RuntimeFilter(
+                        column,
+                        domainFilter.domain(),
+                        false,
+                        false));
             }
             else {
                 var runtimeFilter = ingress.runtimeFilter(column, filter);
@@ -291,7 +311,18 @@ public final class BatchFeedOperator
                                 Map.Entry::getValue))));
     }
 
-    private record PushedFilter(DynamicFilter filter, StaticFilterEnforcement enforcement) {}
+    private record PushedFilter(
+            DynamicFilter filter,
+            StaticDomainFilter domainFilter,
+            StaticFilterEnforcement enforcement)
+    {
+        private PushedFilter
+        {
+            if ((filter == null) == (domainFilter == null)) {
+                throw new IllegalArgumentException("exactly one filter representation is required");
+            }
+        }
+    }
 
     @Override
     public void close()

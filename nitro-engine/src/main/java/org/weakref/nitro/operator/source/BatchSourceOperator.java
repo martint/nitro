@@ -24,6 +24,7 @@ import org.weakref.nitro.data.ValueDemand;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.DynamicFilter;
 import org.weakref.nitro.operator.Operator;
+import org.weakref.nitro.operator.StaticDomainFilter;
 import org.weakref.nitro.operator.StaticFilterEnforcement;
 
 import java.util.Map;
@@ -233,6 +234,20 @@ public final class BatchSourceOperator
         var handle = source.column(filter.column());
         StaticFilterEnforcement enforcement = StaticFilterEnforcement.pending();
         enforcement.complete(source.addRuntimeFilter(ingress.runtimeFilter(handle, filter).withoutResidual()));
+        return enforcement;
+    }
+
+    @Override
+    public StaticFilterEnforcement pushStaticFilter(StaticDomainFilter filter)
+    {
+        requireNonNull(filter, "filter is null");
+        if (!supportsDynamicFilterPushdown(filter.column())) {
+            return StaticFilterEnforcement.residual();
+        }
+        var handle = source.column(filter.column());
+        StaticFilterEnforcement enforcement = StaticFilterEnforcement.pending();
+        enforcement.complete(source.addRuntimeFilter(
+                new org.weakref.nitro.core.source.RuntimeFilter(handle, filter.domain(), false, false)));
         return enforcement;
     }
 

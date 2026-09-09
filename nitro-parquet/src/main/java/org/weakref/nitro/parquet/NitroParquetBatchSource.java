@@ -17,6 +17,8 @@ import org.apache.parquet.format.RowGroup;
 import org.weakref.nitro.core.batch.SourceBatch;
 import org.weakref.nitro.core.function.VersionedLongPredicate;
 import org.weakref.nitro.core.source.BatchSource;
+import org.weakref.nitro.core.source.BinaryDomain;
+import org.weakref.nitro.core.source.BinaryDomainCapability;
 import org.weakref.nitro.core.source.LongDomain;
 import org.weakref.nitro.core.source.LongDomainCapability;
 import org.weakref.nitro.core.source.OrdinalSourceColumnHandle;
@@ -75,6 +77,8 @@ import static java.util.Objects.requireNonNull;
 public final class NitroParquetBatchSource
         implements BatchSource
 {
+    private static final boolean VERIFY_FILTERED_BINARY_PAYLOAD = Boolean.getBoolean("nitro.debug.verifyFilteredBinaryPayload");
+
     public record ColumnProjection(String baseName, int baseOrdinal, List<String> fieldNames, List<Integer> fieldOrdinals)
     {
         public ColumnProjection
@@ -255,6 +259,7 @@ public final class NitroParquetBatchSource
     private final boolean adaptiveNarrowFilterWindowCandidate;
     private boolean adaptiveNarrowFilterWindowDecided;
     private final LongDomain[] filtersByColumn;
+    private final BinaryDomain[] binaryFiltersByColumn;
     private final boolean[] lateRowLevelFiltersByColumn;
     private final boolean[] requiredFiltersByColumn;
     private final LongDomain[] rowGroupFiltersByColumn;
@@ -300,6 +305,9 @@ public final class NitroParquetBatchSource
     private final int[][] windowInt;
     private final boolean[][] windowNull;
     private final Vector[] windowBinary;
+    private final byte[][][] expectedWindowBinary;
+    private final ColumnReader[] referenceBinaryReaders;
+    private final byte[][][] expectedReferenceBinary;
     private int[] windowSlicePositions = new int[0];
     private int windowSurvivorCount;
     private int windowSurvivorCursor;
@@ -934,6 +942,7 @@ public final class NitroParquetBatchSource
         this.adaptiveNarrowFilterWindowCandidate =
                 adaptiveNarrowPolicy.enabled() && numeric && columnCount <= adaptiveNarrowPolicy.maxColumns();
         this.filtersByColumn = new LongDomain[columnCount];
+        this.binaryFiltersByColumn = new BinaryDomain[columnCount];
         this.lateRowLevelFiltersByColumn = new boolean[columnCount];
         this.requiredFiltersByColumn = new boolean[columnCount];
         this.rowGroupFiltersByColumn = new LongDomain[columnCount];
@@ -949,6 +958,16 @@ public final class NitroParquetBatchSource
         this.windowInt = new int[columnCount][];
         this.windowNull = new boolean[columnCount][];
         this.windowBinary = new Vector[columnCount];
+        this.expectedWindowBinary = VERIFY_FILTERED_BINARY_PAYLOAD ? new byte[columnCount][][] : null;
+        this.referenceBinaryReaders = VERIFY_FILTERED_BINARY_PAYLOAD ? new ColumnReader[columnCount] : null;
+        this.expectedReferenceBinary = VERIFY_FILTERED_BINARY_PAYLOAD ? new byte[columnCount][][] : null;
+        if (VERIFY_FILTERED_BINARY_PAYLOAD) {
+            for (int column = 0; column < columnCount; column++) {
+                if (readers[column].kind() == ColumnReader.Kind.BINARY) {
+                    referenceBinaryReaders[column] = readers[column].newSibling();
+                }
+            }
+        }
         this.debugFilterInputs = new long[columnCount];
         this.debugFilterOutputs = new long[columnCount];
         this.debugFullDecoded = new long[columnCount];
@@ -1038,6 +1057,46 @@ public final class NitroParquetBatchSource
         filterVersionsByColumn[column] = dictionaryFilterPolicy.admitsVersionedPredicate(dictionaryEntries, filter.size())
                 ? filter
                 : null;
+        hasFilters = true;
+        lateFilterAlignmentPending |= firstRowLevelFilter && nextRow > 0;
+        return true;
+    }
+
+    private boolean pushBinaryDomain(int column, BinaryDomain filter, boolean enforcementRequired)
+    {
+        if (column < 0 || column >= readers.length || readers[column].kind() != ColumnReader.Kind.BINARY) {
+            return false;
+        }
+        if (logicalValueBindings[column] != null && !logicalValueBindings[column].preservesBinaryEquality()) {
+            return false;
+        }
+        if (!readers[column].isDictionaryOnly()) {
+            return false;
+        }
+        int dictionaryEntries = readers[column].peekDictionarySize();
+        if (!filterEvaluationPolicy.staticBinarySourceFilter().admits(dictionaryEntries)) {
+            return false;
+        }
+        if (!enforcementRequired || nextRow > 0 || !runtimeFilterPolicy.rowLevelFiltering() ||
+                (nullable[column] && !runtimeFilterPolicy.nullableRowLevelFiltering())) {
+            return false;
+        }
+        if (filtersByColumn[column] != null || binaryFiltersByColumn[column] != null) {
+            return false;
+        }
+        for (BinaryDomain existing : binaryFiltersByColumn) {
+            // The direct reader kernel intentionally keeps a binary predicate as the dense lead filter. A second
+            // binary predicate retains its evaluator residual instead of entering a candidate-materialization bridge.
+            if (existing != null) {
+                return false;
+            }
+        }
+        boolean firstRowLevelFilter = !hasFilters;
+        binaryFiltersByColumn[column] = filter;
+        requiredFiltersByColumn[column] = true;
+        if (filterOrder != null) {
+            filterOrder = appendFilterColumn(filterOrder, column);
+        }
         hasFilters = true;
         lateFilterAlignmentPending |= firstRowLevelFilter && nextRow > 0;
         return true;
@@ -1215,7 +1274,8 @@ public final class NitroParquetBatchSource
             return RuntimeFilterAcceptance.REJECTED;
         }
         LongDomain domain = filter.domain().capability(LongDomainCapability.LONG_DOMAIN).orElse(null);
-        if (domain == null) {
+        BinaryDomain binaryDomain = filter.domain().capability(BinaryDomainCapability.BINARY_DOMAIN).orElse(null);
+        if (domain == null && binaryDomain == null) {
             return RuntimeFilterAcceptance.REJECTED;
         }
         // The long-domain capability describes non-null carriers. Nullable domain semantics remain on the enclosing
@@ -1226,7 +1286,9 @@ public final class NitroParquetBatchSource
             return RuntimeFilterAcceptance.ACCEPTED_WITH_RESIDUAL;
         }
         boolean enforcementRequested = !filter.residualRequired() && !filter.approximate();
-        boolean enforced = pushLongDomain(column, domain, enforcementRequested);
+        boolean enforced = domain != null
+                ? pushLongDomain(column, domain, enforcementRequested)
+                : pushBinaryDomain(column, binaryDomain, enforcementRequested);
         return enforced && enforcementRequested
                 ? RuntimeFilterAcceptance.ENFORCED
                 : RuntimeFilterAcceptance.ACCEPTED_WITH_RESIDUAL;
@@ -1237,9 +1299,10 @@ public final class NitroParquetBatchSource
     {
         int index = columnIndex(requireNonNull(column, "column is null"));
         return index >= 0 &&
-                (logicalValueBindings[index] == null || logicalValueBindings[index].preservesLongDomain()) &&
-                readers[index].kind() != ColumnReader.Kind.BINARY &&
-                !readers[index].isDouble();
+                ((readers[index].kind() == ColumnReader.Kind.BINARY &&
+                        (logicalValueBindings[index] == null || logicalValueBindings[index].preservesBinaryEquality())) ||
+                        ((logicalValueBindings[index] == null || logicalValueBindings[index].preservesLongDomain()) &&
+                                !readers[index].isDouble()));
     }
 
     /** Reject mixed-payload row groups from numeric min/max metadata before any column page is visited. */
@@ -1394,6 +1457,7 @@ public final class NitroParquetBatchSource
             if (filterEvaluationPolicy.nonSelectiveElision().enabled() && allFiltersNonSelective()) {
                 for (int c = 0; c < filtersByColumn.length; c++) {
                     filtersByColumn[c] = null;
+                    binaryFiltersByColumn[c] = null;
                     filterVersionsByColumn[c] = null;
                 }
                 hasFilters = false;
@@ -1407,10 +1471,14 @@ public final class NitroParquetBatchSource
     {
         for (int c = 0; c < filtersByColumn.length; c++) {
             LongDomain filter = filtersByColumn[c];
-            if (filter == null) {
+            BinaryDomain binaryFilter = binaryFiltersByColumn[c];
+            if (filter == null && binaryFilter == null) {
                 continue;
             }
             if (requiredFiltersByColumn[c]) {
+                return false;
+            }
+            if (binaryFilter != null) {
                 return false;
             }
             if (filterEvaluationPolicy.nonSelectiveElision().exactDictionaryCoverage()) {
@@ -2158,6 +2226,31 @@ public final class NitroParquetBatchSource
         int applied = 0;
         for (; applied < order.length && survivorCount > 0; applied++) {
             int column = order[applied];
+            BinaryDomain binaryFilter = binaryFiltersByColumn[column];
+            if (binaryFilter != null) {
+                int rows = survivorCount;
+                int kept = filterBinaryColumn(
+                        column,
+                        binaryFilter,
+                        survivors,
+                        rows,
+                        count,
+                        nextSurvivors);
+                survivors = applied + 1 < order.length
+                        ? snapshotFilterSurvivors(column, nextSurvivors, kept)
+                        : nextSurvivors;
+                readPositions[column] = survivors;
+                if (diagnostics.sourceWork()) {
+                    debugDictionaryExamined[column] += rows;
+                }
+                if (diagnostics.rowCounts()) {
+                    debugFilterInputs[column] += rows;
+                    debugFilterOutputs[column] += kept;
+                }
+                survivorCount = kept;
+                checkSurvivorBounds(column, survivors, survivorCount, count);
+                continue;
+            }
             LongDomain filter = filtersByColumn[column];
             int kept;
             if (survivors == null) {
@@ -2302,7 +2395,8 @@ public final class NitroParquetBatchSource
                     progressiveFilterCompactionAdmitted = true;
                     for (int i = 0; i <= applied; i++) {
                         int alignedColumn = order[i];
-                        if (readPositions[alignedColumn] == inputSurvivors) {
+                        if (readers[alignedColumn].kind() != ColumnReader.Kind.BINARY &&
+                                readPositions[alignedColumn] == inputSurvivors) {
                             readPositions[alignedColumn] = survivors;
                         }
                     }
@@ -2400,7 +2494,10 @@ public final class NitroParquetBatchSource
                 continue;
             }
             if (readPositions[c] == survivors) {
-                if (readers[c].kind() == ColumnReader.Kind.INT) {
+                if (readers[c].kind() == ColumnReader.Kind.BINARY) {
+                    // Binary filter output was already compacted directly into its encoded window vector.
+                }
+                else if (readers[c].kind() == ColumnReader.Kind.INT) {
                     windowInt[c] = colInt[c];
                 }
                 else {
@@ -2409,6 +2506,36 @@ public final class NitroParquetBatchSource
                 if (nullable[c]) {
                     windowNull[c] = colNull[c];
                 }
+                continue;
+            }
+            if (readers[c].kind() == ColumnReader.Kind.BINARY) {
+                windowSlicePositions = ensureInt(windowSlicePositions, survivorCount);
+                int[] ranks = windowSlicePositions;
+                int rank = 0;
+                for (int output = 0; output < survivorCount; output++) {
+                    int target = survivors[output];
+                    while (readPositions[c][rank] < target) {
+                        rank++;
+                    }
+                    ranks[output] = rank;
+                }
+                Vector prior = windowBinary[c];
+                windowBinary[c] = prior instanceof DictionaryVector dictionary
+                        ? dictionary.copyPositionsPreservingEncodingBorrowingValues(allocator, allocationContext, ranks, survivorCount)
+                        : prior.copyPositionsInto(
+                                allocator,
+                                allocationContext,
+                                null,
+                                ranks,
+                                survivorCount,
+                                0,
+                                survivorCount);
+                allocator.release(allocationContext, prior);
+                if (nullable[c]) {
+                    windowNull[c] = ensureWindowNull(c, survivorCount);
+                    java.util.Arrays.fill(windowNull[c], 0, survivorCount, false);
+                }
+                recordCopied(c, survivorCount);
                 continue;
             }
             boolean[] nulls = nullable[c] ? ensureWindowNull(c, survivorCount) : null;
@@ -2423,6 +2550,45 @@ public final class NitroParquetBatchSource
             recordCopied(c, survivorCount);
         }
         windowSurvivorCount = survivorCount;
+        if (VERIFY_FILTERED_BINARY_PAYLOAD) {
+            captureReferenceBinary(count, survivors, survivorCount);
+            for (int column = 0; column < columnCount; column++) {
+                captureWindowBinary(column);
+                verifyWindowAgainstReference(column);
+            }
+        }
+    }
+
+    /** Applies an exact binary domain and preserves the selected physical dictionary when the reader exposes one. */
+    private int filterBinaryColumn(
+            int column,
+            BinaryDomain filter,
+            int[] candidates,
+            int candidateCount,
+            int count,
+            int[] survivorsOut)
+    {
+        releaseWindowBinary(column);
+        if (candidates != null || candidateCount != count) {
+            throw new IllegalStateException("binary source predicate must be the dense lead filter");
+        }
+        ColumnReader.BinaryFilterResult result = readers[column].filterBinary(
+                filter,
+                count,
+                survivorsOut,
+                allocator,
+                allocationContext,
+                outputRequired[column]);
+        int kept = result.survivorCount();
+        if (outputRequired[column]) {
+            windowBinary[column] = result.values();
+            if (nullable[column]) {
+                windowNull[column] = ensureWindowNull(column, kept);
+                java.util.Arrays.fill(windowNull[column], 0, kept, false);
+            }
+        }
+        recordSelectedDecode(column, kept);
+        return kept;
     }
 
     /** Filter from the reader's current page cursor when a residual predicate narrows after scanning has begun. */
@@ -2547,7 +2713,8 @@ public final class NitroParquetBatchSource
     {
         for (int i = 0; i <= applied; i++) {
             int column = order[i];
-            if (!outputRequired[column] || readPositions[column] != inputSurvivors) {
+            if (readers[column].kind() == ColumnReader.Kind.BINARY ||
+                    !outputRequired[column] || readPositions[column] != inputSurvivors) {
                 continue;
             }
             if (readers[column].kind() == ColumnReader.Kind.LONG) {
@@ -2575,7 +2742,8 @@ public final class NitroParquetBatchSource
     {
         int count = 0;
         for (int i = 0; i <= applied; i++) {
-            if (readPositions[order[i]] == inputSurvivors) {
+            int column = order[i];
+            if (readers[column].kind() != ColumnReader.Kind.BINARY && readPositions[column] == inputSurvivors) {
                 count++;
             }
         }
@@ -2655,7 +2823,8 @@ public final class NitroParquetBatchSource
     {
         for (int i = 0; i <= applied; i++) {
             int column = order[i];
-            if (!outputRequired[column] || readPositions[column] != inputSurvivors) {
+            if (readers[column].kind() == ColumnReader.Kind.BINARY ||
+                    !outputRequired[column] || readPositions[column] != inputSurvivors) {
                 continue;
             }
             if (readers[column].kind() == ColumnReader.Kind.LONG) {
@@ -2672,7 +2841,7 @@ public final class NitroParquetBatchSource
 
     private boolean isFilterColumn(int column)
     {
-        return filtersByColumn[column] != null;
+        return filtersByColumn[column] != null || binaryFiltersByColumn[column] != null;
     }
 
     private int payloadColumnCount()
@@ -2692,6 +2861,11 @@ public final class NitroParquetBatchSource
         int columnCount = readers.length;
         int start = windowSurvivorCursor;
         int sliceCount = Math.min(currentBatchRows, windowSurvivorCount - start);
+        if (VERIFY_FILTERED_BINARY_PAYLOAD) {
+            for (int column = 0; column < readers.length; column++) {
+                verifyWindowBinary(column);
+            }
+        }
         windowSurvivorCursor += sliceCount;
         lazyFilteredWindowOutputs = true;
         filteredWindowSliceStart = start;
@@ -2763,6 +2937,7 @@ public final class NitroParquetBatchSource
             }
             currentValues[c] = valueVector;
             currentNulls[c] = nullVector;
+            verifyPublishedBinary(c, valueVector, start, sliceCount);
             recordPublished(c, sliceCount);
             recordCopied(c, sliceCount);
             ScanOutputResolver outputResolver = outputResolvers[c];
@@ -2787,6 +2962,102 @@ public final class NitroParquetBatchSource
                 deferredFilteredPayload ? deferredFilteredClose : adaptiveClose);
         currentBatch = batch;
         return batch;
+    }
+
+    private void captureWindowBinary(int column)
+    {
+        Vector values = windowBinary[column];
+        if (values == null) {
+            expectedWindowBinary[column] = null;
+            return;
+        }
+        VectorAccess.BinaryRegions regions = VectorAccess.binaryRegions(values);
+        byte[][] expected = new byte[values.length()][];
+        for (int position = 0; position < expected.length; position++) {
+            expected[position] = java.util.Arrays.copyOfRange(
+                    regions.data(position),
+                    regions.offset(position),
+                    regions.offset(position) + regions.length(position));
+        }
+        expectedWindowBinary[column] = expected;
+        verifyWindowBinary(column);
+    }
+
+    private void verifyWindowBinary(int column)
+    {
+        if (!VERIFY_FILTERED_BINARY_PAYLOAD || expectedWindowBinary[column] == null) {
+            return;
+        }
+        verifyBinaryValues(column, windowBinary[column], expectedWindowBinary[column], 0, expectedWindowBinary[column].length, "window");
+    }
+
+    private void captureReferenceBinary(int count, int[] survivors, int survivorCount)
+    {
+        for (int column = 0; column < readers.length; column++) {
+            ColumnReader reference = referenceBinaryReaders[column];
+            if (reference == null) {
+                continue;
+            }
+            boolean[] nulls = nullable[column] ? new boolean[count] : null;
+            Vector full = reference.readBinary(allocator, allocationContext, nulls, count);
+            try {
+                VectorAccess.BinaryRegions regions = VectorAccess.binaryRegions(full);
+                byte[][] expected = new byte[survivorCount][];
+                for (int output = 0; output < survivorCount; output++) {
+                    int sourcePosition = survivors == null ? output : survivors[output];
+                    expected[output] = java.util.Arrays.copyOfRange(
+                            regions.data(sourcePosition),
+                            regions.offset(sourcePosition),
+                            regions.offset(sourcePosition) + regions.length(sourcePosition));
+                }
+                expectedReferenceBinary[column] = expected;
+            }
+            finally {
+                allocator.release(allocationContext, full);
+            }
+        }
+    }
+
+    private void verifyWindowAgainstReference(int column)
+    {
+        if (!VERIFY_FILTERED_BINARY_PAYLOAD || windowBinary[column] == null || expectedReferenceBinary[column] == null) {
+            return;
+        }
+        verifyBinaryValues(
+                column,
+                windowBinary[column],
+                expectedReferenceBinary[column],
+                0,
+                expectedReferenceBinary[column].length,
+                "full-read-reference");
+    }
+
+    private void verifyPublishedBinary(int column, Vector values, int start, int count)
+    {
+        if (!VERIFY_FILTERED_BINARY_PAYLOAD || readers[column].kind() != ColumnReader.Kind.BINARY ||
+                values == null || expectedWindowBinary[column] == null) {
+            return;
+        }
+        verifyBinaryValues(column, values, expectedWindowBinary[column], start, count, "published");
+    }
+
+    private void verifyBinaryValues(int column, Vector values, byte[][] expected, int expectedStart, int count, String boundary)
+    {
+        VectorAccess.BinaryRegions regions = VectorAccess.binaryRegions(values);
+        for (int position = 0; position < count; position++) {
+            byte[] bytes = expected[expectedStart + position];
+            if (regions.length(position) != bytes.length ||
+                    !java.util.Arrays.equals(
+                            regions.data(position),
+                            regions.offset(position),
+                            regions.offset(position) + regions.length(position),
+                            bytes,
+                            0,
+                            bytes.length)) {
+                throw new IllegalStateException("Filtered binary payload mismatch: boundary=%s column=%s name=%s position=%s expectedPosition=%s expectedLength=%s actualLength=%s"
+                        .formatted(boundary, column, columnNames.get(column), position, expectedStart + position, bytes.length, regions.length(position)));
+            }
+        }
     }
 
     private final class ScanOutputResolver
@@ -2891,6 +3162,14 @@ public final class NitroParquetBatchSource
             }
             if (stream == Stream.VALUES) {
                 adaptCurrentValue(column);
+                if (VERIFY_FILTERED_BINARY_PAYLOAD && !lazyOutputResolution && currentValues[column] != null &&
+                        expectedWindowBinary[column] != null) {
+                    verifyPublishedBinary(
+                            column,
+                            currentValues[column],
+                            filteredWindowSliceStart,
+                            filteredWindowSliceCount);
+                }
             }
             return switch (stream) {
                 case VALUES -> requireNonNull(currentValues[column], "VALUES stream is absent");
@@ -2931,7 +3210,25 @@ public final class NitroParquetBatchSource
                 ? allocator.allocate(allocationContext, BooleanVector.class, batchPolicy.maxRows(), BooleanVector::new)
                 : null;
         Vector valueVector;
-        if (readers[column].kind() == ColumnReader.Kind.INT) {
+        if (readers[column].kind() == ColumnReader.Kind.BINARY) {
+            if (windowSlicePositions.length < count) {
+                windowSlicePositions = replaceInts(windowSlicePositions, count);
+            }
+            for (int position = 0; position < count; position++) {
+                windowSlicePositions[position] = start + position;
+            }
+            valueVector = windowBinary[column] instanceof DictionaryVector dictionary
+                    ? dictionary.copyPositionsPreservingEncodingBorrowingValues(allocator, allocationContext, windowSlicePositions, count)
+                    : windowBinary[column].copyPositionsInto(
+                            allocator,
+                            allocationContext,
+                            null,
+                            windowSlicePositions,
+                            count,
+                            0,
+                            count);
+        }
+        else if (readers[column].kind() == ColumnReader.Kind.INT) {
             valueVector = copyIntOutput(column, windowInt[column], start, count, batchPolicy.maxRows());
         }
         else if (readers[column].isDouble()) {
@@ -2943,7 +3240,15 @@ public final class NitroParquetBatchSource
             valueVector = vector;
         }
         if (nullVector != null) {
-            System.arraycopy(windowNull[column], start, nullVector.values(), 0, count);
+            if (windowNull[column] == null) {
+                // An enforced binary domain rejects nulls while decoding, so its dense value mapping already proves
+                // that every published survivor is present. Do not require a row-count-sized false scratch merely
+                // to materialize the demanded NULLS stream.
+                java.util.Arrays.fill(nullVector.values(), 0, count, false);
+            }
+            else {
+                System.arraycopy(windowNull[column], start, nullVector.values(), 0, count);
+            }
         }
         currentValues[column] = valueVector;
         currentNulls[column] = nullVector;
@@ -3207,8 +3512,8 @@ public final class NitroParquetBatchSource
     {
         if (filterOrder == null) {
             int n = 0;
-            for (LongDomain filter : filtersByColumn) {
-                if (filter != null) {
+            for (int column = 0; column < filtersByColumn.length; column++) {
+                if (isFilterColumn(column)) {
                     n++;
                 }
             }
@@ -3216,11 +3521,13 @@ public final class NitroParquetBatchSource
             double[] selectivity = new double[n];
             int index = 0;
             for (int c = 0; c < filtersByColumn.length; c++) {
-                if (filtersByColumn[c] != null) {
+                if (isFilterColumn(c)) {
                     columns[index] = c;
-                    selectivity[index] = filterEvaluationPolicy.ordering().selectivity()
-                            ? estimateSelectivity(c)
-                            : filtersByColumn[c].size();
+                    selectivity[index] = binaryFiltersByColumn[c] != null
+                            ? Double.NEGATIVE_INFINITY
+                            : (filterEvaluationPolicy.ordering().selectivity()
+                                    ? estimateSelectivity(c)
+                                    : filtersByColumn[c].size());
                     index++;
                 }
             }
@@ -3428,10 +3735,13 @@ public final class NitroParquetBatchSource
             System.err.println("[rowcounts] " + columnNames + " raw=" + debugRawRows + " survivors=" + debugSurvivors);
             StringBuilder stages = new StringBuilder("[rowcounts] filter-stages");
             for (int column : filterOrder()) {
+                LongDomain longFilter = filtersByColumn[column];
                 stages.append(' ').append(columnNames.get(column)).append('=')
                         .append(debugFilterInputs[column]).append("->").append(debugFilterOutputs[column])
-                        .append("[values=").append(filtersByColumn[column].size())
-                        .append(",rangeDensity=").append(String.format(java.util.Locale.ROOT, "%.4f", filtersByColumn[column].rangeDensity()))
+                        .append(longFilter == null
+                                ? "[binary"
+                                : "[values=" + longFilter.size() +
+                                        ",rangeDensity=" + String.format(java.util.Locale.ROOT, "%.4f", longFilter.rangeDensity()))
                         .append(",dict=").append(readers[column].peekDictionarySize()).append(']');
             }
             System.err.println(stages);
@@ -3476,6 +3786,13 @@ public final class NitroParquetBatchSource
         for (ColumnReader reader : nullReaders) {
             if (reader != null) {
                 reader.close();
+            }
+        }
+        if (referenceBinaryReaders != null) {
+            for (ColumnReader reader : referenceBinaryReaders) {
+                if (reader != null) {
+                    reader.close();
+                }
             }
         }
         for (int file = 0; file < files.length; file++) {

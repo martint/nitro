@@ -21,13 +21,15 @@ import static java.util.Objects.requireNonNull;
 public record ParquetFilterEvaluationPolicy(
         Ordering ordering,
         NonSelectiveElision nonSelectiveElision,
-        DirectNullMask directNullMask)
+        DirectNullMask directNullMask,
+        StaticBinarySourceFilter staticBinarySourceFilter)
 {
     public ParquetFilterEvaluationPolicy
     {
         requireNonNull(ordering, "ordering is null");
         requireNonNull(nonSelectiveElision, "nonSelectiveElision is null");
         requireNonNull(directNullMask, "directNullMask is null");
+        requireNonNull(staticBinarySourceFilter, "staticBinarySourceFilter is null");
     }
 
     public static ParquetFilterEvaluationPolicy defaults()
@@ -35,7 +37,8 @@ public record ParquetFilterEvaluationPolicy(
         return new ParquetFilterEvaluationPolicy(
                 new Ordering(true, true, 8_192),
                 new NonSelectiveElision(true, true),
-                new DirectNullMask(true, true));
+                new DirectNullMask(true, true),
+                new StaticBinarySourceFilter(8_192));
     }
 
     public static ParquetFilterEvaluationPolicy fromSystemProperties()
@@ -56,7 +59,9 @@ public record ParquetFilterEvaluationPolicy(
                         Boolean.parseBoolean(System.getProperty(
                                 "nitro.parquet.directNullMaskReader", "true")),
                         Boolean.parseBoolean(System.getProperty(
-                                "nitro.parquet.directNullMaskCompaction", "true"))));
+                                "nitro.parquet.directNullMaskCompaction", "true"))),
+                new StaticBinarySourceFilter(
+                        Integer.getInteger("nitro.parquet.staticBinaryFilterMaxDictionaryEntries", 8_192)));
     }
 
     public record Ordering(boolean selectivity, boolean rangeDensity, int exactDictionaryMaxEntries)
@@ -72,4 +77,19 @@ public record ParquetFilterEvaluationPolicy(
     public record NonSelectiveElision(boolean enabled, boolean exactDictionaryCoverage) {}
 
     public record DirectNullMask(boolean reader, boolean compaction) {}
+
+    public record StaticBinarySourceFilter(int maxDictionaryEntries)
+    {
+        public StaticBinarySourceFilter
+        {
+            if (maxDictionaryEntries < 0) {
+                throw new IllegalArgumentException("maxDictionaryEntries is negative");
+            }
+        }
+
+        public boolean admits(int dictionaryEntries)
+        {
+            return dictionaryEntries > 0 && dictionaryEntries <= maxDictionaryEntries;
+        }
+    }
 }

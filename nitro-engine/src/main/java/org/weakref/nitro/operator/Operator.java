@@ -189,6 +189,12 @@ public interface Operator
         return StaticFilterEnforcement.residual();
     }
 
+    /** Offers an exact typed domain which is not limited to a long carrier. */
+    default StaticFilterEnforcement pushStaticFilter(StaticDomainFilter filter)
+    {
+        return StaticFilterEnforcement.residual();
+    }
+
     /**
      * Returns whether this operator can forward or consume a dynamic filter before it is read.
      *

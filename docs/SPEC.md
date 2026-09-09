@@ -650,6 +650,12 @@ The Nitro Parquet reader decodes directly into Nitro vectors, preserves useful d
 unneeded streams without decoding values. Missing types or encodings fail loudly; they do not fall back to `parquet-mr`
 record materialization.
 
+A filter may offer an exact typed static domain to a source through capability negotiation. The source assumes
+semantic responsibility only when it accepts complete enforcement; until then the original filter remains the
+residual authority. Rejection leaves ordinary expression evaluation unchanged. Physical admission may depend on
+immutable source shape and bounded policy, but not on a query, column, function name, or SQL type. A reader kernel may
+support broader shapes for correctness coverage than the shapes admitted by the production policy.
+
 When encoded child streams prove that many repeated ARRAY or MAP parents are identical, the reader may recover a
 bounded outer dictionary domain. Equality is established only from exact parent null state, repeated boundaries, and
 the immutable physical identities of every child value/null/error stream. Admission is controlled by the immutable

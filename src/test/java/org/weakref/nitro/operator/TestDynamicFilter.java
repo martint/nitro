@@ -17,6 +17,8 @@ import org.junit.jupiter.api.Test;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.function.scalar.builtin.EqualI64;
 import org.weakref.nitro.function.scalar.builtin.EqualI64Optimization;
+import org.weakref.nitro.function.scalar.builtin.EqualUtf8;
+import org.weakref.nitro.function.scalar.builtin.EqualUtf8ProjectionOptimization;
 import org.weakref.nitro.function.scalar.builtin.LessThanI64;
 import org.weakref.nitro.function.scalar.builtin.LessThanI64RangeOptimization;
 import org.weakref.nitro.function.scalar.builtin.LessThanOrEqualI64;
@@ -181,6 +183,34 @@ class TestDynamicFilter
         PrimitiveRegistry registry = new PrimitiveRegistry();
         registry.register("eq", (inputs, mask, requestedStreams, output, context) -> output);
         assertThat(FilterOperator.staticLongEqualityFilter(plan, predicate, registry)).isEmpty();
+    }
+
+    @Test
+    void extractsRegistryOwnedStaticBinaryEqualityAndInequality()
+    {
+        Variable literal = new Variable(0);
+        Variable equals = new Variable(1);
+        EvaluationPlan plan = new EvaluationPlan(List.of(
+                new Assignment(literal, new Literal(""), AllMask.ALL),
+                new Assignment(equals, new Call("aliased_utf8_equality", List.of(
+                        new Reference(new Input(3), Stream.VALUES),
+                        new Reference(literal, Stream.VALUES))), AllMask.ALL)), List.of());
+        ReferenceMask equality = new ReferenceMask(new Reference(equals, Stream.VALUES));
+        PrimitiveRegistry registry = new PrimitiveRegistry();
+        registry.register("aliased_utf8_equality", new EqualUtf8(), new EqualUtf8ProjectionOptimization());
+
+        FilterOperator.StaticBinaryEquality equal = FilterOperator.staticBinaryEquality(plan, equality, registry).orElseThrow();
+        assertThat(equal.input()).isEqualTo(3);
+        assertThat(equal.value()).isEmpty();
+        assertThat(equal.equal()).isTrue();
+
+        FilterOperator.StaticBinaryEquality notEqual = FilterOperator.staticBinaryEquality(
+                plan,
+                new NotMask(equality),
+                registry).orElseThrow();
+        assertThat(notEqual.input()).isEqualTo(3);
+        assertThat(notEqual.value()).isEmpty();
+        assertThat(notEqual.equal()).isFalse();
     }
 
     @Test

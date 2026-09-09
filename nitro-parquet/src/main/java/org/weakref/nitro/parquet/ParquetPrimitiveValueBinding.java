@@ -43,5 +43,11 @@ public non-sealed interface ParquetPrimitiveValueBinding
         {
             return false;
         }
+
+        /// Whether exact logical equality can be applied directly to the decoded raw binary values.
+        default boolean preservesBinaryEquality()
+        {
+            return false;
+        }
     }
 }

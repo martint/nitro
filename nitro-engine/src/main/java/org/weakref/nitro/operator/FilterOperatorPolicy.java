@@ -19,12 +19,13 @@ package org.weakref.nitro.operator;
 public record FilterOperatorPolicy(
         boolean fuseConstantRanges,
         boolean pushStaticLongEquality,
+        boolean pushStaticBinaryEquality,
         boolean pushStaticLongRanges,
         boolean recycleOutputMasks)
 {
     public static FilterOperatorPolicy defaults()
     {
-        return new FilterOperatorPolicy(true, true, true, true);
+        return new FilterOperatorPolicy(true, true, false, true, true);
     }
 
     public static FilterOperatorPolicy fromSystemProperties()
@@ -32,6 +33,7 @@ public record FilterOperatorPolicy(
         return new FilterOperatorPolicy(
                 Boolean.parseBoolean(System.getProperty("nitro.expression.fuseLongConstantRanges", "true")),
                 Boolean.parseBoolean(System.getProperty("nitro.filter.pushStaticLongEquality", "true")),
+                Boolean.parseBoolean(System.getProperty("nitro.filter.pushStaticBinaryEquality", "false")),
                 Boolean.parseBoolean(System.getProperty("nitro.filter.pushStaticLongRanges", "true")),
                 Boolean.parseBoolean(System.getProperty("nitro.filter.recycleOutputMasks", "true")));
     }

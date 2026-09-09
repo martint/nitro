@@ -524,6 +524,20 @@ public class ProjectOperator
     }
 
     @Override
+    public StaticFilterEnforcement pushStaticFilter(StaticDomainFilter filter)
+    {
+        int outputIndex = filter.column();
+        if (outputIndex < 0 || outputIndex >= outputReferences.size()) {
+            return StaticFilterEnforcement.residual();
+        }
+        Reference reference = outputReferences.get(outputIndex);
+        if (reference.stream() != Stream.VALUES || !(reference.producer() instanceof Input input)) {
+            return StaticFilterEnforcement.residual();
+        }
+        return source.pushStaticFilter(filter.withColumn(input.index()));
+    }
+
+    @Override
     public boolean supportsDynamicFilterPushdown(int column)
     {
         if (column < 0 || column >= outputReferences.size()) {

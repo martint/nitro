@@ -23,6 +23,7 @@ import org.apache.parquet.format.PageType;
 import org.apache.parquet.format.Type;
 import org.apache.parquet.format.Util;
 import org.weakref.nitro.core.function.VersionedLongPredicate;
+import org.weakref.nitro.core.source.BinaryDomain;
 import org.weakref.nitro.core.source.LongDomain;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
@@ -2628,6 +2629,338 @@ public final class ColumnReader
         return acceptById;
     }
 
+    private boolean[] acceptByIdBinary(BinaryDomain predicate)
+    {
+        if (acceptByIdChunk != chunkIndex) {
+            if (acceptById.length < dictionarySize) {
+                acceptById = replaceBooleans(acceptById, dictionarySize);
+            }
+            int accepted = 0;
+            for (int id = 0; id < dictionarySize; id++) {
+                int start = dictionaryByteOffsets[id];
+                boolean keep = predicate.test(dictionaryBytes, start, dictionaryByteOffsets[id + 1] - start);
+                acceptById[id] = keep;
+                accepted += keep ? 1 : 0;
+            }
+            acceptedCount = accepted;
+            acceptByIdChunk = chunkIndex;
+        }
+        return acceptById;
+    }
+
+    /**
+     * Result of a fused binary source filter. The value vector, when requested, contains the accepted rows densely
+     * at positions {@code [0, survivorCount)}. Dictionary-only input owns one final ID mapping; plain or mixed input
+     * owns one flat output whose unused tail is internal capacity and is never published by the source.
+     */
+    public record BinaryFilterResult(int survivorCount, Vector values) {}
+
+    /**
+     * Filters the next {@code count} binary rows while decoding them. Dictionary entries are classified once per
+     * chunk and RLE/bit-packed IDs are tested as they are consumed; no row-aligned binary window is constructed.
+     * When values are demanded, accepted IDs are written directly into one allocator-owned dense mapping. Plain and
+     * mixed pages append accepted bytes directly into one flat output instead of materializing a window first.
+     */
+    public BinaryFilterResult filterBinary(
+            BinaryDomain predicate,
+            int count,
+            int[] survivorsOut,
+            Allocator allocator,
+            Allocator.Context allocationContext,
+            boolean valuesRequired)
+    {
+        requireNonNull(predicate, "predicate is null");
+        requireNonNull(survivorsOut, "survivorsOut is null");
+        requireNonNull(allocator, "allocator is null");
+        requireNonNull(allocationContext, "allocationContext is null");
+        if (kind != Kind.BINARY) {
+            throw new IllegalStateException("binary filter requires a binary reader");
+        }
+        if (survivorsOut.length < count) {
+            throw new IllegalArgumentException("survivor storage is smaller than count");
+        }
+
+        BinaryFilterOutput output = valuesRequired ? new BinaryFilterOutput(allocator, allocationContext, count) : null;
+        int survivorCount = 0;
+        int windowPosition = 0;
+        filterScan = true;
+        try {
+            while (windowPosition < count) {
+                if (pageCursor >= pageValueCount && !decodeNextDataPage()) {
+                    throw new IllegalStateException("Ran out of Parquet values (binary filter)");
+                }
+                int pageRows = Math.min(pageValueCount - pageCursor, count - windowPosition);
+                if (pageFilterDict) {
+                    boolean[] accept = acceptByIdBinary(predicate);
+                    if (pageFilterNullableFused) {
+                        int[] ids = filterTile();
+                        int base = 0;
+                        while (base < pageRows) {
+                            int tileRows = Math.min(FILTER_TILE, pageRows - base);
+                            ensureRunDefCapacity(tileRows);
+                            int nonNullCount = defRle.readRunCountingOnes(runDef, tileRows);
+                            if (nonNullCount > 0) {
+                                rle.read(ids, 0, nonNullCount);
+                            }
+                            int idIndex = 0;
+                            int positionBase = windowPosition + base;
+                            for (int position = 0; position < tileRows; position++) {
+                                if (runDef[position] == 0) {
+                                    continue;
+                                }
+                                int id = ids[idIndex++];
+                                if (accept[id]) {
+                                    survivorsOut[survivorCount] = positionBase + position;
+                                    if (output != null) {
+                                        output.appendDictionary(dictionaryGeneration, id);
+                                    }
+                                    survivorCount++;
+                                }
+                            }
+                            base += tileRows;
+                        }
+                    }
+                    else if (pageFilterFused) {
+                        int[] ids = filterTile();
+                        int base = 0;
+                        while (base < pageRows) {
+                            int run = rle.nextRun(pageRows - base);
+                            if (run > 0) {
+                                int id = rle.currentRleValue();
+                                if (accept[id]) {
+                                    int position = windowPosition + base;
+                                    for (int index = 0; index < run; index++) {
+                                        survivorsOut[survivorCount] = position + index;
+                                        if (output != null) {
+                                            output.appendDictionary(dictionaryGeneration, id);
+                                        }
+                                        survivorCount++;
+                                    }
+                                }
+                                base += run;
+                            }
+                            else {
+                                int packed = -run;
+                                int offset = 0;
+                                while (offset < packed) {
+                                    int tileRows = Math.min(FILTER_TILE, packed - offset);
+                                    rle.read(ids, 0, tileRows);
+                                    int positionBase = windowPosition + base + offset;
+                                    for (int position = 0; position < tileRows; position++) {
+                                        int id = ids[position];
+                                        if (accept[id]) {
+                                            survivorsOut[survivorCount] = positionBase + position;
+                                            if (output != null) {
+                                                output.appendDictionary(dictionaryGeneration, id);
+                                            }
+                                            survivorCount++;
+                                        }
+                                    }
+                                    offset += tileRows;
+                                }
+                                base += packed;
+                            }
+                        }
+                    }
+                    else {
+                        // Defensive compatibility for a pre-decoded dictionary page. New binary filter pages use
+                        // one of the streaming paths above, but a partially open page can still reach this shape.
+                        for (int position = 0; position < pageRows; position++) {
+                            int pagePosition = pageCursor + position;
+                            if (optional && pageNulls[pagePosition]) {
+                                continue;
+                            }
+                            int id = pageDictIds[pagePosition];
+                            if (accept[id]) {
+                                survivorsOut[survivorCount] = windowPosition + position;
+                                if (output != null) {
+                                    output.appendDictionary(dictionaryGeneration, id);
+                                }
+                                survivorCount++;
+                            }
+                        }
+                    }
+                }
+                else {
+                    for (int position = 0; position < pageRows; position++) {
+                        int pagePosition = pageCursor + position;
+                        if (optional && pageNulls[pagePosition]) {
+                            continue;
+                        }
+                        int start = pageByteOffsets[pagePosition];
+                        int length = pageByteOffsets[pagePosition + 1] - start;
+                        if (predicate.test(pageBytes, start, length)) {
+                            survivorsOut[survivorCount] = windowPosition + position;
+                            if (output != null) {
+                                output.appendPlain(pageBytes, start, length);
+                            }
+                            survivorCount++;
+                        }
+                    }
+                }
+                pageCursor += pageRows;
+                windowPosition += pageRows;
+            }
+        }
+        catch (Throwable failure) {
+            if (output != null) {
+                output.close();
+            }
+            throw failure;
+        }
+        finally {
+            filterScan = false;
+        }
+        return new BinaryFilterResult(survivorCount, output == null ? null : output.finish());
+    }
+
+    private final class BinaryFilterOutput
+    {
+        private final Allocator allocator;
+        private final Allocator.Context allocationContext;
+        private final int maximumCapacity;
+        private I32Vector ids;
+        private int dictionaryGeneration = -1;
+        private BinaryVector flat;
+        private int size;
+        private int dataSize;
+
+        private BinaryFilterOutput(Allocator allocator, Allocator.Context allocationContext, int capacity)
+        {
+            this.allocator = allocator;
+            this.allocationContext = allocationContext;
+            this.maximumCapacity = capacity;
+        }
+
+        private void appendDictionary(int generation, int id)
+        {
+            if (flat == null && (dictionaryGeneration == -1 || dictionaryGeneration == generation)) {
+                dictionaryGeneration = generation;
+                ensureIdCapacity(size + 1);
+                ids.values()[size++] = id;
+                return;
+            }
+            ensureFlat();
+            appendBytes(dictionaryBytes, dictionaryByteOffsets[id], dictionaryByteOffsets[id + 1] - dictionaryByteOffsets[id]);
+        }
+
+        private void appendPlain(byte[] data, int offset, int length)
+        {
+            ensureFlat();
+            appendBytes(data, offset, length);
+        }
+
+        private void ensureFlat()
+        {
+            if (flat != null) {
+                return;
+            }
+            int positionCapacity = initialOutputCapacity(maximumCapacity);
+            flat = BinaryVector.allocate(
+                    allocator,
+                    allocationContext,
+                    positionCapacity,
+                    initialSelectedBinaryCapacity(positionCapacity));
+            markUtf8(flat);
+            flat.offsets()[0] = 0;
+            if (dictionaryGeneration != -1) {
+                BinaryVector dictionary = dictionaryVectorCache.get(dictionaryGeneration);
+                int[] offsets = dictionary.offsets();
+                byte[] data = dictionary.data();
+                int dictionaryPositions = size;
+                size = 0;
+                for (int position = 0; position < dictionaryPositions; position++) {
+                    int id = ids.values()[position];
+                    appendBytes(data, offsets[id], offsets[id + 1] - offsets[id]);
+                }
+            }
+            if (ids != null) {
+                allocator.release(allocationContext, ids);
+                ids = null;
+            }
+        }
+
+        private void appendBytes(byte[] source, int sourceOffset, int length)
+        {
+            int requiredPositions = size + 1;
+            if (flat.length() < requiredPositions || flat.data().length < dataSize + length) {
+                int positionCapacity = flat.length() < requiredPositions
+                        ? outputGrowthCapacity(flat.length(), requiredPositions, maximumCapacity)
+                        : flat.length();
+                flat = BinaryVector.allocateOrGrow(
+                        allocator,
+                        allocationContext,
+                        flat,
+                        positionCapacity,
+                        dataSize + length,
+                        dataSize);
+            }
+            System.arraycopy(source, sourceOffset, flat.data(), dataSize, length);
+            dataSize += length;
+            flat.offsets()[++size] = dataSize;
+        }
+
+        private void ensureIdCapacity(int required)
+        {
+            if (ids == null) {
+                ids = I32Vector.allocate(allocator, allocationContext, initialOutputCapacity(maximumCapacity));
+                return;
+            }
+            if (ids.length() >= required) {
+                return;
+            }
+            I32Vector grown = I32Vector.allocate(
+                    allocator,
+                    allocationContext,
+                    outputGrowthCapacity(ids.length(), required, maximumCapacity));
+            System.arraycopy(ids.values(), 0, grown.values(), 0, size);
+            allocator.release(allocationContext, ids);
+            ids = grown;
+        }
+
+        private Vector finish()
+        {
+            if (size == 0) {
+                close();
+                return null;
+            }
+            if (flat != null) {
+                BinaryVector result = flat;
+                flat = null;
+                return result;
+            }
+            I32Vector mapping = ids;
+            ids = null;
+            return DictionaryVector.wrapOwnedIds(mapping, size, escapedDictionary(dictionaryGeneration));
+        }
+
+        private void close()
+        {
+            if (ids != null) {
+                allocator.release(allocationContext, ids);
+                ids = null;
+            }
+            if (flat != null) {
+                allocator.release(allocationContext, flat);
+                flat = null;
+            }
+        }
+    }
+
+    private static int initialOutputCapacity(int maximumCapacity)
+    {
+        return Math.min(maximumCapacity, FILTER_TILE);
+    }
+
+    private static int outputGrowthCapacity(int current, int required, int maximum)
+    {
+        if (required < 0 || required > maximum) {
+            throw new IllegalArgumentException("required output capacity exceeds maximum");
+        }
+        long grown = Math.max(required, Math.max(FILTER_TILE, (long) current + (current >> 1)));
+        return (int) Math.min(maximum, grown);
+    }
+
     /**
      * Read {@code count} binary positions. For a non-null column whose batch is fully dictionary-encoded under a
      * single dictionary, returns a {@link org.weakref.nitro.data.DictionaryVector} (ids + the parquet dictionary) so
@@ -4910,7 +5243,7 @@ public final class ColumnReader
             // per-level materialization + sum. Only pages that actually contain nulls pay the full decode.
             if (!rle.consumeIfAllOnes(valueCount)) {
                 rle.init(body, offset, 1);
-                if (!filterScan && dictionary && kind == Kind.BINARY) {
+                if (dictionary && kind == Kind.BINARY) {
                     defRle.init(body, offset, 1);
                     streamBinaryDictionary = true;
                 }
@@ -4955,6 +5288,19 @@ public final class ColumnReader
             int bitWidth = body.get(ValueLayout.JAVA_BYTE, offset) & 0xFF;
             offset += 1;
             rle.init(body, offset, bitWidth);
+            if (filterScan && kind == Kind.BINARY) {
+                // Binary source filtering consumes definition levels and dictionary IDs together, directly from
+                // their RLE/bit-packed streams. Do not scatter a row-aligned ID window before the predicate is
+                // known: accepted IDs are written once into the final dense mapping by filterBinary().
+                pageFilterDict = true;
+                if (streamBinaryDictionary) {
+                    pageFilterNullableFused = true;
+                }
+                else {
+                    pageFilterFused = true;
+                }
+                return;
+            }
             if (!filterScan && kind == Kind.BINARY) {
                 pageBinaryDeferred = true;
                 pageBinaryDictionaryStreaming = true;

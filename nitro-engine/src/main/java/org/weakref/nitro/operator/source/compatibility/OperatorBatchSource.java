@@ -25,6 +25,7 @@ import org.weakref.nitro.core.source.SourceProtocol;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.Operator;
+import org.weakref.nitro.operator.StaticDomainFilter;
 
 import java.util.EnumSet;
 import java.util.Optional;
@@ -146,7 +147,12 @@ public final class OperatorBatchSource
                 .capability(NativeRuntimeFilterCapability.NATIVE_RUNTIME_FILTER)
                 .orElse(null);
         if (nativeFilter == null) {
-            return RuntimeFilterAcceptance.REJECTED;
+            if (filter.residualRequired() || filter.approximate()) {
+                return RuntimeFilterAcceptance.REJECTED;
+            }
+            return source.pushStaticFilter(new StaticDomainFilter(column, filter.domain())).enforced()
+                    ? RuntimeFilterAcceptance.ENFORCED
+                    : RuntimeFilterAcceptance.REJECTED;
         }
         source.pushDynamicFilter(nativeFilter.retarget(column));
         return RuntimeFilterAcceptance.ACCEPTED_WITH_RESIDUAL;

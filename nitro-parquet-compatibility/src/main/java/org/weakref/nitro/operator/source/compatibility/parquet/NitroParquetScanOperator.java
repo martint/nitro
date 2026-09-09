@@ -24,6 +24,8 @@ import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.DynamicFilter;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.Output;
+import org.weakref.nitro.operator.StaticDomainFilter;
+import org.weakref.nitro.operator.StaticFilterEnforcement;
 import org.weakref.nitro.operator.source.AllocatedSelectionOperatorIngress;
 import org.weakref.nitro.operator.source.BatchSourceOperator;
 import org.weakref.nitro.operator.source.ColumnViewOperatorIngress;
@@ -122,6 +124,12 @@ public final class NitroParquetScanOperator
     public void pushDynamicFilter(DynamicFilter filter)
     {
         delegate.pushDynamicFilter(filter);
+    }
+
+    @Override
+    public StaticFilterEnforcement pushStaticFilter(StaticDomainFilter filter)
+    {
+        return delegate.pushStaticFilter(filter);
     }
 
     @Override

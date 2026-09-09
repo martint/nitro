@@ -25,6 +25,8 @@ import org.junit.jupiter.api.io.TempDir;
 import org.weakref.nitro.clickbench.ClickBenchHitsSupport;
 import org.weakref.nitro.core.function.VersionedLongPredicate;
 import org.weakref.nitro.core.source.BatchSource;
+import org.weakref.nitro.core.source.BinaryDomain;
+import org.weakref.nitro.core.source.BinaryDomainCapability;
 import org.weakref.nitro.core.source.DomainCapability;
 import org.weakref.nitro.core.source.LongDomainCapability;
 import org.weakref.nitro.core.source.RuntimeFilter;
@@ -63,6 +65,8 @@ import org.weakref.nitro.function.scalar.PrimitiveFunction;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.DynamicFilter;
 import org.weakref.nitro.operator.FilterOperator;
+import org.weakref.nitro.operator.FilterOperatorPolicy;
+import org.weakref.nitro.operator.FilterOperatorResources;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.ProjectOperator;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
@@ -71,7 +75,10 @@ import org.weakref.nitro.operator.evaluator.ir.Assignment;
 import org.weakref.nitro.operator.evaluator.ir.Call;
 import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
 import org.weakref.nitro.operator.evaluator.ir.Input;
+import org.weakref.nitro.operator.evaluator.ir.Literal;
+import org.weakref.nitro.operator.evaluator.ir.NotMask;
 import org.weakref.nitro.operator.evaluator.ir.Reference;
+import org.weakref.nitro.operator.evaluator.ir.ReferenceMask;
 import org.weakref.nitro.operator.evaluator.ir.Variable;
 import org.weakref.nitro.operator.source.BatchSourceOperator;
 import org.weakref.nitro.operator.source.compatibility.NativeSourceOperatorIngress;
@@ -341,7 +348,8 @@ public class TestParquetOperator
             new ParquetFilterEvaluationPolicy(
                     new ParquetFilterEvaluationPolicy.Ordering(false, false, 0),
                     new ParquetFilterEvaluationPolicy.NonSelectiveElision(false, false),
-                    new ParquetFilterEvaluationPolicy.DirectNullMask(false, false));
+                    new ParquetFilterEvaluationPolicy.DirectNullMask(false, false),
+                    new ParquetFilterEvaluationPolicy.StaticBinarySourceFilter(0));
     private final PrimitiveArrayPool arrayPool = EngineResources.createDefault().primitiveArrays();
 
     @TempDir
@@ -1690,6 +1698,453 @@ public class TestParquetOperator
             assertThat(values).containsExactly(12_345, 12_346);
             assertThat(payloads).containsExactly("payload-12345", "payload-12346");
         }
+    }
+
+    @Test
+    void testNitroParquetSourceEnforcesBinaryDomainAndCompactsSurvivors()
+            throws IOException
+    {
+        List<Integer> values = new ArrayList<>();
+        List<String> models = new ArrayList<>();
+        for (int value = 0; value < 20_003; value++) {
+            values.add(value);
+            models.add(value % 20 == 0 ? "model-" + value : (value % 37 == 0 ? null : ""));
+        }
+        java.nio.file.Path file = tempDirectory.resolve("binary-domain-filter.parquet");
+        write(file, "binary_domain_filter", List.of(
+                requiredInt32("value", values),
+                optionalBinary("model", models).asUtf8()), true);
+        assertDictionaryEncoding(file, "model");
+        Schema schema = Schema.unspecified(List.of("value", "model"));
+
+        try (AllocationResources allocationResources = AllocationResources.createDefault();
+                Allocator allocator = new Allocator(allocationResources);
+                NitroParquetBatchSource source = new NitroParquetBatchSource(
+                        executableRuntimeFilterResources(),
+                        allocator,
+                        List.of(file),
+                        schema)) {
+            assertThat(source.supportsRuntimeFilter(source.column(1))).isTrue();
+            assertThat(source.addRuntimeFilter(new RuntimeFilter(
+                    source.column(1),
+                    new TestingTypedBinaryDomain(source.column(1).type(), new byte[0], false),
+                    false).withoutResidual()))
+                    .isEqualTo(RuntimeFilterAcceptance.ENFORCED);
+
+            int expected = 0;
+            SourcePoll poll = source.poll();
+            while (poll instanceof SourcePoll.Ready ready) {
+                try (var batch = ready.batch()) {
+                    assertThat(batch.selection().count()).isEqualTo(batch.selection().positionCount());
+                    var keys = VectorAccess.longValues(batch.column(0).borrow(Stream.VALUES));
+                    org.weakref.nitro.data.Vector model = batch.column(1).borrow(Stream.VALUES);
+                    assertThat(model).isInstanceOf(DictionaryVector.class);
+                    VectorAccess.BinaryRegions regions = VectorAccess.binaryRegions(model);
+                    for (int position = 0; position < batch.selection().count(); position++) {
+                        assertThat(keys.value(position)).isEqualTo(expected);
+                        assertThat(regions.length(position)).isGreaterThan(0);
+                        expected += 20;
+                    }
+                }
+                poll = source.poll();
+            }
+            assertThat(poll).isSameAs(SourcePoll.Finished.FINISHED);
+            assertThat(expected).isEqualTo(20_020);
+        }
+    }
+
+    @Test
+    void testBinaryDomainFilterKeepsWidePayloadAlignedAcrossDictionaryGenerations()
+            throws IOException
+    {
+        int rowsPerFile = 40_003;
+        List<java.nio.file.Path> files = new ArrayList<>();
+        for (int fileIndex = 0; fileIndex < 3; fileIndex++) {
+            List<Integer> rowIds = new ArrayList<>(rowsPerFile);
+            List<String> states = new ArrayList<>(rowsPerFile);
+            List<String> counties = new ArrayList<>(rowsPerFile);
+            List<String> cities = new ArrayList<>(rowsPerFile);
+            List<String> streets = new ArrayList<>(rowsPerFile);
+            List<String> countries = new ArrayList<>(rowsPerFile);
+            int firstRow = fileIndex * rowsPerFile;
+            for (int filePosition = 0; filePosition < rowsPerFile; filePosition++) {
+                int row = firstRow + filePosition;
+                rowIds.add(row);
+                states.add(row % 20 == 0 ? "GA" : (row % 37 == 0 ? null : "CA"));
+                counties.add(row % 43 == 0 ? null : county(row));
+                cities.add("city-" + (row % 997));
+                streets.add("street-" + (row % 2_003));
+                countries.add("country-" + (row % 17));
+            }
+            java.nio.file.Path file = tempDirectory.resolve("wide-binary-domain-filter-" + fileIndex + ".parquet");
+            write(file, "wide_binary_domain_filter", List.of(
+                    optionalBinary("state", states).asUtf8(),
+                    requiredInt32("row_id", rowIds),
+                    optionalBinary("county", counties).asUtf8(),
+                    requiredBinary("city", cities).asUtf8(),
+                    requiredBinary("street", streets).asUtf8(),
+                    requiredBinary("country", countries).asUtf8()), true);
+            assertDictionaryEncoding(file, "state");
+            assertDictionaryEncoding(file, "county");
+            files.add(file);
+        }
+
+        Schema schema = Schema.unspecified(List.of("state", "row_id", "county", "city", "street", "country"));
+        try (AllocationResources allocationResources = AllocationResources.createDefault();
+                Allocator allocator = new Allocator(allocationResources);
+                NitroParquetBatchSource source = new NitroParquetBatchSource(
+                        executableRuntimeFilterResources(),
+                        allocator,
+                        files,
+                        schema)) {
+            assertThat(source.addRuntimeFilter(new RuntimeFilter(
+                    source.column(0),
+                    new TestingTypedBinaryDomain(
+                            source.column(0).type(),
+                            "GA".getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                            true),
+                    false).withoutResidual()))
+                    .isEqualTo(RuntimeFilterAcceptance.ENFORCED);
+
+            int selectedRows = 0;
+            SourcePoll poll = source.poll();
+            while (poll instanceof SourcePoll.Ready ready) {
+                try (var batch = ready.batch()) {
+                    VectorAccess.LongValues rowIds = VectorAccess.longValues(batch.column(1).borrow(Stream.VALUES));
+                    VectorAccess.BinaryRegions counties = VectorAccess.binaryRegions(batch.column(2).borrow(Stream.VALUES));
+                    BooleanVector countyNulls = (BooleanVector) batch.column(2).borrow(Stream.NULLS);
+                    for (int index = 0; index < batch.selection().count(); index++) {
+                        int position = batch.selection().position(index);
+                        int row = toIntExact(rowIds.value(position));
+                        assertThat(row % 20).isZero();
+                        if (row % 43 == 0) {
+                            assertThat(countyNulls.values()[position]).isTrue();
+                        }
+                        else {
+                            assertThat(countyNulls.values()[position]).isFalse();
+                            assertThat(binaryRegionUtf8(counties, position)).isEqualTo(county(row));
+                        }
+                        selectedRows++;
+                    }
+                }
+                poll = source.poll();
+            }
+            assertThat(poll).isSameAs(SourcePoll.Finished.FINISHED);
+            assertThat(selectedRows).isEqualTo(6_001);
+        }
+    }
+
+    private static String county(int row)
+    {
+        return "county-" + (row % 257) + "-" + "x".repeat(row % 17);
+    }
+
+    private static String binaryRegionUtf8(VectorAccess.BinaryRegions regions, int position)
+    {
+        return new String(
+                regions.data(position),
+                regions.offset(position),
+                regions.length(position),
+                java.nio.charset.StandardCharsets.UTF_8);
+    }
+
+    @Test
+    void testNitroParquetSourceRetainsResidualForLargeBinaryDictionary()
+            throws IOException
+    {
+        int rowCount = 9_000;
+        List<String> values = new ArrayList<>(rowCount);
+        for (int value = 0; value < rowCount; value++) {
+            values.add("value-" + value);
+        }
+        java.nio.file.Path file = tempDirectory.resolve("large-binary-domain-filter.parquet");
+        write(file, "large_binary_domain_filter", List.of(requiredBinary("value", values).asUtf8()), true);
+        assertDictionaryEncoding(file, "value");
+        try (ParquetFile parquet = ParquetFile.open(file);
+                ColumnReader reader = columnReader(List.of(parquet), "value")) {
+            assertThat(reader.peekDictionarySize())
+                    .isGreaterThan(ParquetFilterEvaluationPolicy.defaults()
+                            .staticBinarySourceFilter()
+                            .maxDictionaryEntries());
+        }
+
+        try (AllocationResources allocationResources = AllocationResources.createDefault();
+                Allocator allocator = new Allocator(allocationResources);
+                NitroParquetBatchSource source = new NitroParquetBatchSource(
+                        executableRuntimeFilterResources(),
+                        allocator,
+                        List.of(file),
+                        Schema.unspecified(List.of("value")))) {
+            assertThat(source.addRuntimeFilter(new RuntimeFilter(
+                    source.column(0),
+                    new TestingTypedBinaryDomain(
+                            source.column(0).type(),
+                            "value-0".getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                            true),
+                    false).withoutResidual()))
+                    .isEqualTo(RuntimeFilterAcceptance.ACCEPTED_WITH_RESIDUAL);
+            assertThat(countSourceRows(source)).isEqualTo(rowCount);
+        }
+    }
+
+    @Test
+    void testNitroParquetSourceRetainsResidualForPlainBinaryInput()
+            throws IOException
+    {
+        List<String> values = List.of("value-0", "value-1", "value-2");
+        java.nio.file.Path file = tempDirectory.resolve("plain-binary-domain-filter.parquet");
+        write(file, "plain_binary_domain_filter", List.of(requiredBinary("value", values).asUtf8()), false);
+        try (ParquetFile parquet = ParquetFile.open(file);
+                ColumnReader reader = columnReader(List.of(parquet), "value")) {
+            assertThat(reader.peekDictionarySize()).isEqualTo(-1);
+        }
+
+        try (AllocationResources allocationResources = AllocationResources.createDefault();
+                Allocator allocator = new Allocator(allocationResources);
+                NitroParquetBatchSource source = new NitroParquetBatchSource(
+                        executableRuntimeFilterResources(),
+                        allocator,
+                        List.of(file),
+                        Schema.unspecified(List.of("value")))) {
+            assertThat(source.addRuntimeFilter(new RuntimeFilter(
+                    source.column(0),
+                    new TestingTypedBinaryDomain(
+                            source.column(0).type(),
+                            "value-0".getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                            true),
+                    false).withoutResidual()))
+                    .isEqualTo(RuntimeFilterAcceptance.ACCEPTED_WITH_RESIDUAL);
+            assertThat(countSourceRows(source)).isEqualTo(values.size());
+        }
+    }
+
+    @Test
+    void testNitroParquetSourceRetainsResidualForMixedDictionaryAndPlainBinaryInput()
+            throws IOException
+    {
+        java.nio.file.Path dictionaryFile = tempDirectory.resolve("mixed-binary-domain-filter-dictionary.parquet");
+        write(dictionaryFile, "mixed_binary_domain_filter_dictionary", List.of(
+                requiredBinary("value", List.of("value-0", "value-1", "value-2")).asUtf8()), true);
+        assertDictionaryEncoding(dictionaryFile, "value");
+        java.nio.file.Path plainFile = tempDirectory.resolve("mixed-binary-domain-filter-plain.parquet");
+        write(plainFile, "mixed_binary_domain_filter_plain", List.of(
+                requiredBinary("value", List.of("value-3", "value-4", "value-5")).asUtf8()), false);
+
+        try (ParquetFile dictionary = ParquetFile.open(dictionaryFile);
+                ParquetFile plain = ParquetFile.open(plainFile);
+                ColumnReader reader = columnReader(List.of(dictionary, plain), "value")) {
+            assertThat(reader.peekDictionarySize()).isPositive();
+            assertThat(reader.isDictionaryOnly()).isFalse();
+        }
+
+        try (AllocationResources allocationResources = AllocationResources.createDefault();
+                Allocator allocator = new Allocator(allocationResources);
+                NitroParquetBatchSource source = new NitroParquetBatchSource(
+                        executableRuntimeFilterResources(),
+                        allocator,
+                        List.of(dictionaryFile, plainFile),
+                        Schema.unspecified(List.of("value")))) {
+            assertThat(source.addRuntimeFilter(new RuntimeFilter(
+                    source.column(0),
+                    new TestingTypedBinaryDomain(
+                            source.column(0).type(),
+                            "value-0".getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                            true),
+                    false).withoutResidual()))
+                    .isEqualTo(RuntimeFilterAcceptance.ACCEPTED_WITH_RESIDUAL);
+            assertThat(countSourceRows(source)).isEqualTo(6);
+        }
+    }
+
+    @Test
+    void testSparseBinaryDictionaryFilterRetainsOnlySurvivorCapacity()
+            throws IOException
+    {
+        int rowCount = 50_003;
+        List<String> models = new ArrayList<>(rowCount);
+        for (int position = 0; position < rowCount; position++) {
+            models.add(position % 1_000 == 0 ? "keep" : "drop");
+        }
+        java.nio.file.Path file = tempDirectory.resolve("sparse-binary-filter-capacity.parquet");
+        write(file, "sparse_binary_filter_capacity", List.of(requiredBinary("model", models).asUtf8()), true);
+        assertDictionaryEncoding(file, "model");
+
+        byte[] literal = "keep".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        BinaryDomain predicate = (data, offset, length) ->
+                length == literal.length && Arrays.equals(data, offset, offset + length, literal, 0, literal.length);
+        try (ParquetFile parquet = ParquetFile.open(file);
+                ColumnReader reader = columnReader(List.of(parquet), "model");
+                AllocationResources resources = AllocationResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            Allocator.Context context = new Allocator.Context("sparse-binary-filter-capacity");
+            int[] survivors = new int[rowCount];
+            ColumnReader.BinaryFilterResult result = reader.filterBinary(
+                    predicate,
+                    rowCount,
+                    survivors,
+                    allocator,
+                    context,
+                    true);
+            try {
+                assertThat(result.survivorCount()).isEqualTo(51);
+                assertThat(result.values()).isInstanceOf(DictionaryVector.class);
+                DictionaryVector dictionary = (DictionaryVector) result.values();
+                assertThat(dictionary.ids().length)
+                        .isGreaterThanOrEqualTo(result.survivorCount())
+                        .isLessThan(rowCount / 10);
+                for (int output = 0; output < result.survivorCount(); output++) {
+                    assertThat(survivors[output]).isEqualTo(output * 1_000);
+                    assertThat(utf8(dictionary, output)).isEqualTo("keep");
+                }
+            }
+            finally {
+                allocator.release(context, result.values());
+            }
+        }
+    }
+
+    @Test
+    void testBinaryFilterHandlesPlainAndMixedDictionaryPages()
+            throws IOException
+    {
+        java.nio.file.Path dictionaryFile = tempDirectory.resolve("mixed-binary-filter-dictionary.parquet");
+        write(dictionaryFile, "mixed_binary_filter_dictionary", List.of(
+                requiredBinary("model", List.of("drop", "keep-c", "keep-c")).asUtf8()), true);
+        assertDictionaryEncoding(dictionaryFile, "model");
+        java.nio.file.Path plainFile = tempDirectory.resolve("mixed-binary-filter-plain.parquet");
+        write(plainFile, "mixed_binary_filter_plain", List.of(
+                requiredBinary("model", List.of("keep-a", "drop", "keep-b")).asUtf8()), false);
+
+        BinaryDomain predicate = (data, offset, length) -> length >= 5 &&
+                data[offset] == 'k' && data[offset + 1] == 'e' && data[offset + 2] == 'e' && data[offset + 3] == 'p';
+        try (ParquetFile plain = ParquetFile.open(plainFile);
+                ColumnReader reader = columnReader(List.of(plain), "model");
+                AllocationResources resources = AllocationResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            assertBinaryFilter(
+                    reader,
+                    predicate,
+                    3,
+                    allocator,
+                    new Allocator.Context("plain-binary-filter"),
+                    new int[] {0, 2},
+                    List.of("keep-a", "keep-b"));
+        }
+
+        try (ParquetFile dictionary = ParquetFile.open(dictionaryFile);
+                ParquetFile plain = ParquetFile.open(plainFile);
+                ColumnReader reader = columnReader(List.of(dictionary, plain), "model");
+                AllocationResources resources = AllocationResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            assertBinaryFilter(
+                    reader,
+                    predicate,
+                    6,
+                    allocator,
+                    new Allocator.Context("mixed-binary-filter"),
+                    new int[] {1, 2, 3, 5},
+                    List.of("keep-c", "keep-c", "keep-a", "keep-b"));
+        }
+    }
+
+    @Test
+    void testNullableBinaryFilterNeverSelectsNullAsEmptyBinary()
+            throws IOException
+    {
+        List<String> models = List.of("", "value", "");
+        List<String> nullableModels = new ArrayList<>();
+        nullableModels.add(models.get(0));
+        nullableModels.add(null);
+        nullableModels.add(models.get(1));
+        nullableModels.add(null);
+        nullableModels.add(models.get(2));
+        java.nio.file.Path file = tempDirectory.resolve("nullable-empty-binary-filter.parquet");
+        write(file, "nullable_empty_binary_filter", List.of(optionalBinary("model", nullableModels).asUtf8()), true);
+        assertDictionaryEncoding(file, "model");
+
+        try (ParquetFile parquet = ParquetFile.open(file);
+                ColumnReader reader = columnReader(List.of(parquet), "model");
+                AllocationResources resources = AllocationResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            assertBinaryFilter(
+                    reader,
+                    (data, offset, length) -> length == 0,
+                    nullableModels.size(),
+                    allocator,
+                    new Allocator.Context("nullable-empty-binary-filter"),
+                    new int[] {0, 4},
+                    List.of("", ""));
+        }
+    }
+
+    @Test
+    void testStaticBinaryFilterIsEnforcedThroughNestedSourceAdapters()
+            throws IOException
+    {
+        List<Integer> values = new ArrayList<>();
+        List<String> models = new ArrayList<>();
+        for (int value = 0; value < 20_003; value++) {
+            values.add(value);
+            models.add(value % 20 == 0 ? "model-" + value : "");
+        }
+        java.nio.file.Path file = tempDirectory.resolve("nested-binary-domain-filter.parquet");
+        write(file, "nested_binary_domain_filter", List.of(
+                requiredInt32("value", values),
+                requiredBinary("model", models).asUtf8()), true);
+
+        Map<String, Long> diagnostics = new LinkedHashMap<>();
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            NitroParquetScanOperator scan = new NitroParquetScanOperator(
+                    executableRuntimeFilterResources(),
+                    allocator,
+                    List.of(file),
+                    List.of("value", "model"));
+            Operator source = new BatchSourceOperator(
+                    new OperatorBatchSource(scan, scan.outputSchema()),
+                    new NativeSourceOperatorIngress());
+            PrimitiveRegistry registry = TestPrimitiveFunctions.primitiveRegistry();
+            Variable literal = new Variable(0);
+            Variable equals = new Variable(1);
+            EvaluationPlan plan = new EvaluationPlan(List.of(
+                    new Assignment(literal, new Literal(""), AllMask.ALL),
+                    new Assignment(equals, new Call("eq_utf8", List.of(
+                            new Reference(new Input(1), Stream.VALUES),
+                            new Reference(literal, Stream.VALUES))), AllMask.ALL)), List.of());
+            NotMask predicate = new NotMask(new ReferenceMask(new Reference(equals, Stream.VALUES)));
+            FilterOperatorResources defaults = resources.operatorResources().filter();
+            FilterOperatorResources filterResources = new FilterOperatorResources(
+                    defaults.projectionMaskCompiler(),
+                    defaults.evaluationPolicy(),
+                    new FilterOperatorPolicy(true, true, true, true, true),
+                    defaults.dynamicFilterPolicy());
+
+            int expected = 0;
+            try (FilterOperator filtered = new FilterOperator(
+                    source,
+                    plan,
+                    registry,
+                    predicate,
+                    allocator,
+                    filterResources,
+                    (event, value) -> diagnostics.merge(event, value, Long::sum))) {
+                while (filtered.hasNext()) {
+                    try (Batch batch = filtered.next()) {
+                        assertThat(batch.borrowMask().all()).isTrue();
+                        VectorAccess.LongValues keys = VectorAccess.longValues(batch.output(0).borrow(Stream.VALUES));
+                        for (int position = 0; position < batch.borrowMask().selectedCount(); position++) {
+                            assertThat(keys.value(position)).isEqualTo(expected);
+                            expected += 20;
+                        }
+                    }
+                }
+            }
+            assertThat(expected).isEqualTo(20_020);
+        }
+        assertThat(diagnostics)
+                .containsEntry(FilterOperator.INPUT_POSITIONS, 1_001L)
+                .containsEntry(FilterOperator.OUTPUT_POSITIONS, 1_001L)
+                .containsEntry(FilterOperator.COMPILED_MASK_ATTEMPTS, 0L);
     }
 
     @Test
@@ -3284,17 +3739,21 @@ public class TestParquetOperator
     {
         List<BinaryParquetRow> firstRows = new ArrayList<>();
         List<BinaryParquetRow> secondRows = new ArrayList<>();
+        List<BinaryParquetRow> thirdRows = new ArrayList<>();
         for (int position = 0; position < 12_000; position++) {
             firstRows.add(new BinaryParquetRow((position & 1) == 0 ? "alpha" : "beta", bytes(position & 0xFF)));
             secondRows.add(new BinaryParquetRow((position & 1) == 0 ? "gamma" : "delta", bytes(position & 0xFF)));
+            thirdRows.add(new BinaryParquetRow((position & 1) == 0 ? "theta" : "kappa", bytes(position & 0xFF)));
         }
         java.nio.file.Path first = writeBinaryParquetFile("derived-dictionary-first.parquet", true, firstRows);
         java.nio.file.Path second = writeBinaryParquetFile("derived-dictionary-second.parquet", true, secondRows);
+        java.nio.file.Path third = writeBinaryParquetFile("derived-dictionary-third.parquet", true, thirdRows);
         assertDictionaryEncoding(first, "name");
         assertDictionaryEncoding(second, "name");
+        assertDictionaryEncoding(third, "name");
 
         DictionaryVector retained;
-        try (NitroParquetScanOperator scan = new NitroParquetScanOperator(NitroParquetScanResources.createDefault(), new Allocator(EngineResources.createDefault()), List.of(first, second), List.of("name"))) {
+        try (NitroParquetScanOperator scan = new NitroParquetScanOperator(NitroParquetScanResources.createDefault(), new Allocator(EngineResources.createDefault()), List.of(first, second, third), List.of("name"))) {
             try (Batch firstBatch = scan.next()) {
                 // Join output can own a new mapping over a borrowed source dictionary. Closing the source batch must
                 // not make that immutable value domain available as scratch for a later row group.
@@ -3466,6 +3925,48 @@ public class TestParquetOperator
         }
     }
 
+    private record TestingTypedBinaryDomain(TypeBinding type, byte[] literal, boolean equal)
+            implements TypedDomain, BinaryDomain
+    {
+        private TestingTypedBinaryDomain
+        {
+            literal = literal.clone();
+        }
+
+        @Override
+        public boolean includesNull()
+        {
+            return false;
+        }
+
+        @Override
+        public boolean isAll()
+        {
+            return false;
+        }
+
+        @Override
+        public boolean isNone()
+        {
+            return false;
+        }
+
+        @Override
+        public boolean test(byte[] data, int offset, int length)
+        {
+            return (length == literal.length && Arrays.equals(data, offset, offset + length, literal, 0, literal.length)) == equal;
+        }
+
+        @Override
+        public <T> java.util.Optional<T> capability(DomainCapability<T> capability)
+        {
+            if (capability == BinaryDomainCapability.BINARY_DOMAIN) {
+                return java.util.Optional.of(capability.valueType().cast(this));
+            }
+            return java.util.Optional.empty();
+        }
+    }
+
     private record VectorTypeBinding(
             TypeIdentity identity,
             Class<?> carrierType,
@@ -3600,6 +4101,50 @@ public class TestParquetOperator
             case RleVector vector -> ((BooleanVector) vector.values()).values()[vector.runIndex(position)];
             default -> throw new IllegalArgumentException("Expected boolean-backed vector but got " + values.getClass().getSimpleName());
         };
+    }
+
+    private static void assertBinaryFilter(
+            ColumnReader reader,
+            BinaryDomain predicate,
+            int rowCount,
+            Allocator allocator,
+            Allocator.Context context,
+            int[] expectedSurvivors,
+            List<String> expectedValues)
+    {
+        int[] survivors = new int[rowCount];
+        ColumnReader.BinaryFilterResult result = reader.filterBinary(
+                predicate,
+                rowCount,
+                survivors,
+                allocator,
+                context,
+                true);
+        try {
+            assertThat(result.survivorCount()).isEqualTo(expectedSurvivors.length);
+            assertThat(expectedValues).hasSize(expectedSurvivors.length);
+            for (int output = 0; output < expectedSurvivors.length; output++) {
+                assertThat(survivors[output]).isEqualTo(expectedSurvivors[output]);
+                assertThat(utf8(result.values(), output)).isEqualTo(expectedValues.get(output));
+            }
+        }
+        finally {
+            allocator.release(context, result.values());
+        }
+    }
+
+    private static int countSourceRows(NitroParquetBatchSource source)
+    {
+        int rows = 0;
+        SourcePoll poll = source.poll();
+        while (poll instanceof SourcePoll.Ready ready) {
+            try (var batch = ready.batch()) {
+                rows += batch.selection().count();
+            }
+            poll = source.poll();
+        }
+        assertThat(poll).isSameAs(SourcePoll.Finished.FINISHED);
+        return rows;
     }
 
     private static String utf8(org.weakref.nitro.data.Vector values, int position)
