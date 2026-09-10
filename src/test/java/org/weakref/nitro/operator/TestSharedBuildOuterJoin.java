@@ -15,12 +15,20 @@ package org.weakref.nitro.operator;
 
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.I32Vector;
+import org.weakref.nitro.data.I64Vector;
+import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.RegionVector;
+import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.execution.EngineResources;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicLongArray;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.weakref.nitro.data.Row.row;
@@ -28,6 +36,82 @@ import static org.weakref.nitro.function.scalar.builtin.JoinFilterFunctions.long
 
 class TestSharedBuildOuterJoin
 {
+    @Test
+    void testMarksDenseDictionaryIdentities()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            allocator.beginExecution();
+            AtomicLongArray matched = new AtomicLongArray(3);
+            DictionaryVector identities = new DictionaryVector(
+                    new int[] {2, 0, 1, 2},
+                    new I64Vector(new long[] {65, 1, 129}));
+            try (BuildOuterMatchMarker marker = new BuildOuterMatchMarker(
+                    resources.operatorResources().codeGeneration().buildOuterMatchMarker(),
+                    allocator.primitiveArrays(),
+                    matched)) {
+                marker.mark(identities, null, Mask.all(4));
+            }
+
+            assertThat(matched.get(0)).isEqualTo(1L << 1);
+            assertThat(matched.get(1)).isEqualTo(1L << 1);
+            assertThat(matched.get(2)).isEqualTo(1L << 1);
+        }
+    }
+
+    @Test
+    void testMarksSparseDictionaryIdentities()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            allocator.beginExecution();
+            AtomicLongArray matched = new AtomicLongArray(3);
+            DictionaryVector identities = new DictionaryVector(
+                    new int[] {2, 0, 1, 2},
+                    new I32Vector(new int[] {65, 1, 129}));
+            try (BuildOuterMatchMarker marker = new BuildOuterMatchMarker(
+                    resources.operatorResources().codeGeneration().buildOuterMatchMarker(),
+                    allocator.primitiveArrays(),
+                    matched)) {
+                marker.mark(identities, null, Mask.sparse(new int[] {1, 3}, 4));
+            }
+
+            assertThat(matched.get(0)).isZero();
+            assertThat(matched.get(1)).isEqualTo(1L << 1);
+            assertThat(matched.get(2)).isEqualTo(1L << 1);
+        }
+    }
+
+    @Test
+    void testMarksNestedEncodedIdentitiesWithIndependentNulls()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            allocator.beginExecution();
+            AtomicLongArray matched = new AtomicLongArray(4);
+            RleVector identities = new RleVector(
+                    new int[] {2, 1, 1, 2},
+                    DictionaryVector.wrapNested(
+                            new int[] {2, 0, 1, 2},
+                            4,
+                            new RegionVector(new I64Vector(new long[] {1, 65, 129, 193}), 1, 3)));
+            RleVector nulls = new RleVector(
+                    new int[] {2, 4},
+                    new BooleanVector(new boolean[] {true, false}));
+            try (BuildOuterMatchMarker marker = new BuildOuterMatchMarker(
+                    resources.operatorResources().codeGeneration().buildOuterMatchMarker(),
+                    allocator.primitiveArrays(),
+                    matched)) {
+                marker.mark(identities, nulls, Mask.all(6));
+            }
+
+            assertThat(matched.get(0)).isZero();
+            assertThat(matched.get(1)).isEqualTo(1L << 1);
+            assertThat(matched.get(2)).isEqualTo(1L << 1);
+            assertThat(matched.get(3)).isEqualTo(1L << 1);
+        }
+    }
+
     @Test
     void testSharesMatchesAcrossParallelProbeSessionsAndEmitsUnmatchedOnce()
     {

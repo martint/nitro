@@ -26,7 +26,6 @@ import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
-import org.weakref.nitro.data.VectorAccess;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -34,7 +33,6 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicLongArray;
 
-import static java.lang.Math.toIntExact;
 import static java.util.Objects.requireNonNull;
 
 /**
@@ -174,7 +172,12 @@ public final class SharedBuildOuterJoin
                                 preparedBuild,
                                 joinFilters)
                         .withOutputs(joinOutputChannels);
-        return new ProbeSession(join);
+        return new ProbeSession(
+                join,
+                new BuildOuterMatchMarker(
+                        resources.codeGeneration().buildOuterMatchMarker(),
+                        probeAllocator.primitiveArrays(),
+                        matchedBuildRows));
     }
 
     /** Creates the sole post-probe stream of unmatched build rows. */
@@ -202,23 +205,6 @@ public final class SharedBuildOuterJoin
         allocator.release(allocationContext);
     }
 
-    private void markMatched(Batch output)
-    {
-        Output identityOutput = output.output(outputChannels.length);
-        VectorAccess.LongValues identities = VectorAccess.longValues(identityOutput.borrow(Stream.VALUES));
-        VectorAccess.BooleanValues nulls = VectorAccess.booleanValues(identityOutput.borrowOrNull(Stream.NULLS));
-        Mask mask = output.borrowMask();
-        for (int position : mask) {
-            if (nulls.value(position)) {
-                continue;
-            }
-            int identity = toIntExact(identities.value(position));
-            int word = identity / Long.SIZE;
-            long bit = 1L << (identity % Long.SIZE);
-            matchedBuildRows.getAndUpdate(word, value -> value | bit);
-        }
-    }
-
     private boolean matched(int identity)
     {
         return (matchedBuildRows.get(identity / Long.SIZE) & (1L << (identity % Long.SIZE))) != 0;
@@ -228,10 +214,12 @@ public final class SharedBuildOuterJoin
             implements JoinSession
     {
         private final JoinSession join;
+        private final BuildOuterMatchMarker matchMarker;
 
-        private ProbeSession(JoinSession join)
+        private ProbeSession(JoinSession join, BuildOuterMatchMarker matchMarker)
         {
             this.join = join;
+            this.matchMarker = matchMarker;
         }
 
         @Override
@@ -257,7 +245,11 @@ public final class SharedBuildOuterJoin
         public Batch getOutput()
         {
             Batch source = join.getOutput();
-            markMatched(source);
+            Output identityOutput = source.output(outputChannels.length);
+            matchMarker.mark(
+                    identityOutput.borrow(Stream.VALUES),
+                    identityOutput.borrowOrNull(Stream.NULLS),
+                    source.borrowMask());
             Output[] outputs = new Output[outputChannels.length];
             for (int index = 0; index < outputs.length; index++) {
                 Output sourceOutput = source.output(index);
@@ -289,7 +281,12 @@ public final class SharedBuildOuterJoin
         @Override
         public void close()
         {
-            join.close();
+            try {
+                join.close();
+            }
+            finally {
+                matchMarker.close();
+            }
         }
     }
 

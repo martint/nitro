@@ -38,6 +38,7 @@ public final class OperatorCodeGenerationResources
     private final DirectCompositeGroupingKernelGenerator directCompositeGrouping = new DirectCompositeGroupingKernelGenerator();
     private final NormalizedIntGroupingKernelGenerator normalizedIntGrouping = new NormalizedIntGroupingKernelGenerator();
     private final DictionaryRecordEqualityKernelGenerator dictionaryRecordEquality = new DictionaryRecordEqualityKernelGenerator();
+    private final BuildOuterMatchMarkerGenerator buildOuterMatchMarker = new BuildOuterMatchMarkerGenerator();
     private final StructuralTypeKernelFactory structuralTypes = new StructuralTypeKernelFactory();
     private boolean closed;
 
@@ -124,6 +125,12 @@ public final class OperatorCodeGenerationResources
         return dictionaryRecordEquality;
     }
 
+    BuildOuterMatchMarkerGenerator buildOuterMatchMarker()
+    {
+        checkOpen();
+        return buildOuterMatchMarker;
+    }
+
     public StructuralTypeKernelFactory structuralTypes()
     {
         checkOpen();
@@ -149,6 +156,7 @@ public final class OperatorCodeGenerationResources
         directCompositeGrouping.close();
         normalizedIntGrouping.close();
         dictionaryRecordEquality.close();
+        buildOuterMatchMarker.close();
     }
 
     private void checkOpen()
