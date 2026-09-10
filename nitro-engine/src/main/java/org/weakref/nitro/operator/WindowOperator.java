@@ -1093,6 +1093,11 @@ public final class WindowOperator
         if (policy.radixSort() && tryStableRadixSortSinglePagePositions(positions)) {
             return;
         }
+        Streams[] columns = pages.getFirst().columns();
+        StructuralComparisonKernel.PositionComparison[] partitionComparisons =
+                bindSinglePagePartitionComparisons(columns);
+        StructuralComparisonKernel.PositionComparison[] orderingComparisons =
+                bindNullFreeSinglePageOrderingComparisons(columns);
         int[] scratch = arrayPool.borrowInts(length);
         try {
             int[] source = positions;
@@ -1105,7 +1110,12 @@ public final class WindowOperator
                     int right = middle;
                     int output = start;
                     while (left < middle && right < end) {
-                        if (compareSinglePagePositions(source[left], source[right]) <= 0) {
+                        if (compareSinglePagePositions(
+                                partitionComparisons,
+                                orderingComparisons,
+                                columns,
+                                source[left],
+                                source[right]) <= 0) {
                             target[output++] = source[left++];
                         }
                         else {
@@ -1599,17 +1609,61 @@ public final class WindowOperator
         return values instanceof I64Vector ? ~sortable : (~sortable) & 0xFFFF_FFFFL;
     }
 
-    private int compareSinglePagePositions(int leftPosition, int rightPosition)
+    private StructuralComparisonKernel.PositionComparison[] bindSinglePagePartitionComparisons(Streams[] columns)
     {
-        Streams[] columns = pages.getFirst().columns();
-        for (int partitionColumn : partitionColumns) {
-            int comparison = compareColumn(partitionColumn, columns[partitionColumn], leftPosition, rightPosition);
+        StructuralComparisonKernel.PositionComparison[] comparisons =
+                new StructuralComparisonKernel.PositionComparison[partitionColumns.length];
+        for (int index = 0; index < partitionColumns.length; index++) {
+            int column = partitionColumns[index];
+            Streams streams = columns[column];
+            comparisons[index] = comparisonKernels[column].bindComparison(
+                    streams.values(), streams.getOrNull(Stream.NULLS),
+                    streams.values(), streams.getOrNull(Stream.NULLS));
+        }
+        return comparisons;
+    }
+
+    private StructuralComparisonKernel.PositionComparison[] bindNullFreeSinglePageOrderingComparisons(Streams[] columns)
+    {
+        StructuralComparisonKernel.PositionComparison[] comparisons =
+                new StructuralComparisonKernel.PositionComparison[orderingColumns.length];
+        for (int index = 0; index < orderingColumns.length; index++) {
+            int column = orderingColumns[index];
+            Streams streams = columns[column];
+            Vector nulls = streams.getOrNull(Stream.NULLS);
+            if (VectorAccess.isAllFalseNulls(nulls)) {
+                comparisons[index] = comparisonKernels[column].bindComparison(
+                        streams.values(), nulls, streams.values(), nulls);
+            }
+        }
+        return comparisons;
+    }
+
+    private int compareSinglePagePositions(
+            StructuralComparisonKernel.PositionComparison[] partitionComparisons,
+            StructuralComparisonKernel.PositionComparison[] orderingComparisons,
+            Streams[] columns,
+            int leftPosition,
+            int rightPosition)
+    {
+        for (StructuralComparisonKernel.PositionComparison partitionComparison : partitionComparisons) {
+            int comparison = partitionComparison.compare(leftPosition, rightPosition);
             if (comparison != 0) {
                 return comparison;
             }
         }
         for (int orderingIndex = 0; orderingIndex < orderingColumns.length; orderingIndex++) {
-            int comparison = compareOrderingColumn(orderingIndex, columns, leftPosition, rightPosition);
+            StructuralComparisonKernel.PositionComparison bound = orderingComparisons[orderingIndex];
+            int comparison;
+            if (bound != null) {
+                comparison = bound.compare(leftPosition, rightPosition);
+                if (descendingByColumn[orderingIndex]) {
+                    comparison = -comparison;
+                }
+            }
+            else {
+                comparison = compareOrderingColumn(orderingIndex, columns, leftPosition, rightPosition);
+            }
             if (comparison != 0) {
                 return comparison;
             }

@@ -1286,6 +1286,20 @@ public final class StructuralTypeKernelFactory
         }
 
         @Override
+        public PositionComparison bindComparison(
+                Vector leftValues,
+                Vector leftNulls,
+                Vector rightValues,
+                Vector rightNulls)
+        {
+            if (VectorAccess.isAllFalseNulls(leftNulls) && VectorAccess.isAllFalseNulls(rightNulls)) {
+                return new NullFreePositionComparison(comparison, leftValues, rightValues);
+            }
+            return StructuralComparisonKernel.super.bindComparison(
+                    leftValues, leftNulls, rightValues, rightNulls);
+        }
+
+        @Override
         public int compare(
                 Vector leftValues,
                 Vector leftNulls,
@@ -1328,6 +1342,32 @@ public final class StructuralTypeKernelFactory
             }
             catch (Throwable throwable) {
                 throw new IllegalStateException("Direct structural identity comparison failed", throwable);
+            }
+        }
+
+        private static final class NullFreePositionComparison
+                implements PositionComparison
+        {
+            private final MethodHandle comparison;
+            private final Vector leftValues;
+            private final Vector rightValues;
+
+            private NullFreePositionComparison(MethodHandle comparison, Vector leftValues, Vector rightValues)
+            {
+                this.comparison = requireNonNull(comparison, "comparison is null");
+                this.leftValues = requireNonNull(leftValues, "leftValues is null");
+                this.rightValues = requireNonNull(rightValues, "rightValues is null");
+            }
+
+            @Override
+            public int compare(int leftPosition, int rightPosition)
+            {
+                try {
+                    return (int) comparison.invokeExact(leftValues, leftPosition, rightValues, rightPosition);
+                }
+                catch (Throwable throwable) {
+                    throw new IllegalStateException("Direct structural comparison failed", throwable);
+                }
             }
         }
     }

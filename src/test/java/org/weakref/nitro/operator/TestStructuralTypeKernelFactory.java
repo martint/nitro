@@ -94,6 +94,53 @@ class TestStructuralTypeKernelFactory
     }
 
     @Test
+    void testBindsDirectNullFreePositionComparisonAndPreservesNullableFallback()
+            throws ReflectiveOperationException
+    {
+        AtomicInteger comparisons = new AtomicInteger();
+        var vectorComparison = lookup().findStatic(
+                        TestStructuralTypeKernelFactory.class,
+                        "compareLongs",
+                        methodType(int.class, AtomicInteger.class, Vector.class, int.class, Vector.class, int.class))
+                .bindTo(comparisons);
+        var vectorIdentical = lookup().findStatic(
+                TestStructuralTypeKernelFactory.class,
+                "sameRawValue",
+                methodType(boolean.class, AtomicInteger.class, Vector.class, int.class, Vector.class, int.class))
+                .bindTo(new AtomicInteger());
+        TypeBinding type = new TestingIdentityType(new TypeOperators(
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.of(vectorIdentical),
+                Optional.empty(),
+                Optional.of(vectorComparison),
+                Optional.empty(),
+                Optional.empty()));
+        I64Vector values = new I64Vector(new long[] {11, 7});
+        Vector noNulls = new RleVector(new int[] {2}, new BooleanVector(new boolean[] {false}));
+
+        StructuralComparisonKernel.PositionComparison comparison =
+                new StructuralTypeKernelFactory().comparison(type).bindComparison(
+                        values, noNulls, values, noNulls);
+
+        assertThat(comparison.compare(0, 1)).isPositive();
+        assertThat(comparisons).hasValue(1);
+
+        StructuralComparisonKernel.PositionComparison nullableComparison =
+                new StructuralTypeKernelFactory().comparison(type).bindComparison(
+                        values, new BooleanVector(new boolean[] {false, true}),
+                        values, new BooleanVector(new boolean[] {false, true}));
+
+        assertThat(nullableComparison.compare(0, 1)).isNegative();
+        assertThat(nullableComparison.compare(1, 0)).isPositive();
+        assertThat(comparisons).hasValue(1);
+    }
+
+    @Test
     void testRawKeyIdentityProofUsesGenericPhysicalKernel()
             throws ReflectiveOperationException
     {
@@ -418,5 +465,18 @@ class TestStructuralTypeKernelFactory
     {
         invocations.incrementAndGet();
         return Long.hashCode(((I64Vector) values).values()[position]);
+    }
+
+    private static int compareLongs(
+            AtomicInteger invocations,
+            Vector left,
+            int leftPosition,
+            Vector right,
+            int rightPosition)
+    {
+        invocations.incrementAndGet();
+        return Long.compare(
+                ((I64Vector) left).values()[leftPosition],
+                ((I64Vector) right).values()[rightPosition]);
     }
 }

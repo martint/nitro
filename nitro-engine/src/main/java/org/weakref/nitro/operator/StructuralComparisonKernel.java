@@ -16,9 +16,20 @@ package org.weakref.nitro.operator;
 import org.weakref.nitro.core.type.BoundTypeComparison;
 import org.weakref.nitro.data.Vector;
 
+import static java.util.Objects.requireNonNull;
+
 interface StructuralComparisonKernel
         extends StructuralIdentityKernel, BoundTypeComparison
 {
+    default PositionComparison bindComparison(
+            Vector leftValues,
+            Vector leftNulls,
+            Vector rightValues,
+            Vector rightNulls)
+    {
+        return new NullablePositionComparison(this, leftValues, leftNulls, rightValues, rightNulls);
+    }
+
     default PositionEquality bindPartitionEquality(
             Vector leftValues,
             Vector leftNulls,
@@ -39,6 +50,44 @@ interface StructuralComparisonKernel
     interface PositionEquality
     {
         boolean identical(int leftPosition, int rightPosition);
+    }
+
+    @FunctionalInterface
+    interface PositionComparison
+    {
+        int compare(int leftPosition, int rightPosition);
+    }
+
+    final class NullablePositionComparison
+            implements PositionComparison
+    {
+        private final StructuralComparisonKernel kernel;
+        private final Vector leftValues;
+        private final Vector leftNulls;
+        private final Vector rightValues;
+        private final Vector rightNulls;
+
+        private NullablePositionComparison(
+                StructuralComparisonKernel kernel,
+                Vector leftValues,
+                Vector leftNulls,
+                Vector rightValues,
+                Vector rightNulls)
+        {
+            this.kernel = requireNonNull(kernel, "kernel is null");
+            this.leftValues = requireNonNull(leftValues, "leftValues is null");
+            this.leftNulls = leftNulls;
+            this.rightValues = requireNonNull(rightValues, "rightValues is null");
+            this.rightNulls = rightNulls;
+        }
+
+        @Override
+        public int compare(int leftPosition, int rightPosition)
+        {
+            return kernel.compare(
+                    leftValues, leftNulls, leftPosition,
+                    rightValues, rightNulls, rightPosition);
+        }
     }
 
     default boolean allowsLegacyPhysicalShortcuts()
