@@ -2463,15 +2463,13 @@ public class HashJoinOperator
 
     private Vector takeResultStream(int outputIndex, Vector vector, InnerOutputMappingScope innerOutputMappings)
     {
-        if (outputIndex < outerOutputCount && vector instanceof DictionaryVector) {
+        if (outputIndex < outerOutputCount && vector instanceof DictionaryVector dictionary) {
             // Borrowers inside a pull chain can safely consume the view while the upstream batch is pinned. A
             // caller that takes the vector can outlive that batch regardless of whether the upstream supports a
             // constrained re-borrow, so compact the logical rows at that explicit ownership boundary instead of
             // transferring a wrapper over borrowed upstream storage. In particular, an ordinary Parquet-backed
             // probe advances by closing its current batch and may then recycle a dictionary's primitive storage.
-            int[] positions = new int[vector.length()];
-            Arrays.setAll(positions, index -> index);
-            Vector copy = vector.copy(allocator, allocationContext, positions);
+            Vector copy = dictionary.copyFlat(allocator, allocationContext);
             allocator.release(allocationContext, vector);
             return allocator.transferOwned(allocationContext, copy);
         }
