@@ -678,6 +678,19 @@ Host `Page`/`Block` adaptation is permitted only at explicit ingress or egress w
 available. Adaptation preserves laziness, encoding, companion-stream semantics, logical length, and ownership wherever
 the host representation permits it.
 
+At a synchronous remote-output egress, the host may declare a callback-scoped, non-retaining consumer that copies
+every selected value into destination-owned storage before returning. The host integration may then expose an exact
+temporary host view over borrowed Nitro value storage when every output channel's registered type adapter proves the
+physical representation compatible. Dense views expose only the logical range. Sparse views may carry a temporary
+selection mapping over the borrowed flat base, but the destination must consume that mapping directly or complete any
+encoding-preserving serialization within the callback; neither the view, its base, nor a transitive wrapper may remain
+reachable afterward. Semantic transformations such as `CHAR` normalization and unsupported vector layouts require
+the ordinary owning adaptation path. The source batch closes only after the synchronous consumer returns.
+
+This optimization does not move partition assignment, buffering, serialization, backpressure, replication, skew,
+encryption, or output accounting into Nitro. Nitro core remains independent of host `Page`/`Block` classes. The host
+boundary reports borrowed versus owning adaptations and their conversion and append costs.
+
 The host can charge separate memory reservations through allocator contexts without copies between adjacent Nitro
 stages. Page/Block boundaries are not ownership boundaries inside an island.
 

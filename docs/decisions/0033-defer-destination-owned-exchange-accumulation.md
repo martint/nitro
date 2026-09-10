@@ -1,9 +1,13 @@
 # ADR-0033: Defer destination-owned exchange accumulation
 
-- **Status:** accepted
+- **Status:** superseded by [ADR-0098](0098-borrow-remote-output-storage-through-synchronous-destination-append.md)
 - **Date:** 2026-09-03 (retrospective; decided 2026-08-13)
 - **Spec:** §15, §19
 - **Historical evidence:** reconciliation proposal “destination-owned exchange accumulation”
+
+> **Superseded 2026-09-10 by [ADR-0098](0098-borrow-remote-output-storage-through-synchronous-destination-append.md):**
+> the host's existing destination builders can consume exact callback-scoped Nitro storage without introducing a
+> Nitro-owned persistent destination accumulator.
 
 ## Context
 

@@ -112,7 +112,7 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | [0030](0030-defer-spilling-behind-engine-arbitration.md) | Design spilling behind engine-level memory arbitration | proposed |
 | [0031](0031-defer-locator-based-payload-materialization.md) | Defer locator-based payload materialization until remote reads are designed | accepted |
 | [0032](0032-require-equivalent-evidence-for-native-kernels.md) | Require algorithmically equivalent evidence before adopting native kernels | accepted |
-| [0033](0033-defer-destination-owned-exchange-accumulation.md) | Defer destination-owned exchange accumulation | accepted |
+| [0033](0033-defer-destination-owned-exchange-accumulation.md) | Defer destination-owned exchange accumulation | superseded |
 | [0034](0034-allow-disjoint-branches-to-share-a-destination.md) | Allow conditional branches to populate one destination only through explicit ownership | proposed |
 | [0035](0035-unify-dynamic-filter-transport-later.md) | Preserve a path to subsume Nitro dynamic-filter transport under the host | proposed |
 | [0036](0036-share-physical-key-contracts-across-consumers.md) | Share physical key and table contracts across grouping, joins, and distinct | accepted |
@@ -177,3 +177,4 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | [0095](0095-generate-unordered-repeated-key-layouts.md) | Generate unordered repeated key layouts | accepted |
 | [0096](0096-normalize-mixed-flat-distinct-keys.md) | Normalize mixed flat DISTINCT keys into generated fixed-width layouts | accepted |
 | [0097](0097-admit-exact-distinct-value-ids-by-observed-reuse.md) | Admit exact DISTINCT value IDs by observed reuse | accepted |
+| [0098](0098-borrow-remote-output-storage-through-synchronous-destination-append.md) | Borrow remote-output storage through synchronous destination append | accepted |

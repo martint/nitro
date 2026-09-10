@@ -19,6 +19,8 @@ public final class Utf8Traits
     public static final BinaryVector.Trait UTF8_VALID = BinaryVector.Trait.flag("utf8_valid");
     /** Every byte in the vector is in the seven-bit ASCII subset. */
     public static final BinaryVector.Trait ASCII_ONLY = BinaryVector.Trait.flag("ascii_only");
+    /** No non-empty value ends in the ASCII space byte. */
+    public static final BinaryVector.Trait NO_TRAILING_SPACE = BinaryVector.Trait.flag("no_trailing_space");
 
     private Utf8Traits() {}
 }
