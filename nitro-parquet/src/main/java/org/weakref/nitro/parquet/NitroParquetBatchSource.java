@@ -3309,9 +3309,17 @@ public final class NitroParquetBatchSource
             finally {
                 allocator.release(allocationContext, raw);
             }
-            currentValues[column] = vector == null
+            BinaryVector output = vector == null
                     ? BinaryVector.allocate(allocator, allocationContext, batchPolicy.maxRows(), 0)
-                    : vector;
+                    : (BinaryVector) vector;
+            if (decodeCount > 0) {
+                int lastOutputPosition = weakConstraint || outputPositions == null
+                        ? decodeCount - 1
+                        : outputPositions[decodeCount - 1];
+                int trailingOffset = output.offsets()[lastOutputPosition + 1];
+                java.util.Arrays.fill(output.offsets(), lastOutputPosition + 2, output.length() + 1, trailingOffset);
+            }
+            currentValues[column] = output;
             recordSelectedDecode(column, decodeCount);
             recordCopied(column, decodeCount);
         }

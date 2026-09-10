@@ -2687,6 +2687,42 @@ public class TestParquetOperator
     }
 
     @Test
+    void testNitroFilteredWindowCompletesSparseBinaryOffsets()
+            throws IOException
+    {
+        java.nio.file.Path file = writeWideBinaryParquetFile("nitro-deferred-filtered-binary.parquet", List.of(
+                new WideBinaryRow(1, "11", "12", "13", "14"),
+                new WideBinaryRow(2, "21", "22", "23", "24"),
+                new WideBinaryRow(3, "31", "32", "33", "34"),
+                new WideBinaryRow(4, "41", "42", "43", "44"),
+                new WideBinaryRow(5, "51", "52", "53", "54"),
+                new WideBinaryRow(6, "61", "62", "63", "64"),
+                new WideBinaryRow(7, "71", "72", "73", "74"),
+                new WideBinaryRow(8, "81", "82", "83", "84"),
+                new WideBinaryRow(9, "91", "92", "93", "94"),
+                new WideBinaryRow(10, "101", "102", "103", "104")));
+
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        try (NitroParquetScanOperator scan = new NitroParquetScanOperator(
+                executableRuntimeFilterResources(),
+                allocator,
+                List.of(file),
+                List.of("key", "p1", "p2", "p3", "p4"))) {
+            scan.pushDynamicFilter(DynamicFilter.fromRange(0, 2, 6));
+            Batch batch = scan.next();
+            assertThat(batch.borrowMask()).hasSize(5);
+
+            scan.constrain(Mask.sparse(new int[] {2}, 5));
+            BinaryVector payload = (BinaryVector) batch.output(4).borrow(Stream.VALUES);
+            assertThat(new String(payload.copyBytes(2), java.nio.charset.StandardCharsets.UTF_8)).isEqualTo("44");
+            assertThat(payload.offsets()).isSorted();
+            assertThat(payload.copyBytes(payload.length() - 1)).isEmpty();
+            batch.close();
+            assertThat(scan.hasNext()).isFalse();
+        }
+    }
+
+    @Test
     void testNitroFilteredWindowDoesNotDeferAcrossInitialAdaptiveBatches()
             throws IOException
     {
@@ -4014,6 +4050,19 @@ public class TestParquetOperator
         return file;
     }
 
+    private java.nio.file.Path writeWideBinaryParquetFile(String name, List<WideBinaryRow> rows)
+            throws IOException
+    {
+        java.nio.file.Path file = tempDirectory.resolve(name);
+        write(file, "nitro_wide_binary_test", List.of(
+                requiredInt64("key", rows.stream().map(WideBinaryRow::key).toList()),
+                requiredBinary("p1", rows.stream().map(WideBinaryRow::p1).toList()).asUtf8(),
+                requiredBinary("p2", rows.stream().map(WideBinaryRow::p2).toList()).asUtf8(),
+                requiredBinary("p3", rows.stream().map(WideBinaryRow::p3).toList()).asUtf8(),
+                requiredBinary("p4", rows.stream().map(WideBinaryRow::p4).toList()).asUtf8()), true);
+        return file;
+    }
+
     private java.nio.file.Path writeBinaryParquetFile(String name, boolean dictionaryEnabled, List<BinaryParquetRow> rows)
             throws IOException
     {
@@ -4168,6 +4217,8 @@ public class TestParquetOperator
     private record ParquetRow(long x, boolean flag, Long maybe) {}
 
     private record WideNumericRow(long key, long p1, long p2, long p3, long p4) {}
+
+    private record WideBinaryRow(long key, String p1, String p2, String p3, String p4) {}
 
     private record BinaryParquetRow(String name, byte[] payload) {}
 
