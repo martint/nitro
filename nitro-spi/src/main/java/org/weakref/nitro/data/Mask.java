@@ -2192,6 +2192,15 @@ public class Mask
         setSelection(size, retainedCount, retainedCount == size);
     }
 
+    /**
+     * Completes an in-place dense exclusion kernel that wrote the sorted positions to exclude into this mask's
+     * existing position buffer. This is the complement form of {@link #finishRetain(int)}.
+     */
+    public void finishExclude(int excludedCount)
+    {
+        setExclusion(size, excludedCount);
+    }
+
     void setSelection(int size, int selectedCount, boolean allSelected)
     {
         checkArgument(size >= 0, "size is negative");

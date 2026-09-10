@@ -15,10 +15,28 @@ package org.weakref.nitro.function.scalar.builtin;
 
 import org.junit.jupiter.api.Test;
 
+import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class TestUtf8BinaryDispatchPolicy
 {
+    @Test
+    void testCompiledNeedleIndexOf()
+    {
+        byte[] data = "ordinary special handling requests".getBytes(UTF_8);
+
+        assertThat(Utf8BinaryDispatch.indexOf(data, 0, data.length, Utf8BinaryDispatch.containsNeedle("special".getBytes(UTF_8))))
+                .isEqualTo(9);
+        assertThat(Utf8BinaryDispatch.indexOf(data, 17, data.length - 17, Utf8BinaryDispatch.containsNeedle("requests".getBytes(UTF_8))))
+                .isEqualTo(9);
+        assertThat(Utf8BinaryDispatch.indexOf(data, 0, data.length, Utf8BinaryDispatch.containsNeedle("missing".getBytes(UTF_8))))
+                .isEqualTo(-1);
+        assertThat(Utf8BinaryDispatch.indexOf(data, 0, data.length, Utf8BinaryDispatch.containsNeedle("o".getBytes(UTF_8))))
+                .isZero();
+        assertThat(Utf8BinaryDispatch.indexOf(data, 4, data.length - 4, Utf8BinaryDispatch.containsNeedle(new byte[0])))
+                .isZero();
+    }
+
     @Test
     void testDefaultsPreserveAllExistingSpecializations()
     {

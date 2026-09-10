@@ -2105,6 +2105,35 @@ public final class Utf8BinaryDispatch
     }
 
     /**
+     * Returns the byte offset of the first occurrence of a precompiled needle relative to {@code offset}, or
+     * {@code -1} when the needle is absent. This is the positional counterpart of {@link #contains}; providers can
+     * use it to compose ordered literal searches without falling back to per-byte accessor dispatch.
+     */
+    public static int indexOf(byte[] data, int offset, int length, ContainsNeedle needle)
+    {
+        if (needle.length() == 0) {
+            return 0;
+        }
+        if (length < needle.length()) {
+            return -1;
+        }
+        if (needle.length() == 1) {
+            return binaryIndexOfSingleByte(data, offset, length, needle.firstProbeByte());
+        }
+        return binaryIndexOfVectorized(
+                data,
+                offset,
+                length,
+                needle.data(),
+                needle.start(),
+                needle.length(),
+                needle.firstProbeOffset(),
+                needle.secondProbeOffset(),
+                needle.firstProbeByte(),
+                needle.secondProbeByte());
+    }
+
+    /**
      * Sweep containment over a concatenated row buffer: select the rows of {@code [0, rowCount)} whose
      * {@code [offsets[row], offsets[row + 1])} slice contains the needle, writing them to {@code selection}
      * (ascending, deduplicated) and returning the count. One SIMD pass over the whole region -- candidate hits
@@ -2259,6 +2288,69 @@ public final class Utf8BinaryDispatch
             }
         }
         return false;
+    }
+
+    private static int binaryIndexOfSingleByte(byte[] haystackData, int haystackStart, int haystackLength, byte needleByte)
+    {
+        int fullLength = CONTAINS_SPECIES.loopBound(haystackLength);
+        int offset = 0;
+        while (offset < fullLength) {
+            long matches = jdk.incubator.vector.ByteVector.fromArray(CONTAINS_SPECIES, haystackData, haystackStart + offset)
+                    .compare(jdk.incubator.vector.VectorOperators.EQ, needleByte)
+                    .toLong();
+            if (matches != 0) {
+                return offset + Long.numberOfTrailingZeros(matches);
+            }
+            offset += CONTAINS_SPECIES.length();
+        }
+        if (offset < haystackLength) {
+            jdk.incubator.vector.VectorMask<Byte> laneMask = CONTAINS_SPECIES.indexInRange(offset, haystackLength);
+            long matches = jdk.incubator.vector.ByteVector.fromArray(CONTAINS_SPECIES, haystackData, haystackStart + offset, laneMask)
+                    .compare(jdk.incubator.vector.VectorOperators.EQ, needleByte, laneMask)
+                    .toLong();
+            if (matches != 0) {
+                return offset + Long.numberOfTrailingZeros(matches);
+            }
+        }
+        return -1;
+    }
+
+    private static int binaryIndexOfVectorized(
+            byte[] haystackData,
+            int haystackStart,
+            int haystackLength,
+            byte[] needleData,
+            int needleStart,
+            int needleLength,
+            int firstProbeOffset,
+            int secondProbeOffset,
+            byte firstProbeByte,
+            byte secondProbeByte)
+    {
+        int candidateCount = haystackLength - needleLength + 1;
+        int fullLength = CONTAINS_SPECIES.loopBound(candidateCount);
+        int offset = 0;
+        while (offset < fullLength) {
+            jdk.incubator.vector.ByteVector firstProbe = jdk.incubator.vector.ByteVector.fromArray(CONTAINS_SPECIES, haystackData, haystackStart + offset + firstProbeOffset);
+            jdk.incubator.vector.ByteVector secondProbe = jdk.incubator.vector.ByteVector.fromArray(CONTAINS_SPECIES, haystackData, haystackStart + offset + secondProbeOffset);
+            long candidateBits = firstProbe.eq(firstProbeByte).toLong() & secondProbe.eq(secondProbeByte).toLong();
+            while (candidateBits != 0) {
+                int lane = Long.numberOfTrailingZeros(candidateBits);
+                if (binaryMatchesAt(haystackData, haystackStart + offset + lane, needleData, needleStart, needleLength)) {
+                    return offset + lane;
+                }
+                candidateBits &= candidateBits - 1;
+            }
+            offset += CONTAINS_SPECIES.length();
+        }
+        for (int candidate = offset; candidate < candidateCount; candidate++) {
+            if (haystackData[haystackStart + candidate + firstProbeOffset] == firstProbeByte &&
+                    haystackData[haystackStart + candidate + secondProbeOffset] == secondProbeByte &&
+                    binaryMatchesAt(haystackData, haystackStart + candidate, needleData, needleStart, needleLength)) {
+                return candidate;
+            }
+        }
+        return -1;
     }
 
     private static boolean binaryContainsVectorized(

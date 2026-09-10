@@ -486,6 +486,21 @@ public class TestBatchRuntime
     }
 
     @Test
+    void testDirectMaskExclusionRetainsComplementWithoutMaterializingIt()
+    {
+        Mask mask = Mask.all(8);
+        int[] excluded = mask.positionsArrayForOverwrite(3);
+        excluded[0] = 1;
+        excluded[1] = 3;
+        excluded[2] = 6;
+
+        mask.finishExclude(3);
+
+        assertThat(mask.selectedCount()).isEqualTo(5);
+        assertThat(positions(mask)).containsExactly(0, 2, 4, 5, 7);
+    }
+
+    @Test
     void testReusedMaskOverwriteDiscardsReleasedDictionarySelection()
     {
         try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
