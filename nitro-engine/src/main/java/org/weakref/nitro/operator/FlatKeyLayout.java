@@ -1790,6 +1790,13 @@ class FlatKeyLayout
             int bestField = -1;
             int bestDistinct = 0;
             for (int field = 0; field < handlers.length; field++) {
+                // Generated projected layouts bind canonical source arrays after this base batch setup returns.
+                // Their exact full-key hash remains available, but a canonical lane cannot be sampled here before
+                // those generated fields are live. Direct and repeated fields are already bound and may still serve
+                // as the discriminator for the same composite key.
+                if (fieldKinds[field] == FlatTypeHandler.Kind.CANONICAL) {
+                    continue;
+                }
                 // A nullable discriminator remains correct, but a common null value creates an avoidable collision
                 // cluster. Admit only a null-free first batch; the selected hash remains correctness-equivalent if
                 // a later batch happens to carry nulls.

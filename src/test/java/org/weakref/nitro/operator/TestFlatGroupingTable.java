@@ -171,6 +171,55 @@ class TestFlatGroupingTable
     }
 
     @Test
+    void testGeneratedProjectedFlatLayoutSkipsUnboundCanonicalDiscriminator()
+    {
+        int size = 128;
+        int[] sharedIds = new int[size];
+        String[][] binaryFields = new String[4][size];
+        double[] canonicalValues = new double[size];
+        for (int position = 0; position < size; position++) {
+            sharedIds[position] = position;
+            binaryFields[0][position] = "customer-" + position;
+            binaryFields[1][position] = "first";
+            binaryFields[2][position] = "last";
+            binaryFields[3][position] = "country";
+            canonicalValues[position] = position;
+        }
+
+        Vector[] values = {
+                nestedDictionary(sharedIds, binaryFields[0]),
+                nestedDictionary(sharedIds, binaryFields[1]),
+                nestedDictionary(sharedIds, binaryFields[2]),
+                nestedDictionary(sharedIds, binaryFields[3]),
+                DictionaryVector.wrapNested(
+                        sharedIds,
+                        size,
+                        DictionaryVector.wrapNested(sharedIds, size, new F64Vector(canonicalValues)))};
+        Allocator allocator = new Allocator(engineResources);
+        Allocator.Context context = new Allocator.Context("projected-flat-canonical-discriminator");
+        GroupingState state = new GroupingState(
+                arrayPool,
+                codeGeneration,
+                groupingResources,
+                adaptiveLongGroupingPolicy,
+                flatKeyTablePolicy,
+                List.of(rawBinaryType(), rawBinaryType(), rawBinaryType(), rawBinaryType(), canonicalDoubleType()),
+                allocator,
+                context);
+        try {
+            I64Vector groups = new I64Vector(size);
+            state.assignGroups(values, new Vector[] {null, null, null, null, null}, Mask.all(size), groups);
+
+            assertThat(groups.values()).containsExactly(java.util.stream.LongStream.range(0, size).toArray());
+            assertThat(state.groupCount()).isEqualTo(size);
+        }
+        finally {
+            state.releaseBuffers();
+            allocator.release(context);
+        }
+    }
+
+    @Test
     void testGeneratedPersistentLayoutComposesRecursiveProductNullsAndMixedLeaves()
     {
         TypeBinding timestamp = fixedWidthPairType();
