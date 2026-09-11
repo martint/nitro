@@ -23,6 +23,7 @@ import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.PrimitiveArrayPool;
+import org.weakref.nitro.data.RegionVector;
 import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
@@ -61,6 +62,8 @@ class FlatKeyLayout
         private long[] longs;
         private int[] ints;
         private int[] ids;
+        private int positionOffset;
+        private int valueOffset;
         private long constant;
         private VectorAccess.LongValues generic;
 
@@ -76,6 +79,16 @@ class FlatKeyLayout
                     kind = I32;
                     ints = values.values();
                 }
+                case RegionVector region when region.values() instanceof I64Vector values -> {
+                    kind = I64;
+                    longs = values.values();
+                    valueOffset = region.offset();
+                }
+                case RegionVector region when region.values() instanceof I32Vector values -> {
+                    kind = I32;
+                    ints = values.values();
+                    valueOffset = region.offset();
+                }
                 case DictionaryVector dictionary when dictionary.values() instanceof I64Vector values -> {
                     kind = DICTIONARY_I64;
                     longs = values.values();
@@ -85,6 +98,34 @@ class FlatKeyLayout
                     kind = DICTIONARY_I32;
                     ints = values.values();
                     ids = dictionary.ids();
+                }
+                case DictionaryVector dictionary when dictionary.values() instanceof RegionVector region &&
+                        region.values() instanceof I64Vector values -> {
+                    kind = DICTIONARY_I64;
+                    longs = values.values();
+                    ids = dictionary.ids();
+                    valueOffset = region.offset();
+                }
+                case DictionaryVector dictionary when dictionary.values() instanceof RegionVector region &&
+                        region.values() instanceof I32Vector values -> {
+                    kind = DICTIONARY_I32;
+                    ints = values.values();
+                    ids = dictionary.ids();
+                    valueOffset = region.offset();
+                }
+                case RegionVector region when region.values() instanceof DictionaryVector dictionary &&
+                        dictionary.values() instanceof I64Vector values -> {
+                    kind = DICTIONARY_I64;
+                    longs = values.values();
+                    ids = dictionary.ids();
+                    positionOffset = region.offset();
+                }
+                case RegionVector region when region.values() instanceof DictionaryVector dictionary &&
+                        dictionary.values() instanceof I32Vector values -> {
+                    kind = DICTIONARY_I32;
+                    ints = values.values();
+                    ids = dictionary.ids();
+                    positionOffset = region.offset();
                 }
                 case RleVector rle when rle.counts().length == 1 -> {
                     kind = CONSTANT;
@@ -111,6 +152,16 @@ class FlatKeyLayout
                     kind = DICTIONARY_I32;
                     ints = values.values();
                 }
+                case RegionVector region when region.values() instanceof I64Vector values -> {
+                    kind = DICTIONARY_I64;
+                    longs = values.values();
+                    valueOffset = region.offset();
+                }
+                case RegionVector region when region.values() instanceof I32Vector values -> {
+                    kind = DICTIONARY_I32;
+                    ints = values.values();
+                    valueOffset = region.offset();
+                }
                 default -> {
                     kind = GENERIC;
                     VectorAccess.LongValues values = VectorAccess.longValues(vector);
@@ -126,16 +177,18 @@ class FlatKeyLayout
             ints = null;
             ids = null;
             generic = null;
+            positionOffset = 0;
+            valueOffset = 0;
         }
 
         @Override
         public long value(int position)
         {
             return switch (kind) {
-                case I64 -> longs[position];
-                case I32 -> ints[position];
-                case DICTIONARY_I64 -> longs[ids[position]];
-                case DICTIONARY_I32 -> ints[ids[position]];
+                case I64 -> longs[valueOffset + position];
+                case I32 -> ints[valueOffset + position];
+                case DICTIONARY_I64 -> longs[valueOffset + ids[positionOffset + position]];
+                case DICTIONARY_I32 -> ints[valueOffset + ids[positionOffset + position]];
                 case CONSTANT -> constant;
                 case GENERIC -> generic.value(position);
                 default -> throw new IllegalStateException("Unknown physical long access kind: " + kind);

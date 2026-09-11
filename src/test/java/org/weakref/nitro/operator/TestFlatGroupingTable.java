@@ -1556,6 +1556,48 @@ class TestFlatGroupingTable
     }
 
     @Test
+    void testPhysicalLongBindingResolvesDictionaryRegionCompositions()
+    {
+        int[] ids = {2, 0, 1, 2};
+        Vector[] values = {
+                DictionaryVector.wrap(
+                        ids,
+                        ids.length,
+                        new RegionVector(new I32Vector(new int[] {-1, 10, 20, 30, -1}), 1, 3)),
+                new RegionVector(
+                        DictionaryVector.wrap(
+                                new int[] {0, 2, 1, 0, 2, 1},
+                                new I64Vector(new long[] {100, 200, 300})),
+                        1,
+                        ids.length),
+                DictionaryVector.wrap(
+                        ids,
+                        ids.length,
+                        DictionaryVector.wrap(
+                                new int[] {1, 2, 0},
+                                new RegionVector(new I64Vector(new long[] {-1, 1_000, 2_000, 3_000, -1}), 1, 3)))};
+        long[][] expected = {
+                {30, 10, 20, 30},
+                {300, 200, 100, 300},
+                {1_000, 2_000, 3_000, 1_000}};
+
+        FlatKeyLayout layout = FlatKeyLayout.tryCreate(values, false, arrayPool, codeGeneration, flatKeyTablePolicy);
+        try {
+            layout.beginBatch(values, null);
+            for (int field = 0; field < values.length; field++) {
+                for (int position = 0; position < ids.length; position++) {
+                    assertThat(layout.fieldHash(field, field, values[field], position))
+                            .isEqualTo(Long.hashCode(expected[field][position]));
+                }
+            }
+            layout.endBatch();
+        }
+        finally {
+            layout.releaseBuffers();
+        }
+    }
+
+    @Test
     void testGeneratedDictionaryHashProbeBatchMatchesDecoupledDriver()
     {
         int size = 128;
