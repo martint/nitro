@@ -646,6 +646,13 @@ Host dynamic-filter plumbing may carry the same logical constraint, but Nitro mu
 semantic authorities. Future unification may use the host transport if it preserves Nitro timing, physical-domain, and
 source-capability contracts.
 
+For a join with multiple equality criteria, the host may preserve the ordered build-key correlation as a bounded
+tuple filter beside the independent column domains. The exact join predicate remains authoritative. A correlation is
+valid only for the equality criteria and registered types from which it was built; partial partition state, mismatched
+tuple order, a missing partition, or a non-equality comparison cannot contribute to it. Partitioned results union a
+correlation only when every completed partition supplies the same ordered tuple shape. Intersections may retain
+several independent necessary correlations.
+
 ## 14. Sources and native Parquet execution
 
 Connectors interact through the source and vector SPI. They receive allocator, type bindings, I/O capabilities, and
@@ -695,6 +702,16 @@ the ordinary owning adaptation path. The source batch closes only after the sync
 This optimization does not move partition assignment, buffering, serialization, backpressure, replication, skew,
 encryption, or output accounting into Nitro. Nitro core remains independent of host `Page`/`Block` classes. The host
 boundary reports borrowed versus owning adaptations and their conversion and append costs.
+
+The host may attach ordered dynamic-filter identity/output-symbol groups to a producer fragment when it can trace all
+probe symbols through exact lineage. Identity paths, reference-only projections, exchange position mappings,
+set-operation layouts, and nested Nitro plans are eligible; opaque transformations are not. The metadata travels with
+the fragment through task serialization and retry. Reused fragments merge distinct consumer groups.
+
+When explicitly enabled, an eligible Nitro remote-output boundary may consume the corresponding immutable tuple
+filter before partitioning or host adaptation. Every required output must be present with the registered type, the
+retained filter must be bounded and host-accounted, and an instance-owned selectivity sample may stop applying an
+ineffective filter. The capability is disabled by default pending breadth validation.
 
 The host can charge separate memory reservations through allocator contexts without copies between adjacent Nitro
 stages. Page/Block boundaries are not ownership boundaries inside an island.
@@ -749,6 +766,10 @@ Architectural tests cover representative island compositions and corpus-wide non
 admission and rejection causes; vector lifecycle and cancellation order; branch-mask error isolation; encoding and
 companion-stream composition; equal-work counters; calling-convention conformance; native Parquet type/encoding
 coverage; and scheduler restart under time sharing.
+
+Correlated dynamic-filter coverage includes ordered tuple hashing, independent-domain preservation, partition union
+and intersection, exact lineage and remapping, non-equality exclusion, fragment task-transport round trips, retry
+idempotence, reused-fragment consumers, bounded collection, and ineffective-filter admission.
 
 Tests assert capabilities and observable invariants. They must not infer architecture from package or class names.
 
@@ -806,6 +827,10 @@ They are not admitted through row-wise semantic key tables.
 Rollout begins with plans whose complete region is supported, retains explicit host fallback at island admission, and
 expands by closing gaps. Once admitted, an island executes wholly in Nitro or fails; runtime decomposition is not a
 rollout mechanism.
+
+New cross-fragment physical filters remain default-off until an activating macro inventory and adaptive breadth board
+show equivalent plans and input, bounded memory, transport stability, and no material regression. A diagnostic opt-in
+must be explicit in benchmark evidence.
 
 ## 20. Changing this specification
 
