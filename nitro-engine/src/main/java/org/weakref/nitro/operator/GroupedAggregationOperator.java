@@ -22,6 +22,7 @@ import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.GeneratedAggregationDomainBindings;
+import org.weakref.nitro.data.GeneratedAggregationRowBindings;
 import org.weakref.nitro.data.GeneratedLongGroupingBindings;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
@@ -125,6 +126,9 @@ public class GroupedAggregationOperator
     private GeneratedAggregationDomainBindings fusedDomainBindings;
     private DictionaryDomainGroupingKernel fusedDomainKernel;
     private GeneratedAggregationDomainBindings.PhysicalShape fusedDomainPhysicalShape;
+    private GeneratedAggregationRowBindings stagedBindings;
+    private StagedAggregationKernel stagedKernel;
+    private GeneratedAggregationRowBindings.PhysicalShape stagedPhysicalShape;
     private Object[] fusedStateVectors;
     private boolean fusedStateVectorsBound;
     private GeneratedLongGroupingBindings.PhysicalShape fusedPhysicalShape;
@@ -1010,7 +1014,8 @@ public class GroupedAggregationOperator
      */
     private void prepareFusedKernel()
     {
-        boolean generatedEligible = groupByColumns != null
+        boolean plainGeneratedEligible = plainAggregationIndexes.length > 0 && allPlainAggregationsFusible();
+        boolean fusedGroupingEligible = groupByColumns != null
                 && groupByColumns.length == 1
                 // A filtered-only aggregation can still use a generated grouping-only pass that writes
                 // group IDs for the explicit masked stage.
@@ -1018,10 +1023,10 @@ public class GroupedAggregationOperator
                 && (filteredAggregationIndexes.length == 0 || partialGeneratedGrouping)
                 && (distinctAggregationGroups.length == 0 || partialGeneratedGrouping)
                 && allPlainAggregationsFusible();
-        if (!generatedEligible) {
+        if (!plainGeneratedEligible && !fusedGroupingEligible) {
             return;
         }
-        fusedEligible = inlineGroupingState.usesSingleLongGrouping();
+        fusedEligible = fusedGroupingEligible && inlineGroupingState.usesSingleLongGrouping();
         fusedAggregationIndexes = plainAggregationIndexes.clone();
         fusedStateOffsets = new int[fusedAggregationIndexes.length + 1];
         List<GroupedAggregationUpdate> updates = new ArrayList<>();
@@ -1047,6 +1052,11 @@ public class GroupedAggregationOperator
         }
         fusedBindings = new GeneratedLongGroupingBindings(fusedInputOffsets[fusedSpecs.length], fusedDictionaryInput);
         fusedDomainBindings = new GeneratedAggregationDomainBindings(fusedInputOffsets[fusedSpecs.length]);
+        if (plainGeneratedEligible) {
+            stagedBindings = new GeneratedAggregationRowBindings(
+                    fusedInputOffsets[fusedSpecs.length],
+                    allocator.primitiveArrays());
+        }
         fusedStateVectors = new Object[fusedSpecs.length];
     }
 
@@ -2255,12 +2265,92 @@ public class GroupedAggregationOperator
 
     private void accumulateGroupedRows(Batch batch, I64Vector groups, Mask mask, org.weakref.nitro.operator.aggregation.StreamAccessor streamAccessor, int groupCount)
     {
-        for (int aggregationIndex : plainAggregationIndexes) {
-            aggregations[aggregationIndex].accumulate(states[aggregationIndex], groups, mask, streamAccessor);
+        if (!tryStagedGeneratedAggregation(batch, groups, mask)) {
+            for (int aggregationIndex : plainAggregationIndexes) {
+                aggregations[aggregationIndex].accumulate(states[aggregationIndex], groups, mask, streamAccessor);
+            }
         }
 
         accumulateFilteredGroupedRows(batch, groups, mask, streamAccessor);
         accumulateDistinctGroupedRows(batch, groups, mask, streamAccessor, groupCount);
+    }
+
+    private boolean tryStagedGeneratedAggregation(Batch batch, I64Vector groups, Mask mask)
+    {
+        if (stagedBindings == null) {
+            return false;
+        }
+        int inputIndex = 0;
+        try {
+            for (GroupedAggregationUpdate spec : fusedSpecs) {
+                for (int contribution = 0; contribution < spec.contributions().size(); contribution++, inputIndex++) {
+                    if (!spec.readsInput(contribution)) {
+                        stagedBindings.clearInput(inputIndex);
+                        continue;
+                    }
+                    Output input = batch.output(spec.inputColumn(contribution));
+                    Vector values = spec.readsValue(contribution) ? input.borrow(Stream.VALUES) : null;
+                    if (values != null && !spec.fieldPath(contribution).isEmpty()) {
+                        try {
+                            for (String field : spec.fieldPath(contribution)) {
+                                Streams component = VectorAccess.structField(values, field);
+                                if (!VectorAccess.isAllFalseNulls(component.getOrNull(Stream.NULLS))) {
+                                    return false;
+                                }
+                                values = component.values();
+                            }
+                        }
+                        catch (IllegalArgumentException _) {
+                            return false;
+                        }
+                    }
+                    if (!stagedBindings.bindInput(
+                            inputIndex,
+                            values,
+                            input.borrowOrNull(Stream.NULLS),
+                            spec.readsValue(contribution),
+                            spec.carrier(contribution))) {
+                        return false;
+                    }
+                }
+            }
+            if (!fusedStateVectorsBound) {
+                refreshFusedStateVectors();
+            }
+            if (!stagedBindings.matchesPhysicalShape(stagedPhysicalShape)) {
+                stagedKernel = operatorResources.codeGeneration().stagedAggregation().create(
+                        List.of(fusedSpecs),
+                        stagedBindings.intInputs(),
+                        stagedBindings.inputCarriers(),
+                        stagedBindings.allNullInputs(),
+                        stagedBindings.mappedInputs(),
+                        stagedBindings.inputMappingOffsetInputs(),
+                        stagedBindings.inputBaseOffsetInputs(),
+                        stagedBindings.nullableInputs(),
+                        stagedBindings.mappedInputNulls(),
+                        stagedBindings.inputNullMappingOffsetInputs(),
+                        stagedBindings.inputNullBaseOffsetInputs());
+                stagedPhysicalShape = stagedBindings.capturePhysicalShape();
+            }
+            stagedKernel.accumulate(
+                    mask.selectedPositions(),
+                    mask.count(),
+                    groups.values(),
+                    stagedBindings.inputs(),
+                    stagedBindings.inputValueOffsets(),
+                    stagedBindings.inputMappings(),
+                    stagedBindings.inputMappingOffsets(),
+                    stagedBindings.inputBaseOffsets(),
+                    stagedBindings.inputNulls(),
+                    stagedBindings.inputNullMappings(),
+                    stagedBindings.inputNullMappingOffsets(),
+                    stagedBindings.inputNullBaseOffsets(),
+                    fusedStateVectors);
+            return true;
+        }
+        finally {
+            stagedBindings.release();
+        }
     }
 
     private void accumulateFilteredGroupedRows(Batch batch, I64Vector groups, Mask mask, org.weakref.nitro.operator.aggregation.StreamAccessor streamAccessor)
@@ -2837,6 +2927,9 @@ public class GroupedAggregationOperator
         }
         for (DistinctAggregationPlan.Group distinctAggregationGroup : distinctAggregationGroups) {
             distinctAggregationGroup.releaseBuffers();
+        }
+        if (stagedBindings != null) {
+            stagedBindings.close();
         }
         if (inlineGroupValues != null) {
             Arrays.fill(inlineGroupValues, null);

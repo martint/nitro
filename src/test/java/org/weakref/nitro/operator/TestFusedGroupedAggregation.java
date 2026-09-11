@@ -29,6 +29,7 @@ import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.RegionVector;
 import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
@@ -437,6 +438,78 @@ class TestFusedGroupedAggregation
         }
 
         assertGroupedSumAndCount(pages, List.of(new Sum(1), new CountAll()), reference, true);
+    }
+
+    @Test
+    void generatedUpdatesRunAfterWideGroupingWithComposedInputWrappers()
+    {
+        int size = 16_384;
+        int domainSize = 257;
+        int regionOffset = 5;
+        long[] firstKeys = new long[size];
+        long[] secondKeys = new long[size];
+        int[] valueIds = new int[size];
+        long[] baseValues = new long[domainSize + regionOffset];
+        boolean[] nulls = new boolean[size];
+        Map<List<Long>, Long> expected = new HashMap<>();
+        for (int domain = 0; domain < domainSize; domain++) {
+            baseValues[regionOffset + domain] = domain * 17L - 31;
+        }
+        for (int position = 0; position < size; position++) {
+            firstKeys[position] = position % 97;
+            secondKeys[position] = (position / 97) % 11;
+            int valueId = (position * 37 + 13) % domainSize;
+            valueIds[position] = valueId;
+            nulls[position] = position % 19 == 0;
+            if (!nulls[position]) {
+                expected.merge(
+                        List.of(firstKeys[position], secondKeys[position]),
+                        baseValues[regionOffset + valueId],
+                        Long::sum);
+            }
+        }
+
+        Vector values = DictionaryVector.ofTrustedIds(
+                valueIds,
+                new RegionVector(new I64Vector(baseValues), regionOffset, domainSize));
+        TableOperator.Page page = new TableOperator.Page(
+                size,
+                new Streams[] {
+                        Streams.ofValues(new I64Vector(firstKeys)),
+                        Streams.ofValues(new I64Vector(secondKeys)),
+                        Streams.ofValuesAndNulls(values, new BooleanVector(nulls))},
+                Mask.all(size));
+        EncodedGeneratedSum implementation = new EncodedGeneratedSum(true);
+        PhysicalAggregationProgram program = PhysicalAggregationProgram.singleUnit(
+                new GeneratedRegisteredAggregationUnit(
+                        implementation,
+                        RAW,
+                        FINAL,
+                        new int[] {2},
+                        -1,
+                        GroupedAggregationUpdate.inputValue(2, encodedGeneratedSumTarget())));
+
+        Map<List<Long>, Long> actual = new HashMap<>();
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                Operator operator = new GroupedAggregationOperator(
+                        allocator,
+                        List.of(0, 1),
+                        program,
+                        new TableOperator(3, List.of(page)))) {
+            while (operator.hasNext()) {
+                try (Batch result = operator.next()) {
+                    VectorAccess.LongValues first = VectorAccess.longValues(result.output(0).borrow(Stream.VALUES));
+                    VectorAccess.LongValues second = VectorAccess.longValues(result.output(1).borrow(Stream.VALUES));
+                    VectorAccess.LongValues sums = VectorAccess.longValues(result.output(2).borrow(Stream.VALUES));
+                    for (int position : result.borrowMask()) {
+                        actual.put(List.of(first.value(position), second.value(position)), sums.value(position));
+                    }
+                }
+            }
+        }
+
+        assertThat(actual).isEqualTo(expected);
     }
 
     @Test
