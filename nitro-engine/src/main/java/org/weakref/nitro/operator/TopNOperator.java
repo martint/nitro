@@ -203,6 +203,7 @@ public class TopNOperator
                             batch,
                             n >= policy.columnarOrderingMinLimit(),
                             n >= policy.variableWidthColumnarOrderingMinLimit(),
+                            n >= policy.mixedFixedAndVariableWidthColumnarOrderingMinLimit(),
                             n >= policy.hybridColumnarOrderingMinLimit());
                 }
 

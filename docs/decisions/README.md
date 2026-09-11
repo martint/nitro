@@ -178,3 +178,4 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | [0096](0096-normalize-mixed-flat-distinct-keys.md) | Normalize mixed flat DISTINCT keys into generated fixed-width layouts | accepted |
 | [0097](0097-admit-exact-distinct-value-ids-by-observed-reuse.md) | Admit exact DISTINCT value IDs by observed reuse | accepted |
 | [0098](0098-borrow-remote-output-storage-through-synchronous-destination-append.md) | Borrow remote-output storage through synchronous destination append | accepted |
+| [0099](0099-admit-mutable-binary-topn-at-every-limit.md) | Admit mutable binary TopN winner storage at every positive limit | accepted |

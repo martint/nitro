@@ -400,6 +400,11 @@ complete operator state per partition. Retained row state therefore scales with 
 including required boundary ties, rather than with total input. Partition-key state necessarily scales with distinct
 partition count. The host-session and island-pull entry points use the same physical state.
 
+TopN selection stores every error-free binary-only ordering tuple in allocator-accounted mutable winner slots for
+every positive result limit, then materializes compact variable-width output after selection. A small result limit is
+not a reason to retain independently allocated one-position vector trees. Mixed and structural ordering tuples keep
+their separately evidenced per-lane admission policies.
+
 Operators are generic over functions, logical types, arity, query shape, tables, and column combinations.
 Specialization comes through general physical interfaces or generated resolved layouts.
 

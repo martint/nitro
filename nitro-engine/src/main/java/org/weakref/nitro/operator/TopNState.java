@@ -263,9 +263,11 @@ final class TopNState
             Batch batch,
             boolean fixedWidthAdmitted,
             boolean variableWidthAdmitted,
+            boolean mixedFixedAndVariableWidthAdmitted,
             boolean hybridAdmitted)
     {
         boolean hasVariableWidth = false;
+        boolean hasFixedWidth = false;
         boolean hasCompactColumn = false;
         boolean hasGenericColumn = false;
         denseColumns = new Streams[slotColumns.length];
@@ -279,15 +281,26 @@ final class TopNState
                 continue;
             }
             if (values instanceof I64Vector || values instanceof I32Vector || values instanceof F64Vector) {
+                hasFixedWidth = true;
                 hasCompactColumn = true;
                 denseOrderingColumns[orderingColumn] = true;
                 continue;
             }
             hasGenericColumn = true;
         }
-        boolean admitted = hasGenericColumn
-                ? hybridAdmitted
-                : hasVariableWidth ? variableWidthAdmitted : fixedWidthAdmitted;
+        boolean admitted;
+        if (hasGenericColumn) {
+            admitted = hybridAdmitted;
+        }
+        else if (hasVariableWidth && hasFixedWidth) {
+            admitted = mixedFixedAndVariableWidthAdmitted;
+        }
+        else if (hasVariableWidth) {
+            admitted = variableWidthAdmitted;
+        }
+        else {
+            admitted = fixedWidthAdmitted;
+        }
         if (!hasCompactColumn || !admitted) {
             denseColumns = null;
             denseOrderingColumns = null;

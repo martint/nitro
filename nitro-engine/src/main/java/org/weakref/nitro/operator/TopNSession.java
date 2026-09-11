@@ -189,6 +189,7 @@ public final class TopNSession
                     batch,
                     limit >= policy.columnarOrderingMinLimit(),
                     limit >= policy.variableWidthColumnarOrderingMinLimit(),
+                    limit >= policy.mixedFixedAndVariableWidthColumnarOrderingMinLimit(),
                     limit >= policy.hybridColumnarOrderingMinLimit());
         }
         try {

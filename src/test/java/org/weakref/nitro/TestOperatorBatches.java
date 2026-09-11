@@ -4811,15 +4811,17 @@ public class TestOperatorBatches
                                 row(10L, "banana", 4L))));
 
         Batch batch = operator.next();
-        I64Vector first = (I64Vector) batch.output(0).borrow(Stream.VALUES);
+        VectorAccess.LongValues first = VectorAccess.longValues(batch.output(0).borrow(Stream.VALUES));
         BinaryVector second = (BinaryVector) batch.output(1).borrow(Stream.VALUES);
-        I64Vector payload = (I64Vector) batch.output(2).borrow(Stream.VALUES);
+        VectorAccess.LongValues payload = VectorAccess.longValues(batch.output(2).borrow(Stream.VALUES));
 
-        assertThat(Arrays.copyOf(first.values(), batch.borrowMask().count())).containsExactly(10L, 10L, 10L);
+        assertThat(java.util.stream.IntStream.range(0, batch.borrowMask().count()).mapToLong(first::value).toArray())
+                .containsExactly(10L, 10L, 10L);
         assertThat(utf8(second, 0)).isEqualTo("apple");
         assertThat(utf8(second, 1)).isEqualTo("banana");
         assertThat(utf8(second, 2)).isEqualTo("pear");
-        assertThat(Arrays.copyOf(payload.values(), batch.borrowMask().count())).containsExactly(3L, 4L, 2L);
+        assertThat(java.util.stream.IntStream.range(0, batch.borrowMask().count()).mapToLong(payload::value).toArray())
+                .containsExactly(3L, 4L, 2L);
     }
 
     @Test
