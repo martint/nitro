@@ -24,7 +24,7 @@ import org.weakref.nitro.data.Vector;
 
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.IdentityHashMap;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -201,7 +201,7 @@ public final class NativeBatchPartitioner
     private Batch copy(Streams[] columns, int[] positions, int count)
     {
         Allocator.Context context = new Allocator.Context("NativeBatchPartitioner.partition");
-        Map<int[], DictionaryRemapping> dictionaryRemappings = new IdentityHashMap<>();
+        Map<DictionaryMapping, DictionaryRemapping> dictionaryRemappings = new HashMap<>();
         try {
             Output[] outputs = new Output[columns.length];
             for (int channel = 0; channel < columns.length; channel++) {
@@ -235,16 +235,17 @@ public final class NativeBatchPartitioner
             Allocator.Context context,
             int[] positions,
             int count,
-            Map<int[], DictionaryRemapping> dictionaryRemappings)
+            Map<DictionaryMapping, DictionaryRemapping> dictionaryRemappings)
     {
         if (source instanceof DictionaryVector dictionary) {
+            DictionaryMapping mapping = DictionaryMapping.of(dictionary);
             DictionaryRemapping remapping = dictionaryRemappings.computeIfAbsent(
-                    dictionary.ids(),
-                    _ -> dictionaryRemapping(dictionary, positions, count));
+                    mapping,
+                    _ -> dictionaryRemapping(mapping, positions, count));
             if (!remapping.preserved()) {
                 return source.copyPositionsInto(allocator, context, null, positions, count, 0, count);
             }
-            Vector dictionaryValues = dictionary.values().copyPositionsInto(
+            Vector dictionaryValues = mapping.baseValues().copyPositionsInto(
                     allocator,
                     context,
                     null,
@@ -257,18 +258,17 @@ public final class NativeBatchPartitioner
         return source.copyPositionsInto(allocator, context, null, positions, count, 0, count);
     }
 
-    private DictionaryRemapping dictionaryRemapping(DictionaryVector dictionary, int[] positions, int count)
+    private DictionaryRemapping dictionaryRemapping(DictionaryMapping mapping, int[] positions, int count)
     {
         if (!policy.preserveDictionaryEncoding() || policy.maximumCopiedDictionaryEntries() == 0) {
             return DictionaryRemapping.NOT_PRESERVED;
         }
-        int[] sourceIds = dictionary.ids();
         int maximumDictionarySize = Math.min(count, policy.maximumCopiedDictionaryEntries());
         int[] dictionaryPositions = new int[maximumDictionarySize];
         int[] ids = new int[count];
-        int dictionarySize = dictionary.values().length() <= policy.maximumCopiedDictionaryEntries()
-                ? remapWithArray(sourceIds, positions, count, dictionaryPositions, ids, dictionary.values().length())
-                : remapWithHashTable(sourceIds, positions, count, dictionaryPositions, ids);
+        int dictionarySize = mapping.baseValues().length() <= policy.maximumCopiedDictionaryEntries()
+                ? remapWithArray(mapping, positions, count, dictionaryPositions, ids)
+                : remapWithHashTable(mapping, positions, count, dictionaryPositions, ids);
         if (dictionarySize < 0 || !policy.preserveDictionary(dictionarySize, count)) {
             return DictionaryRemapping.NOT_PRESERVED;
         }
@@ -276,18 +276,17 @@ public final class NativeBatchPartitioner
     }
 
     private static int remapWithArray(
-            int[] sourceIds,
+            DictionaryMapping mapping,
             int[] positions,
             int count,
             int[] dictionaryPositions,
-            int[] ids,
-            int sourceDictionarySize)
+            int[] ids)
     {
-        int[] oldToNew = new int[sourceDictionarySize];
+        int[] oldToNew = new int[mapping.baseValues().length()];
         Arrays.fill(oldToNew, -1);
         int dictionarySize = 0;
         for (int outputPosition = 0; outputPosition < count; outputPosition++) {
-            int sourceId = sourceIds[positions[outputPosition]];
+            int sourceId = mapping.basePosition(positions[outputPosition]);
             int compactId = oldToNew[sourceId];
             if (compactId < 0) {
                 if (dictionarySize == dictionaryPositions.length) {
@@ -303,7 +302,7 @@ public final class NativeBatchPartitioner
     }
 
     private static int remapWithHashTable(
-            int[] sourceIds,
+            DictionaryMapping mapping,
             int[] positions,
             int count,
             int[] dictionaryPositions,
@@ -313,7 +312,7 @@ public final class NativeBatchPartitioner
         oldToNew.defaultReturnValue(-1);
         int dictionarySize = 0;
         for (int outputPosition = 0; outputPosition < count; outputPosition++) {
-            int sourceId = sourceIds[positions[outputPosition]];
+            int sourceId = mapping.basePosition(positions[outputPosition]);
             int compactId = oldToNew.get(sourceId);
             if (compactId < 0) {
                 if (dictionarySize == dictionaryPositions.length) {
@@ -326,6 +325,53 @@ public final class NativeBatchPartitioner
             ids[outputPosition] = compactId;
         }
         return dictionarySize;
+    }
+
+    private record DictionaryMapping(int[][] mappings, Vector baseValues)
+    {
+        private static DictionaryMapping of(DictionaryVector dictionary)
+        {
+            List<int[]> mappings = new ArrayList<>();
+            Vector values = dictionary;
+            while (values instanceof DictionaryVector current) {
+                mappings.add(current.ids());
+                values = current.values();
+            }
+            return new DictionaryMapping(mappings.toArray(int[][]::new), values);
+        }
+
+        private int basePosition(int position)
+        {
+            int mappedPosition = position;
+            for (int depth = 0; depth < mappings.length; depth++) {
+                mappedPosition = mappings[depth][mappedPosition];
+            }
+            return mappedPosition;
+        }
+
+        @Override
+        public boolean equals(Object other)
+        {
+            if (!(other instanceof DictionaryMapping mapping) || mappings.length != mapping.mappings.length) {
+                return false;
+            }
+            for (int index = 0; index < mappings.length; index++) {
+                if (mappings[index] != mapping.mappings[index]) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        @Override
+        public int hashCode()
+        {
+            int hash = 1;
+            for (int index = 0; index < mappings.length; index++) {
+                hash = 31 * hash + System.identityHashCode(mappings[index]);
+            }
+            return hash;
+        }
     }
 
     private record DictionaryRemapping(int[] ids, int[] dictionaryPositions, int dictionarySize)

@@ -125,6 +125,43 @@ class TestNativeBatchPartitioner
     }
 
     @Test
+    void preservesReusedBaseDomainThroughOneToOneOuterDictionary()
+    {
+        int size = 8;
+        int[] outerIds = {0, 1, 2, 3, 4, 5, 6, 7};
+        int[] innerIds = {0, 1, 0, 1, 0, 1, 0, 1};
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                Batch source = new Batch(
+                        Mask.all(size),
+                        Output.of(Streams.ofValues(DictionaryVector.wrapNested(
+                                outerIds,
+                                size,
+                                DictionaryVector.wrapNested(innerIds, size, new I64Vector(new long[] {11, 22}))))))) {
+            NativeBatchPartitioner partitioner = new NativeBatchPartitioner(
+                    allocator,
+                    1,
+                    1,
+                    new NativeBatchPartitionPolicy(true, 2, 4));
+
+            List<NativeBatchPartitioner.Partition> partitions = partitioner.partition(source, new int[size]);
+            try {
+                assertThat(partitions).hasSize(1);
+                assertThat(partitions.getFirst().batch().output(0).borrow(Stream.VALUES))
+                        .isInstanceOfSatisfying(DictionaryVector.class, values -> {
+                            assertThat(values.dictionaryDepth()).isEqualTo(1);
+                            assertThat(values.ids()).containsExactly(0, 1, 0, 1, 0, 1, 0, 1);
+                            assertThat(values.values()).isInstanceOfSatisfying(I64Vector.class, base ->
+                                    assertThat(base.values()).containsExactly(11, 22));
+                        });
+            }
+            finally {
+                partitions.forEach(partition -> partition.batch().close());
+            }
+        }
+    }
+
+    @Test
     void materializesDictionaryInputWhenFlatPartitionsAreRequired()
     {
         try (EngineResources resources = EngineResources.createDefault();
