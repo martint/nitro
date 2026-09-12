@@ -24,11 +24,87 @@ import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.execution.EngineResources;
 
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 class TestBufferedJoinInputPolicy
 {
+    @Test
+    void testDeferredReborrowDoesNotPermitOpenBatchPolling()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            Allocator.Context context = new Allocator.Context("advancing-join-input");
+            BufferedJoinInput input = new BufferedJoinInput(
+                    BufferedJoinInputPolicy.defaults(),
+                    new JoinBufferSupport(JoinBufferPolicy.defaults(), allocator, context),
+                    1);
+            AtomicBoolean closed = new AtomicBoolean();
+            Batch batch = new Batch(
+                    Mask.all(2),
+                    _ -> {},
+                    Function.identity(),
+                    _ -> {},
+                    () -> closed.set(true),
+                    Output.of(Streams.ofValues(new I64Vector(new long[] {11, 22}))));
+            try (Operator source = new Operator()
+            {
+                private boolean emitted;
+
+                @Override
+                public int outputCount()
+                {
+                    return 1;
+                }
+
+                @Override
+                public boolean hasNext()
+                {
+                    if (emitted) {
+                        assertThat(closed.get()).as("close the build batch before polling upstream").isTrue();
+                    }
+                    return !emitted;
+                }
+
+                @Override
+                public Batch next()
+                {
+                    emitted = true;
+                    return batch;
+                }
+
+                @Override
+                public void constrain(Mask mask)
+                {
+                    batch.constrain(mask);
+                }
+
+                @Override
+                public boolean supportsConstrainedReborrow()
+                {
+                    return true;
+                }
+
+                @Override
+                public void close()
+                {
+                    batch.close();
+                }
+            }) {
+                input.loadAll(source, 1024, new int[] {0}, false, true);
+                assertThat(input.batches()).hasSize(1);
+                I64Vector values = (I64Vector) input.batches().getFirst().columns()[0].values();
+                assertThat(values.values()).startsWith(11, 22);
+            }
+            finally {
+                input.releaseBuffers();
+                allocator.release(context);
+            }
+        }
+    }
+
     @Test
     void testOwnedBuildColumnsArePublishedImmutable()
     {

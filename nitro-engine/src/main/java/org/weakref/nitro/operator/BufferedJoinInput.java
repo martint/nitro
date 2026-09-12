@@ -137,7 +137,8 @@ final class BufferedJoinInput
      *     the batch is kept as a <em>deferred</em> {@link InnerBatch} so that non-key payload columns
      *     are materialized lazily by constraining the batch to the matched source positions and
      *     re-borrowing, rather than eagerly compacting every column at load time. Only set this when
-     *     the source reports {@link Operator#supportsConstrainedReborrow()}.
+     *     the source reports {@link Operator#supportsConstrainedReborrow()}. The deferred path also requires
+     *     {@link Operator#supportsOpenBatchHasNext()} to establish whole-input completion without advancing.
      */
     public void loadAll(Operator source, int batchSize, int[] eagerColumns, boolean retainBatches, boolean deferSingleBatch)
     {
@@ -196,7 +197,7 @@ final class BufferedJoinInput
             // when a downstream output stream is actually requested. Genuinely retained sources keep
             // using loadRetained above; this path serves sources whose batch does not outlive an
             // advance but can still satisfy a constrained re-borrow before the next advance.
-            if (deferSingleBatch && first && !source.hasNext() && batches.isEmpty() && outputPosition == 0) {
+            if (deferSingleBatch && first && source.supportsOpenBatchHasNext() && !source.hasNext() && batches.isEmpty() && outputPosition == 0) {
                 // Do not capture a representative VALUES schema here: borrowing a payload column's
                 // VALUES would force the very materialization we are trying to defer. The schema is
                 // derived lazily from the retained batch in outputSchema() if an empty/null result
