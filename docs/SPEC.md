@@ -789,6 +789,13 @@ Correlated dynamic-filter coverage includes ordered tuple hashing, independent-d
 and intersection, exact lineage and remapping, non-equality exclusion, fragment task-transport round trips, retry
 idempotence, reused-fragment consumers, bounded collection, and ineffective-filter admission.
 
+Native dynamic-filter collector diagnostics identify the plan filter and report completed partition input positions
+(selected rows passed to the collector, not the physical position range of a sparse mask),
+independent scalar-domain representation, range count where available, and retained publication bytes. Summed
+driver-local ranges are construction work, not global distinct cardinality; summed publication bytes are not peak
+memory. Inspection must not materialize discrete values merely to count them. These counters describe collector
+publication, not coordinator compaction or every possible dynamic-filter construction path.
+
 Tests assert capabilities and observable invariants. They must not infer architecture from package or class names.
 
 ## 18. Performance evidence
