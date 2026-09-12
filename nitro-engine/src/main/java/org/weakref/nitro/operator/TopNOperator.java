@@ -184,10 +184,13 @@ public class TopNOperator
             Batch batch = currentInputBatch;
             if (!currentInputProcessed) {
                 state.beginBatch();
-                state.captureSchema(batch, deferSchemaBorrow);
                 Mask mask = batch.borrowMask();
+                // Nonempty inputs establish payload schema from copied winners before an advancing source
+                // invalidates the batch. Eager discovery would decode payload for rows TopN will discard.
+                state.captureSchema(batch, deferSchemaBorrow || !mask.none());
                 if (firstBatch &&
                         source.supportsConstrainedReborrow() &&
+                        source.supportsOpenBatchHasNext() &&
                         retainedSingleBatchAdmission(batch, mask) &&
                         !source.hasNext()) {
                     currentInputBatch = null;
@@ -260,10 +263,12 @@ public class TopNOperator
             // The final batch is exempt only when the source can satisfy a constrained re-borrow
             // (it stays valid until close() and its payload columns can remain deferred until
             // output is requested). Sources whose reader advances irreversibly are always flushed.
-            // supportsConstrainedReborrow() is checked first because probing hasNext() on an
-            // advancing source (e.g. a Parquet scan) would itself invalidate the current batch.
-            boolean canDeferFinalBatch = source.supportsConstrainedReborrow() && !source.hasNext();
-            if (!source.supportsRetainedBatches() && !canDeferFinalBatch) {
+            // Constrained reborrow alone does not permit lookahead: hasNext() must also be safe
+            // with an open batch and distinguish whole-input completion from temporary depletion.
+            boolean canDeferFinalBatch = source.supportsConstrainedReborrow() &&
+                    source.supportsOpenBatchHasNext() &&
+                    !source.hasNext();
+            if ((!source.supportsRetainedBatches() || !source.supportsOpenBatchHasNext()) && !canDeferFinalBatch) {
                 state.flushPendingBatch(batch, queue.values(), 0, queue.size());
                 if (!queue.isEmpty()) {
                     state.releaseFallbackBatch();

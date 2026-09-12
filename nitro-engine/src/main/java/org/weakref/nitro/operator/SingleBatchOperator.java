@@ -29,6 +29,7 @@ public final class SingleBatchOperator
     private Mask currentMask;
     private boolean emitted;
     private boolean closed;
+    private boolean completeInput;
 
     public SingleBatchOperator(int outputCount, Mask mask, Supplier<Output[]> outputsSupplier)
     {
@@ -41,6 +42,7 @@ public final class SingleBatchOperator
         this.currentMask = requireNonNull(mask, "mask is null");
         this.outputsSupplier = requireNonNull(outputsSupplier, "outputsSupplier is null");
         this.delegate = null;
+        this.completeInput = true;
     }
 
     /**
@@ -54,6 +56,7 @@ public final class SingleBatchOperator
         this.outputSchema = requireNonNull(outputSchema, "outputSchema is null");
         this.delegate = null;
         this.outputsSupplier = null;
+        this.completeInput = true;
         addInput(batch);
     }
 
@@ -97,6 +100,7 @@ public final class SingleBatchOperator
         delegate = null;
         currentMask = null;
         emitted = false;
+        completeInput = false;
     }
 
     @Override
@@ -143,6 +147,13 @@ public final class SingleBatchOperator
         if (delegate != null) {
             delegate.constrain(mask);
         }
+    }
+
+    @Override
+    public boolean supportsOpenBatchHasNext()
+    {
+        // A constructor-supplied batch is complete. Resetting it as a reusable feed opens a new input cohort.
+        return completeInput;
     }
 
     @Override

@@ -5455,6 +5455,146 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testTopNOrderingOnlyDoesNotConstrainCopiedInput()
+    {
+        for (int[] ordering : List.of(new int[] {0, 1}, new int[] {0, 1, 0})) {
+            AtomicInteger constraints = new AtomicInteger();
+            Batch input = new Batch(
+                    Mask.all(3),
+                    _ -> constraints.incrementAndGet(),
+                    Function.identity(),
+                    _ -> {},
+                    () -> {},
+                    Output.of(Streams.ofValues(new I64Vector(new long[] {3, 1, 2}))),
+                    Output.of(Streams.ofValues(new I64Vector(new long[] {30, 10, 20}))));
+            Operator source = new Operator()
+            {
+                private boolean consumed;
+
+                @Override
+                public int outputCount()
+                {
+                    return 2;
+                }
+
+                @Override
+                public boolean hasNext()
+                {
+                    return !consumed;
+                }
+
+                @Override
+                public Batch next()
+                {
+                    consumed = true;
+                    return input;
+                }
+
+                @Override
+                public void constrain(Mask mask)
+                {
+                    input.constrain(mask);
+                }
+
+                @Override
+                public void close()
+                {
+                    input.close();
+                }
+            };
+            try (EngineResources resources = EngineResources.createDefault();
+                    Allocator allocator = new Allocator(resources);
+                    TopNOperator topN = new TopNOperator(allocator, 2, ordering, new boolean[ordering.length], source)) {
+                assertThat(OperatorAssertions.OperatorAssert.toRows(topN)).containsExactly(row(1L, 10L), row(2L, 20L));
+                assertThat(constraints.get()).as("copied ordering columns have no deferred payload").isZero();
+            }
+        }
+    }
+
+    @Test
+    void testTopNOperatorConstrainsAdvancingSourceBeforePayloadBorrow()
+    {
+        assertTopNAdvancingSourcePayload(false);
+        assertTopNAdvancingSourcePayload(true);
+    }
+
+    private static void assertTopNAdvancingSourcePayload(boolean constrainedReborrow)
+    {
+        int rows = 100_000;
+        Mask[] demandedMask = {Mask.all(rows)};
+        AtomicInteger decodedPositions = new AtomicInteger();
+        AtomicBoolean batchClosed = new AtomicBoolean();
+        Batch input = new Batch(
+                demandedMask[0],
+                constrained -> demandedMask[0] = constrained,
+                Function.identity(),
+                _ -> {},
+                () -> batchClosed.set(true),
+                Output.of(Streams.ofValues(new I64Vector(java.util.stream.LongStream.range(0, rows).toArray()))),
+                new Output(Set.of(Stream.VALUES), ignored -> {
+                    I64Vector values = new I64Vector(rows);
+                    for (int position : demandedMask[0]) {
+                        decodedPositions.incrementAndGet();
+                        values.values()[position] = position;
+                    }
+                    return values;
+                }));
+        Operator source = new Operator()
+        {
+            private boolean consumed;
+
+            @Override
+            public int outputCount()
+            {
+                return 2;
+            }
+
+            @Override
+            public boolean hasNext()
+            {
+                if (consumed) {
+                    assertThat(batchClosed.get()).as("close the current batch before polling an advancing source").isTrue();
+                }
+                return !consumed;
+            }
+
+            @Override
+            public Batch next()
+            {
+                consumed = true;
+                return input;
+            }
+
+            @Override
+            public void constrain(Mask mask)
+            {
+                input.constrain(mask);
+            }
+
+            @Override
+            public boolean supportsConstrainedReborrow()
+            {
+                return constrainedReborrow;
+            }
+
+            @Override
+            public void close()
+            {
+                input.close();
+            }
+        };
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                TopNOperator topN = new TopNOperator(allocator, 2, 0, source);
+                Batch output = topN.next()) {
+            VectorAccess.LongValues payload = VectorAccess.longValues(output.output(1).borrow(Stream.VALUES));
+            assertThat(payload.value(0)).isEqualTo(rows - 1);
+            assertThat(payload.value(1)).isEqualTo(rows - 2);
+            assertThat(decodedPositions.get()).isEqualTo(2);
+        }
+    }
+
+    @Test
     void testSingleBatchOperatorPropagatesTopNConstraintToLazyDelegate()
     {
         AtomicInteger payloadRows = new AtomicInteger();
@@ -5562,6 +5702,7 @@ public class TestOperatorBatches
     void testSingleBatchOperatorAcceptsSequentialNativeBatches()
     {
         try (SingleBatchOperator operator = new SingleBatchOperator(Schema.unspecified(1))) {
+            assertThat(operator.supportsOpenBatchHasNext()).isFalse();
             operator.addInput(new Batch(
                     Mask.all(2),
                     Output.of(Streams.ofValues(new I64Vector(new long[] {11, 12})))));
@@ -5580,6 +5721,25 @@ public class TestOperatorBatches
             }
             operator.finishInput();
             assertThat(operator.hasNext()).isFalse();
+            assertThat(operator.supportsOpenBatchHasNext()).isFalse();
+        }
+    }
+
+    @Test
+    void testSingleBatchLookaheadEndsWhenResetAsReusableFeed()
+    {
+        try (SingleBatchOperator operator = new SingleBatchOperator(
+                Schema.unspecified(1),
+                new Batch(Mask.all(1), Output.of(Streams.ofValues(new I64Vector(new long[] {1})))))) {
+            assertThat(operator.supportsOpenBatchHasNext()).isTrue();
+            try (Batch input = operator.next()) {
+                assertThat(operator.hasNext()).isFalse();
+                assertThat(input.borrowMask().count()).isEqualTo(1);
+            }
+            operator.finishInput();
+            assertThat(operator.supportsOpenBatchHasNext()).isFalse();
+            operator.addInput(new Batch(Mask.all(1), Output.of(Streams.ofValues(new I64Vector(new long[] {2})))));
+            assertThat(operator.supportsOpenBatchHasNext()).isFalse();
         }
     }
 

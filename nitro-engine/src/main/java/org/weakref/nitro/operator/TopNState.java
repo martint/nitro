@@ -47,6 +47,7 @@ final class TopNState
     private final boolean[] descendingByColumn;
     private final boolean[] nullsFirstByColumn;
     private final boolean[] orderingColumnFlags;
+    private final boolean hasPayloadColumns;
     private final StructuralComparisonKernel[] comparisonKernels;
     private final TypeOrderKeyBinder singleOrderingKeyBinder;
     private final Schema sourceSchema;
@@ -102,9 +103,14 @@ final class TopNState
         this.nullsFirstByColumn = nullsFirstByColumn.clone();
         this.sourceSchema = sourceSchema;
         this.orderingColumnFlags = new boolean[outputCount];
+        int orderingColumnCount = 0;
         for (int orderingColumn : orderingColumns) {
+            if (!orderingColumnFlags[orderingColumn]) {
+                orderingColumnCount++;
+            }
             orderingColumnFlags[orderingColumn] = true;
         }
+        hasPayloadColumns = orderingColumnCount < outputCount;
         this.comparisonKernels = new StructuralComparisonKernel[outputCount];
         for (int orderingIndex = 0; orderingIndex < orderingColumns.length; orderingIndex++) {
             int orderingColumn = orderingColumns[orderingIndex];
@@ -670,7 +676,7 @@ final class TopNState
             }
             slotColumns[outputIndex][slot] = null;
         }
-        pendingBatches[slot] = batch;
+        pendingBatches[slot] = hasPayloadColumns ? batch : null;
         pendingPositions[slot] = position;
     }
 
@@ -724,7 +730,7 @@ final class TopNState
                 slotColumns[outputIndex][slot] = null;
             }
         }
-        pendingBatches[slot] = batch;
+        pendingBatches[slot] = hasPayloadColumns ? batch : null;
         pendingPositions[slot] = position;
     }
 
@@ -764,6 +770,28 @@ final class TopNState
 
     public void flushPendingBatch(Batch batch, int[] retainedSlots, int start, int end)
     {
+        int retained = 0;
+        for (int index = start; index < end; index++) {
+            if (pendingBatches[retainedSlots[index]] == batch) {
+                retained++;
+            }
+        }
+        if (retained == 0) {
+            return;
+        }
+        if (retained < batch.borrowMask().count()) {
+            Mask constraint = allocator.allocateUninitializedSparseMask(allocationContext, retained, batch.borrowMask().size());
+            int[] positions = constraint.selectedPositions();
+            int selected = 0;
+            for (int index = start; index < end; index++) {
+                int slot = retainedSlots[index];
+                if (pendingBatches[slot] == batch) {
+                    positions[selected++] = pendingPositions[slot];
+                }
+            }
+            Arrays.sort(positions, 0, retained);
+            batch.constrain(constraint);
+        }
         for (int index = start; index < end; index++) {
             int slot = retainedSlots[index];
             if (pendingBatches[slot] != batch) {

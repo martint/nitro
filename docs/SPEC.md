@@ -392,6 +392,15 @@ inside an island.
 Blocking operators may retain state, but retained input and output ownership must be explicit. Operators close fully
 consumed batches promptly and cannot retain borrowed vectors after their lease ends.
 
+Constrained reborrow, retention across source advancement, and open-batch availability checks are distinct
+capabilities. Reborrow does not authorize polling a source while its current batch remains open. A consumer may
+infer that an open batch is final only when the source can report whole-input availability without advancing or
+invalidating it; temporary depletion of a reusable ingress is not completion. Otherwise, consumers constrain and
+copy required payload, then close the batch before polling again. Nonempty inputs establish payload representation
+from selected values rather than borrowing rejected payload merely to discover its schema.
+Ordering values already copied into winner storage are not deferred payload. When no other output remains to be
+read, selection does not retain a pending source batch or propagate a payload constraint to it.
+
 Top-N ranking selects incrementally. `ROW_NUMBER` retains at most the requested row count per partition; `RANK`
 retains peer groups while their preceding-row count is below the limit; and `DENSE_RANK` retains the requested number
 of distinct peer groups. New better groups evict worse groups during ingestion. Partitioned ranking assigns identity
