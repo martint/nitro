@@ -95,6 +95,48 @@ class TestFlatGroupingTable
     private final FlatKeyTablePolicy flatKeyTablePolicy = engineResources.operatorResources().flatKeyTablePolicy();
 
     @Test
+    void testBinaryFlatKeysComposeRegionsWithDictionaryAndRuns()
+    {
+        BinaryVector base = utf8("padding", "alpha", "beta", "alpha", "tail");
+        Vector region = new RegionVector(base, 1, 3);
+        BinaryVector expected = utf8("alpha", "beta", "alpha");
+        List<Vector> encodings = List.of(
+                region,
+                DictionaryVector.wrap(new int[] {2, 1, 0}, region),
+                new RegionVector(DictionaryVector.wrap(new int[] {4, 1, 2, 3, 0}, base), 1, 3),
+                new RleVector(new int[] {1, 1, 1}, region),
+                new RegionVector(new RleVector(new int[] {1, 1, 1, 1, 1}, base), 1, 3),
+                DictionaryVector.wrap(new int[] {2, 1, 0}, new RleVector(new int[] {1, 1, 1}, region)));
+        for (Vector encoding : encodings) {
+            for (int position = 0; position < expected.length(); position++) {
+                assertThat(FlatTypeHandlers.BINARY.hashInput(encoding, position))
+                        .isEqualTo(FlatTypeHandlers.BINARY.hashInput(expected, position));
+            }
+            Vector[] values = {encoding};
+            Vector[] nulls = {null};
+            FlatKeyLayout layout = FlatKeyLayout.tryCreate(values, true, arrayPool, codeGeneration, flatKeyTablePolicy);
+            FlatGroupingTable table = new FlatGroupingTable(layout, 2, true);
+            try {
+                table.beginBatch(values, nulls);
+                assertThat(table.assignGroup(values, nulls, 0, 0)).isZero();
+                assertThat(table.assignGroup(values, nulls, 1, 1)).isEqualTo(1);
+                assertThat(table.assignGroup(values, nulls, 2, 2)).isZero();
+                table.endBatch();
+
+                // Stored keys must also compare equal through a different representation.
+                Vector[] flat = {expected};
+                table.beginBatch(flat, nulls);
+                assertThat(table.assignGroup(flat, nulls, 0, 2)).isZero();
+                assertThat(table.assignGroup(flat, nulls, 1, 2)).isEqualTo(1);
+                table.endBatch();
+            }
+            finally {
+                table.releaseBuffers();
+            }
+        }
+    }
+
+    @Test
     void testGeneratedProjectedFlatLayoutComposesVariableWidthAndCanonicalFields()
     {
         Allocator allocator = new Allocator(engineResources);

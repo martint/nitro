@@ -23,6 +23,7 @@ import org.weakref.nitro.data.F64Vector;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.RegionVector;
 import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
@@ -562,6 +563,7 @@ final class FlatTypeHandlers
         {
             return switch (vector) {
                 case BinaryVector binary -> OperatorVectorSupport.binaryHash(binary.data(), binary.startOffset(position), binary.length(position));
+                case RegionVector region -> hashBinary(region.values(), region.offset() + position);
                 case DictionaryVector dictionary -> hashBinary(dictionary.values(), dictionary.ids()[position]);
                 case RleVector rle -> hashBinary(rle.values(), OperatorVectorSupport.runIndex(rle, position));
                 default -> throw new IllegalArgumentException("Expected binary vector but found " + vector.getClass().getSimpleName());
@@ -573,6 +575,7 @@ final class FlatTypeHandlers
             return switch (vector) {
                 case BinaryVector binary -> binary.length(position) == rightLength &&
                         OperatorVectorSupport.binaryEquals(binary.data(), binary.startOffset(position), right, rightOffset, rightLength);
+                case RegionVector region -> binaryEquals(region.values(), region.offset() + position, right, rightOffset, rightLength);
                 case DictionaryVector dictionary -> binaryEquals(dictionary.values(), dictionary.ids()[position], right, rightOffset, rightLength);
                 case RleVector rle -> binaryEquals(rle.values(), OperatorVectorSupport.runIndex(rle, position), right, rightOffset, rightLength);
                 default -> throw new IllegalArgumentException("Expected binary vector but found " + vector.getClass().getSimpleName());
@@ -583,6 +586,7 @@ final class FlatTypeHandlers
         {
             switch (vector) {
                 case BinaryVector binary -> writeFlat(binary.data(), binary.startOffset(position), binary.length(position), fixedChunk, fixedOffset, variableWidthArena);
+                case RegionVector region -> writeBinaryFlat(region.values(), region.offset() + position, fixedChunk, fixedOffset, variableWidthArena);
                 case DictionaryVector dictionary -> writeBinaryFlat(dictionary.values(), dictionary.ids()[position], fixedChunk, fixedOffset, variableWidthArena);
                 case RleVector rle -> writeBinaryFlat(rle.values(), OperatorVectorSupport.runIndex(rle, position), fixedChunk, fixedOffset, variableWidthArena);
                 default -> throw new IllegalArgumentException("Expected binary vector but found " + vector.getClass().getSimpleName());
