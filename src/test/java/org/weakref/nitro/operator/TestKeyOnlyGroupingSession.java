@@ -15,7 +15,11 @@ package org.weakref.nitro.operator;
 
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.core.type.Field;
+import org.weakref.nitro.core.type.FixedWidthKeyLayout;
 import org.weakref.nitro.core.type.Schema;
+import org.weakref.nitro.core.type.TypeBinding;
+import org.weakref.nitro.core.type.TypeIdentity;
+import org.weakref.nitro.core.type.TypeOperators;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
@@ -23,13 +27,18 @@ import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
+import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.execution.EngineResources;
 import org.weakref.nitro.operator.aggregation.PhysicalAggregationProgram;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import static java.lang.invoke.MethodHandles.lookup;
+import static java.lang.invoke.MethodType.methodType;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class TestKeyOnlyGroupingSession
@@ -325,6 +334,95 @@ class TestKeyOnlyGroupingSession
                 assertThat(selectedValues(output)).containsExactly(11L, 22L, 22L);
                 assertThat(selectedNulls(output)).containsExactly(false, false, true);
             }
+        }
+    }
+
+    @Test
+    void testDictionaryDistinctCanonicalizesTheDomainRatherThanEveryRow()
+            throws ReflectiveOperationException
+    {
+        CountingCanonicalType type = new CountingCanonicalType();
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                KeyOnlyGroupingSession session = new KeyOnlyGroupingSession(
+                        allocator,
+                        new Schema(List.of(new Field(type, false))),
+                        List.of(0),
+                        List.of(0),
+                        resources.operatorResources())) {
+            allocator.beginExecution();
+            int[] ids = new int[120_000];
+            for (int position = 0; position < ids.length; position++) {
+                ids[position] = position % 3;
+            }
+            for (int batch = 0; batch < 2; batch++) {
+                long base = batch * 20L;
+                type.calls = 0;
+                // Distinct physical entries can have the same provider-defined logical identity.
+                // Reusing IDs with a different dictionary must not reuse stale key results.
+                try (Batch input = new Batch(
+                        Mask.all(ids.length),
+                        Output.of(Streams.ofValues(DictionaryVector.wrap(
+                                ids, new I64Vector(new long[] {base + 11, base + 12, base + 21})))))) {
+                    session.addInput(input);
+                }
+                try (Batch output = session.getOutput()) {
+                    assertThat(selectedValues(output)).containsExactly(base + 11, base + 21);
+                }
+                // Allow repeated canonicalization for insertion/comparison, but never per logical row.
+                assertThat(type.calls).isBetween(1, 12);
+            }
+        }
+    }
+
+    private static final class CountingCanonicalType
+            implements TypeBinding
+    {
+        private final FixedWidthKeyLayout layout;
+        private int calls;
+
+        private CountingCanonicalType()
+                throws ReflectiveOperationException
+        {
+            layout = new FixedWidthKeyLayout(List.of(FixedWidthKeyLayout.Lane.projected(
+                    List.of(new FixedWidthKeyLayout.Source(List.of(), FixedWidthKeyLayout.Carrier.I64)),
+                    lookup().findVirtual(CountingCanonicalType.class, "canonicalize", methodType(long.class, long.class)).bindTo(this))));
+        }
+
+        private long canonicalize(long value)
+        {
+            calls++;
+            return value / 10;
+        }
+
+        @Override
+        public TypeIdentity identity()
+        {
+            return new TypeIdentity("testing:counted-canonical-key");
+        }
+
+        @Override
+        public Class<?> carrierType()
+        {
+            return long.class;
+        }
+
+        @Override
+        public TypeOperators operators()
+        {
+            return TypeOperators.UNSPECIFIED;
+        }
+
+        @Override
+        public Optional<FixedWidthKeyLayout> fixedWidthKeyLayout()
+        {
+            return Optional.of(layout);
+        }
+
+        @Override
+        public Set<Class<? extends Vector>> supportedVectorTypes()
+        {
+            return Set.of(I64Vector.class, DictionaryVector.class);
         }
     }
 
