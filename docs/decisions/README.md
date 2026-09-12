@@ -180,3 +180,4 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | [0098](0098-borrow-remote-output-storage-through-synchronous-destination-append.md) | Borrow remote-output storage through synchronous destination append | accepted |
 | [0099](0099-admit-mutable-binary-topn-at-every-limit.md) | Admit mutable binary TopN winner storage at every positive limit | accepted |
 | [0100](0100-carry-correlated-dynamic-filters-across-fragment-outputs.md) | Carry correlated dynamic filters across fragment outputs | accepted |
+| [0101](0101-bound-correlated-hash-domains-through-promotion.md) | Bound correlated hash domains through promotion | proposed |

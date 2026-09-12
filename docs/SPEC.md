@@ -653,6 +653,10 @@ tuple order, a missing partition, or a non-equality comparison cannot contribute
 correlation only when every completed partition supplies the same ordered tuple shape. Intersections may retain
 several independent necessary correlations.
 
+The host boundary may transfer exclusively decoder-owned storage into an immutable filter summary after validation.
+This does not permit borrowing mutable caller storage: ordinary constructors remain defensive, and framework-only
+deserialization entry points must be marked as such. The ownership optimization must preserve the wire contract.
+
 ## 14. Sources and native Parquet execution
 
 Connectors interact through the source and vector SPI. They receive allocator, type bindings, I/O capabilities, and
@@ -712,6 +716,11 @@ When explicitly enabled, an eligible Nitro remote-output boundary may consume th
 filter before partitioning or host adaptation. Every required output must be present with the registered type, the
 retained filter must be bounded and host-accounted, and an instance-owned selectivity sample may stop applying an
 ineffective filter. The capability is disabled by default pending breadth validation.
+
+Optional tuple construction may be omitted when its native join probe has no possible consumer for that
+representation. In the current integration, a fully local probe has no remote-output tuple consumer; native scans
+still consume independent column domains and native join-filter capabilities. Unknown build-only fragments remain
+conservative. Consumer admission does not change the plan, scalar-domain semantics, or exact join enforcement.
 
 The host can charge separate memory reservations through allocator contexts without copies between adjacent Nitro
 stages. Page/Block boundaries are not ownership boundaries inside an island.
