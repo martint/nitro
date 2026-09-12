@@ -67,7 +67,7 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | §10 Cooperative execution | 0004, 0044, 0045 |
 | §11 Allocation and memory | 0007, 0014, 0017–0019, 0041, 0066, 0072, 0075, 0077 |
 | §12 Aggregation, windows, patterns, table functions | 0011–0013, 0015, 0016, 0022, 0036, 0045, 0046, 0055–0061, 0064, 0075–0081, 0089, 0090, 0093 |
-| §13 Joins and dynamic filters | 0006, 0012, 0018, 0025, 0035, 0036, 0089, 0090, 0093, 0100 |
+| §13 Joins and dynamic filters | 0006, 0012, 0018, 0025, 0035, 0036, 0089, 0090, 0093, 0100, 0101, 0103 |
 | §14 Sources and Parquet | 0009, 0020–0023, 0027, 0031, 0068 |
 | §15 Host boundaries | 0003, 0017, 0019, 0024, 0033, 0044, 0046, 0071, 0100 |
 | §16 Adaptivity and generation | 0011, 0012, 0027, 0032, 0036, 0037, 0054–0061, 0068, 0071–0073, 0075, 0089, 0090, 0093 |
@@ -182,3 +182,4 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | [0100](0100-carry-correlated-dynamic-filters-across-fragment-outputs.md) | Carry correlated dynamic filters across fragment outputs | accepted |
 | [0101](0101-bound-correlated-hash-domains-through-promotion.md) | Bound correlated hash domains through promotion | proposed |
 | [0102](0102-measure-cumulative-jvm-allocations.md) | Measure cumulative JVM allocations across thread lifetimes | accepted |
+| [0103](0103-publish-native-filter-domains-with-primitive-position-ordering.md) | Publish native filter domains with primitive position ordering | proposed |

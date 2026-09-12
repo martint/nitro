@@ -655,6 +655,14 @@ Host dynamic-filter plumbing may carry the same logical constraint, but Nitro mu
 semantic authorities. Future unification may use the host transport if it preserves Nitro timing, physical-domain, and
 source-capability contracts.
 
+Exact host-domain publication may use an injected factory to order primitive position indexes with the host's
+resolved logical comparator. Flat collector values may be written directly into an independently owned Block
+using the registered FLAT-to-BLOCK_BUILDER convention, without an intermediate boxed scalar collection. The
+unordered-last comparator and host NaN predicate exclude only top-level NaNs; nested values retain their type semantics.
+Publication must preserve the existing domain semantics, retained representation,
+collection bounds, and partition-completeness and readiness rules. It must not infer logical ordering from a physical carrier. An explicit
+ordered-position domain factory is a boundary capability; the ordinary host builder's default path remains unchanged.
+
 For a join with multiple equality criteria, the host may preserve the ordered build-key correlation as a bounded
 tuple filter beside the independent column domains. The exact join predicate remains authoritative. A correlation is
 valid only for the equality criteria and registered types from which it was built; partial partition state, mismatched
