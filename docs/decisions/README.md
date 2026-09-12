@@ -181,3 +181,4 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | [0099](0099-admit-mutable-binary-topn-at-every-limit.md) | Admit mutable binary TopN winner storage at every positive limit | accepted |
 | [0100](0100-carry-correlated-dynamic-filters-across-fragment-outputs.md) | Carry correlated dynamic filters across fragment outputs | accepted |
 | [0101](0101-bound-correlated-hash-domains-through-promotion.md) | Bound correlated hash domains through promotion | proposed |
+| [0102](0102-measure-cumulative-jvm-allocations.md) | Measure cumulative JVM allocations across thread lifetimes | accepted |

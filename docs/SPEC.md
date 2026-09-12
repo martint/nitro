@@ -800,6 +800,12 @@ Query-owned reservations and resources must return to baseline at query close.
 Primary metrics are latency, CPU core-seconds, allocated bytes, and peak memory. Reports include absolutes, a fixed
 subject/control ratio, ranges, CPU-seconds per second of latency, geometric-mean suite summaries, and per-query spread.
 
+Total allocation is measured with a cumulative counter which retains allocations by terminated threads, across the
+same serial query interval on both engines. A sum over currently live threads is not a valid substitute. Unsupported
+accounting or a decreasing counter invalidates allocation evidence rather than reporting zero. Run metadata identifies
+the counter and its scope; whole-JVM allocation is not labelled operator-only allocation. Historical allocation
+comparisons collected with a different or invalid counter are not merged with corrected measurements.
+
 Routine Engine Coverage points take 25–45 seconds per execution on the slower engine. Its point manifest is the single
 source of truth for harness execution and campaign audit; changing point membership, member order, or data scale
 invalidates prior inventories. A warmed one-measurement control preflight publishes a complete duration inventory,
