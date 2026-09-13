@@ -14,6 +14,8 @@
 package org.weakref.nitro.core.function.projection;
 
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 
 /**
  * Classloader-neutral expression builder offered to a function provider.
@@ -23,6 +25,15 @@ import java.util.List;
  */
 public interface ProjectionCodeBuilder
 {
+    /// Creates a view whose argument indexes still address the original provider signature.
+    /// Bound non-null literals replace value/null reads; remaining arguments keep their order.
+    /// Completed programs use the reduced runtime signature and belong to this builder.
+    /// Returns empty when the implementation cannot represent a literal; it must not approximate it.
+    default Optional<ProjectionCodeBuilder> bindArguments(int argumentCount, Map<Integer, Object> literals)
+    {
+        return Optional.empty();
+    }
+
     Value argument(int index, ValueType type);
 
     Value isNull(int index);

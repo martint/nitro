@@ -15,7 +15,9 @@ package org.weakref.nitro.core.function.projection;
 
 import org.weakref.nitro.core.function.FunctionCapability;
 
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -27,6 +29,30 @@ import java.util.Optional;
 public interface ProjectionCodeProvider
         extends FunctionCapability
 {
+    /// Retains this provider's admission, value, null and fallback program after partial application.
+    /// Unsupported literal representations decline generation, leaving ordinary invocation available.
+    default ProjectionCodeProvider bindArguments(int argumentCount, Map<Integer, Object> literals)
+    {
+        Map<Integer, Object> bound = Map.copyOf(literals);
+        if (argumentCount < 0 || bound.keySet().stream().anyMatch(index -> index < 0 || index >= argumentCount)) {
+            throw new IllegalArgumentException("bound argument is outside the provider signature");
+        }
+        return (builder, arguments) -> {
+            if (arguments.size() != argumentCount - bound.size()) {
+                throw new IllegalArgumentException("runtime arguments do not match the partially applied signature");
+            }
+            List<ProjectionArgument> original = new ArrayList<>(argumentCount);
+            int runtimeIndex = 0;
+            for (int index = 0; index < argumentCount; index++) {
+                original.add(bound.containsKey(index)
+                        ? ProjectionArgument.literal(bound.get(index))
+                        : arguments.get(runtimeIndex++));
+            }
+            return builder.bindArguments(argumentCount, bound)
+                    .flatMap(view -> generate(view, List.copyOf(original)));
+        };
+    }
+
     Optional<ProjectionProgram> generate(
             ProjectionCodeBuilder builder,
             List<ProjectionArgument> arguments);

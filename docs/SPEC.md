@@ -370,6 +370,13 @@ retain their original order. Null literals retain the ordinary null convention. 
 authoritative: a generic fallback cannot silently replace a provider's native batch implementation merely because
 it can bind a constant.
 
+Partial application must preserve applicable provider-owned physical programs, not just the scalar invocation.
+A projection-builder binding view substitutes exact non-null literals and remaps the remaining arguments while
+preserving the provider's original admission, null and guarded-fallback logic. The completed program uses the
+reduced runtime signature. Unsupported literal representations decline generation; they do not authorize
+approximation, dropping guards, or interpreting logical function semantics in the engine. Other capabilities
+cannot be copied blindly across a changed argument signature.
+
 A provider may attach a failure mapper to a fallible scalar target. The generated adapter catches failures only
 around invocation of that target. The mapper converts declared row failures to classloader-neutral `ErrorValue`
 records and must rethrow cancellation, linkage, virtual-machine, and other non-row failures. The adapter writes

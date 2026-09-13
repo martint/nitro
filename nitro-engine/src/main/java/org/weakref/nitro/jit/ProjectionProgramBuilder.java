@@ -20,6 +20,8 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.stream.IntStream;
 
 import static java.util.Objects.requireNonNull;
 
@@ -32,7 +34,47 @@ import static java.util.Objects.requireNonNull;
 final class ProjectionProgramBuilder
         implements ProjectionCodeBuilder
 {
-    private final Object owner = new Object();
+    private final Object owner;
+    private final ProjectionProgramBuilder parent;
+    private final int argumentCount;
+    private final Map<Integer, Object> literals;
+
+    ProjectionProgramBuilder()
+    {
+        owner = new Object();
+        parent = null;
+        argumentCount = 0;
+        literals = Map.of();
+    }
+
+    private ProjectionProgramBuilder(ProjectionProgramBuilder parent, int argumentCount, Map<Integer, Object> literals)
+    {
+        this.owner = parent.owner;
+        this.parent = parent;
+        this.argumentCount = argumentCount;
+        this.literals = literals;
+    }
+
+    @Override
+    public Optional<ProjectionCodeBuilder> bindArguments(int argumentCount, Map<Integer, Object> literals)
+    {
+        Map<Integer, Object> bound = Map.copyOf(literals);
+        if (argumentCount < 0 || bound.keySet().stream().anyMatch(index -> index < 0 || index >= argumentCount)) {
+            throw new IllegalArgumentException("bound argument is outside the provider signature");
+        }
+        if (bound.values().stream().anyMatch(value -> !(value instanceof Long || value instanceof Boolean))) {
+            return Optional.empty();
+        }
+        return Optional.of(new ProjectionProgramBuilder(this, argumentCount, bound));
+    }
+
+    private int runtimeIndex(int index)
+    {
+        if (index < 0 || index >= argumentCount) {
+            throw new IllegalArgumentException("argument index is outside the provider signature");
+        }
+        return index - (int) literals.keySet().stream().filter(bound -> bound < index).count();
+    }
 
     @Override
     public Value argument(int index, ValueType type)
@@ -44,6 +86,16 @@ final class ProjectionProgramBuilder
         if (valueType == ValueType.NULLS_ONLY) {
             throw new IllegalArgumentException("NULLS_ONLY argument has no value");
         }
+        if (parent != null) {
+            int runtimeIndex = runtimeIndex(index);
+            Object literal = literals.get(index);
+            if (literal != null) {
+                Value value = literal instanceof Long number ? constant(number.longValue()) : constant((boolean) literal);
+                requireType(expression(value), valueType);
+                return value;
+            }
+            return parent.argument(runtimeIndex, valueType);
+        }
         return new ArgumentValue(index, valueType);
     }
 
@@ -52,6 +104,10 @@ final class ProjectionProgramBuilder
     {
         if (index < 0) {
             throw new IllegalArgumentException("argument index is negative");
+        }
+        if (parent != null) {
+            int runtimeIndex = runtimeIndex(index);
+            return literals.containsKey(index) ? constant(false) : parent.isNull(runtimeIndex);
         }
         return new ArgumentNull(index);
     }
@@ -253,6 +309,20 @@ final class ProjectionProgramBuilder
             Value fallback)
     {
         List<ValueType> types = List.copyOf(requireNonNull(argumentTypes, "argumentTypes is null"));
+        if (parent != null) {
+            if (types.size() != argumentCount) {
+                throw new IllegalArgumentException("program signature does not match the provider signature");
+            }
+            literals.forEach((index, literal) -> {
+                ValueType type = literal instanceof Long ? ValueType.I64 : ValueType.BOOLEAN;
+                if (types.get(index) != type && types.get(index) != ValueType.NULLS_ONLY) {
+                    throw new IllegalArgumentException("literal does not match the provider argument type");
+                }
+            });
+            return parent.guardedProgram(
+                    IntStream.range(0, argumentCount).filter(index -> !literals.containsKey(index)).mapToObj(types::get).toList(),
+                    value, isNull, fallback);
+        }
         Expression valueExpression = expression(value);
         Expression nullExpression = expression(isNull);
         Expression fallbackExpression = expression(fallback);
