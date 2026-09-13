@@ -212,3 +212,4 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | [0129](0129-reject-probes-outside-completed-build-bounds.md) | Reject probes outside completed build bounds | accepted |
 | [0130](0130-close-component-benchmark-allocator-domains.md) | Close component benchmark allocator domains | accepted |
 | [0131](0131-qualify-primitive-evaluator-traversal-with-error-containment.md) | Qualify primitive evaluator traversal with error containment | accepted |
+| [0132](0132-recycle-evaluator-scratch-after-batch-invalidation.md) | Recycle evaluator scratch after batch invalidation | accepted |

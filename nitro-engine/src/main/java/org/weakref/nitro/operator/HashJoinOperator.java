@@ -3025,7 +3025,7 @@ public class HashJoinOperator
         outerConstraintApplied = true;
         Mask constraint = matchedOuterMask();
         try {
-            probeSource.constrain(constraint);
+            currentOuterBatch.constrain(constraint);
             currentOuterConstraintMask = constraint;
         }
         catch (RuntimeException | Error failure) {

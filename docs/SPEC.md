@@ -410,6 +410,11 @@ inside an island.
 Blocking operators may retain state, but retained input and output ownership must be explicit. Operators close fully
 consumed batches promptly and cannot retain borrowed vectors after their lease ends.
 
+A batch constraint invalidates constraint-sensitive output generations before resetting producer evaluation state.
+Once exposed results have been released or transferred, remaining evaluator-owned scratch may return to its pools.
+A constraint after a sensitive output transfer is rejected before invalidating other outputs. An operator-level
+constraint without this output-lifetime guarantee cannot recycle potentially borrowed results.
+
 Constrained reborrow, retention across source advancement, and open-batch availability checks are distinct
 capabilities. Reborrow does not authorize polling a source while its current batch remains open. A consumer may
 infer that an open batch is final only when the source can report whole-input availability without advancing or

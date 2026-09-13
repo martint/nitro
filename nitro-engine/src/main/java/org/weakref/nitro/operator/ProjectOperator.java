@@ -302,7 +302,7 @@ public class ProjectOperator
         }
         return new Batch(
                 batchState.mask(),
-                batchState::constrain,
+                batchState::constrainAfterOutputInvalidation,
                 ignored -> sourceBatch.takeMask(),
                 _ -> {},
                 () -> {
@@ -951,8 +951,20 @@ public class ProjectOperator
         private void constrain(Mask mask)
         {
             planEvaluator.reset();
+            updateConstraint(mask);
+        }
+
+        private void constrainAfterOutputInvalidation(Mask mask)
+        {
+            resetAfterOutputInvalidation();
+            updateConstraint(mask);
+        }
+
+        private void updateConstraint(Mask mask)
+        {
             evaluatedOutputBundles.clear();
             schemaBundles.clear();
+            schemaMask = null;
             fusedResults = null;
             fusedResultsComputed = false;
             this.mask = mask;
@@ -964,6 +976,16 @@ public class ProjectOperator
             // Batch.close() closes every Output before invoking this action, so all exposed evaluator/fused results
             // have either been released or transferred. Remaining tracked vectors are scratch/intermediates and are
             // now safe to return to their pools.
+            resetAfterOutputInvalidation();
+            evaluatedOutputBundles.clear();
+            schemaBundles.clear();
+            sourceBatch.close();
+        }
+
+        private void resetAfterOutputInvalidation()
+        {
+            // Only Batch's output invalidation or close establishes that no exposed result remains borrowed.
+            // Operator-level constrain does not establish this guarantee and must retain the discard-only reset.
             if (recycleEvaluatorOutputs) {
                 planEvaluator.resetForReuse();
                 for (Allocator.Context context : executionContext.allocationContexts()) {
@@ -974,9 +996,6 @@ public class ProjectOperator
             else {
                 planEvaluator.reset();
             }
-            evaluatedOutputBundles.clear();
-            schemaBundles.clear();
-            sourceBatch.close();
         }
 
         private void releaseOutput(Vector vector)
