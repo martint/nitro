@@ -966,14 +966,13 @@ public final class ClickBenchHitsSupport
             // The Nitro reader is multi-file aware, so it takes the whole directory's files directly.
             List<Path> paths = Files.isDirectory(file) ? parquetFiles(file) : List.of(file);
             List<String> columnNames = List.of(columns);
+            var schema = SCHEMAS.parquet(paths.getFirst(), columnNames);
             Operator decoder = new NitroParquetScanOperator(
                     resources,
                     allocator,
                     paths,
-                    columnNames);
-            return new BatchSourceOperator(new OperatorBatchSource(
-                    decoder,
-                    SCHEMAS.parquet(paths.getFirst(), columnNames)),
+                    schema);
+            return new BatchSourceOperator(new OperatorBatchSource(decoder),
                     new NativeSourceOperatorIngress());
         }
         catch (IOException exception) {

@@ -4508,9 +4508,9 @@ final class TpcdsParquetSupport
                 tables.scanResources(),
                 allocator,
                 tables.tableFiles(tableName),
-                columnNames);
+                tables.tableSchema(tableName, columnNames));
         return new BatchSourceOperator(
-                new OperatorBatchSource(decoder, tables.tableSchema(tableName, columnNames)),
+                new OperatorBatchSource(decoder),
                 new NativeSourceOperatorIngress());
     }
 

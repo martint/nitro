@@ -53,8 +53,17 @@ public final class NitroParquetScanOperator
             List<Path> paths,
             List<String> columns)
     {
+        this(resources, allocator, paths, Schema.unspecified(requireNonNull(columns, "columns is null")));
+    }
+
+    public NitroParquetScanOperator(
+            NitroParquetScanResources resources,
+            Allocator allocator,
+            List<Path> paths,
+            Schema schema)
+    {
         requireNonNull(allocator, "allocator is null");
-        Schema schema = Schema.unspecified(requireNonNull(columns, "columns is null"));
+        requireNonNull(schema, "schema is null");
         this.delegate = new BatchSourceOperator(
                 new NitroParquetBatchSource(resources, allocator, paths, schema),
                 new ColumnViewSourceOperatorIngress(

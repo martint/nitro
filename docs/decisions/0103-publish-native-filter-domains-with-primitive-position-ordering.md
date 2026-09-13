@@ -1,6 +1,7 @@
 # ADR-0103: Publish native filter domains with primitive position ordering
 
-- **Status:** proposed
+- **Status:** accepted
+- **Adopted by:** [ADR-0104](0104-integrate-correlated-filtering-without-an-opt-in.md).
 - **Date:** 2026-09-12
 - **Spec:** §13, §17, §18
 - **Related:** ADR-0027, ADR-0101

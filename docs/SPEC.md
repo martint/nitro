@@ -734,15 +734,18 @@ probe symbols through exact lineage. Identity paths, reference-only projections,
 set-operation layouts, and nested Nitro plans are eligible; opaque transformations are not. The metadata travels with
 the fragment through task serialization and retry. Reused fragments merge distinct consumer groups.
 
-When explicitly enabled, an eligible Nitro remote-output boundary may consume the corresponding immutable tuple
+An eligible Nitro remote-output boundary consumes the corresponding immutable tuple
 filter before partitioning or host adaptation. Every required output must be present with the registered type, the
 retained filter must be bounded and host-accounted, and an instance-owned selectivity sample may stop applying an
-ineffective filter. The capability is disabled by default pending breadth validation.
+ineffective filter. This is part of normal Nitro execution, with no separate configuration opt-in (ADR-0104).
 
 Optional tuple construction may be omitted when its native join probe has no possible consumer for that
 representation. In the current integration, a fully local probe has no remote-output tuple consumer; native scans
 still consume independent column domains and native join-filter capabilities. Unknown build-only fragments remain
 conservative. Consumer admission does not change the plan, scalar-domain semantics, or exact join enforcement.
+
+Registry-proven static binary equality pushdown is likewise part of normal filter execution, not a separate opt-in.
+The original predicate is retained unless the source explicitly accepts complete semantic enforcement.
 
 The host can charge separate memory reservations through allocator contexts without copies between adjacent Nitro
 stages. Page/Block boundaries are not ownership boundaries inside an island.

@@ -1,6 +1,7 @@
 # ADR-0101: Bound correlated hash domains through promotion
 
-- **Status:** proposed
+- **Status:** accepted
+- **Adopted by:** [ADR-0104](0104-integrate-correlated-filtering-without-an-opt-in.md). The proposal and its prior validation conditions below record the investigation; ADR-0104 states the current normal-path decision and remaining costs.
 - **Date:** 2026-09-12
 - **Spec:** §13, §15, §17, §19
 - **Amends if accepted:** [ADR-0100](0100-carry-correlated-dynamic-filters-across-fragment-outputs.md)

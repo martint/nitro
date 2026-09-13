@@ -193,20 +193,18 @@ public class FilterOperator
                             source.pushStaticFilter(candidate.filter()),
                             null)));
         }
-        if (policy.pushStaticBinaryEquality()) {
-            staticBinaryEquality(evaluationPlan, predicateMask, primitiveRegistry).ifPresent(equality -> {
-                StaticDomainFilter filter = new StaticDomainFilter(
-                        equality.input(),
-                        new BinaryLiteralDomain(
-                                source.outputSchema().field(equality.input()).type(),
-                                equality.value(),
-                                equality.equal()));
-                pushdowns.add(new StaticPredicatePushdown(
-                        List.of(predicateMask),
-                        source.pushStaticFilter(filter),
-                        null));
-            });
-        }
+        staticBinaryEquality(evaluationPlan, predicateMask, primitiveRegistry).ifPresent(equality -> {
+            StaticDomainFilter filter = new StaticDomainFilter(
+                    equality.input(),
+                    new BinaryLiteralDomain(
+                            source.outputSchema().field(equality.input()).type(),
+                            equality.value(),
+                            equality.equal()));
+            pushdowns.add(new StaticPredicatePushdown(
+                    List.of(predicateMask),
+                    source.pushStaticFilter(filter),
+                    null));
+        });
         this.staticPredicatePushdowns = List.copyOf(pushdowns);
         PlanEvaluator.MaskExecutionDiagnostics evaluatorDiagnostics = planEvaluator.maskExecutionDiagnostics();
         diagnostics.record(PLANNED_ASSIGNMENTS, evaluatorDiagnostics.plannedAssignments());

@@ -1,6 +1,7 @@
 # ADR-0100: Carry correlated dynamic filters across fragment outputs
 
-- **Status:** accepted
+- **Status:** amended
+- **Amended by:** [ADR-0104](0104-integrate-correlated-filtering-without-an-opt-in.md) removes the opt-in and adopts bounded sparse transport; the original decision below is historical.
 - **Date:** 2026-09-11
 - **Spec:** §13, §15, §17, §19
 - **Depends on:** [ADR-0025](0025-use-one-logical-dynamic-filter-lifecycle.md),

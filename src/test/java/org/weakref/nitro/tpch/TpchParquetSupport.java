@@ -1866,9 +1866,9 @@ final class TpchParquetSupport
                 tables.scanResources(),
                 allocator,
                 tables.tableFiles(tableName),
-                columnNames);
+                SCHEMAS.tpch(tableName, columnNames));
         return new BatchSourceOperator(
-                new OperatorBatchSource(decoder, SCHEMAS.tpch(tableName, columnNames)),
+                new OperatorBatchSource(decoder),
                 new NativeSourceOperatorIngress());
     }
 

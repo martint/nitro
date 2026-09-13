@@ -19,21 +19,22 @@ package org.weakref.nitro.operator;
 public record FilterOperatorPolicy(
         boolean fuseConstantRanges,
         boolean pushStaticLongEquality,
-        boolean pushStaticBinaryEquality,
         boolean pushStaticLongRanges,
         boolean recycleOutputMasks)
 {
     public static FilterOperatorPolicy defaults()
     {
-        return new FilterOperatorPolicy(true, true, false, true, true);
+        return new FilterOperatorPolicy(true, true, true, true);
     }
 
     public static FilterOperatorPolicy fromSystemProperties()
     {
+        if (System.getProperty("nitro.filter.pushStaticBinaryEquality") != null) {
+            throw new IllegalArgumentException("nitro.filter.pushStaticBinaryEquality has been removed; binary equality pushdown is automatic");
+        }
         return new FilterOperatorPolicy(
                 Boolean.parseBoolean(System.getProperty("nitro.expression.fuseLongConstantRanges", "true")),
                 Boolean.parseBoolean(System.getProperty("nitro.filter.pushStaticLongEquality", "true")),
-                Boolean.parseBoolean(System.getProperty("nitro.filter.pushStaticBinaryEquality", "false")),
                 Boolean.parseBoolean(System.getProperty("nitro.filter.pushStaticLongRanges", "true")),
                 Boolean.parseBoolean(System.getProperty("nitro.filter.recycleOutputMasks", "true")));
     }

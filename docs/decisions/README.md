@@ -67,9 +67,9 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | §10 Cooperative execution | 0004, 0044, 0045 |
 | §11 Allocation and memory | 0007, 0014, 0017–0019, 0041, 0066, 0072, 0075, 0077 |
 | §12 Aggregation, windows, patterns, table functions | 0011–0013, 0015, 0016, 0022, 0036, 0045, 0046, 0055–0061, 0064, 0075–0081, 0089, 0090, 0093 |
-| §13 Joins and dynamic filters | 0006, 0012, 0018, 0025, 0035, 0036, 0089, 0090, 0093, 0100, 0101, 0103 |
+| §13 Joins and dynamic filters | 0006, 0012, 0018, 0025, 0035, 0036, 0089, 0090, 0093, 0100, 0101, 0103, 0104 |
 | §14 Sources and Parquet | 0009, 0020–0023, 0027, 0031, 0068 |
-| §15 Host boundaries | 0003, 0017, 0019, 0024, 0033, 0044, 0046, 0071, 0100 |
+| §15 Host boundaries | 0003, 0017, 0019, 0024, 0033, 0044, 0046, 0071, 0100, 0104 |
 | §16 Adaptivity and generation | 0011, 0012, 0027, 0032, 0036, 0037, 0054–0061, 0068, 0071–0073, 0075, 0089, 0090, 0093 |
 | §17 Correctness and tests | 0026, 0029, 0043, 0047, 0100 |
 | §18 Performance evidence | 0026–0028, 0032, 0041, 0042, 0087 |
@@ -179,7 +179,8 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | [0097](0097-admit-exact-distinct-value-ids-by-observed-reuse.md) | Admit exact DISTINCT value IDs by observed reuse | accepted |
 | [0098](0098-borrow-remote-output-storage-through-synchronous-destination-append.md) | Borrow remote-output storage through synchronous destination append | accepted |
 | [0099](0099-admit-mutable-binary-topn-at-every-limit.md) | Admit mutable binary TopN winner storage at every positive limit | accepted |
-| [0100](0100-carry-correlated-dynamic-filters-across-fragment-outputs.md) | Carry correlated dynamic filters across fragment outputs | accepted |
-| [0101](0101-bound-correlated-hash-domains-through-promotion.md) | Bound correlated hash domains through promotion | proposed |
+| [0100](0100-carry-correlated-dynamic-filters-across-fragment-outputs.md) | Carry correlated dynamic filters across fragment outputs | amended |
+| [0101](0101-bound-correlated-hash-domains-through-promotion.md) | Bound correlated hash domains through promotion | accepted |
 | [0102](0102-measure-cumulative-jvm-allocations.md) | Measure cumulative JVM allocations across thread lifetimes | accepted |
-| [0103](0103-publish-native-filter-domains-with-primitive-position-ordering.md) | Publish native filter domains with primitive position ordering | proposed |
+| [0103](0103-publish-native-filter-domains-with-primitive-position-ordering.md) | Publish native filter domains with primitive position ordering | accepted |
+| [0104](0104-integrate-correlated-filtering-without-an-opt-in.md) | Integrate validated filter optimizations without opt-ins | accepted |

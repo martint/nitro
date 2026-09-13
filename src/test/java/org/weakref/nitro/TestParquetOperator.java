@@ -2099,7 +2099,9 @@ public class TestParquetOperator
                     executableRuntimeFilterResources(),
                     allocator,
                     List.of(file),
-                    List.of("value", "model"));
+                    new Schema(List.of(
+                            new Field("value", BIGINT, false),
+                            new Field("model", VARCHAR, false))));
             Operator source = new BatchSourceOperator(
                     new OperatorBatchSource(scan, scan.outputSchema()),
                     new NativeSourceOperatorIngress());
@@ -2116,7 +2118,7 @@ public class TestParquetOperator
             FilterOperatorResources filterResources = new FilterOperatorResources(
                     defaults.projectionMaskCompiler(),
                     defaults.evaluationPolicy(),
-                    new FilterOperatorPolicy(true, true, true, true, true),
+                    FilterOperatorPolicy.defaults(),
                     defaults.dynamicFilterPolicy());
 
             int expected = 0;
