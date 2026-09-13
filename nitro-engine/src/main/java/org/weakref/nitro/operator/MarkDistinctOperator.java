@@ -111,7 +111,6 @@ public class MarkDistinctOperator
             currentBatchState = null;
             return sourceBatch;
         }
-        source.constrain(batchMask);
         sourceBatch.constrain(batchMask);
 
         BatchState batchState = new BatchState(sourceBatch, batchMask);

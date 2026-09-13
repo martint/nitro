@@ -484,8 +484,6 @@ public class FilterOperator
         }
         batchState.ownedMask(batchMask);
         outputPositions += batchMask.count();
-        source.constrain(batchMask);
-        sourceBatch.constrain(batchMask);
         // The predicate result has been reduced to the owned output mask; no evaluator vector escapes this point.
         planEvaluator.resetForReuse();
         batchState.constrain(batchMask);

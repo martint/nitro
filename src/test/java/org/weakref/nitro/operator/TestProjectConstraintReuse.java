@@ -42,6 +42,17 @@ class TestProjectConstraintReuse
     @Test
     void testBatchConstraintRecyclesUnexposedIntermediateStorage()
     {
+        assertBatchConstraintRecyclesUnexposedIntermediateStorage(false);
+    }
+
+    @Test
+    void testForwardedLimitConstraintRecyclesUnexposedIntermediateStorage()
+    {
+        assertBatchConstraintRecyclesUnexposedIntermediateStorage(true);
+    }
+
+    private void assertBatchConstraintRecyclesUnexposedIntermediateStorage(boolean throughLimit)
+    {
         try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
             PrimitiveRegistry registry = new PrimitiveRegistry();
             registry.register("increment", (inputs, mask, requested, _, context) -> {
@@ -63,9 +74,10 @@ class TestProjectConstraintReuse
                             new Assignment(intermediate, new Call("increment", List.of(new Reference(new Input(0), Stream.VALUES))), AllMask.ALL),
                             new Assignment(result, new Call("increment", List.of(new Reference(intermediate, Stream.VALUES))), AllMask.ALL)),
                     List.of(new Reference(result, Stream.VALUES)));
-            try (Operator project = new ProjectOperator(allocator, plan, registry,
+            Operator project = new ProjectOperator(allocator, plan, registry,
                     new ConstantTableOperator(allocator, 1, LongStream.range(0, 512).mapToObj(value -> row(value)).toList()));
-                    Batch batch = project.next()) {
+            try (Operator operator = throughLimit ? new LimitOperator(allocator, 512, project) : project;
+                    Batch batch = operator.next()) {
                 long warmedAllocation = 0;
                 for (int iteration = 0; iteration < 16; iteration++) {
                     Mask mask = iteration % 2 == 0 ? Mask.all(512) : Mask.sparse(new int[] {0, 255, 511}, 512);

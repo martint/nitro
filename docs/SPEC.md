@@ -414,6 +414,9 @@ A batch constraint invalidates constraint-sensitive output generations before re
 Once exposed results have been released or transferred, remaining evaluator-owned scratch may return to its pools.
 A constraint after a sensitive output transfer is rejected before invalidating other outputs. An operator-level
 constraint without this output-lifetime guarantee cannot recycle potentially borrowed results.
+Consumers selecting rows from an owned source batch propagate each selection through that batch's lifecycle once;
+they do not first invoke an independent operator-level reset for the same transition. Forwarding lifecycles preserve
+this order recursively so scratch is not discarded before its outputs have been invalidated.
 
 Constrained reborrow, retention across source advancement, and open-batch availability checks are distinct
 capabilities. Reborrow does not authorize polling a source while its current batch remains open. A consumer may

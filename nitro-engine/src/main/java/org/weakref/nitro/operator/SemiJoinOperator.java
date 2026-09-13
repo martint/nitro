@@ -339,8 +339,6 @@ public class SemiJoinOperator
         Mask batchMask = sourceBatch.borrowMask();
         if (!outputMatches) {
             batchMask = selectRows(sourceBatch);
-            outer.constrain(batchMask);
-            sourceBatch.constrain(batchMask);
             batchState.constrain(batchMask);
         }
 

@@ -60,7 +60,6 @@ public class LimitOperator
 
         int remaining = toIntExact(Math.min(limit - count, sourceMask.count()));
         currentMask = allocator.firstMask(allocationContext, sourceMask, remaining);
-        source.constrain(currentMask);
         sourceBatch.constrain(currentMask);
         count += remaining;
 
@@ -110,7 +109,6 @@ public class LimitOperator
         public void constrain(Mask mask)
         {
             currentMask = mask;
-            source.constrain(mask);
             sourceBatch.constrain(mask);
         }
 

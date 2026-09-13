@@ -214,3 +214,4 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | [0131](0131-qualify-primitive-evaluator-traversal-with-error-containment.md) | Qualify primitive evaluator traversal with error containment | accepted |
 | [0132](0132-recycle-evaluator-scratch-after-batch-invalidation.md) | Recycle evaluator scratch after batch invalidation | accepted |
 | [0133](0133-copy-primitive-vector-selections-without-boxing.md) | Copy primitive vector selections without boxing | accepted |
+| [0134](0134-constrain-selected-batches-once.md) | Constrain selected batches once | accepted |

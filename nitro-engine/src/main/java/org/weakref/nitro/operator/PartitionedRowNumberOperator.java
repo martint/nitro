@@ -146,7 +146,6 @@ public final class PartitionedRowNumberOperator
         if (selectedCount != sourceMask.selectedCount()) {
             outputMask = allocator.allocateSparseMask(allocationContext, selectedPositions, selectedCount, sourceMask.size());
             ownsOutputMask = true;
-            source.constrain(outputMask);
             sourceBatch.constrain(outputMask);
         }
 
