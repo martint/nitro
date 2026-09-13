@@ -663,6 +663,11 @@ Publication must preserve the existing domain semantics, retained representation
 collection bounds, and partition-completeness and readiness rules. It must not infer logical ordering from a physical carrier. An explicit
 ordered-position domain factory is a boundary capability; the ordinary host builder's default path remains unchanged.
 
+At the source boundary, an admitted integral logical type may consume immutable host range endpoints through that
+type's accessor without materializing per-range scalar objects. Unbounded and exclusive endpoints, null inclusion,
+expansion budgets, and physical membership admission must retain the same semantics. This does not expose host
+range or Block classes to Nitro core or change host filter readiness.
+
 For a join with multiple equality criteria, the host may preserve the ordered build-key correlation as a bounded
 tuple filter beside the independent column domains. The exact join predicate remains authoritative. A correlation is
 valid only for the equality criteria and registered types from which it was built; partial partition state, mismatched
