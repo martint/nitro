@@ -206,3 +206,4 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | [0123](0123-use-primitive-iteration-for-conditional-merges.md) | Reject conditional-merge traversal revisions after SQL qualification | rejected |
 | [0124](0124-preserve-provider-proven-bound-call-failure-conventions.md) | Preserve provider-proven bound-call failure conventions | accepted |
 | [0125](0125-specialize-scalar-loops-by-physical-input-shape.md) | Reject scalar physical-shape specialization after SQL qualification | rejected |
+| [0126](0126-reuse-exact-generated-scalar-bindings.md) | Reject generated scalar binding reuse after SQL qualification | rejected |
