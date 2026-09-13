@@ -16,7 +16,9 @@ package org.weakref.nitro.operator;
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.BinaryVector;
+import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.I64Vector;
+import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.execution.EngineResources;
@@ -28,6 +30,33 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class TestGenericJoinIndexFactory
 {
+    @Test
+    void testCappedAdmissionRejectsOnlyProvenImpossibleKeys()
+    {
+        try (EngineResources resources = EngineResources.createDefault()) {
+            GenericJoinIndexFactory indexes = resources.operatorResources().genericJoinIndexes();
+            long maximumKey = resources.operatorResources().hashJoin().indexPolicy().maxDirectBuildKey();
+            long[] validKeys = {0, 0, 0, 0, 0, 0, 0, maximumKey - 1};
+            assertThat(indexes.initialHashBuildAdmission(batch(validKeys), vectors(validKeys), new Vector[1], 8, false))
+                    .isEqualTo(new GenericJoinIndexFactory.InitialHashBuildAdmission(true, true));
+
+            for (long invalidKey : new long[] {-1, Long.MIN_VALUE, maximumKey, Long.MAX_VALUE}) {
+                long[] keys = {0, 0, 0, 0, 0, 0, 0, invalidKey};
+                Vector[] values = vectors(keys);
+                assertThat(indexes.initialHashBuildAdmission(batch(keys), values, new Vector[1], 8, false))
+                        .isEqualTo(new GenericJoinIndexFactory.InitialHashBuildAdmission(true, false));
+                Vector[] nulls = {new BooleanVector(new boolean[] {false, false, false, false, false, false, false, true})};
+                assertThat(indexes.initialHashBuildAdmission(batch(keys), values, nulls, 8, false))
+                        .isEqualTo(new GenericJoinIndexFactory.InitialHashBuildAdmission(true, true));
+                try (Batch source = new Batch(Mask.all(keys.length), Output.of(Streams.ofValues(values[0])))) {
+                    BufferedJoinInput.InnerBatch selected = BufferedJoinInput.InnerBatch.retained(source, new int[] {0, 1, 2, 3, 4, 5, 6});
+                    assertThat(indexes.initialHashBuildAdmission(selected, values, new Vector[1], 7, false))
+                            .isEqualTo(new GenericJoinIndexFactory.InitialHashBuildAdmission(true, true));
+                }
+            }
+        }
+    }
+
     @Test
     void testFlatJoinUsesProviderCanonicalLongStorage()
     {

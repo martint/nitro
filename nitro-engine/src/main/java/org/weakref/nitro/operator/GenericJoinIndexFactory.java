@@ -18,6 +18,7 @@ import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.data.VectorAccess;
 
 import java.util.List;
 import java.util.function.IntToLongFunction;
@@ -109,7 +110,41 @@ final class GenericJoinIndexFactory
         return new FlatJoinIndex(joinIndexPolicy, layout, expectedSize);
     }
 
-    boolean shouldCapInitialHash(
+    record InitialHashBuildAdmission(boolean capHash, boolean directBuild) {}
+
+    InitialHashBuildAdmission initialHashBuildAdmission(
+            BufferedJoinInput.InnerBatch batch,
+            Vector[] values,
+            Vector[] nulls,
+            int expectedRows,
+            boolean keyOnlyBuild)
+    {
+        boolean capHash = shouldCapInitialHash(batch, values, expectedRows, keyOnlyBuild);
+        boolean directBuild = capHash && values.length == 1 && isLong(values[0]) && sampleFitsDirectBuild(batch, values[0], nulls[0]);
+        return new InitialHashBuildAdmission(capHash, directBuild);
+    }
+
+    private boolean sampleFitsDirectBuild(BufferedJoinInput.InnerBatch batch, Vector values, Vector nulls)
+    {
+        // One unrepresentable selected key proves direct construction must later be discarded. The absence of
+        // such a key in this bounded sample is provisional; ordinary insertion remains responsible for fallback.
+        VectorAccess.LongValues keys = VectorAccess.longValues(values);
+        VectorAccess.BooleanValues nullValues = nulls == null ? null : VectorAccess.booleanValues(nulls);
+        int sampleSize = Math.min(batch.length(), buildPolicy.initialHashAdmissionSampleRows());
+        for (int position = 0; position < sampleSize; position++) {
+            int sourcePosition = batch.sourcePosition(position);
+            if (nullValues != null && nullValues.value(sourcePosition)) {
+                continue;
+            }
+            long key = keys.value(sourcePosition);
+            if (key < 0 || key >= joinIndexPolicy.maxDirectBuildKey()) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean shouldCapInitialHash(
             BufferedJoinInput.InnerBatch batch,
             Vector[] values,
             int expectedRows,

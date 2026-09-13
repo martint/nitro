@@ -1674,7 +1674,7 @@ public class HashJoinOperator
                                 arrayPool,
                                 expectedRows,
                                 true,
-                                true,
+                                new GenericJoinIndexFactory.InitialHashBuildAdmission(true, true),
                                 true,
                                 lazyDuplicateSlotState,
                                 false,
@@ -1684,7 +1684,7 @@ public class HashJoinOperator
                                 buildPolicy.batchSingleLongBuild());
                     }
                     else {
-                        joinIndex = createJoinIndex(joinValues, false, true, false);
+                        joinIndex = createJoinIndex(joinValues, new GenericJoinIndexFactory.InitialHashBuildAdmission(false, false), true, false);
                     }
                 }
                 streamedInnerRows += mask.count();
@@ -2083,7 +2083,7 @@ public class HashJoinOperator
             boolean keyOnlyBuild = innerSchema.length == innerJoinColumns.length;
             joinIndex = createJoinIndex(
                     joinValues,
-                    genericJoinIndexes.shouldCapInitialHash(batch, joinValues, expectedRows, keyOnlyBuild),
+                    genericJoinIndexes.initialHashBuildAdmission(batch, joinValues, joinNulls, expectedRows, keyOnlyBuild),
                     genericJoinIndexes.shouldUseGroupedLongHash(batch, joinValues, expectedRows),
                     genericJoinIndexes.shouldUseDirectRangeBuild(batch, joinValues, expectedRows));
         }
@@ -2189,7 +2189,7 @@ public class HashJoinOperator
 
     private JoinIndex createJoinIndex(
             Vector[] joinValues,
-            boolean capInitialHash,
+            GenericJoinIndexFactory.InitialHashBuildAdmission initialBuild,
             boolean groupedLongHashTable,
             boolean directRangeBuild)
     {
@@ -2237,7 +2237,7 @@ public class HashJoinOperator
                     arrayPool,
                     expectedSize,
                     innerSchema.length == innerJoinColumns.length,
-                    capInitialHash,
+                    initialBuild,
                     groupedLongHashTable,
                     lazyDuplicateSlotState,
                     implicitSequentialBuildRowReferences,
@@ -2252,7 +2252,7 @@ public class HashJoinOperator
                 arrayPool,
                 expectedSize,
                 canStreamUnusedBuildPayload(),
-                capInitialHash);
+                initialBuild.capHash());
     }
 
     @Override
@@ -4603,7 +4603,7 @@ public class HashJoinOperator
                 PrimitiveArrayPool arrayPool,
                 int expectedSize,
                 boolean keyOnlyBuild,
-                boolean capInitialHash,
+                GenericJoinIndexFactory.InitialHashBuildAdmission initialBuild,
                 boolean groupedHashTable,
                 boolean lazyDuplicateSlotState,
                 boolean implicitSequentialRowReferences,
@@ -4646,6 +4646,7 @@ public class HashJoinOperator
             this.expectedBuildRows = expectedSize;
             this.directRangeBuild = directRangeBuild;
             this.boundedDirectRangeAdmission = boundedDirectRangeAdmission || directRangeBuild;
+            boolean capInitialHash = initialBuild.capHash();
             int initialExpectedSize = capInitialHash ? Math.min(expectedSize, policy.initialHashExpectedCap()) : expectedSize;
             int capacity = 16;
             while (capacity < initialExpectedSize / LOAD_FACTOR) {
@@ -4680,7 +4681,7 @@ public class HashJoinOperator
             if (policy.debugJoinIndex() && directRangeBuild) {
                 System.err.printf("[direct-range-build] expected=%d%n", expectedSize);
             }
-            if (capInitialHash || directRangeBuild) {
+            if (initialBuild.directBuild() || directRangeBuild) {
                 int directCapacity = policy.directRangeBuildInitialCapacity();
                 if (directRangeBuild) {
                     long required = Math.min((long) policy.maxDirectBuildKey(), (long) expectedSize + 1);
@@ -4894,7 +4895,7 @@ public class HashJoinOperator
                 }
                 long key = values.value(position);
                 long rowReference = rowReferenceBase + position;
-                if (key < 0 || key >= policy.maxDirectBuildKey()) {
+                if (!directBuild.isActive() || !admitsDirectRangeKey(key)) {
                     addRow(key, rowReference);
                     continue;
                 }
@@ -4918,7 +4919,7 @@ public class HashJoinOperator
 
         private void addCompressedDirectRangeRow(long key, long rowReference)
         {
-            if (key < 0 || key >= policy.maxDirectBuildKey()) {
+            if (!directBuild.isActive() || !admitsDirectRangeKey(key)) {
                 addRow(key, rowReference);
                 return;
             }
@@ -6377,10 +6378,14 @@ public class HashJoinOperator
                 maxKey = key;
             }
             if (directBuild.isActive()) {
-                if (key >= 0 && key < policy.maxDirectBuildKey() &&
-                        (!boundedDirectRangeAdmission || key + 1 <= directRangeAdmissionLimit())) {
+                if (admitsDirectRangeKey(key)) {
                     addDirectRangeRow((int) key, rowReference);
                     return;
+                }
+                if (policy.debugJoinIndex()) {
+                    System.err.println("[direct-range-fallback] expected=%d observed=%d distinct=%d key=%d capacity=%d budget=%d".formatted(
+                            expectedBuildRows, directBuild.rowCount(), buildCardinality.distinctKeyCount(), key,
+                            directBuild.capacity(), directRangeAdmissionLimit()));
                 }
                 materializeDirectRangeBuildAsHash();
             }
@@ -6417,6 +6422,12 @@ public class HashJoinOperator
             }
             // Append at the tail to preserve insertion (FIFO) order within a key.
             rows.link(hashTable.append(slot, ordinal), ordinal);
+        }
+
+        private boolean admitsDirectRangeKey(long key)
+        {
+            return key >= 0 && key < policy.maxDirectBuildKey() &&
+                    (!boundedDirectRangeAdmission || key + 1 <= directRangeAdmissionLimit());
         }
 
         private long directRangeAdmissionLimit()

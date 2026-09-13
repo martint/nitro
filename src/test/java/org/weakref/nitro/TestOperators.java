@@ -7557,6 +7557,77 @@ public class TestOperators
     }
 
     @Test
+    void testCappedHashJoinRejectsSampledImpossibleDirectBuild()
+    {
+        try (EngineResources resources = EngineResources.createDefault(0);
+                Allocator queryAllocator = new Allocator(resources)) {
+            long initialBytes = resources.primitiveArrays().allocatedBytes();
+            Operator probe = new ConstantTableOperator(
+                    queryAllocator,
+                    2,
+                    List.of(row(0L, 10L), row(1_000_003L, 20L), row(-7L, 30L), row(2_000_006L, 0L), row(null, 40L)));
+            Operator build = new ConstantTableOperator(
+                    queryAllocator,
+                    2,
+                    List.of(
+                            row(0L, 10L), row(0L, 11L), row(0L, 12L), row(0L, 13L),
+                            row(1_000_003L, 20L), row(1_000_003L, 21L), row(1_000_003L, 22L), row(1_000_003L, 23L),
+                            row(-7L, 30L), row(-7L, 31L), row(-7L, 32L), row(-7L, 33L),
+                            row(null, 40L), row(null, 41L), row(null, 42L), row(null, 43L)));
+            assertThat(operator(new HashJoinOperator(queryAllocator, probe, 0, build, 0, longNotEqual(1, 1))))
+                    .matchesExactly(List.of(
+                            row(0L, 10L, 0L, 11L),
+                            row(0L, 10L, 0L, 12L),
+                            row(0L, 10L, 0L, 13L),
+                            row(1_000_003L, 20L, 1_000_003L, 21L),
+                            row(1_000_003L, 20L, 1_000_003L, 22L),
+                            row(1_000_003L, 20L, 1_000_003L, 23L),
+                            row(-7L, 30L, -7L, 31L),
+                            row(-7L, 30L, -7L, 32L),
+                            row(-7L, 30L, -7L, 33L)));
+            assertThat(resources.primitiveArrays().allocatedBytes() - initialBytes).isLessThan(1L << 20);
+        }
+    }
+
+    @Test
+    void testCompressedJoinBuildFallsBackWithinBatch()
+    {
+        for (int stride : new int[] {1, 2}) {
+            try (EngineResources resources = EngineResources.createDefault(0);
+                    Allocator queryAllocator = new Allocator(resources)) {
+                long initialBytes = resources.primitiveArrays().allocatedBytes();
+                long[] logicalKeys = {1_000_003, 1_000_003, -7, -7, 2, 2, 0, 0};
+                long[] keys = new long[logicalKeys.length * stride];
+                boolean[] nulls = new boolean[keys.length];
+                for (int position = 0; position < keys.length; position++) {
+                    keys[position] = position % stride == 0 ? logicalKeys[position / stride] : Long.MAX_VALUE;
+                    nulls[position] = position / stride >= 6;
+                }
+                Mask selection = Mask.all(keys.length);
+                selection.retainIf(position -> position % stride == 0);
+                // The following batch crosses the default filter-collection row limit, so construction uses
+                // the compressed batch loop after the duplicate prefix has established its direct state.
+                int repeatedRows = 1 << 16;
+                Operator build = new TableOperator(1, List.of(
+                        TableOperator.Page.values(repeatedRows, new Vector[] {new I64Vector(new long[repeatedRows])}, Mask.all(repeatedRows)),
+                        new TableOperator.Page(keys.length,
+                                new Streams[] {Streams.ofValuesAndNulls(new I64Vector(keys), new BooleanVector(nulls))},
+                                selection)));
+                Operator probe = new ConstantTableOperator(queryAllocator, 1,
+                        List.of(row(0L), row(1_000_003L), row(-7L), row(2L), row(99L), row((Object) null)));
+                List<Row> expected = new ArrayList<>();
+                for (int position = 0; position < repeatedRows; position++) {
+                    expected.add(row(0L));
+                }
+                expected.addAll(List.of(row(1_000_003L), row(1_000_003L), row(-7L), row(-7L), row(2L), row(2L)));
+                assertThat(operator(new HashJoinOperator(queryAllocator, probe, 0, build, 0).withOutputs(0)))
+                        .matchesExactly(expected);
+                assertThat(resources.primitiveArrays().allocatedBytes() - initialBytes).isLessThan(8L << 20);
+            }
+        }
+    }
+
+    @Test
     void testHashJoinDirectRangeBuildPreservesMultipleSparseDuplicateGroups()
     {
         assertThat(operator(

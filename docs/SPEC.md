@@ -654,6 +654,13 @@ Hash joins and semi-join membership likewise reject keys that would require a ro
 Build state and prepared membership are task-owned capabilities shareable across compatible probe drivers. Join output
 preserves mappings and encodings when this avoids copies and satisfies ownership.
 
+Capping initial hash allocation does not establish that a direct index can represent the build. A bounded sample
+may avoid speculative direct construction when a selected, non-null key proves it exceeds that representation's
+existing capability. Absence of such a witness is only provisional admission; later insertion retains exact fallback.
+This proof must not silently substitute a narrower density budget for an otherwise valid direct domain. Compressed
+batch insertion honors its existing admission budget and observes any direct-to-hash transition within the batch
+before accessing direct storage again.
+
 Dynamic filtering has one logical lifecycle: build evidence becomes a published immutable constraint with exact
 semantics and bounded representation. Nitro operators and connector/source capabilities may consume it. The source may
 use row-group statistics, page indexes, dictionaries, bloom filters, or value-level filtering; the join retains exact
