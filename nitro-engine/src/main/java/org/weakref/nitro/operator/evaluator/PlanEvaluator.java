@@ -81,6 +81,7 @@ import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.PrimitiveIterator;
 import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
@@ -2037,7 +2038,8 @@ public final class PlanEvaluator
                     length,
                     ErrorVector::new);
             fillFalseBoolean(errors, Mask.all(length), length);
-            for (int position : errorMask) {
+            for (PrimitiveIterator.OfInt selectedPositionIterator = errorMask.iterator(); selectedPositionIterator.hasNext(); ) {
+                int position = selectedPositionIterator.nextInt();
                 ErrorValue error = ErrorVectors.errorAt(source, position);
                 if (error != null) {
                     errors.setError(position, error);
@@ -2051,7 +2053,8 @@ public final class PlanEvaluator
         }
 
         BooleanVector errors = fillFalseBoolean(null, Mask.all(length), length);
-        for (int position : errorMask) {
+        for (PrimitiveIterator.OfInt selectedPositionIterator = errorMask.iterator(); selectedPositionIterator.hasNext(); ) {
+            int position = selectedPositionIterator.nextInt();
             errors.values()[position] = true;
         }
         return errors;
@@ -2147,7 +2150,8 @@ public final class PlanEvaluator
             return null;
         }
 
-        for (int position : fullMask) {
+        for (PrimitiveIterator.OfInt selectedPositionIterator = fullMask.iterator(); selectedPositionIterator.hasNext(); ) {
+            int position = selectedPositionIterator.nextInt();
             Vector source = trueMask.contains(position) ? trueVector : falseMask.contains(position) ? falseVector : null;
             if (source != null) {
                 target = source.copySinglePositionInto(allocator, allocationContext, target, position, position, fullMask.size());
@@ -2269,7 +2273,8 @@ public final class PlanEvaluator
 
     private static boolean recordDictionaryBranchChoices(int[] ids, Mask mask, byte[] choices, byte branch)
     {
-        for (int position : mask) {
+        for (PrimitiveIterator.OfInt selectedPositionIterator = mask.iterator(); selectedPositionIterator.hasNext(); ) {
+            int position = selectedPositionIterator.nextInt();
             int domain = ids[position];
             byte previous = choices[domain];
             if (previous != 0 && previous != branch) {
@@ -2352,7 +2357,8 @@ public final class PlanEvaluator
             return merged;
         }
 
-        for (int position : mask) {
+        for (PrimitiveIterator.OfInt selectedPositionIterator = mask.iterator(); selectedPositionIterator.hasNext(); ) {
+            int position = selectedPositionIterator.nextInt();
             merged.values()[position] = readOptionalBoolean(parentStream, position) || readOptionalBoolean(childStream, position);
         }
         return merged;
@@ -2366,7 +2372,8 @@ public final class PlanEvaluator
                 ErrorVector.class,
                 mask.size(),
                 ErrorVector::new);
-        for (int position : mask) {
+        for (PrimitiveIterator.OfInt selectedPositionIterator = mask.iterator(); selectedPositionIterator.hasNext(); ) {
+            int position = selectedPositionIterator.nextInt();
             boolean parentError = readOptionalBoolean(parentStream, position);
             boolean childError = readOptionalBoolean(childStream, position);
             ErrorValue error = parentError
@@ -2390,7 +2397,8 @@ public final class PlanEvaluator
     {
         BooleanVector target = VectorAccess.writableBooleanVector(allocator, allocationContext, existing, length);
         if (target instanceof ErrorVector errors) {
-            for (int position : mask) {
+            for (PrimitiveIterator.OfInt selectedPositionIterator = mask.iterator(); selectedPositionIterator.hasNext(); ) {
+                int position = selectedPositionIterator.nextInt();
                 errors.clearError(position);
             }
             return target;
@@ -2399,7 +2407,8 @@ public final class PlanEvaluator
             Arrays.fill(target.values(), 0, mask.size(), false);
         }
         else {
-            for (int position : mask) {
+            for (PrimitiveIterator.OfInt selectedPositionIterator = mask.iterator(); selectedPositionIterator.hasNext(); ) {
+                int position = selectedPositionIterator.nextInt();
                 target.values()[position] = false;
             }
         }
@@ -2512,7 +2521,8 @@ public final class PlanEvaluator
                     ErrorVector.class,
                     source.length(),
                     ErrorVector::new);
-            for (int position : mask) {
+            for (PrimitiveIterator.OfInt selectedPositionIterator = mask.iterator(); selectedPositionIterator.hasNext(); ) {
+                int position = selectedPositionIterator.nextInt();
                 ErrorValue error = ErrorVectors.errorAt(source, position);
                 if (error != null) {
                     target.setError(position, error);
@@ -2535,7 +2545,8 @@ public final class PlanEvaluator
                     Math.max(source.length(), mask.size()),
                     I64Vector::new);
             VectorAccess.LongValues values = VectorAccess.longValues(source);
-            for (int position : mask) {
+            for (PrimitiveIterator.OfInt selectedPositionIterator = mask.iterator(); selectedPositionIterator.hasNext(); ) {
+                int position = selectedPositionIterator.nextInt();
                 target.values()[position] = values.value(position);
             }
             return target;
@@ -2547,7 +2558,8 @@ public final class PlanEvaluator
                 target.values()[position] = compactTarget.values()[position];
             }
             VectorAccess.LongValues values = VectorAccess.longValues(source);
-            for (int position : mask) {
+            for (PrimitiveIterator.OfInt selectedPositionIterator = mask.iterator(); selectedPositionIterator.hasNext(); ) {
+                int position = selectedPositionIterator.nextInt();
                 target.values()[position] = values.value(position);
             }
             allocator.release(allocationContext, compactTarget);
@@ -2938,7 +2950,8 @@ public final class PlanEvaluator
         int trueCount = 0;
         int nullCount = 0;
         int errorCount = 0;
-        for (int position : mask) {
+        for (PrimitiveIterator.OfInt selectedPositionIterator = mask.iterator(); selectedPositionIterator.hasNext(); ) {
+            int position = selectedPositionIterator.nextInt();
             if (isError(errors, position)) {
                 errorPositions[errorCount++] = position;
             }
@@ -2970,7 +2983,8 @@ public final class PlanEvaluator
             boolean[] dictionaryMatches = evaluateLongDictionaryDomain(dictionary.values(), domain);
             if (dictionaryMatches != null) {
                 int[] ids = dictionary.ids();
-                for (int position : mask) {
+                for (PrimitiveIterator.OfInt selectedPositionIterator = mask.iterator(); selectedPositionIterator.hasNext(); ) {
+                    int position = selectedPositionIterator.nextInt();
                     if (!isError(errors, position) && !isNull(nulls, position) && dictionaryMatches[ids[position]]) {
                         positions[count++] = position;
                     }
@@ -2981,7 +2995,8 @@ public final class PlanEvaluator
         }
 
         VectorAccess.LongValues longValues = VectorAccess.longValues(values);
-        for (int position : mask) {
+        for (PrimitiveIterator.OfInt selectedPositionIterator = mask.iterator(); selectedPositionIterator.hasNext(); ) {
+            int position = selectedPositionIterator.nextInt();
             if (!isError(errors, position) && !isNull(nulls, position) && domain.test(longValues.value(position))) {
                 positions[count++] = position;
             }
@@ -3052,7 +3067,8 @@ public final class PlanEvaluator
         int nullCount = 0;
         int errorCount = 0;
 
-        for (int position : mask) {
+        for (PrimitiveIterator.OfInt selectedPositionIterator = mask.iterator(); selectedPositionIterator.hasNext(); ) {
+            int position = selectedPositionIterator.nextInt();
             if (isError(errors, position)) {
                 errorPositions[errorCount++] = position;
             }
@@ -3086,7 +3102,8 @@ public final class PlanEvaluator
         Mask result = allocator.allocateUninitializedSparseMask(allocationContext, trueCount, mask.size());
         int[] truePositions = result.positionsArrayForOverwrite(trueCount);
         int outputIndex = 0;
-        for (int position : mask) {
+        for (PrimitiveIterator.OfInt selectedPositionIterator = mask.iterator(); selectedPositionIterator.hasNext(); ) {
+            int position = selectedPositionIterator.nextInt();
             if (isError(errors, position)) {
                 continue;
             }
@@ -3117,7 +3134,8 @@ public final class PlanEvaluator
         Mask result = allocator.allocateUninitializedSparseMask(allocationContext, falseCount, mask.size());
         int[] falsePositions = result.positionsArrayForOverwrite(falseCount);
         int outputIndex = 0;
-        for (int position : mask) {
+        for (PrimitiveIterator.OfInt selectedPositionIterator = mask.iterator(); selectedPositionIterator.hasNext(); ) {
+            int position = selectedPositionIterator.nextInt();
             if (isError(errors, position)) {
                 continue;
             }
@@ -3135,7 +3153,8 @@ public final class PlanEvaluator
     private int countTrueRows(Vector values, Vector nulls, Vector errors, Mask mask)
     {
         int trueCount = 0;
-        for (int position : mask) {
+        for (PrimitiveIterator.OfInt selectedPositionIterator = mask.iterator(); selectedPositionIterator.hasNext(); ) {
+            int position = selectedPositionIterator.nextInt();
             if (isError(errors, position)) {
                 continue;
             }
@@ -3152,7 +3171,8 @@ public final class PlanEvaluator
     private int countFalseRows(Vector values, Vector nulls, Vector errors, Mask mask)
     {
         int falseCount = 0;
-        for (int position : mask) {
+        for (PrimitiveIterator.OfInt selectedPositionIterator = mask.iterator(); selectedPositionIterator.hasNext(); ) {
+            int position = selectedPositionIterator.nextInt();
             if (isError(errors, position)) {
                 continue;
             }
@@ -3652,14 +3672,16 @@ public final class PlanEvaluator
 
             int selectedCount = 0;
             if (nulls == null) {
-                for (int position : mask) {
+                for (PrimitiveIterator.OfInt selectedPositionIterator = mask.iterator(); selectedPositionIterator.hasNext(); ) {
+                    int position = selectedPositionIterator.nextInt();
                     if (nestedMatches[nestedIds[ids[position]]] == selectMatches) {
                         selectedCount++;
                     }
                 }
             }
             else {
-                for (int position : mask) {
+                for (PrimitiveIterator.OfInt selectedPositionIterator = mask.iterator(); selectedPositionIterator.hasNext(); ) {
+                    int position = selectedPositionIterator.nextInt();
                     if (!nulls.value(position) && nestedMatches[nestedIds[ids[position]]] == selectMatches) {
                         selectedCount++;
                     }
@@ -3669,14 +3691,16 @@ public final class PlanEvaluator
             int[] positions = new int[selectedCount];
             int outputIndex = 0;
             if (nulls == null) {
-                for (int position : mask) {
+                for (PrimitiveIterator.OfInt selectedPositionIterator = mask.iterator(); selectedPositionIterator.hasNext(); ) {
+                    int position = selectedPositionIterator.nextInt();
                     if (nestedMatches[nestedIds[ids[position]]] == selectMatches) {
                         positions[outputIndex++] = position;
                     }
                 }
             }
             else {
-                for (int position : mask) {
+                for (PrimitiveIterator.OfInt selectedPositionIterator = mask.iterator(); selectedPositionIterator.hasNext(); ) {
+                    int position = selectedPositionIterator.nextInt();
                     if (!nulls.value(position) && nestedMatches[nestedIds[ids[position]]] == selectMatches) {
                         positions[outputIndex++] = position;
                     }
@@ -3700,14 +3724,16 @@ public final class PlanEvaluator
 
             int selectedCount = 0;
             if (nulls == null) {
-                for (int position : mask) {
+                for (PrimitiveIterator.OfInt selectedPositionIterator = mask.iterator(); selectedPositionIterator.hasNext(); ) {
+                    int position = selectedPositionIterator.nextInt();
                     if (innerMatches[innerIds[nestedIds[ids[position]]]] == selectMatches) {
                         selectedCount++;
                     }
                 }
             }
             else {
-                for (int position : mask) {
+                for (PrimitiveIterator.OfInt selectedPositionIterator = mask.iterator(); selectedPositionIterator.hasNext(); ) {
+                    int position = selectedPositionIterator.nextInt();
                     if (!nulls.value(position) && innerMatches[innerIds[nestedIds[ids[position]]]] == selectMatches) {
                         selectedCount++;
                     }
@@ -3717,14 +3743,16 @@ public final class PlanEvaluator
             int[] positions = new int[selectedCount];
             int outputIndex = 0;
             if (nulls == null) {
-                for (int position : mask) {
+                for (PrimitiveIterator.OfInt selectedPositionIterator = mask.iterator(); selectedPositionIterator.hasNext(); ) {
+                    int position = selectedPositionIterator.nextInt();
                     if (innerMatches[innerIds[nestedIds[ids[position]]]] == selectMatches) {
                         positions[outputIndex++] = position;
                     }
                 }
             }
             else {
-                for (int position : mask) {
+                for (PrimitiveIterator.OfInt selectedPositionIterator = mask.iterator(); selectedPositionIterator.hasNext(); ) {
+                    int position = selectedPositionIterator.nextInt();
                     if (!nulls.value(position) && innerMatches[innerIds[nestedIds[ids[position]]]] == selectMatches) {
                         positions[outputIndex++] = position;
                     }
@@ -3744,14 +3772,16 @@ public final class PlanEvaluator
 
             int selectedCount = 0;
             if (nulls == null) {
-                for (int position : mask) {
+                for (PrimitiveIterator.OfInt selectedPositionIterator = mask.iterator(); selectedPositionIterator.hasNext(); ) {
+                    int position = selectedPositionIterator.nextInt();
                     if (dictionaryMatches[ids[position]] == selectMatches) {
                         selectedCount++;
                     }
                 }
             }
             else {
-                for (int position : mask) {
+                for (PrimitiveIterator.OfInt selectedPositionIterator = mask.iterator(); selectedPositionIterator.hasNext(); ) {
+                    int position = selectedPositionIterator.nextInt();
                     if (!nulls.value(position) && dictionaryMatches[ids[position]] == selectMatches) {
                         selectedCount++;
                     }
@@ -3761,14 +3791,16 @@ public final class PlanEvaluator
             int[] positions = new int[selectedCount];
             int outputIndex = 0;
             if (nulls == null) {
-                for (int position : mask) {
+                for (PrimitiveIterator.OfInt selectedPositionIterator = mask.iterator(); selectedPositionIterator.hasNext(); ) {
+                    int position = selectedPositionIterator.nextInt();
                     if (dictionaryMatches[ids[position]] == selectMatches) {
                         positions[outputIndex++] = position;
                     }
                 }
             }
             else {
-                for (int position : mask) {
+                for (PrimitiveIterator.OfInt selectedPositionIterator = mask.iterator(); selectedPositionIterator.hasNext(); ) {
+                    int position = selectedPositionIterator.nextInt();
                     if (!nulls.value(position) && dictionaryMatches[ids[position]] == selectMatches) {
                         positions[outputIndex++] = position;
                     }
@@ -3797,14 +3829,16 @@ public final class PlanEvaluator
 
         int selectedCount = 0;
         if (nulls == null) {
-            for (int position : mask) {
+            for (PrimitiveIterator.OfInt selectedPositionIterator = mask.iterator(); selectedPositionIterator.hasNext(); ) {
+                int position = selectedPositionIterator.nextInt();
                 if (dictionaryMatches[ids[position]] == selectMatches) {
                     selectedCount++;
                 }
             }
         }
         else {
-            for (int position : mask) {
+            for (PrimitiveIterator.OfInt selectedPositionIterator = mask.iterator(); selectedPositionIterator.hasNext(); ) {
+                int position = selectedPositionIterator.nextInt();
                 if (!nulls.value(position) && dictionaryMatches[ids[position]] == selectMatches) {
                     selectedCount++;
                 }
@@ -3814,14 +3848,16 @@ public final class PlanEvaluator
         int[] positions = new int[selectedCount];
         int outputIndex = 0;
         if (nulls == null) {
-            for (int position : mask) {
+            for (PrimitiveIterator.OfInt selectedPositionIterator = mask.iterator(); selectedPositionIterator.hasNext(); ) {
+                int position = selectedPositionIterator.nextInt();
                 if (dictionaryMatches[ids[position]] == selectMatches) {
                     positions[outputIndex++] = position;
                 }
             }
         }
         else {
-            for (int position : mask) {
+            for (PrimitiveIterator.OfInt selectedPositionIterator = mask.iterator(); selectedPositionIterator.hasNext(); ) {
+                int position = selectedPositionIterator.nextInt();
                 if (!nulls.value(position) && dictionaryMatches[ids[position]] == selectMatches) {
                     positions[outputIndex++] = position;
                 }
@@ -3845,7 +3881,8 @@ public final class PlanEvaluator
         int[] positions = null;
         int selectedCount = 0;
         if (nulls == null) {
-            for (int position : mask) {
+            for (PrimitiveIterator.OfInt selectedPositionIterator = mask.iterator(); selectedPositionIterator.hasNext(); ) {
+                int position = selectedPositionIterator.nextInt();
                 if (dictionaryMatchStatus(matchByValueId, nestedValues, nestedIds[ids[position]], inputs) == selectedStatus) {
                     if (!allSelected) {
                         positions = ensurePositionCapacity(positions, selectedCount, mask.count());
@@ -3862,7 +3899,8 @@ public final class PlanEvaluator
             }
         }
         else {
-            for (int position : mask) {
+            for (PrimitiveIterator.OfInt selectedPositionIterator = mask.iterator(); selectedPositionIterator.hasNext(); ) {
+                int position = selectedPositionIterator.nextInt();
                 if (!nulls.value(position) && dictionaryMatchStatus(matchByValueId, nestedValues, nestedIds[ids[position]], inputs) == selectedStatus) {
                     if (!allSelected) {
                         positions = ensurePositionCapacity(positions, selectedCount, mask.count());
@@ -3956,7 +3994,8 @@ public final class PlanEvaluator
         int[] positions = null;
         int selectedCount = 0;
         if (nulls == null) {
-            for (int position : mask) {
+            for (PrimitiveIterator.OfInt selectedPositionIterator = mask.iterator(); selectedPositionIterator.hasNext(); ) {
+                int position = selectedPositionIterator.nextInt();
                 if (dictionaryMatchStatus(matchByValueId, values, ids[position], inputs) == selectedStatus) {
                     if (!allSelected) {
                         positions = ensurePositionCapacity(positions, selectedCount, mask.count());
@@ -3973,7 +4012,8 @@ public final class PlanEvaluator
             }
         }
         else {
-            for (int position : mask) {
+            for (PrimitiveIterator.OfInt selectedPositionIterator = mask.iterator(); selectedPositionIterator.hasNext(); ) {
+                int position = selectedPositionIterator.nextInt();
                 if (!nulls.value(position) && dictionaryMatchStatus(matchByValueId, values, ids[position], inputs) == selectedStatus) {
                     if (!allSelected) {
                         positions = ensurePositionCapacity(positions, selectedCount, mask.count());
@@ -4009,7 +4049,8 @@ public final class PlanEvaluator
         int[] positions = null;
         int selectedCount = 0;
         if (nulls == null) {
-            for (int position : mask) {
+            for (PrimitiveIterator.OfInt selectedPositionIterator = mask.iterator(); selectedPositionIterator.hasNext(); ) {
+                int position = selectedPositionIterator.nextInt();
                 if (dictionaryMatchStatus(matchByValueId, values, ids[position], inputs) == selectedStatus) {
                     if (!allSelected) {
                         positions = ensurePositionCapacity(positions, selectedCount, mask.count());
@@ -4026,7 +4067,8 @@ public final class PlanEvaluator
             }
         }
         else {
-            for (int position : mask) {
+            for (PrimitiveIterator.OfInt selectedPositionIterator = mask.iterator(); selectedPositionIterator.hasNext(); ) {
+                int position = selectedPositionIterator.nextInt();
                 if (!nulls.value(position) && dictionaryMatchStatus(matchByValueId, values, ids[position], inputs) == selectedStatus) {
                     if (!allSelected) {
                         positions = ensurePositionCapacity(positions, selectedCount, mask.count());
@@ -4058,7 +4100,8 @@ public final class PlanEvaluator
             return positions;
         }
         int index = 0;
-        for (int position : mask) {
+        for (PrimitiveIterator.OfInt selectedPositionIterator = mask.iterator(); selectedPositionIterator.hasNext(); ) {
+            int position = selectedPositionIterator.nextInt();
             if (index == selectedCount) {
                 break;
             }

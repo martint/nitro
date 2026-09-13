@@ -3058,6 +3058,43 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testSparseErrorMergeExpandsBeyondCachedIntegerPositions()
+    {
+        int size = 512;
+        ErrorValue diagnostic = new ErrorValue("test", 23, "SELECTED", "USER_ERROR", "selected branch");
+        boolean[] condition = new boolean[size];
+        ErrorVector whenTrue = new ErrorVector(size);
+        boolean[] whenFalse = new boolean[size];
+        for (int position = 0; position < size; position++) {
+            condition[position] = position % 2 == 0;
+            whenTrue.setError(position, diagnostic);
+            whenFalse[position] = position % 3 == 0;
+        }
+        Variable merged = new Variable(0);
+        Reference mergedErrors = new Reference(merged, Stream.ERRORS);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(merged,
+                        new org.weakref.nitro.operator.evaluator.ir.Merge(
+                                new ReferenceMask(new Reference(new Input(0), Stream.VALUES)),
+                                new Reference(new Input(1), Stream.ERRORS),
+                                new Reference(new Input(2), Stream.ERRORS)), AllMask.ALL)),
+                List.of(mergedErrors));
+        try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
+            PlanEvaluator evaluator = planEvaluator(plan, new PrimitiveRegistry(), inputResolver(Map.of(
+                    new Reference(new Input(0), Stream.VALUES), new BooleanVector(condition),
+                    new Reference(new Input(1), Stream.ERRORS), whenTrue,
+                    new Reference(new Input(2), Stream.ERRORS), new BooleanVector(whenFalse))), allocator);
+            for (Mask mask : List.of(Mask.sparse(new int[] {129, 255, 300, 511}, size), Mask.all(size))) {
+                ErrorVector errors = (ErrorVector) evaluator.evaluate(mergedErrors, mask).get(Stream.ERRORS);
+                for (int position : mask) {
+                    assertThat(errors.values()[position]).isEqualTo(condition[position] || whenFalse[position]);
+                    assertThat(errors.error(position)).isEqualTo(condition[position] ? diagnostic : null);
+                }
+            }
+        }
+    }
+
+    @Test
     void testMergeOfValuesCanProjectSiblingErrors()
     {
         AtomicReference<Set<Stream>> trueRequestedStreams = new AtomicReference<>(Set.of());
