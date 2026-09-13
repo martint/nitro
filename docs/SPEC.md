@@ -795,6 +795,9 @@ points. Mid-stream re-adaptation resists oscillation.
 Specialization can generate expression loops, grouping layouts, hash/probe kernels, comparators, decoders, and state
 updates. Generated code derives from interfaces and physical layouts—not function names, queries, tables, or fixed SQL
 arities. Adaptive mechanisms report admission, strategy, transitions, and achieved reduction.
+Shared admission counters remain observable after an early report: subsequent reports publish newly accumulated
+evidence, without double-counting observations shared across operator instances. An early empty snapshot must not
+freeze the final diagnostics at zero.
 
 Persistent-key generation specializes one exact physical layout: its ordered direct fields, product-presence
 boundaries, source carriers, source partitioning into canonical lanes, nullable ancestors, constant projection

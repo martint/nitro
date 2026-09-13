@@ -202,4 +202,5 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | [0119](0119-reevaluate-grouped-tag-kernels-on-wide-sql-probes.md) | Reevaluate grouped tag kernels on wide SQL probes | rejected |
 | [0120](0120-specialize-provider-owned-primitive-literals.md) | Specialize provider-owned primitive literals | accepted |
 | [0121](0121-discard-unrequested-mapped-scalar-errors.md) | Reject unrequested-error scratch removal after SQL qualification | rejected |
+| [0122](0122-report-late-admission-observations.md) | Report late admission observations | accepted |
 | [0123](0123-use-primitive-iteration-for-conditional-merges.md) | Reject conditional-merge traversal revisions after SQL qualification | rejected |
