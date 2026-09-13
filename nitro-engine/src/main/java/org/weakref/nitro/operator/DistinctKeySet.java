@@ -808,6 +808,12 @@ final class DistinctKeySet
             }
             if (bitmapPages == null && (!policy.adaptivePagedLongBitmap() || size >= policy.pagedLongBitmapMinKeys())) {
                 pooledKeys.enableVectorTags(addCalls);
+                if (!pooledKeys.vectorTagsEnabled() && mask.all() && VectorAccess.isAllFalseNulls(nulls[0])) {
+                    int count = pooledKeys.addScalarBatch(keyValues, 0, mask.size(), distinctPositions);
+                    addCalls += mask.size();
+                    size += count;
+                    return count;
+                }
                 return addFinalHashBatch(keyValues, keyNulls, mask, distinctPositions);
             }
             int count = 0;

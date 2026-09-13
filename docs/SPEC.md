@@ -752,6 +752,12 @@ stages. Page/Block boundaries are not ownership boundaries inside an island.
 
 ## 16. Adaptivity and specialization
 
+Physical tables may overlap independent initial lookups in bounded batches. Prefetched slot contents are only
+evidence of a hit after exact key equality; an apparent miss must be resolved against earlier insertions in the same
+batch. Growth invalidates slot coordinates. Batching preserves first-occurrence order, selection/null semantics,
+and the existing representation-admission and growth rules. Scratch storage is allocator-owned and accounted;
+batch size is immutable instance policy, not query-specific knowledge or an enabling feature flag.
+
 Adaptive choices respond to measured physical facts: mask density, selectivity, domain size, run length, cardinality,
 novelty, key width, state footprint, ordering, and locality.
 

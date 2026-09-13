@@ -1504,6 +1504,47 @@ class TestDistinctKeySet
     }
 
     @Test
+    void testScalarHashBatchAcrossCarriersMasksAndNulls()
+    {
+        long[] initial = new long[4096];
+        for (int position = 0; position < initial.length; position++) {
+            initial[position] = (long) position << 40;
+        }
+        DistinctKeySet keys = DistinctKeySet.create(new Vector[] {new I64Vector(initial)}, arrayPool, codeGeneration, DistinctKeySetPolicy.defaults(), adaptiveLongGroupingPolicy, flatKeyTablePolicy);
+        try {
+            int[] positions = new int[initial.length];
+            assertThat(keys.addBatch(new Vector[] {new I64Vector(initial)}, new Vector[] {null}, Mask.all(initial.length), positions))
+                    .isEqualTo(initial.length);
+            assertThat(keys.addBatch(new Vector[] {new I64Vector(initial)}, new Vector[] {null}, Mask.all(initial.length), positions))
+                    .isZero();
+
+            int count = keys.addBatch(
+                    new Vector[] {new I32Vector(new int[] {-3, -2, -1, 1, 0, 1})},
+                    new Vector[] {null},
+                    Mask.all(6),
+                    positions);
+            assertThat(Arrays.copyOf(positions, count)).containsExactly(0, 1, 2, 3);
+
+            count = keys.addBatch(
+                    new Vector[] {DictionaryVector.wrap(new int[] {0, 1, 0, 2}, new I64Vector(new long[] {7, 8, 9}))},
+                    new Vector[] {new BooleanVector(new boolean[] {false, false, true, false})},
+                    Mask.sparse(new int[] {0, 2, 3}, 4),
+                    positions);
+            assertThat(Arrays.copyOf(positions, count)).containsExactly(0, 3);
+
+            count = keys.addBatch(
+                    new Vector[] {new RleVector(new int[] {64}, new I64Vector(new long[] {8}))},
+                    new Vector[] {null},
+                    Mask.all(64),
+                    positions);
+            assertThat(Arrays.copyOf(positions, count)).containsExactly(0);
+        }
+        finally {
+            keys.releaseBuffers();
+        }
+    }
+
+    @Test
     void testDenseBitmapBatchFallsBackExactlyWhenDomainBecomesSparse()
     {
         long[] denseKeys = new long[4_096];

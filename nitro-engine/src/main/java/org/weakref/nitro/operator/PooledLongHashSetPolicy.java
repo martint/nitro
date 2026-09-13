@@ -24,6 +24,7 @@ public record PooledLongHashSetPolicy(
         int maximumVectorKeyNewKeyPercent,
         int tagGroupBits,
         int keyGroupBits,
+        int scalarBatchSize,
         boolean debug)
 {
     public PooledLongHashSetPolicy
@@ -43,11 +44,14 @@ public record PooledLongHashSetPolicy(
         if (keyGroupBits != 64 && keyGroupBits != 128 && keyGroupBits != 256 && keyGroupBits != 512) {
             throw new IllegalArgumentException("keyGroupBits must be 64, 128, 256, or 512");
         }
+        if (scalarBatchSize <= 0) {
+            throw new IllegalArgumentException("scalarBatchSize must be positive");
+        }
     }
 
     public static PooledLongHashSetPolicy defaults()
     {
-        return new PooledLongHashSetPolicy(0.75f, false, supportsVectorKeyGroups(), 5, 50, 128, preferredKeyGroupBits(), false);
+        return new PooledLongHashSetPolicy(0.75f, false, supportsVectorKeyGroups(), 5, 50, 128, preferredKeyGroupBits(), 64, false);
     }
 
     public static PooledLongHashSetPolicy fromSystemProperties()
@@ -62,6 +66,7 @@ public record PooledLongHashSetPolicy(
                 Integer.getInteger("nitro.distinct.scalarLongVectorKeyMaxNewKeyPercent", 50),
                 Integer.getInteger("nitro.distinct.scalarLongTagGroupBits", 128),
                 Integer.getInteger("nitro.distinct.scalarLongKeyGroupBits", preferredKeyGroupBits()),
+                64,
                 Boolean.getBoolean("nitro.debug.scalarLongDistinct"));
     }
 

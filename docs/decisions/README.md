@@ -184,3 +184,4 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | [0102](0102-measure-cumulative-jvm-allocations.md) | Measure cumulative JVM allocations across thread lifetimes | accepted |
 | [0103](0103-publish-native-filter-domains-with-primitive-position-ordering.md) | Publish native filter domains with primitive position ordering | accepted |
 | [0104](0104-integrate-correlated-filtering-without-an-opt-in.md) | Integrate validated filter optimizations without opt-ins | accepted |
+| [0105](0105-batch-exact-scalar-table-lookups.md) | Batch exact scalar table lookups | accepted |

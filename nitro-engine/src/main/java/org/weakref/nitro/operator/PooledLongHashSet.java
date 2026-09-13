@@ -18,6 +18,7 @@ import jdk.incubator.vector.LongVector;
 import jdk.incubator.vector.VectorOperators;
 import jdk.incubator.vector.VectorSpecies;
 import org.weakref.nitro.data.PrimitiveArrayPool;
+import org.weakref.nitro.data.VectorAccess;
 
 import java.util.Arrays;
 import java.util.function.LongConsumer;
@@ -38,6 +39,9 @@ final class PooledLongHashSet
     private boolean vectorKeys;
     private long[] keys;
     private byte[] tags;
+    private long[] batchKeys;
+    private long[] initialKeys;
+    private int[] batchSlots;
     private int mask;
     private int maxFill;
     private int size;
@@ -124,7 +128,11 @@ final class PooledLongHashSet
 
     private boolean addScalar(long key)
     {
-        int slot = hash(key) & mask;
+        return addScalarAtSlot(key, hash(key) & mask);
+    }
+
+    private boolean addScalarAtSlot(long key, int slot)
+    {
         long current = keys[slot];
         while (current != 0 && current != key) {
             slot = (slot + 1) & mask;
@@ -142,6 +150,51 @@ final class PooledLongHashSet
             rehash(keys.length << 1);
         }
         return true;
+    }
+
+    int addScalarBatch(VectorAccess.LongValues values, int startPosition, int endPosition, int[] distinctPositions)
+    {
+        if (vectorTags) {
+            throw new IllegalStateException("Scalar batch insertion requires the scalar table layout");
+        }
+        if (batchKeys == null) {
+            batchKeys = arrayPool.borrowLongs(policy.scalarBatchSize());
+            initialKeys = arrayPool.borrowLongs(policy.scalarBatchSize());
+            batchSlots = arrayPool.borrowInts(policy.scalarBatchSize());
+        }
+        int distinctCount = 0;
+        for (int start = startPosition; start < endPosition; ) {
+            int count = Math.min(policy.scalarBatchSize(), endPosition - start);
+            int initialMask = mask;
+            for (int index = 0; index < count; index++) {
+                long key = values.value(start + index);
+                batchKeys[index] = key;
+                batchSlots[index] = hash(key) & initialMask;
+            }
+            for (int index = 0; index < count; index++) {
+                initialKeys[index] = keys[batchSlots[index]];
+            }
+            for (int index = 0; index < count; index++) {
+                long key = batchKeys[index];
+                addCalls++;
+                if (key == 0) {
+                    if (!containsZero) {
+                        containsZero = true;
+                        size++;
+                        distinctPositions[distinctCount++] = start + index;
+                    }
+                    continue;
+                }
+                // Existing hits stay valid across insertion and growth. Misses must observe earlier inserts in
+                // this batch, and growth invalidates their original slot coordinates.
+                if (initialKeys[index] != key &&
+                        addScalarAtSlot(key, initialMask == mask ? batchSlots[index] : hash(key) & mask)) {
+                    distinctPositions[distinctCount++] = start + index;
+                }
+            }
+            start += count;
+        }
+        return distinctCount;
     }
 
     boolean contains(long key)
@@ -169,7 +222,10 @@ final class PooledLongHashSet
     long retainedBytes()
     {
         return (keys == null ? 0 : (long) keys.length * Long.BYTES) +
-                (tags == null ? 0 : tags.length);
+                (tags == null ? 0 : tags.length) +
+                (batchKeys == null ? 0 : (long) batchKeys.length * Long.BYTES) +
+                (initialKeys == null ? 0 : (long) initialKeys.length * Long.BYTES) +
+                (batchSlots == null ? 0 : (long) batchSlots.length * Integer.BYTES);
     }
 
     void enableVectorTags()
@@ -247,8 +303,14 @@ final class PooledLongHashSet
         }
         arrayPool.release(keys);
         arrayPool.release(tags);
+        arrayPool.release(batchKeys);
+        arrayPool.release(initialKeys);
+        arrayPool.release(batchSlots);
         keys = null;
         tags = null;
+        batchKeys = null;
+        initialKeys = null;
+        batchSlots = null;
         mask = 0;
         maxFill = 0;
         size = 0;
