@@ -278,6 +278,7 @@ public class HashJoinOperator
     private boolean singleMatchProbe;
     private boolean singleMatchPositionProbe;
     private boolean compactSingleMatchProbe;
+    private boolean rangeMatchProbe;
     private boolean outputSingleMatch;
     private int currentMatchRangeStart;
     private long currentMatchRef;
@@ -846,7 +847,7 @@ public class HashJoinOperator
                     prepareOuterProbeChunk();
                 }
                 if (preparedOuterIndex >= preparedOuterCount) {
-                    outerRemaining = 0;
+                    // Compacted range lookup may retire a whole chunk of misses before later chunks match.
                     continue;
                 }
                 currentOuterPosition = preparedOuterRange ? preparedOuterRangeStart + preparedOuterIndex : preparedOuterPositions[preparedOuterIndex];
@@ -861,6 +862,10 @@ public class HashJoinOperator
                                 : preparedSingleRefs[preparedOuterIndex];
                         currentMatchCount = currentMatchRef == NO_MATCH_ROW_REFERENCE ? 0 : 1;
                     }
+                }
+                else if (rangeMatchProbe) {
+                    currentMatchRangeStart = preparedRangeStarts[preparedOuterIndex];
+                    currentMatchCount = preparedRangeCounts[preparedOuterIndex];
                 }
                 else {
                     currentMatches = preparedOuterMatches[preparedOuterIndex];
@@ -891,6 +896,9 @@ public class HashJoinOperator
                 long rowReference;
                 if (singleMatchPositionProbe) {
                     rowReference = JoinRowReference.pack(joinIndex.singleMatchPositionBatchIndex(), currentMatchPosition);
+                }
+                else if (rangeMatchProbe) {
+                    rowReference = joinIndex.rowRangeReference(currentMatchRangeStart + currentMatchIndex);
                 }
                 else {
                     rowReference = singleMatchProbe ? currentMatchRef : currentMatches.getLong(currentMatchIndex);
@@ -1127,6 +1135,7 @@ public class HashJoinOperator
         preparedOuterCount = Math.min(currentOuterMask.count() - currentOuterMaskIndex, executionPolicy.maxBatchRows());
         preparedOuterIndex = 0;
         singleMatchProbe = joinIndex.supportsSingleMatchRefs();
+        rangeMatchProbe = !probeOuterJoin && !singleMatchProbe && joinIndex.supportsRowRanges();
         singleMatchPositionProbe = singleMatchProbe && !probeOuterJoin && joinIndex.supportsSingleMatchPositions();
         preparedOuterRange = singleMatchPositionProbe && currentOuterMask.all() && joinIndex.supportsSingleMatchPositionRange();
         if (preparedOuterRange) {
@@ -1150,6 +1159,16 @@ public class HashJoinOperator
         }
         else if (singleMatchProbe) {
             joinIndex.matchSingleRows(currentOuterJoinValues, currentOuterJoinNulls, currentOuterJoinHasNulls, preparedOuterPositions, preparedOuterCount, preparedSingleRefs);
+        }
+        else if (rangeMatchProbe) {
+            int inputCount = preparedOuterCount;
+            preparedOuterCount = joinIndex.matchRowRanges(
+                    currentOuterJoinValues, currentOuterJoinNulls, currentOuterJoinHasNulls,
+                    preparedOuterPositions, inputCount, preparedRangeStarts, preparedRangeCounts);
+            if (preparedOuterCount < 0) {
+                throw new IllegalStateException("Compacted range index stopped supporting row ranges");
+            }
+            outerRemaining -= inputCount - preparedOuterCount;
         }
         else {
             joinIndex.matchRows(currentOuterJoinValues, currentOuterJoinNulls, currentOuterJoinHasNulls, preparedOuterPositions, preparedOuterCount, preparedOuterMatches, preparedSingleMatches());
@@ -1820,8 +1839,10 @@ public class HashJoinOperator
         if (fastInnerFilterBatch != null) {
             if (singleLongJoinFilter != null &&
                     fastInnerOrderedIntFilterValues != null &&
-                    currentMatches instanceof ChainLongList chain) {
-                int storageIndex = chain.storageIndex(matchIndex);
+                    (rangeMatchProbe || currentMatches instanceof ChainLongList)) {
+                int storageIndex = rangeMatchProbe
+                        ? currentMatchRangeStart + matchIndex
+                        : ((ChainLongList) currentMatches).storageIndex(matchIndex);
                 if (storageIndex >= 0) {
                     boolean outerNull = currentFastOuterFilterCached
                             ? currentFastOuterFilterNull
@@ -5055,6 +5076,12 @@ public class HashJoinOperator
         public void copyRowRange(int start, long[] output, int outputOffset, int length)
         {
             compactedRows.copy(start, output, outputOffset, length);
+        }
+
+        @Override
+        public long rowRangeReference(int position)
+        {
+            return compactedRows.reference(position);
         }
 
         private void matchLongRowsNullFree(long[] values, int[] positions, int positionCount, LongList[] matches, SingleLongList[] singleMatches)

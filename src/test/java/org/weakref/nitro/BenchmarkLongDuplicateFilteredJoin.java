@@ -41,9 +41,10 @@ import java.util.concurrent.TimeUnit;
 import static org.weakref.nitro.function.scalar.builtin.JoinFilterFunctions.longNotEqual;
 
 /**
- * The duplicate single-long join plus residual inequality shape used repeatedly by TPC-H q21. Every probe key has
- * four build rows and the residual predicate removes the row with the same payload value. This exercises the common
- * duplicate-match cursor and ordinary output producer without introducing query-specific semantics.
+ * The duplicate single-long join plus residual inequality shape used repeatedly by TPC-H q21. Each matching probe key has
+ * four build rows and the residual predicate removes the row with the same payload value. A varied match rate exercises the common
+ * duplicate-match cursor and ordinary output producer without introducing query-specific semantics. Key spacing
+ * distinguishes a dense direct-index domain from a wide domain requiring the hashed duplicate representation.
  */
 @State(Scope.Thread)
 @Fork(2)
@@ -66,6 +67,12 @@ public class BenchmarkLongDuplicateFilteredJoin
     @Param({"factory", "registry"})
     public String filterImplementation;
 
+    @Param({"0", "10", "100"})
+    public int matchingProbePercent;
+
+    @Param({"1", "1000003"})
+    public long keyStride;
+
     @Setup
     public void setup()
     {
@@ -75,7 +82,7 @@ public class BenchmarkLongDuplicateFilteredJoin
         long[] probeKeys = new long[PROBE_ROWS];
         long[] probePayload = new long[PROBE_ROWS];
         for (int row = 0; row < PROBE_ROWS; row++) {
-            probeKeys[row] = row % DISTINCT_KEYS;
+            probeKeys[row] = (row % 100 < matchingProbePercent ? row % DISTINCT_KEYS : DISTINCT_KEYS + row) * keyStride;
             probePayload[row] = row % BUILD_ROWS_PER_KEY;
         }
 
@@ -84,14 +91,14 @@ public class BenchmarkLongDuplicateFilteredJoin
         for (int key = 0; key < DISTINCT_KEYS; key++) {
             for (int value = 0; value < BUILD_ROWS_PER_KEY; value++) {
                 int row = key * BUILD_ROWS_PER_KEY + value;
-                buildKeys[row] = key;
+                buildKeys[row] = key * keyStride;
                 buildPayload[row] = value;
             }
         }
         probePages = pages(probeKeys, probePayload);
         buildPages = pages(buildKeys, buildPayload);
 
-        long expected = (long) PROBE_ROWS * (BUILD_ROWS_PER_KEY - 1);
+        long expected = (long) PROBE_ROWS * matchingProbePercent / 100 * (BUILD_ROWS_PER_KEY - 1);
         long actual = joinAndCount();
         if (actual != expected) {
             throw new IllegalStateException("join row count mismatch: expected=" + expected + ", actual=" + actual);

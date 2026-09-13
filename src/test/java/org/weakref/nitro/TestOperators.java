@@ -7625,6 +7625,44 @@ public class TestOperators
     }
 
     @Test
+    void testFilteredHashJoinRangesContinueAfterMissChunksAndAcrossOutputBatches()
+    {
+        for (boolean firstMatchOnly : List.of(false, true)) {
+            int batchRows = org.weakref.nitro.operator.HashJoinExecutionPolicy.defaults().maxBatchRows();
+            List<Row> probeRows = new ArrayList<>();
+            for (int index = 0; index < batchRows + 3; index++) {
+                probeRows.add(row(10_000_000L + index, 7L));
+            }
+            probeRows.add(row(null, 7L));
+            probeRows.add(row(1_000_000L, 7L));
+            probeRows.add(row(2_000_000L, 12L));
+            List<Row> buildRows = new ArrayList<>();
+            buildRows.add(row(1_000_000L, 7L));
+            List<Row> expected = new ArrayList<>();
+            for (int index = 0; index < batchRows + 3; index++) {
+                buildRows.add(row(1_000_000L, 8L));
+                if (!firstMatchOnly || index == 0) {
+                    expected.add(row(1_000_000L, 7L, 1_000_000L, 8L));
+                }
+            }
+            buildRows.add(row(2_000_000L, 12L));
+            buildRows.add(row(2_000_000L, 14L));
+            expected.add(row(2_000_000L, 12L, 2_000_000L, 14L));
+            HashJoinOperator join = new HashJoinOperator(
+                    allocator,
+                    new ConstantTableOperator(allocator, 2, probeRows),
+                    0,
+                    new ConstantTableOperator(allocator, 2, buildRows),
+                    0,
+                    longNotEqual(1, 1));
+            if (firstMatchOnly) {
+                join.withOutputSingleMatch();
+            }
+            assertThat(operator(join)).matchesExactly(expected);
+        }
+    }
+
+    @Test
     void testHashJoinDirectSelectedSingleMatchesSkipSparseProbeMisses()
     {
         List<Row> probeRows = new ArrayList<>();

@@ -105,6 +105,11 @@ final class CompactedJoinRows
         System.arraycopy(orderedReferences, start, output, outputOffset, length);
     }
 
+    long reference(int position)
+    {
+        return orderedReferences[position];
+    }
+
     int[] buildIntPayload(
             VectorAccess.LongValues values,
             long[] directValues,

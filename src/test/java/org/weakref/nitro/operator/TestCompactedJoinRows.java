@@ -57,6 +57,9 @@ class TestCompactedJoinRows
         long[] copy = new long[2];
         compactedRows.copy(firstStart, copy, 0, 2);
         assertThat(copy).containsExactly(first, second);
+        assertThat(compactedRows.reference(firstStart)).isEqualTo(first);
+        assertThat(compactedRows.reference(firstStart + 1)).isEqualTo(second);
+        assertThat(compactedRows.reference(secondStart)).isEqualTo(third);
         assertThat(compactedRows.rows(secondStart, 1, new SingleLongList(), new ChainLongList()).getLong(0)).isEqualTo(third);
         long[] values = new long[12];
         values[7] = 70;

@@ -130,6 +130,12 @@ abstract class JoinIndex
         throw new UnsupportedOperationException();
     }
 
+    /// Reads a reference in the same ordinal space as row ranges and any ordered filter payload.
+    long rowRangeReference(int position)
+    {
+        throw new UnsupportedOperationException();
+    }
+
     boolean supportsSingleMatchRefs()
     {
         return false;
