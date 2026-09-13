@@ -16,6 +16,10 @@ package org.weakref.nitro.operator;
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.data.PrimitiveArrayPool;
 
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Random;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 class TestLongJoinHashTable
@@ -55,6 +59,89 @@ class TestLongJoinHashTable
         assertThat(table.isAllocated()).isFalse();
         assertThat(table.hasDuplicates()).isTrue();
         assertThat(arrayPool.retainedBytes()).isGreaterThan(0);
+    }
+
+    @Test
+    void verifiesKeysAcrossWordHalvesAndWrappedGroups()
+    {
+        PrimitiveArrayPool arrayPool = new PrimitiveArrayPool(1024, 0);
+        LongJoinHashTable table = new LongJoinHashTable(arrayPool, 64, true, true, EMPTY);
+        try {
+            long[] keys = new long[33];
+            int count = 0;
+            for (long key = 0; count < keys.length; key++) {
+                // Select an initially empty group at the end of the array before inserting any key.
+                if (~table.findSlotForInsert(key) == 48) {
+                    keys[count++] = key;
+                }
+            }
+            for (int index = 0; index < keys.length - 1; index++) {
+                int slot = ~table.findSlotForInsert(keys[index]);
+                assertThat(slot).isEqualTo((48 + index) & 63);
+                table.initialize(slot, keys[index], index);
+            }
+            for (int index = 0; index < keys.length - 1; index++) {
+                int slot = table.findSlotForInsert(keys[index]);
+                assertThat(slot).isNotNegative();
+                assertThat(table.head(slot)).isEqualTo(index);
+            }
+            assertThat(table.findSlotForInsert(keys[32])).isEqualTo(~16);
+        }
+        finally {
+            table.release();
+        }
+    }
+
+    @Test
+    void matchesReferenceAcrossGrowthAndDirtyPoolReuse()
+    {
+        PrimitiveArrayPool arrayPool = new PrimitiveArrayPool(1024, 0);
+        Random random = new Random(8191);
+        long[] keys = new long[4096];
+        keys[0] = 0;
+        keys[1] = Long.MIN_VALUE;
+        keys[2] = Long.MAX_VALUE;
+        for (int index = 3; index < keys.length; index++) {
+            keys[index] = random.nextLong();
+        }
+        for (boolean grouped : new boolean[] {false, true}) {
+            for (int reuse = 0; reuse < 2; reuse++) {
+                LongJoinHashTable table = new LongJoinHashTable(arrayPool, 16, grouped, true, EMPTY);
+                Map<Long, Integer> expected = new HashMap<>();
+                try {
+                    for (int index = 0; index < keys.length; index++) {
+                        long key = keys[index];
+                        int slot = table.findSlotForInsert(key);
+                        assertThat(slot).isNegative();
+                        table.initialize(~slot, key, index);
+                        expected.put(key, index);
+                        table.growIfNeeded(expected.size());
+                        assertThat(table.head(table.findSlot(key))).isEqualTo(index);
+                    }
+                    for (long key : keys) {
+                        int slot = table.findSlotForInsert(key);
+                        assertThat(slot).isNotNegative();
+                        assertThat(table.key(slot)).isEqualTo(key);
+                        assertThat(table.head(slot)).isEqualTo(expected.get(key));
+                    }
+                    for (int index = 0; index < keys.length; index++) {
+                        long key = random.nextLong();
+                        int slot = table.findSlotForInsert(key);
+                        Integer head = expected.get(key);
+                        if (head == null) {
+                            assertThat(slot).isNegative();
+                            assertThat(table.isOccupied(~slot)).isFalse();
+                        }
+                        else {
+                            assertThat(table.head(slot)).isEqualTo(head);
+                        }
+                    }
+                }
+                finally {
+                    table.release();
+                }
+            }
+        }
     }
 
     @Test
