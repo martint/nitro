@@ -204,3 +204,4 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | [0121](0121-discard-unrequested-mapped-scalar-errors.md) | Reject unrequested-error scratch removal after SQL qualification | rejected |
 | [0122](0122-report-late-admission-observations.md) | Report late admission observations | accepted |
 | [0123](0123-use-primitive-iteration-for-conditional-merges.md) | Reject conditional-merge traversal revisions after SQL qualification | rejected |
+| [0124](0124-preserve-provider-proven-bound-call-failure-conventions.md) | Preserve provider-proven bound-call failure conventions | accepted |
