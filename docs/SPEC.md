@@ -725,6 +725,10 @@ encoding-preserving serialization within the callback; neither the view, its bas
 reachable afterward. Semantic transformations such as `CHAR` normalization and unsupported vector layouts require
 the ordinary owning adaptation path. The source batch closes only after the synchronous consumer returns.
 
+A sparse borrowed base exposes only the prefix through the highest selected position. The original mask-domain
+width is not a requirement that every vector retain storage for an unused suffix. Selected values must exist;
+incidental pooled-array capacity must not hide a mismatch between advertised host positions and physical storage.
+
 This optimization does not move partition assignment, buffering, serialization, backpressure, replication, skew,
 encryption, or output accounting into Nitro. Nitro core remains independent of host `Page`/`Block` classes. The host
 boundary reports borrowed versus owning adaptations and their conversion and append costs.
