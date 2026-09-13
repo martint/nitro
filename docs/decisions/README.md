@@ -194,3 +194,4 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | [0112](0112-probe-grouped-join-tags-with-packed-word-masks.md) | Probe grouped join tags with packed-word masks | rejected |
 | [0113](0113-bound-direct-index-growth-for-capped-hash-builds.md) | Avoid provably unusable direct build state | accepted |
 | [0114](0114-reduce-only-the-first-empty-join-tag.md) | Reduce only the first empty join tag | rejected |
+| [0115](0115-bind-single-match-hash-dispatch-per-batch.md) | Bind single-match hash dispatch per batch | rejected |
