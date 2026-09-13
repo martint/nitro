@@ -63,7 +63,6 @@ public class BenchmarkLongPairDuplicateJoin
     private boolean compactChains;
 
     private EngineResources resources;
-    private Allocator allocator;
     private List<TableOperator.Page> probePages;
     private List<TableOperator.Page> buildPages;
 
@@ -72,7 +71,6 @@ public class BenchmarkLongPairDuplicateJoin
     {
         System.setProperty("nitro.join.compactChains", Boolean.toString(compactChains));
         resources = EngineResources.createDefault();
-        allocator = new Allocator(resources);
 
         long[] probeItem = new long[PROBE_ROWS];
         long[] probeDate = new long[PROBE_ROWS];
@@ -126,10 +124,9 @@ public class BenchmarkLongPairDuplicateJoin
     {
         Operator probe = new TableOperator(3, probePages);
         Operator build = new TableOperator(3, buildPages);
-        Operator join = new HashJoinOperator(allocator, probe, new int[] {0, 1}, build, new int[] {0, 1});
-
         long checksum = 0;
-        try (join) {
+        try (Allocator allocator = new Allocator(resources);
+                Operator join = new HashJoinOperator(allocator, probe, new int[] {0, 1}, build, new int[] {0, 1})) {
             while (join.hasNext()) {
                 try (var batch = join.next()) {
                     Mask mask = batch.borrowMask();

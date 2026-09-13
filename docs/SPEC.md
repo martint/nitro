@@ -866,6 +866,10 @@ Tests assert capabilities and observable invariants. They must not infer archite
 
 ## 18. Performance evidence
 
+Repeated component executions must close their owned allocation domains at the modeled driver/query boundary.
+Closing one operator can return storage to its allocator's pools; it does not close that allocator. A comparison
+must use the same resource lifetime on both sides and reject missing or failed benchmark points.
+
 TPC-H, TPC-DS, ClickBench, and Engine Coverage are macro regression guards. Subject and control use the same SQL, plan
 topology, input files, worker topology, concurrency, heap policy, and query execution order.
 

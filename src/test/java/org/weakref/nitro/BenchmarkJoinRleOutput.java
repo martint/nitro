@@ -24,6 +24,7 @@ import org.openjdk.jmh.annotations.Param;
 import org.openjdk.jmh.annotations.Scope;
 import org.openjdk.jmh.annotations.Setup;
 import org.openjdk.jmh.annotations.State;
+import org.openjdk.jmh.annotations.TearDown;
 import org.openjdk.jmh.annotations.Warmup;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.I64Vector;
@@ -72,6 +73,7 @@ public class BenchmarkJoinRleOutput
     private List<Page> probe;
     private List<Page> build;
     private Allocator allocator;
+    private EngineResources resources;
 
     @Setup
     public void setup()
@@ -112,7 +114,19 @@ public class BenchmarkJoinRleOutput
     @Setup(Level.Invocation)
     public void setupInvocation()
     {
-        allocator = new Allocator(EngineResources.createDefault());
+        resources = EngineResources.createDefault();
+        allocator = new Allocator(resources);
+    }
+
+    @TearDown(Level.Invocation)
+    public void tearDownInvocation()
+    {
+        try {
+            allocator.close();
+        }
+        finally {
+            resources.close();
+        }
     }
 
     @Benchmark

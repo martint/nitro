@@ -60,7 +60,6 @@ public class BenchmarkLongDuplicateFilteredJoin
     private static final int CHUNK = 4096;
 
     private EngineResources resources;
-    private Allocator allocator;
     private List<TableOperator.Page> probePages;
     private List<TableOperator.Page> buildPages;
 
@@ -77,7 +76,6 @@ public class BenchmarkLongDuplicateFilteredJoin
     public void setup()
     {
         resources = EngineResources.createDefault();
-        allocator = new Allocator(resources);
 
         long[] probeKeys = new long[PROBE_ROWS];
         long[] probePayload = new long[PROBE_ROWS];
@@ -116,16 +114,9 @@ public class BenchmarkLongDuplicateFilteredJoin
     {
         Operator probe = new TableOperator(2, probePages);
         Operator build = new TableOperator(2, buildPages);
-        Operator join = new HashJoinOperator(
-                allocator,
-                probe,
-                0,
-                build,
-                0,
-                filter());
-
         long rows = 0;
-        try (join) {
+        try (Allocator allocator = new Allocator(resources);
+                Operator join = new HashJoinOperator(allocator, probe, 0, build, 0, filter())) {
             while (join.hasNext()) {
                 try (var batch = join.next()) {
                     Mask mask = batch.borrowMask();

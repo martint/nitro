@@ -55,7 +55,6 @@ public class BenchmarkLongPairUniqueJoin
     private static final int CHUNK = 4096;
 
     private EngineResources resources;
-    private Allocator allocator;
     private List<TableOperator.Page> probePages;
     private List<TableOperator.Page> buildPages;
     private long expectedChecksum;
@@ -64,7 +63,6 @@ public class BenchmarkLongPairUniqueJoin
     public void setup()
     {
         resources = EngineResources.createDefault();
-        allocator = new Allocator(resources);
 
         long[] buildItem = new long[BUILD_ROWS];
         long[] buildOrder = new long[BUILD_ROWS];
@@ -108,10 +106,9 @@ public class BenchmarkLongPairUniqueJoin
     {
         Operator probe = new TableOperator(3, probePages);
         Operator build = new TableOperator(3, buildPages);
-        Operator join = new HashJoinOperator(allocator, probe, new int[] {0, 1}, build, new int[] {0, 1});
-
         long checksum = 0;
-        try (join) {
+        try (Allocator allocator = new Allocator(resources);
+                Operator join = new HashJoinOperator(allocator, probe, new int[] {0, 1}, build, new int[] {0, 1})) {
             while (join.hasNext()) {
                 try (var batch = join.next()) {
                     Mask mask = batch.borrowMask();
