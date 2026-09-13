@@ -3042,6 +3042,8 @@ class FlatKeyLayout
         Arrays.fill(fieldBoolean, null);
         Arrays.fill(fieldBinaryHashes, null);
         Arrays.fill(fieldNullAccess, null);
+        Arrays.fill(batchFieldNullFree, false);
+        Arrays.fill(batchFieldAllNull, false);
     }
 
     void prepareBatchMask(Mask mask)
@@ -4312,6 +4314,8 @@ class FlatKeyLayout
             Arrays.fill(fieldBoolean, null);
             Arrays.fill(fieldBinaryHashes, null);
             Arrays.fill(fieldNullAccess, null);
+            Arrays.fill(batchFieldNullFree, false);
+            Arrays.fill(batchFieldAllNull, false);
         }
         batchAccessorsReady = false;
         batchNormalizedIntKeyEligible = false;

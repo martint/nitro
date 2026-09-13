@@ -501,6 +501,10 @@ State is allocator-owned and may use fixed-width, segmented, recursive, dictiona
 Function-specific aggregation-state vector types belong with function implementations, not in the core vector
 vocabulary.
 
+A physical key layout's batch binding governs metadata queries as well as hashing, writing and comparison.
+Specialized layouts must expose their bound null semantics through the shared capability, including when a caller
+does not resupply input vectors. Ending a binding invalidates its encoding and nullability proofs.
+
 A provider may bind exact reversible single-position updates for overlapping window frames. The window driver adds
 newly entering positions and removes positions leaving a monotonically advancing frame; the provider retains all
 function, null, and state semantics. A provider may decline the capability, in which case the driver reinitializes

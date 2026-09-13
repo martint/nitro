@@ -148,6 +148,20 @@ final class BigintPairFlatKeyLayout
     }
 
     @Override
+    boolean inputFieldNull(int fieldIndex, Vector[] nulls, int position)
+    {
+        if (firstKeyAccessor == null) {
+            return super.inputFieldNull(fieldIndex, nulls, position);
+        }
+        // Metadata consumers must share the batch proof used by hashing and record writes.
+        return switch (fieldIndex) {
+            case 0 -> (batchNullability & 1) != 0 && firstNullAccessor.value(position);
+            case 1 -> (batchNullability & 2) != 0 && secondNullAccessor.value(position);
+            default -> throw new IndexOutOfBoundsException("fieldIndex: " + fieldIndex);
+        };
+    }
+
+    @Override
     public long hash(Vector[] values, Vector[] nulls, int position)
     {
         // Hot path: direct calls into hoisted accessors. No Vector[] indexing, no OVS switch,

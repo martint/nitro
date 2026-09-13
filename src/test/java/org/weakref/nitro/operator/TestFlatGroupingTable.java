@@ -95,6 +95,73 @@ class TestFlatGroupingTable
     private final FlatKeyTablePolicy flatKeyTablePolicy = engineResources.operatorResources().flatKeyTablePolicy();
 
     @Test
+    void testInputNullProofsExpireWithBatchBinding()
+    {
+        Vector[] values = {new I64Vector(new long[] {10, 20})};
+        Vector[] nonNull = {new RleVector(new int[] {2}, new BooleanVector(new boolean[] {false}))};
+        Vector[] allNull = {new RleVector(new int[] {2}, new BooleanVector(new boolean[] {true}))};
+        Vector[] mixedNulls = {new BooleanVector(new boolean[] {false, true})};
+        FlatKeyLayout layout = FlatKeyLayout.tryCreate(values, true, arrayPool, codeGeneration, flatKeyTablePolicy);
+        try {
+            for (Vector[] batchNulls : List.of(nonNull, allNull)) {
+                layout.beginBatch(values, batchNulls);
+                assertThat(layout.inputFieldNull(0, null, 0)).isEqualTo(batchNulls == allNull);
+                assertThat(layout.inputFieldNull(0, null, 1)).isEqualTo(batchNulls == allNull);
+                layout.endBatch();
+
+                assertThat(layout.inputFieldNull(0, mixedNulls, 0)).isFalse();
+                assertThat(layout.inputFieldNull(0, mixedNulls, 1)).isTrue();
+                assertThat(layout.inputFieldNull(0, null, 1)).isFalse();
+            }
+            layout.beginBatch(values, allNull);
+            layout.releaseBuffers();
+            assertThat(layout.inputFieldNull(0, mixedNulls, 0)).isFalse();
+            assertThat(layout.inputFieldNull(0, mixedNulls, 1)).isTrue();
+        }
+        finally {
+            layout.endBatch();
+            layout.releaseBuffers();
+        }
+    }
+
+    @Test
+    void testSpecializedLayoutHonorsBoundInputNullMetadata()
+    {
+        Vector[] values = {new I64Vector(new long[] {10, 20, 30, 40}), new I64Vector(new long[] {1, 2, 3, 4})};
+        Vector[] nullable = {
+                new RleVector(new int[] {2, 2}, new BooleanVector(new boolean[] {false, true})),
+                DictionaryVector.wrap(new int[] {0, 1, 0, 1}, new BooleanVector(new boolean[] {true, false}))};
+        Vector[] nonNull = {
+                new RleVector(new int[] {4}, new BooleanVector(new boolean[] {false})),
+                new BooleanVector(4)};
+        FlatKeyLayout layout = BigintPairFlatKeyLayout.create(values, true, arrayPool, codeGeneration, flatKeyTablePolicy, List.of());
+        try {
+            assertThat(layout.inputFieldNull(0, nullable, 2)).isTrue();
+            layout.beginBatch(values, nullable);
+            assertThat(layout.inputFieldNull(0, null, 2)).isTrue();
+            assertThat(layout.inputFieldNull(0, null, 0)).isFalse();
+            assertThat(layout.inputFieldNull(1, null, 0)).isTrue();
+            assertThat(layout.inputFieldNull(1, null, 1)).isFalse();
+            layout.endBatch();
+            assertThat(layout.inputFieldNull(1, nullable, 0)).isTrue();
+
+            layout.beginBatch(values, nonNull);
+            for (int position = 0; position < values[0].length(); position++) {
+                assertThat(layout.inputFieldNull(0, null, position)).isFalse();
+                assertThat(layout.inputFieldNull(1, null, position)).isFalse();
+            }
+            layout.endBatch();
+            layout.beginBatch(values, nullable);
+            assertThat(layout.inputFieldNull(0, null, 3)).isTrue();
+            assertThat(layout.inputFieldNull(1, null, 2)).isTrue();
+        }
+        finally {
+            layout.endBatch();
+            layout.releaseBuffers();
+        }
+    }
+
+    @Test
     void testStoredGroupNullMetadataAcrossEncodings()
     {
         Vector[] values = {new I64Vector(new long[] {10, 20, 30, 40}), new I64Vector(new long[] {1, 2, 3, 4})};

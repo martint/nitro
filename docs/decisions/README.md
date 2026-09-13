@@ -190,3 +190,4 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | [0108](0108-pool-non-escaping-partition-remapping-scratch.md) | Pool non-escaping partition remapping scratch | accepted |
 | [0109](0109-encode-constant-initial-average-counts.md) | Encode constant initial average counts | accepted |
 | [0110](0110-consume-compacted-ranges-through-residual-filters.md) | Consume compacted ranges through residual filters | accepted |
+| [0111](0111-honor-bound-null-metadata-in-specialized-layouts.md) | Honor bound null metadata in specialized key layouts | accepted |
