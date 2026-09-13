@@ -275,30 +275,35 @@ public final class NativeBatchPartitioner
         return new DictionaryRemapping(ids, dictionaryPositions, dictionarySize);
     }
 
-    private static int remapWithArray(
+    private int remapWithArray(
             DictionaryMapping mapping,
             int[] positions,
             int count,
             int[] dictionaryPositions,
             int[] ids)
     {
-        int[] oldToNew = new int[mapping.baseValues().length()];
-        Arrays.fill(oldToNew, -1);
-        int dictionarySize = 0;
-        for (int outputPosition = 0; outputPosition < count; outputPosition++) {
-            int sourceId = mapping.basePosition(positions[outputPosition]);
-            int compactId = oldToNew[sourceId];
-            if (compactId < 0) {
-                if (dictionarySize == dictionaryPositions.length) {
-                    return -1;
+        int[] oldToNew = allocator.primitiveArrays().borrowInts(mapping.baseValues().length());
+        try {
+            Arrays.fill(oldToNew, -1);
+            int dictionarySize = 0;
+            for (int outputPosition = 0; outputPosition < count; outputPosition++) {
+                int sourceId = mapping.basePosition(positions[outputPosition]);
+                int compactId = oldToNew[sourceId];
+                if (compactId < 0) {
+                    if (dictionarySize == dictionaryPositions.length) {
+                        return -1;
+                    }
+                    compactId = dictionarySize++;
+                    oldToNew[sourceId] = compactId;
+                    dictionaryPositions[compactId] = sourceId;
                 }
-                compactId = dictionarySize++;
-                oldToNew[sourceId] = compactId;
-                dictionaryPositions[compactId] = sourceId;
+                ids[outputPosition] = compactId;
             }
-            ids[outputPosition] = compactId;
+            return dictionarySize;
         }
-        return dictionarySize;
+        finally {
+            allocator.primitiveArrays().release(oldToNew);
+        }
     }
 
     private static int remapWithHashTable(

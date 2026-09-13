@@ -485,6 +485,10 @@ constructing maps or iterators. Provider operations invoked once per logical pos
 outside that loop or use a non-allocating single-value access path; an accessor factory is not itself a per-position
 calling convention.
 
+Temporary domain lookup storage and the output mapping derived from it have separate lifetimes. A partition copier
+may return its non-escaping lookup scratch to the primitive pool after remapping, but published mapping IDs must
+remain valid for every output that shares them, independently of subsequent scratch reuse.
+
 ## 12. Stateful and extensible operators
 
 ### 12.1 Aggregation and window functions

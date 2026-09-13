@@ -19,11 +19,13 @@ import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.core.type.TypeIdentity;
 import org.weakref.nitro.core.type.TypeOperators;
+import org.weakref.nitro.data.AllocationResources;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
@@ -32,14 +34,70 @@ import org.weakref.nitro.execution.EngineResources;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class TestNativeBatchPartitioner
 {
+    @Test
+    void reusesTemporaryRemappingWithoutAliasingPublishedIds()
+    {
+        int[] sourceIds = {7, 7, 9, 7, 9, 9, 7, 9};
+        try (AllocationResources resources = new AllocationResources(new PrimitiveArrayPool(1 << 20, 0), new PrimitiveArrayPool(0, 0));
+                Allocator allocator = new Allocator(resources);
+                Batch source = new Batch(
+                        Mask.all(8),
+                        Output.of(Streams.ofValues(DictionaryVector.wrap(
+                                sourceIds, new I64Vector(new long[16])))))) {
+            int[] scratch = allocator.primitiveArrays().borrowInts(16);
+            Arrays.fill(scratch, 777);
+            allocator.primitiveArrays().release(scratch);
+            NativeBatchPartitioner partitioner = new NativeBatchPartitioner(allocator, 1, 1, new NativeBatchPartitionPolicy(true, 2, 16));
+            List<NativeBatchPartitioner.Partition> first = partitioner.partition(source, new int[8]);
+            try {
+                int[] reused = allocator.primitiveArrays().borrowInts(16);
+                try {
+                    assertThat(reused).isSameAs(scratch);
+                    assertThat(reused[7]).isZero();
+                    assertThat(reused[9]).isOne();
+                    assertThat(reused[0]).isEqualTo(-1);
+                    Arrays.fill(reused, 888);
+                }
+                finally {
+                    allocator.primitiveArrays().release(reused);
+                }
+                List<NativeBatchPartitioner.Partition> second = partitioner.partition(source, new int[8]);
+                try {
+                    for (List<NativeBatchPartitioner.Partition> partitions : List.of(first, second)) {
+                        DictionaryVector output = (DictionaryVector) partitions.getFirst().batch().output(0).borrow(Stream.VALUES);
+                        assertThat(output.ids()).containsExactly(0, 0, 1, 0, 1, 1, 0, 1);
+                        assertThat(output.ids()).isNotSameAs(scratch);
+                    }
+                }
+                finally {
+                    second.forEach(partition -> partition.batch().close());
+                }
+                sourceIds[2] = 16;
+                assertThatThrownBy(() -> partitioner.partition(source, new int[8])).isInstanceOf(IndexOutOfBoundsException.class);
+                int[] afterFailure = allocator.primitiveArrays().borrowInts(16);
+                try {
+                    assertThat(afterFailure).isSameAs(scratch);
+                }
+                finally {
+                    allocator.primitiveArrays().release(afterFailure);
+                }
+            }
+            finally {
+                first.forEach(partition -> partition.batch().close());
+            }
+        }
+    }
+
     @Test
     void preservesReusedDictionaryEncodingInPartitionCopies()
             throws ReflectiveOperationException
