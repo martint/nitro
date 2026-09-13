@@ -197,3 +197,4 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | [0115](0115-bind-single-match-hash-dispatch-per-batch.md) | Bind single-match hash dispatch per batch | rejected |
 | [0116](0116-record-completed-pipeline-timing-evidence.md) | Record completed pipeline timing evidence | accepted |
 | [0117](0117-consume-host-filter-snapshots-without-restarting-waits.md) | Consume host filter snapshots without restarting waits | rejected |
+| [0118](0118-count-host-visible-source-output-once.md) | Count host-visible source output once | accepted |

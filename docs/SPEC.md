@@ -857,6 +857,11 @@ Query-owned reservations and resources must return to baseline at query close.
 Primary metrics are latency, CPU core-seconds, allocated bytes, and peak memory. Reports include absolutes, a fixed
 subject/control ratio, ranges, CPU-seconds per second of latency, geometric-mean suite summaries, and per-query spread.
 
+Each boundary counter has one owner. For host-visible Pages returned by a Nitro source, the host driver's existing
+output accounting is authoritative; an adapter must not also increment those same output rows or bytes. Independent
+Nitro boundary diagnostics remain separate. Driver-level tests compare actual emitted rows/bytes with source output
+and downstream input statistics; a counter mismatch is not by itself evidence of extra physical processing.
+
 Optional structured pipeline timing evidence is exported from completed query statistics after measured iterations
 and profiling stop. It retains per-member/repetition query, stage, task and pipeline identities, dependencies,
 start/end envelopes and cumulative CPU/scheduled/blocked times. Missing timestamps remain null. An envelope is not
