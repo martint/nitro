@@ -195,3 +195,4 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | [0113](0113-bound-direct-index-growth-for-capped-hash-builds.md) | Avoid provably unusable direct build state | accepted |
 | [0114](0114-reduce-only-the-first-empty-join-tag.md) | Reduce only the first empty join tag | rejected |
 | [0115](0115-bind-single-match-hash-dispatch-per-batch.md) | Bind single-match hash dispatch per batch | rejected |
+| [0116](0116-record-completed-pipeline-timing-evidence.md) | Record completed pipeline timing evidence | accepted |

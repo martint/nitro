@@ -857,6 +857,12 @@ Query-owned reservations and resources must return to baseline at query close.
 Primary metrics are latency, CPU core-seconds, allocated bytes, and peak memory. Reports include absolutes, a fixed
 subject/control ratio, ranges, CPU-seconds per second of latency, geometric-mean suite summaries, and per-query spread.
 
+Optional structured pipeline timing evidence is exported from completed query statistics after measured iterations
+and profiling stop. It retains per-member/repetition query, stage, task and pipeline identities, dependencies,
+start/end envelopes and cumulative CPU/scheduled/blocked times. Missing timestamps remain null. An envelope is not
+a continuous execution interval; cumulative times can overlap across drivers and cannot be added to reconstruct
+latency. These diagnostics do not change host scheduling or retrospectively supply evidence for older runs.
+
 Total allocation is measured with a cumulative counter which retains allocations by terminated threads, across the
 same serial query interval on both engines. A sum over currently live threads is not a valid substitute. Unsupported
 accounting or a decreasing counter invalidates allocation evidence rather than reporting zero. Run metadata identifies
