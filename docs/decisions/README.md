@@ -209,3 +209,4 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | [0126](0126-reuse-exact-generated-scalar-bindings.md) | Reject generated scalar binding reuse after SQL qualification | rejected |
 | [0127](0127-preserve-projection-capabilities-through-partial-application.md) | Preserve projection capabilities through partial application | accepted |
 | [0128](0128-clear-selected-errors-in-reused-scalar-outputs.md) | Clear selected errors in reused scalar outputs | accepted |
+| [0129](0129-reject-probes-outside-completed-build-bounds.md) | Reject probes outside completed build bounds | accepted |

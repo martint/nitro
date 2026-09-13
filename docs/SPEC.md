@@ -661,6 +661,10 @@ reports a compatibility provider as native.
 Join algorithms are separate from key semantics. Type bindings and registry functions provide exact hashing,
 comparison, and residual predicates. Physical key layouts may be generated from resolved lanes.
 
+Complete-build bounds over an exact physical key domain may reject impossible probes independently of optional
+bitmap admission. Such bounds are a necessary membership condition, not proof of an in-range match and not a
+logical ordering capability. They must never exclude keys from an incomplete build or overflow at physical endpoints.
+
 A join over a provider-described persistent key layout uses the same generated exact table and physical binder as
 grouping and distinct, including canonical fixed-width lanes and recursive finite products. Build insertion skips
 every row with a null logical key; for a product key, any null descendant makes the join key null even though grouping

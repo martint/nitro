@@ -20,7 +20,7 @@ import java.util.Arrays;
 import static java.util.Objects.requireNonNull;
 
 /**
- * Exact, allocator-owned membership for a sparse bounded long-key range.
+ * Completed-build bounds with optional exact, allocator-owned membership for a sparse long-key range.
  */
 final class SparseLongRangeMembership
 {
@@ -28,8 +28,8 @@ final class SparseLongRangeMembership
     private final PrimitiveArrayPool arrayPool;
 
     private long[] words;
-    private long min;
-    private long max;
+    private long min = Long.MIN_VALUE;
+    private long max = Long.MAX_VALUE;
     private int distinctSize;
     private int range;
 
@@ -41,7 +41,14 @@ final class SparseLongRangeMembership
 
     void build(LongJoinHashTable hashTable, long min, long max, int distinctSize)
     {
-        if (!policy.sparseLongRangeMembership() || !hashTable.isAllocated() || words != null) {
+        if (!hashTable.isAllocated() || words != null) {
+            return;
+        }
+        // A domain too wide for the optional bitmap still proves every key outside these endpoints absent.
+        // Compare endpoints directly when probing: subtracting them can overflow for full-width keys.
+        this.min = min;
+        this.max = max;
+        if (!policy.sparseLongRangeMembership()) {
             return;
         }
         long range = max - min + 1;
@@ -50,8 +57,6 @@ final class SparseLongRangeMembership
                 range < (long) distinctSize * policy.sparseLongRangeMinRatio()) {
             return;
         }
-        this.min = min;
-        this.max = max;
         this.distinctSize = distinctSize;
         this.range = (int) range;
         words = arrayPool.borrowLongs((this.range + Long.SIZE - 1) / Long.SIZE);
@@ -67,6 +72,9 @@ final class SparseLongRangeMembership
 
     boolean contains(long key)
     {
+        if (key < min || key > max) {
+            return false;
+        }
         if (words == null) {
             return true;
         }
@@ -92,5 +100,7 @@ final class SparseLongRangeMembership
     {
         arrayPool.release(words);
         words = null;
+        min = Long.MIN_VALUE;
+        max = Long.MAX_VALUE;
     }
 }
