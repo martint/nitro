@@ -17,6 +17,7 @@ import org.junit.jupiter.api.Test;
 import org.weakref.nitro.core.function.BoundSignature;
 import org.weakref.nitro.core.function.FunctionSemantics;
 import org.weakref.nitro.core.function.NullPropagatingScalarInvocationProvider;
+import org.weakref.nitro.core.function.ScalarFailureMapper;
 import org.weakref.nitro.core.function.ScalarResultWriter;
 import org.weakref.nitro.core.function.ScalarResultWriterFactory;
 import org.weakref.nitro.core.type.TypeBinding;
@@ -689,6 +690,72 @@ final class TestScalarAdapterGenerator
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessage("negative value");
         }
+    }
+
+    @Test
+    void testBoundLiteralMatchesRleArgumentAcrossEncodingsAndMasks()
+            throws ReflectiveOperationException
+    {
+        MethodHandle target = MethodHandles.lookup().findStatic(
+                TestScalarAdapterGenerator.class, "remainder", MethodType.methodType(long.class, long.class, long.class));
+        ErrorValue divisionByZero = new ErrorValue("test", 3, "DIVISION_BY_ZERO", "USER_ERROR", "division by zero");
+        ScalarFailureMapper mapper = failure -> {
+            if (failure instanceof ArithmeticException) {
+                return divisionByZero;
+            }
+            throw failure;
+        };
+        List<Vector> inputs = List.of(
+                new I64Vector(new long[] {Long.MIN_VALUE, -101, 0, 101, Long.MAX_VALUE}),
+                new DictionaryVector(new int[] {2, 0, 1, 2, 0}, new I64Vector(new long[] {-101, 0, 101})),
+                new RleVector(new int[] {5}, new I64Vector(new long[] {-101})));
+        for (long divisor : new long[] {100, 0}) {
+            ScalarAdapterGenerator generator = new ScalarAdapterGenerator();
+            PrimitiveFunction unbound = generator.adapt(
+                    "rle_remainder",
+                    new BoundSignature(LONG, List.of(LONG, LONG)),
+                    new FunctionSemantics(true, Collections.nCopies(2, RETURN_NULL_ON_NULL), false, MAY_FAIL),
+                    new ScalarMethodTarget(target, mapper)).implementation();
+            PrimitiveFunction bound = generator.adapt(
+                    "literal_remainder",
+                    new BoundSignature(LONG, List.of(LONG)),
+                    new FunctionSemantics(true, List.of(RETURN_NULL_ON_NULL), false, MAY_FAIL),
+                    new ScalarMethodTarget(MethodHandles.insertArguments(target, 1, divisor), mapper)).implementation();
+            for (Vector input : inputs) {
+                for (Mask mask : List.of(Mask.all(5), Mask.sparse(new int[] {0, 1, 3}, 5))) {
+                    try (Allocator allocator = new Allocator(createDefault())) {
+                        Streams values = Streams.ofValuesAndNulls(
+                                input, new BooleanVector(new boolean[] {false, true, false, false, false}));
+                        Streams constant = Streams.ofValues(new RleVector(new int[] {5}, new I64Vector(new long[] {divisor})));
+                        PrimitiveExecutionContext context = new PrimitiveExecutionContext(allocator);
+                        Streams unboundResult = unbound.apply(
+                                List.of(values, constant), mask, EnumSet.allOf(Stream.class), Streams.empty(), context);
+                        Streams boundResult = bound.apply(
+                                List.of(values), mask, EnumSet.allOf(Stream.class), Streams.empty(), context);
+                        for (int position : mask) {
+                            boolean isNull = position == 1;
+                            assertThat(VectorAccess.isNull(unboundResult.get(Stream.NULLS), position)).isEqualTo(isNull);
+                            assertThat(VectorAccess.isNull(boundResult.get(Stream.NULLS), position)).isEqualTo(isNull);
+                            boolean fails = !isNull && divisor == 0;
+                            assertThat(((ErrorVector) unboundResult.get(Stream.ERRORS)).error(position))
+                                    .isEqualTo(fails ? divisionByZero : null);
+                            assertThat(((ErrorVector) boundResult.get(Stream.ERRORS)).error(position))
+                                    .isEqualTo(fails ? divisionByZero : null);
+                            if (!isNull && !fails) {
+                                long expected = VectorAccess.longValue(input, position) % divisor;
+                                assertThat(VectorAccess.longValue(unboundResult.values(), position)).isEqualTo(expected);
+                                assertThat(VectorAccess.longValue(boundResult.values(), position)).isEqualTo(expected);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private static long remainder(long value, long divisor)
+    {
+        return value % divisor;
     }
 
     @Test

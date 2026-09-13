@@ -34,6 +34,7 @@ import org.weakref.nitro.core.type.TypeOperators;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.ErrorValue;
 import org.weakref.nitro.data.F64Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
@@ -59,6 +60,7 @@ import java.util.SplittableRandom;
 import java.util.concurrent.TimeUnit;
 
 import static org.weakref.nitro.core.function.FunctionSemantics.ArgumentNullConvention.RETURN_NULL_ON_NULL;
+import static org.weakref.nitro.core.function.FunctionSemantics.FailureConvention.MAY_FAIL;
 import static org.weakref.nitro.core.function.FunctionSemantics.FailureConvention.NEVER_FAILS;
 
 /**
@@ -95,6 +97,7 @@ public class BenchmarkGeneratedScalarAdapters
     private PrimitiveExecutionContext context;
     private Mask mask;
     private List<Streams> binaryInputs;
+    private List<Streams> remainderInputs;
     private List<Streams> compositeInputs;
     private List<Streams> materializedAddInputs;
     private List<Streams> unaryInput;
@@ -103,6 +106,8 @@ public class BenchmarkGeneratedScalarAdapters
     private Streams doubleOutput;
     private PrimitiveFunction nativeAdd;
     private PrimitiveFunction generatedAdd;
+    private PrimitiveFunction generatedRleRemainder;
+    private PrimitiveFunction generatedLiteralRemainder;
     private PrimitiveFunction generatedBoundAdd;
     private PrimitiveFunction generatedCast;
     private PrimitiveFunction generatedBoundCast;
@@ -138,6 +143,9 @@ public class BenchmarkGeneratedScalarAdapters
         binaryInputs = List.of(Streams.ofValues(leftVector), Streams.ofValues(rightVector));
         compositeInputs = List.of(Streams.ofValues(leftVector), Streams.ofValues(rightVector), Streams.ofValues(offsetVector));
         unaryInput = List.of(Streams.ofValues(leftVector));
+        remainderInputs = List.of(
+                Streams.ofValues(leftVector),
+                Streams.ofValues(new RleVector(new int[] {POSITION_COUNT}, new I64Vector(new long[] {100}))));
         int[] binaryOffsets = new int[POSITION_COUNT + 1];
         for (int position = 0; position < POSITION_COUNT; position++) {
             binaryOffsets[position + 1] = binaryOffsets[position] + 8 + position % 57;
@@ -153,6 +161,24 @@ public class BenchmarkGeneratedScalarAdapters
 
         nativeAdd = new HandwrittenBigintAdd();
         ScalarAdapterGenerator generator = new ScalarAdapterGenerator();
+        MethodHandle remainder = MethodHandles.lookup().findStatic(
+                BenchmarkGeneratedScalarAdapters.class,
+                "remainder",
+                MethodType.methodType(long.class, long.class, long.class));
+        generatedRleRemainder = generator.adapt(
+                "generated_rle_remainder",
+                new BoundSignature(LONG, List.of(LONG, LONG)),
+                new FunctionSemantics(true, Collections.nCopies(2, RETURN_NULL_ON_NULL), false, MAY_FAIL),
+                new ScalarMethodTarget(remainder, BenchmarkGeneratedScalarAdapters::mapArithmeticFailure))
+                .implementation();
+        generatedLiteralRemainder = generator.adapt(
+                "generated_literal_remainder",
+                new BoundSignature(LONG, List.of(LONG)),
+                new FunctionSemantics(true, List.of(RETURN_NULL_ON_NULL), false, MAY_FAIL),
+                new ScalarMethodTarget(
+                        MethodHandles.insertArguments(remainder, 1, 100L),
+                        BenchmarkGeneratedScalarAdapters::mapArithmeticFailure))
+                .implementation();
         generatedAdd = generator.adapt(
                 "generated_add",
                 new BoundSignature(LONG, List.of(LONG, LONG)),
@@ -253,6 +279,18 @@ public class BenchmarkGeneratedScalarAdapters
     public Streams generatedAdd()
     {
         return generatedAdd.apply(binaryInputs, mask, VALUES, longOutput, context);
+    }
+
+    @Benchmark
+    public Streams generatedRleRemainder()
+    {
+        return generatedRleRemainder.apply(remainderInputs, mask, VALUES, longOutput, context);
+    }
+
+    @Benchmark
+    public Streams generatedLiteralRemainder()
+    {
+        return generatedLiteralRemainder.apply(unaryInput, mask, VALUES, longOutput, context);
     }
 
     @Benchmark
@@ -391,6 +429,20 @@ public class BenchmarkGeneratedScalarAdapters
     private static long multiply(long left, long right)
     {
         return left * right;
+    }
+
+    private static long remainder(long value, long divisor)
+    {
+        return value % divisor;
+    }
+
+    private static ErrorValue mapArithmeticFailure(Throwable failure)
+            throws Throwable
+    {
+        if (failure instanceof ArithmeticException) {
+            return new ErrorValue("benchmark", 1, "ARITHMETIC_FAILURE", "USER_ERROR", failure.getMessage());
+        }
+        throw failure;
     }
 
     private static long multiplyAdd(long left, long right, long offset)
