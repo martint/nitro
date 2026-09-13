@@ -95,6 +95,47 @@ class TestFlatGroupingTable
     private final FlatKeyTablePolicy flatKeyTablePolicy = engineResources.operatorResources().flatKeyTablePolicy();
 
     @Test
+    void testStoredGroupNullMetadataAcrossEncodings()
+    {
+        Vector[] values = {new I64Vector(new long[] {10, 20, 30, 40}), new I64Vector(new long[] {1, 2, 3, 4})};
+        Vector[] initialNulls = {
+                new RleVector(new int[] {2, 2}, new BooleanVector(new boolean[] {false, false})),
+                new RleVector(new int[] {4}, new BooleanVector(new boolean[] {false}))};
+        Vector[] laterNulls = {
+                new RleVector(new int[] {2, 2}, new BooleanVector(new boolean[] {false, true})),
+                DictionaryVector.wrap(new int[] {0, 1, 0, 1}, new BooleanVector(new boolean[] {true, false}))};
+        FlatKeyLayout layout = FlatKeyLayout.tryCreate(values, true, arrayPool, codeGeneration, flatKeyTablePolicy);
+        FlatGroupingTable table = new FlatGroupingTable(layout, 2, true);
+        try {
+            table.beginBatch(values, initialNulls);
+            assertThat(table.assignGroup(values, initialNulls, 0, 0)).isZero();
+            assertThat(table.fieldHasNull(0)).isFalse();
+            assertThat(table.fieldHasNull(1)).isFalse();
+            table.endBatch();
+
+            table.beginBatch(values, laterNulls);
+            assertThat(table.assignGroup(values, laterNulls, 1, 1)).isEqualTo(1);
+            assertThat(table.fieldHasNull(0)).isFalse();
+            assertThat(table.fieldHasNull(1)).isFalse();
+            assertThat(table.assignGroup(values, laterNulls, 2, 2)).isEqualTo(2);
+            assertThat(table.fieldHasNull(0)).isTrue();
+            assertThat(table.fieldHasNull(1)).isTrue();
+            assertThat(table.fieldNull(2, 0)).isTrue();
+            assertThat(table.fieldNull(2, 1)).isTrue();
+            table.endBatch();
+
+            table.beginBatch(values, initialNulls);
+            assertThat(table.assignGroup(values, initialNulls, 3, 3)).isEqualTo(3);
+            assertThat(table.fieldHasNull(0)).isTrue();
+            assertThat(table.fieldHasNull(1)).isTrue();
+            table.endBatch();
+        }
+        finally {
+            table.releaseBuffers();
+        }
+    }
+
+    @Test
     void testBinaryFlatKeysComposeRegionsWithDictionaryAndRuns()
     {
         BinaryVector base = utf8("padding", "alpha", "beta", "alpha", "tail");
@@ -3935,12 +3976,24 @@ class TestFlatGroupingTable
                 new I64Vector(new long[] {10, 20}),
                 new I64Vector(new long[] {100, 200})};
         FlatKeyLayout layout = FlatKeyLayout.tryCreate(values, true, arrayPool, codeGeneration, flatKeyTablePolicy);
+        FlatGroupingTable table = new FlatGroupingTable(layout, 2, true);
         try {
             assertThat(layout.supportsNormalizedIntKeyShape()).isTrue();
             assertThat(layout.supportsNormalizedRecordWrite()).isTrue();
+            Vector[] nulls = {new RleVector(new int[] {1, 1}, new BooleanVector(new boolean[] {false, true})), null, null};
+            I64Vector groups = new I64Vector(new long[2]);
+            table.beginBatch(values, nulls);
+            assertThat(table.assignNormalizedIntBatch(values, nulls, Mask.all(2), groups, 0)).isEqualTo(2);
+            assertThat(table.normalizedRecordValid(0)).isTrue();
+            assertThat(table.normalizedRecordValid(1)).isTrue();
+            assertThat(table.fieldHasNull(0)).isTrue();
+            assertThat(table.fieldHasNull(1)).isFalse();
+            assertThat(table.fieldHasNull(2)).isFalse();
+            assertThat(table.fieldNull(1, 0)).isTrue();
+            table.endBatch();
         }
         finally {
-            layout.releaseBuffers();
+            table.releaseBuffers();
         }
     }
 
