@@ -35,6 +35,7 @@ import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.data.VectorAllocator;
 
 import java.util.List;
+import java.util.PrimitiveIterator;
 import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
@@ -165,15 +166,21 @@ final class FrameworkManagedScalarFunction
         // This also keeps encoded-domain evaluation safe when the physical domain contains values outside the
         // current logical selection.
         boolean transientErrors = mayFail && invokeTarget && !requestErrors;
+        ErrorVector existingErrors = requestErrors && output != null && output.getOrNull(Stream.ERRORS) instanceof ErrorVector existing ? existing : null;
         ErrorVector errors = requestErrors || transientErrors
                 ? context.allocator().allocateOrGrow(
                         allocationContext,
-                        requestErrors && output != null && output.getOrNull(Stream.ERRORS) instanceof ErrorVector existing ? existing : null,
+                        existingErrors,
                         ErrorVector.class,
                         requiredLength,
                         ErrorVector::new)
                 : null;
         if (errors != null) {
+            // Newly allocated scratch is already cleared by its constructor or allocator reuse. A retained output
+            // (including one copied during growth) can contain earlier independently evaluated positions.
+            if (existingErrors != null) {
+                errors.clearErrors(mask);
+            }
             propagateInputErrors(state, mask, errors);
         }
         if (requestErrors) {
@@ -303,19 +310,11 @@ final class FrameworkManagedScalarFunction
         for (VectorAccess.BooleanValues errors : state.inputErrorValues) {
             hasInputErrors |= errors != null;
         }
-        if (mask.all() && mask.size() == output.length()) {
-            output.markAllFalse();
-            if (!hasInputErrors) {
-                return;
-            }
+        if (!hasInputErrors) {
+            return;
         }
-        for (int position : mask) {
-            if (!mask.all()) {
-                output.clearError(position);
-            }
-            if (!hasInputErrors) {
-                continue;
-            }
+        for (PrimitiveIterator.OfInt positions = mask.iterator(); positions.hasNext(); ) {
+            int position = positions.nextInt();
             for (int input = 0; input < state.inputErrorValues.length; input++) {
                 VectorAccess.BooleanValues inputErrors = state.inputErrorValues[input];
                 if (inputErrors == null || !inputErrors.value(position)) {
@@ -323,7 +322,7 @@ final class FrameworkManagedScalarFunction
                 }
                 ErrorValue error = ErrorVectors.errorAt(state.errorVectors[input], position);
                 if (error == null) {
-                    output.values()[position] = true;
+                    output.setError(position);
                 }
                 else {
                     output.setError(position, error);

@@ -385,6 +385,11 @@ diagnostics without invoking the target for those rows. Carrier readers and resu
 region. Without a mapper, a target failure retains ordinary query-failure behavior. A mapper attached to a target
 declared infallible is ignored and adds no generated exception path.
 
+Reused error outputs clear stale presence and diagnostics only at selected positions before propagating current
+input failures. An all-selected mask describes its own logical extent, not the capacity of an oversized output;
+positions beyond that extent remain unchanged. Publishing an error-presence bit without a provider diagnostic
+invalidates any cached all-false summary just as publishing a diagnostic does.
+
 VALUES and ERRORS may be evaluated in separate invocations. When a fallible target has a failure mapper, a
 VALUES-only invocation must therefore contain mapped target failures in invocation-local scratch even though it does
 not publish an ERRORS stream. A later ERRORS invocation publishes the diagnostic. This rule also permits an encoded

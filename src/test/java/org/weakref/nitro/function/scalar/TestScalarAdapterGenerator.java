@@ -873,14 +873,17 @@ final class TestScalarAdapterGenerator
             Streams destination = Streams.ofValues(allocator.allocate(outputContext, I64Vector.class, size, I64Vector::new))
                     .with(Stream.NULLS, outputNulls)
                     .with(Stream.ERRORS, errors);
-            Streams result = requireNonNegativeFunctionWithFailureMapping().apply(
-                    List.of(Streams.ofValues(new I64Vector(values))
-                            .with(Stream.NULLS, new BooleanVector(nulls))
-                            .with(Stream.ERRORS, inputErrors)),
+            PrimitiveFunction function = requireNonNegativeFunctionWithFailureMapping();
+            PrimitiveExecutionContext execution = new PrimitiveExecutionContext(allocator);
+            List<Streams> inputs = List.of(Streams.ofValues(new I64Vector(values))
+                    .with(Stream.NULLS, new BooleanVector(nulls))
+                    .with(Stream.ERRORS, inputErrors));
+            Streams result = function.apply(
+                    inputs,
                     Mask.sparse(new int[] {129, 255, 300, 450}, size),
                     EnumSet.allOf(Stream.class),
                     destination,
-                    new PrimitiveExecutionContext(allocator));
+                    execution);
 
             ErrorVector resultErrors = (ErrorVector) result.get(Stream.ERRORS);
             assertThat(resultErrors.error(129)).isNull();
@@ -893,6 +896,66 @@ final class TestScalarAdapterGenerator
             assertThat(((BooleanVector) result.get(Stream.NULLS)).values()[129]).isTrue();
             assertThat(((BooleanVector) result.get(Stream.NULLS)).values()[400]).isTrue();
             assertThat(((I64Vector) result.values()).values()[450]).isEqualTo(7);
+
+            // Reusing scratch must clear selected stale failures without erasing earlier unselected diagnostics.
+            values[300] = 9;
+            Streams updated = function.apply(
+                    inputs,
+                    Mask.sparse(new int[] {300}, size),
+                    EnumSet.allOf(Stream.class),
+                    result,
+                    execution);
+            ErrorVector updatedErrors = (ErrorVector) updated.get(Stream.ERRORS);
+            assertThat(updatedErrors.error(300)).isNull();
+            assertThat(updatedErrors.values()[300]).isFalse();
+            assertThat(updatedErrors.error(255)).isEqualTo(upstream);
+            assertThat(updatedErrors.error(400)).isEqualTo(upstream);
+            assertThat(((I64Vector) updated.values()).values()[300]).isEqualTo(9);
+            assertThat(((BooleanVector) updated.get(Stream.NULLS)).values()[129]).isTrue();
+        }
+    }
+
+    @Test
+    void testDenseMaskClearsSelectedErrorsInOversizedOutput()
+            throws Throwable
+    {
+        assertDenseMaskClearsSelectedErrorsInOversizedOutput(256);
+        assertDenseMaskClearsSelectedErrorsInOversizedOutput(1024);
+    }
+
+    private static void assertDenseMaskClearsSelectedErrorsInOversizedOutput(int inputSize)
+            throws Throwable
+    {
+        int selectedSize = 256;
+        int outputSize = 512;
+        ErrorValue upstream = new ErrorValue("test", 2, "UPSTREAM", "USER_ERROR", "upstream failure");
+        for (boolean hasInputError : List.of(false, true)) {
+            ErrorVector inputErrors = new ErrorVector(inputSize);
+            if (hasInputError) {
+                inputErrors.setError(200, upstream);
+            }
+            try (Allocator allocator = new Allocator(createDefault())) {
+                Allocator.Context outputContext = new Allocator.Context("oversized-error-output");
+                ErrorVector errors = allocator.allocate(outputContext, ErrorVector.class, outputSize, ErrorVector::new);
+                errors.setError(129, NEGATIVE_VALUE);
+                errors.setError(400, upstream);
+                Streams destination = Streams.ofValues(allocator.allocate(outputContext, I64Vector.class, outputSize, I64Vector::new))
+                        .with(Stream.ERRORS, errors);
+                Streams result = requireNonNegativeFunctionWithFailureMapping().apply(
+                        List.of(Streams.ofValues(new I64Vector(inputSize)).with(Stream.ERRORS, inputErrors)),
+                        Mask.all(selectedSize),
+                        EnumSet.of(Stream.VALUES, Stream.ERRORS),
+                        destination,
+                        new PrimitiveExecutionContext(allocator));
+
+                ErrorVector resultErrors = (ErrorVector) result.get(Stream.ERRORS);
+                assertThat(resultErrors.length()).isGreaterThanOrEqualTo(Math.max(outputSize, inputSize));
+                assertThat(resultErrors.error(129)).isNull();
+                assertThat(resultErrors.values()[129]).isFalse();
+                assertThat(resultErrors.error(400)).isEqualTo(upstream);
+                assertThat(resultErrors.values()[400]).isTrue();
+                assertThat(resultErrors.values()[200]).isEqualTo(hasInputError);
+            }
         }
     }
 
@@ -958,6 +1021,18 @@ final class TestScalarAdapterGenerator
                     Streams.empty(),
                     new PrimitiveExecutionContext(allocator));
             assertThat(((ErrorVector) propagated.get(Stream.ERRORS)).values()).containsExactly(false, true);
+            assertThat(target.invocations).isZero();
+
+            Streams presenceOnly = infallible.apply(
+                    List.of(Streams.of(Stream.ERRORS, new BooleanVector(new boolean[] {true, false}))),
+                    Mask.all(2),
+                    EnumSet.of(Stream.ERRORS),
+                    Streams.empty(),
+                    new PrimitiveExecutionContext(allocator));
+            ErrorVector presenceErrors = (ErrorVector) presenceOnly.get(Stream.ERRORS);
+            assertThat(presenceErrors.values()).containsExactly(true, false);
+            assertThat(presenceErrors.error(0)).isNull();
+            assertThat(presenceErrors.isAllFalse()).isFalse();
             assertThat(target.invocations).isZero();
         }
     }

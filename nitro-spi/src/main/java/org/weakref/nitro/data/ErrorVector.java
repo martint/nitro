@@ -14,7 +14,9 @@
 package org.weakref.nitro.data;
 
 import java.util.Arrays;
+import java.util.PrimitiveIterator;
 
+import static com.google.common.base.Preconditions.checkArgument;
 import static java.util.Objects.requireNonNull;
 
 /**
@@ -46,6 +48,13 @@ public final class ErrorVector
         values()[position] = true;
     }
 
+    /// Records error presence without a provider diagnostic, replacing any previous diagnostic at this position.
+    public void setError(int position)
+    {
+        clearError(position);
+        values()[position] = true;
+    }
+
     public void clearError(int position)
     {
         invalidateContentSummary();
@@ -61,6 +70,36 @@ public final class ErrorVector
         super.markAllFalse();
         if (errors != null) {
             Arrays.fill(errors, null);
+        }
+    }
+
+    /// Clears error presence and diagnostics only at selected positions. A dense mask may cover a prefix of an
+    /// oversized vector; errors outside that prefix remain intact for independently evaluated positions.
+    public void clearErrors(Mask mask)
+    {
+        requireNonNull(mask, "mask is null");
+        checkArgument(mask.size() <= length(), "Mask exceeds error vector length");
+        if (mask.none()) {
+            return;
+        }
+        if (mask.all() && mask.size() == length()) {
+            markAllFalse();
+            return;
+        }
+        invalidateContentSummary();
+        if (mask.all()) {
+            Arrays.fill(values(), 0, mask.size(), false);
+            if (errors != null) {
+                Arrays.fill(errors, 0, mask.size(), null);
+            }
+            return;
+        }
+        for (PrimitiveIterator.OfInt positions = mask.iterator(); positions.hasNext(); ) {
+            int position = positions.nextInt();
+            values()[position] = false;
+            if (errors != null) {
+                errors[position] = null;
+            }
         }
     }
 

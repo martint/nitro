@@ -208,3 +208,4 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | [0125](0125-specialize-scalar-loops-by-physical-input-shape.md) | Reject scalar physical-shape specialization after SQL qualification | rejected |
 | [0126](0126-reuse-exact-generated-scalar-bindings.md) | Reject generated scalar binding reuse after SQL qualification | rejected |
 | [0127](0127-preserve-projection-capabilities-through-partial-application.md) | Preserve projection capabilities through partial application | accepted |
+| [0128](0128-clear-selected-errors-in-reused-scalar-outputs.md) | Clear selected errors in reused scalar outputs | accepted |

@@ -17,9 +17,65 @@ import org.junit.jupiter.api.Test;
 import org.weakref.nitro.execution.EngineResources;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class TestErrorVector
 {
+    @Test
+    void testClearsOnlySelectedPositionsAndInvalidatesSummary()
+    {
+        ErrorVector errors = new ErrorVector(512);
+        ErrorValue failure = new ErrorValue("test", 1, "FAILURE", "USER_ERROR", "failure");
+        errors.setError(129, failure);
+        errors.setError(255, failure);
+        errors.setError(400, failure);
+        assertThat(errors.isAllFalse()).isFalse();
+        long generation = errors.contentGeneration();
+        errors.clearErrors(Mask.none(512));
+        assertThat(errors.contentGeneration()).isEqualTo(generation);
+        assertThat(errors.error(129)).isEqualTo(failure);
+
+        errors.clearErrors(Mask.all(256));
+        assertThat(errors.error(129)).isNull();
+        assertThat(errors.error(255)).isNull();
+        assertThat(errors.values()[129]).isFalse();
+        assertThat(errors.values()[255]).isFalse();
+        assertThat(errors.error(400)).isEqualTo(failure);
+        assertThat(errors.isAllFalse()).isFalse();
+
+        errors.clearErrors(Mask.sparse(new int[] {400}, 512));
+        assertThat(errors.error(400)).isNull();
+        assertThat(errors.isAllFalse()).isTrue();
+        errors.setError(255, failure);
+        errors.clearErrors(Mask.all(512));
+        assertThat(errors.error(255)).isNull();
+        assertThat(errors.isAllFalse()).isTrue();
+        errors.setError(255);
+        assertThat(errors.error(255)).isNull();
+        assertThat(errors.isAllFalse()).isFalse();
+        errors.setError(255, failure);
+        errors.setError(255);
+        assertThat(errors.error(255)).isNull();
+        assertThat(errors.values()[255]).isTrue();
+    }
+
+    @Test
+    void testClearingDoesNotAllocateDiagnosticsAndRejectsOversizedMask()
+    {
+        ErrorVector errors = new ErrorVector(512);
+        long retainedBytes = errors.retainedBytes();
+        errors.markAllTrue();
+        errors.clearErrors(Mask.all(256));
+        assertThat(errors.values()[129]).isFalse();
+        assertThat(errors.values()[400]).isTrue();
+        errors.clearErrors(Mask.sparse(new int[] {400}, 512));
+        assertThat(errors.values()[400]).isFalse();
+        assertThat(errors.retainedBytes()).isEqualTo(retainedBytes);
+        assertThatThrownBy(() -> errors.clearErrors(Mask.all(513)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Mask exceeds error vector length");
+    }
+
     @Test
     void testInvalidatesAllFalseSummaryWhenErrorIsSet()
     {
