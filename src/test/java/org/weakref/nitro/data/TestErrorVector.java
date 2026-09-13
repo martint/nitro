@@ -147,6 +147,30 @@ class TestErrorVector
     }
 
     @Test
+    void testMaskedCopyPreservesInactiveDiagnosticsBeyondCachedIntegerPositions()
+    {
+        ErrorValue failure = new ErrorValue("test", 1, "FAILURE", "USER_ERROR", "failure");
+        ErrorVector source = new ErrorVector(512);
+        source.setError(300);
+        source.setError(511, failure);
+        try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
+            Allocator.Context context = new Allocator.Context("masked-errors");
+            ErrorVector target = allocator.allocate(context, ErrorVector.class, 512, ErrorVector::new);
+            target.setError(0, failure);
+            target.setError(129, failure);
+            target.setError(300, failure);
+            assertThat(source.copyMasked(allocator, context, target, Mask.sparse(new int[] {129, 300, 511}, 512)))
+                    .isSameAs(target);
+            assertThat(target.error(0)).isSameAs(failure);
+            assertThat(target.values()[129]).isFalse();
+            assertThat(target.error(129)).isNull();
+            assertThat(target.values()[300]).isTrue();
+            assertThat(target.error(300)).isNull();
+            assertThat(target.error(511)).isSameAs(failure);
+        }
+    }
+
+    @Test
     void testMaterializesMixedBooleanRepresentationsWithoutLosingDiagnostics()
     {
         ErrorValue failure = new ErrorValue("test", 1, "FAILURE", "USER_ERROR", "failure");

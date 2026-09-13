@@ -14,6 +14,7 @@
 package org.weakref.nitro.data;
 
 import java.util.Arrays;
+import java.util.PrimitiveIterator;
 
 public class I64Vector
         implements FlatVector, RecyclableVectorStorage
@@ -120,8 +121,17 @@ public class I64Vector
     public Vector copyMasked(Allocator allocator, Allocator.Context allocationContext, Vector existing, Mask mask)
     {
         I64Vector target = allocator.allocateOrGrow(allocationContext, (I64Vector) existing, I64Vector.class, values.length, I64Vector::new);
-        for (int position : mask) {
-            target.values()[position] = values[position];
+        if (mask.none()) {
+            return target;
+        }
+        long[] targetValues = target.values();
+        if (mask.all()) {
+            System.arraycopy(values, 0, targetValues, 0, mask.size());
+            return target;
+        }
+        for (PrimitiveIterator.OfInt positions = mask.iterator(); positions.hasNext(); ) {
+            int position = positions.nextInt();
+            targetValues[position] = values[position];
         }
         return target;
     }

@@ -166,7 +166,8 @@ public final class ErrorVector
     public Vector copyMasked(Allocator allocator, Allocator.Context allocationContext, Vector existing, Mask mask)
     {
         ErrorVector target = writable(allocator, allocationContext, existing, length());
-        for (int position : mask) {
+        for (PrimitiveIterator.OfInt positions = mask.iterator(); positions.hasNext(); ) {
+            int position = positions.nextInt();
             copyPosition(target, position, position);
         }
         return target;

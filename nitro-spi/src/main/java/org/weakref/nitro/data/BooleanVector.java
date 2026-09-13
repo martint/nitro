@@ -14,6 +14,7 @@
 package org.weakref.nitro.data;
 
 import java.util.Arrays;
+import java.util.PrimitiveIterator;
 
 public class BooleanVector
         implements FlatVector
@@ -193,8 +194,17 @@ public class BooleanVector
     public Vector copyMasked(Allocator allocator, Allocator.Context allocationContext, Vector existing, Mask mask)
     {
         BooleanVector target = allocator.allocateOrGrow(allocationContext, (BooleanVector) existing, BooleanVector.class, values.length, BooleanVector::new);
-        for (int position : mask) {
-            target.values()[position] = values[position];
+        if (mask.none()) {
+            return target;
+        }
+        boolean[] targetValues = target.values();
+        if (mask.all()) {
+            System.arraycopy(values, 0, targetValues, 0, mask.size());
+            return target;
+        }
+        for (PrimitiveIterator.OfInt positions = mask.iterator(); positions.hasNext(); ) {
+            int position = positions.nextInt();
+            targetValues[position] = values[position];
         }
         return target;
     }
