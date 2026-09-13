@@ -188,3 +188,4 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | [0106](0106-bound-borrowed-views-by-selected-extents.md) | Bound borrowed views by selected extents | accepted |
 | [0107](0107-derive-group-null-metadata-from-stored-keys.md) | Derive group null metadata from stored keys | rejected |
 | [0108](0108-pool-non-escaping-partition-remapping-scratch.md) | Pool non-escaping partition remapping scratch | accepted |
+| [0109](0109-encode-constant-initial-average-counts.md) | Encode constant initial average counts | accepted |
