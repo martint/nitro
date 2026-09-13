@@ -364,6 +364,12 @@ semantic null are unspecified. A framework-managed adapter for a fallible strict
 request NULLS and ERRORS needed to prove which active rows may invoke the target. Requested companion streams preserve
 exact semantics.
 
+A call-aware provider may consume non-null primitive literals before generating a scalar adapter. The resolved
+identity includes their original argument positions, logical types and bound values; remaining runtime arguments
+retain their original order. Null literals retain the ordinary null convention. Explicit provider selection remains
+authoritative: a generic fallback cannot silently replace a provider's native batch implementation merely because
+it can bind a constant.
+
 A provider may attach a failure mapper to a fallible scalar target. The generated adapter catches failures only
 around invocation of that target. The mapper converts declared row failures to classloader-neutral `ErrorValue`
 records and must rethrow cancellation, linkage, virtual-machine, and other non-row failures. The adapter writes

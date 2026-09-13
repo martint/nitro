@@ -22,7 +22,7 @@ decision record until it changes the accepted design or default.
 Files are named `NNNN-short-kebab-title.md` and contain Status and Date, links to affected specification sections and
 related records, Context, Decision, Consequences, and Alternatives considered.
 
-Use exactly four statuses:
+Use these statuses:
 
 | Status | Meaning |
 |---|---|
@@ -30,6 +30,7 @@ Use exactly four statuses:
 | `amended` | The decision remains, but a later record corrects or narrows it. |
 | `superseded` | A later record replaces it. |
 | `proposed` | The decision has not been accepted. |
+| `rejected` | The proposal was evaluated and declined; its implementation is not current. |
 
 Accepted records are immutable. A correction or reversal creates a new record. Update the old record's status and
 cross-reference, the new record, and this index in the same change.
@@ -199,3 +200,6 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | [0117](0117-consume-host-filter-snapshots-without-restarting-waits.md) | Consume host filter snapshots without restarting waits | rejected |
 | [0118](0118-count-host-visible-source-output-once.md) | Count host-visible source output once | accepted |
 | [0119](0119-reevaluate-grouped-tag-kernels-on-wide-sql-probes.md) | Reevaluate grouped tag kernels on wide SQL probes | rejected |
+| [0120](0120-specialize-provider-owned-primitive-literals.md) | Specialize provider-owned primitive literals | accepted |
+| [0121](0121-discard-unrequested-mapped-scalar-errors.md) | Reject unrequested-error scratch removal after SQL qualification | rejected |
+| [0123](0123-use-primitive-iteration-for-conditional-merges.md) | Reject conditional-merge traversal revisions after SQL qualification | rejected |

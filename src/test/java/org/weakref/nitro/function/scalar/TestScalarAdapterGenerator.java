@@ -848,6 +848,78 @@ final class TestScalarAdapterGenerator
     }
 
     @Test
+    void testSparseCompanionStreamsPreserveUnselectedDiagnostics()
+            throws Throwable
+    {
+        int size = 512;
+        long[] values = new long[size];
+        values[129] = -1;
+        values[255] = -2;
+        values[300] = -3;
+        values[450] = 7;
+        boolean[] nulls = new boolean[size];
+        nulls[129] = true;
+        ErrorValue upstream = new ErrorValue("test", 2, "UPSTREAM", "USER_ERROR", "upstream failure");
+        ErrorVector inputErrors = new ErrorVector(size);
+        inputErrors.setError(255, upstream);
+
+        try (Allocator allocator = new Allocator(createDefault())) {
+            Allocator.Context outputContext = new Allocator.Context("sparse-output");
+            ErrorVector errors = allocator.allocate(outputContext, ErrorVector.class, size, ErrorVector::new);
+            errors.setError(400, upstream);
+            errors.setError(450, upstream);
+            BooleanVector outputNulls = allocator.allocate(outputContext, BooleanVector.class, size, BooleanVector::new);
+            outputNulls.values()[400] = true;
+            Streams destination = Streams.ofValues(allocator.allocate(outputContext, I64Vector.class, size, I64Vector::new))
+                    .with(Stream.NULLS, outputNulls)
+                    .with(Stream.ERRORS, errors);
+            Streams result = requireNonNegativeFunctionWithFailureMapping().apply(
+                    List.of(Streams.ofValues(new I64Vector(values))
+                            .with(Stream.NULLS, new BooleanVector(nulls))
+                            .with(Stream.ERRORS, inputErrors)),
+                    Mask.sparse(new int[] {129, 255, 300, 450}, size),
+                    EnumSet.allOf(Stream.class),
+                    destination,
+                    new PrimitiveExecutionContext(allocator));
+
+            ErrorVector resultErrors = (ErrorVector) result.get(Stream.ERRORS);
+            assertThat(resultErrors.error(129)).isNull();
+            assertThat(resultErrors.error(255)).isEqualTo(upstream);
+            assertThat(resultErrors.error(300)).isEqualTo(NEGATIVE_VALUE);
+            assertThat(resultErrors.error(400)).isEqualTo(upstream);
+            assertThat(resultErrors.error(450)).isNull();
+            assertThat(resultErrors.values()[129]).isFalse();
+            assertThat(resultErrors.values()[450]).isFalse();
+            assertThat(((BooleanVector) result.get(Stream.NULLS)).values()[129]).isTrue();
+            assertThat(((BooleanVector) result.get(Stream.NULLS)).values()[400]).isTrue();
+            assertThat(((I64Vector) result.values()).values()[450]).isEqualTo(7);
+        }
+    }
+
+    @Test
+    void testUnrequestedErrorsStillValidateFailureMapper()
+            throws Throwable
+    {
+        IllegalStateException fatal = new IllegalStateException("unmapped failure");
+        PrimitiveFunction rejecting = requireNonNegativeFunctionWithFailureMapping(failure -> {
+            throw fatal;
+        });
+        PrimitiveFunction invalid = requireNonNegativeFunctionWithFailureMapping(failure -> null);
+
+        for (EnumSet<Stream> demand : List.of(EnumSet.of(Stream.VALUES), EnumSet.of(Stream.VALUES, Stream.ERRORS))) {
+            try (Allocator allocator = new Allocator(createDefault())) {
+                List<Streams> inputs = List.of(Streams.ofValues(new I64Vector(new long[] {-1})));
+                PrimitiveExecutionContext context = new PrimitiveExecutionContext(allocator);
+                assertThatThrownBy(() -> rejecting.apply(inputs, Mask.all(1), demand, Streams.empty(), context))
+                        .isSameAs(fatal);
+                assertThatThrownBy(() -> invalid.apply(inputs, Mask.all(1), demand, Streams.empty(), context))
+                        .isInstanceOf(NullPointerException.class)
+                        .hasMessage("error is null");
+            }
+        }
+    }
+
+    @Test
     void testErrorOnlyDemandInvokesOnlyFallibleTargets()
             throws Throwable
     {
@@ -999,6 +1071,12 @@ final class TestScalarAdapterGenerator
     private static PrimitiveFunction requireNonNegativeFunctionWithFailureMapping()
             throws ReflectiveOperationException
     {
+        return requireNonNegativeFunctionWithFailureMapping(TestScalarAdapterGenerator::mapNegativeValue);
+    }
+
+    private static PrimitiveFunction requireNonNegativeFunctionWithFailureMapping(ScalarFailureMapper failureMapper)
+            throws ReflectiveOperationException
+    {
         return new ScalarAdapterGenerator().adapt(
                 "require_non_negative",
                 new BoundSignature(LONG, List.of(LONG)),
@@ -1008,7 +1086,7 @@ final class TestScalarAdapterGenerator
                                 TestScalarAdapterGenerator.class,
                                 "requireNonNegative",
                                 MethodType.methodType(long.class, long.class)),
-                        TestScalarAdapterGenerator::mapNegativeValue))
+                        failureMapper))
                 .implementation();
     }
 

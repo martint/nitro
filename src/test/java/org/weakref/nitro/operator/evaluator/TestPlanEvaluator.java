@@ -735,6 +735,46 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testConditionalMergeExpandsSparseDemandBeyondCachedIntegerPositions()
+    {
+        int size = 512;
+        boolean[] condition = new boolean[size];
+        int[] compact = new int[size];
+        long[] wide = new long[size];
+        for (int position = 0; position < size; position++) {
+            condition[position] = position % 2 == 0;
+            compact[position] = position;
+            wide[position] = (1L << 40) + position;
+        }
+        Variable result = new Variable(0);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(
+                        result,
+                        new org.weakref.nitro.operator.evaluator.ir.Merge(
+                                new ReferenceMask(new Reference(new Input(0), Stream.VALUES)),
+                                new Reference(new Input(1), Stream.VALUES),
+                                new Reference(new Input(2), Stream.VALUES)),
+                        AllMask.ALL)),
+                List.of(new Reference(result, Stream.VALUES)));
+        try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
+            PlanEvaluator evaluator = planEvaluator(plan, new PrimitiveRegistry(), inputResolver(Map.of(
+                    new Reference(new Input(0), Stream.VALUES), new BooleanVector(condition),
+                    new Reference(new Input(1), Stream.VALUES), new I32Vector(compact),
+                    new Reference(new Input(2), Stream.VALUES), new I64Vector(wide))), allocator);
+            Reference output = new Reference(result, Stream.VALUES);
+            I64Vector sparse = (I64Vector) evaluator.evaluate(output, Mask.sparse(new int[] {129, 255, 300}, size)).values();
+            assertThat(sparse.values()[129]).isEqualTo(wide[129]);
+            assertThat(sparse.values()[255]).isEqualTo(wide[255]);
+            assertThat(sparse.values()[300]).isEqualTo(compact[300]);
+
+            I64Vector complete = (I64Vector) evaluator.evaluate(output, Mask.all(size)).values();
+            for (int position = 0; position < size; position++) {
+                assertThat(complete.values()[position]).isEqualTo(condition[position] ? compact[position] : wide[position]);
+            }
+        }
+    }
+
+    @Test
     void testConditionalDoesNotEvaluateUnselectedNestedBranch()
     {
         PrimitiveRegistry primitiveRegistry = new PrimitiveRegistry();
