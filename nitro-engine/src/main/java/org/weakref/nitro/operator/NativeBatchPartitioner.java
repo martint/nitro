@@ -48,6 +48,7 @@ public final class NativeBatchPartitioner
     private final int partitionCount;
     private final int partitionMask;
     private final NativeBatchPartitionPolicy policy;
+    private final Object poolGroup;
 
     /**
      * Creates a representation-preserving partition copier whose destination assignments are supplied by the caller.
@@ -58,8 +59,20 @@ public final class NativeBatchPartitioner
             int partitionCount,
             NativeBatchPartitionPolicy policy)
     {
+        this(allocator, outputCount, partitionCount, policy, new Object());
+    }
+
+    /// Shares released storage with copies in the constructed pool group, without sharing their ownership scopes.
+    public NativeBatchPartitioner(
+            Allocator allocator,
+            int outputCount,
+            int partitionCount,
+            NativeBatchPartitionPolicy policy,
+            Object poolGroup)
+    {
         this.allocator = requireNonNull(allocator, "allocator is null");
         this.policy = requireNonNull(policy, "policy is null");
+        this.poolGroup = requireNonNull(poolGroup, "poolGroup is null");
         checkArgument(outputCount >= 0, "outputCount is negative");
         checkArgument(partitionCount > 0, "partitionCount must be positive");
         this.outputCount = outputCount;
@@ -76,8 +89,21 @@ public final class NativeBatchPartitioner
             int partitionCount,
             NativeBatchPartitionPolicy policy)
     {
+        this(allocator, schema, partitionChannels, partitionCount, policy, new Object());
+    }
+
+    /// Uses registry-defined partition keys and a caller-owned reuse group for independently owned outputs.
+    public NativeBatchPartitioner(
+            Allocator allocator,
+            Schema schema,
+            int[] partitionChannels,
+            int partitionCount,
+            NativeBatchPartitionPolicy policy,
+            Object poolGroup)
+    {
         this.allocator = requireNonNull(allocator, "allocator is null");
         this.policy = requireNonNull(policy, "policy is null");
+        this.poolGroup = requireNonNull(poolGroup, "poolGroup is null");
         requireNonNull(schema, "schema is null");
         outputCount = schema.size();
         this.partitionChannels = requireNonNull(partitionChannels, "partitionChannels is null").clone();
@@ -200,7 +226,7 @@ public final class NativeBatchPartitioner
 
     private Batch copy(Streams[] columns, int[] positions, int count)
     {
-        Allocator.Context context = new Allocator.Context("NativeBatchPartitioner.partition");
+        Allocator.Context context = new Allocator.Context("NativeBatchPartitioner.partition", poolGroup);
         Map<DictionaryMapping, DictionaryRemapping> dictionaryRemappings = new HashMap<>();
         try {
             Output[] outputs = new Output[columns.length];

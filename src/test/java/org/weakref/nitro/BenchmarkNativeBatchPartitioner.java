@@ -86,11 +86,31 @@ public class BenchmarkNativeBatchPartitioner
     @OperationsPerInvocation(128)
     public void copyPartition(Blackhole blackhole)
     {
+        copyPartitions(blackhole, false);
+    }
+
+    @Benchmark
+    @OperationsPerInvocation(128)
+    public void copyAsyncPartition(Blackhole blackhole)
+    {
+        copyPartitions(blackhole, true);
+    }
+
+    private void copyPartitions(Blackhole blackhole, boolean asynchronous)
+    {
         try (Allocator allocator = new Allocator(resources)) {
             NativeBatchPartitioner partitioner = new NativeBatchPartitioner(allocator, 1, 1, NativeBatchPartitionPolicy.defaults());
             for (int partitionIndex = 0; partitionIndex < 128; partitionIndex++) {
                 try (Batch partition = partitioner.partition(source, assignments).getFirst().batch()) {
-                    blackhole.consume(partition.output(0).borrow(Stream.VALUES));
+                    if (asynchronous) {
+                        try (Allocator.AsyncVectorTreeLease lease = partition.tryDetachRetainedVectorsForAsyncRelease(allocator).orElseThrow()) {
+                            blackhole.consume(partition.output(0).borrow(Stream.VALUES));
+                            partition.close();
+                        }
+                    }
+                    else {
+                        blackhole.consume(partition.output(0).borrow(Stream.VALUES));
+                    }
                 }
             }
         }

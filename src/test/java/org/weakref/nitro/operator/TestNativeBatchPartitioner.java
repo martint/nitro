@@ -47,6 +47,85 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class TestNativeBatchPartitioner
 {
     @Test
+    void reusesReleasedPartitionStorageAcrossConstructedCopiers()
+    {
+        Object poolGroup = new Object();
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                Batch source = new Batch(Mask.all(4), Output.of(Streams.ofValues(new I64Vector(new long[] {10, 20, 30, 40}))))) {
+            Vector previous;
+            try (Batch first = new NativeBatchPartitioner(allocator, 1, 1, NativeBatchPartitionPolicy.flat(), poolGroup)
+                    .partition(source, new int[4]).getFirst().batch()) {
+                previous = first.output(0).borrow(Stream.VALUES);
+            }
+            long allocated = allocator.allocatedBytes();
+            long resident = allocator.residentBytes();
+            for (int iteration = 0; iteration < 100; iteration++) {
+                try (Batch next = new NativeBatchPartitioner(allocator, 1, 1, NativeBatchPartitionPolicy.flat(), poolGroup)
+                        .partition(source, new int[4]).getFirst().batch()) {
+                    assertThat(next.output(0).borrow(Stream.VALUES)).isSameAs(previous);
+                    assertThat(values(next)).containsExactly(10, 20, 30, 40);
+                }
+                assertThat(allocator.allocatedBytes()).isEqualTo(allocated);
+                assertThat(allocator.residentBytes()).isEqualTo(resident);
+            }
+        }
+    }
+
+    @Test
+    void failedCopyDoesNotReleaseAnotherPartitionInTheSamePoolGroup()
+    {
+        Object poolGroup = new Object();
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                Batch source = new Batch(Mask.all(4), Output.of(Streams.ofValues(new I64Vector(new long[] {10, 20, 30, 40}))));
+                Batch invalid = new Batch(
+                        Mask.all(4),
+                        Output.of(Streams.ofValues(new I64Vector(new long[] {1, 2, 3, 4}))),
+                        Output.of(Streams.ofValues(DictionaryVector.wrap(new int[] {0, 0, 8, 0}, new I64Vector(new long[] {50})))))) {
+            NativeBatchPartitioner partitioner = new NativeBatchPartitioner(allocator, 1, 1, NativeBatchPartitionPolicy.flat(), poolGroup);
+            try (Batch first = partitioner.partition(source, new int[4]).getFirst().batch()) {
+                NativeBatchPartitioner invalidPartitioner = new NativeBatchPartitioner(
+                        allocator, 2, 1, NativeBatchPartitionPolicy.defaults(), poolGroup);
+                assertThatThrownBy(() -> invalidPartitioner.partition(invalid, new int[4]))
+                        .isInstanceOf(IndexOutOfBoundsException.class);
+                try (Batch second = partitioner.partition(source, new int[4]).getFirst().batch()) {
+                    assertThat(second.output(0).borrow(Stream.VALUES)).isNotSameAs(first.output(0).borrow(Stream.VALUES));
+                    Arrays.fill(values(second), -1);
+                    assertThat(values(first)).containsExactly(10, 20, 30, 40);
+                }
+            }
+        }
+    }
+
+    @Test
+    void keepsLivePartitionsIndependentWhileReusingReleasedStorage()
+    {
+        Object poolGroup = new Object();
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                Batch source = new Batch(Mask.all(4), Output.of(Streams.ofValues(new I64Vector(new long[] {10, 20, 30, 40}))))) {
+            NativeBatchPartitioner partitioner = new NativeBatchPartitioner(allocator, 1, 1, NativeBatchPartitionPolicy.flat(), poolGroup);
+            try (Batch retained = partitioner.partition(source, new int[4]).getFirst().batch()) {
+                Vector retainedVector = retained.output(0).borrow(Stream.VALUES);
+                try (Allocator.AsyncVectorTreeLease lease = retained.tryDetachRetainedVectorsForAsyncRelease(allocator).orElseThrow()) {
+                    retained.close();
+                    Vector released;
+                    try (Batch second = partitioner.partition(source, new int[4]).getFirst().batch()) {
+                        released = second.output(0).borrow(Stream.VALUES);
+                        assertThat(released).isNotSameAs(retainedVector);
+                    }
+                    try (Batch third = partitioner.partition(source, new int[4]).getFirst().batch()) {
+                        assertThat(third.output(0).borrow(Stream.VALUES)).isSameAs(released);
+                        Arrays.fill(values(third), -1);
+                        assertThat(((I64Vector) retainedVector).values()).containsExactly(10, 20, 30, 40);
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
     void stopsRemappingWhenSelectedDomainCannotMeetReuse()
     {
         try (AllocationResources resources = new AllocationResources(new PrimitiveArrayPool(1 << 20, 0), new PrimitiveArrayPool(0, 0));
