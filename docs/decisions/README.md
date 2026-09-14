@@ -222,3 +222,4 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | [0139](0139-batch-independent-long-join-probes.md) | Batch independent long join probes | accepted |
 | [0140](0140-borrow-compatible-constant-runs-at-egress.md) | Borrow compatible constant runs at synchronous egress | rejected |
 | [0141](0141-mix-owned-and-borrowed-synchronous-egress.md) | Mix owned and borrowed synchronous egress | accepted |
+| [0142](0142-preserve-dictionaries-for-non-null-grouped-ranges.md) | Preserve dictionaries for non-null grouped ranges | rejected |
