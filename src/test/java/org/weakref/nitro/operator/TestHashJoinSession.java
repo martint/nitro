@@ -422,6 +422,76 @@ class TestHashJoinSession
     }
 
     @Test
+    void testLargeNonSequentialBuildAdmitsBatchedProbes()
+    {
+        long[] buildKeys = new long[800_000];
+        for (int index = 0; index < buildKeys.length; index++) {
+            buildKeys[index] = (index + 1L) * 0x9E3779B97F4A7C15L;
+        }
+        long[] probeKeys = new long[40_000];
+        for (int index = 0; index < probeKeys.length; index++) {
+            probeKeys[index] = buildKeys[(index * 13) % buildKeys.length];
+        }
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                HashJoinOperator join = new HashJoinOperator(
+                        resources.operatorResources(), allocator, table(probeKeys), 0, table(buildKeys), 0)) {
+            allocator.beginExecution();
+            int outputRows = 0;
+            while (join.hasNext()) {
+                try (Batch batch = join.next()) {
+                    outputRows += batch.borrowMask().count();
+                }
+            }
+            assertThat(outputRows).isEqualTo(probeKeys.length);
+            assertThat(join.probeStatistics().batchedCalls()).isPositive();
+            assertThat(join.probeStatistics().transitions()).isEqualTo(1);
+        }
+    }
+
+    @Test
+    void testPreparedProbeAdmissionAndScratchAreIndependent()
+    {
+        long[] keys = new long[800_000];
+        for (int index = 0; index < keys.length; index++) {
+            keys[index] = (index + 1L) * 0x9E3779B97F4A7C15L;
+        }
+        long[] probes = java.util.Arrays.copyOf(keys, 40_000);
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            allocator.beginExecution();
+            try (HashJoinBuild build = HashJoinSession.prepareBuild(resources.operatorResources(), allocator,
+                            Schema.unspecified(1), new int[] {0}, table(keys), new int[] {0}, false, new int[] {0, 1}).orElseThrow();
+                    HashJoinSession first = new HashJoinSession(resources.operatorResources(), allocator,
+                            Schema.unspecified(1), new int[] {0}, table(), new int[] {0}, false, build);
+                    HashJoinSession second = new HashJoinSession(resources.operatorResources(), allocator,
+                            Schema.unspecified(1), new int[] {0}, table(), new int[] {0}, false, build)) {
+                first.addInput(batch(probes));
+                int firstRows = 0;
+                while (first.hasOutput()) {
+                    try (Batch output = first.getOutput()) {
+                        firstRows += output.borrowMask().count();
+                    }
+                }
+                assertThat(firstRows).isEqualTo(probes.length);
+                assertThat(first.probeStatistics().batchedCalls()).isPositive();
+                assertThat(second.probeStatistics().batchedCalls()).isZero();
+                assertThat(second.probeStatistics().transitions()).isZero();
+                first.finish();
+                second.addInput(batch(probes));
+                int secondRows = 0;
+                while (second.hasOutput()) {
+                    try (Batch output = second.getOutput()) {
+                        secondRows += output.borrowMask().count();
+                    }
+                }
+                assertThat(secondRows).isEqualTo(probes.length);
+                assertThat(second.probeStatistics().batchedCalls()).isEqualTo(first.probeStatistics().batchedCalls());
+            }
+        }
+    }
+
+    @Test
     void testPreparedBuildVisitsDenseMembership()
     {
         long[] buildKeys = new long[512];

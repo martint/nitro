@@ -20,6 +20,7 @@ import org.weakref.nitro.data.PrimitiveArrayPool;
 
 import java.util.Arrays;
 
+import static java.util.Objects.checkFromIndexSize;
 import static java.util.Objects.requireNonNull;
 
 /**
@@ -63,6 +64,11 @@ final class LongJoinHashTable
     boolean isAllocated()
     {
         return keys != null;
+    }
+
+    boolean supportsBatchedProbes()
+    {
+        return grouped && keys != null;
     }
 
     int capacity()
@@ -119,6 +125,58 @@ final class LongJoinHashTable
     {
         int slot = findSlotForInsert(key);
         return slot < 0 ? ~slot : slot;
+    }
+
+    /// Looks up a completed, immutable table. Outputs occupied slots or -1 for absent keys.
+    /// Scratch is supplied by the probe owner and must not alias the input keys.
+    void findSlots(long[] probeKeys, int count, int[] slots, long[] candidateKeys)
+    {
+        checkFromIndexSize(0, count, probeKeys.length);
+        checkFromIndexSize(0, count, slots.length);
+        checkFromIndexSize(0, count, candidateKeys.length);
+        if (probeKeys == candidateKeys) {
+            throw new IllegalArgumentException("Probe keys and candidate scratch must not alias");
+        }
+        if (keys == null) {
+            Arrays.fill(slots, 0, count, -1);
+            return;
+        }
+        if (!grouped) {
+            for (int index = 0; index < count; index++) {
+                int slot = findSlotForInsert(probeKeys[index]);
+                slots[index] = slot < 0 ? -1 : slot;
+            }
+            return;
+        }
+
+        // Separate independent tag loads from the dependent key loads. A tag is only a candidate, never equality.
+        for (int index = 0; index < count; index++) {
+            long hash = hash64(probeKeys[index]);
+            int group = ((int) hash) & mask & ~(HASH_TAG_GROUP - 1);
+            ByteVector groupTags = ByteVector.fromArray(HASH_TAG_SPECIES, tags, group);
+            long matches = groupTags.compare(VectorOperators.EQ, hashTag(hash)).toLong();
+            if (matches != 0) {
+                slots[index] = group + Long.numberOfTrailingZeros(matches);
+            }
+            else {
+                // A full group may have displaced a matching key into a later group.
+                slots[index] = groupTags.compare(VectorOperators.EQ, (byte) 0).anyTrue() ? -1 : -2;
+            }
+        }
+        for (int index = 0; index < count; index++) {
+            int slot = slots[index];
+            if (slot >= 0) {
+                candidateKeys[index] = keys[slot];
+            }
+        }
+        for (int index = 0; index < count; index++) {
+            int slot = slots[index];
+            if (slot == -2 || (slot >= 0 && candidateKeys[index] != probeKeys[index])) {
+                // Resolve additional tag matches and displaced groups with the authoritative exact algorithm.
+                int exactSlot = findSlotForInsert(probeKeys[index]);
+                slots[index] = exactSlot < 0 ? -1 : exactSlot;
+            }
+        }
     }
 
     /**

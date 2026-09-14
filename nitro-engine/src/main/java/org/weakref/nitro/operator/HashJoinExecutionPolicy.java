@@ -13,6 +13,8 @@
  */
 package org.weakref.nitro.operator;
 
+import static java.util.Objects.requireNonNull;
+
 /// Engine-selected batching, scratch, and row-reference execution policy for hash joins.
 ///
 /// The property-backed factory is a standalone composition adapter. Hash joins receive one immutable policy from
@@ -22,8 +24,25 @@ public record HashJoinExecutionPolicy(
         boolean poolScratch,
         int duplicateListInitialCapacity,
         boolean lazyDuplicateSlotState,
-        boolean implicitSequentialBuildRowReferences)
+        boolean implicitSequentialBuildRowReferences,
+        HashJoinProbeBatchPolicy probeBatchPolicy)
 {
+    public HashJoinExecutionPolicy
+    {
+        probeBatchPolicy = requireNonNull(probeBatchPolicy, "probeBatchPolicy is null");
+    }
+
+    public HashJoinExecutionPolicy(
+            int maxBatchRows,
+            boolean poolScratch,
+            int duplicateListInitialCapacity,
+            boolean lazyDuplicateSlotState,
+            boolean implicitSequentialBuildRowReferences)
+    {
+        this(maxBatchRows, poolScratch, duplicateListInitialCapacity, lazyDuplicateSlotState,
+                implicitSequentialBuildRowReferences, HashJoinProbeBatchPolicy.defaults());
+    }
+
     public static HashJoinExecutionPolicy defaults()
     {
         return new HashJoinExecutionPolicy(10_000, true, 2, false, true);

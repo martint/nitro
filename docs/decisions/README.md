@@ -219,3 +219,4 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | [0136](0136-cache-canonical-character-domains-at-retained-boundaries.md) | Cache canonical character domains at retained boundaries | rejected |
 | [0137](0137-reuse-byte-views-during-character-egress.md) | Reuse byte views during character egress | accepted |
 | [0138](0138-discover-grouping-hash-consumers-inside-islands.md) | Discover grouping-hash consumers inside islands | rejected |
+| [0139](0139-batch-independent-long-join-probes.md) | Batch independent long join probes | accepted |

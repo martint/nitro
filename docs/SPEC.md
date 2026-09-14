@@ -687,6 +687,12 @@ lookup does not mutate the table. Prepared probe views share immutable build sta
 No row-wise structural comparison or accessor interface is an execution bridge for an admitted persistent layout.
 Hash joins and semi-join membership likewise reject keys that would require a row-wise semantic object table.
 
+Completed grouped long-key tables may overlap independent probe accesses when constructed capacity/batch thresholds
+and bounded repeated hit-rate observations admit the path. Separate initial tag loads, candidate-key loads and exact
+resolution preserve equality and selected output order. Collision/displacement resolution remains authoritative.
+Probe-local staging is allocator-owned, accounted and released independently of the immutable shared build.
+Low-hit observations exit batching; small, direct and ungrouped paths retain their existing lookup behavior.
+
 Build state and prepared membership are task-owned capabilities shareable across compatible probe drivers. Join output
 preserves mappings and encodings when this avoids copies and satisfies ownership.
 

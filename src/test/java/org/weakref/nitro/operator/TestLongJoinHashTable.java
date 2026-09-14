@@ -21,10 +21,59 @@ import java.util.Map;
 import java.util.Random;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class TestLongJoinHashTable
 {
     private static final int EMPTY = -1;
+
+    @Test
+    void batchLookupMatchesScalarAfterGrowth()
+    {
+        for (boolean grouped : new boolean[] {false, true}) {
+            PrimitiveArrayPool pool = new PrimitiveArrayPool(1024, 0);
+            LongJoinHashTable table = new LongJoinHashTable(pool, 16, grouped, true, EMPTY);
+            long[] probes = new long[8192];
+            int[] slots = new int[probes.length + 1];
+            long[] candidates = new long[probes.length];
+            Random random = new Random(139);
+            probes[0] = 0;
+            probes[1] = Long.MIN_VALUE;
+            probes[2] = Long.MAX_VALUE;
+            for (int index = 3; index < probes.length; index++) {
+                probes[index] = random.nextLong();
+            }
+            try {
+                table.findSlots(probes, probes.length, slots, candidates);
+                assertThat(table.isAllocated()).isFalse();
+                for (int index = 0; index < probes.length; index++) {
+                    assertThat(slots[index]).isEqualTo(-1);
+                }
+                for (int index = 0; index < probes.length / 2; index++) {
+                    int slot = table.findSlot(probes[index]);
+                    table.initialize(slot, probes[index], index);
+                    table.growIfNeeded(index + 1);
+                }
+                probes[probes.length - 1] = probes[0];
+                slots[probes.length] = 123456;
+                table.findSlots(probes, probes.length, slots, candidates);
+                for (int index = 0; index < probes.length; index++) {
+                    int scalarSlot = table.findSlotForInsert(probes[index]);
+                    assertThat(slots[index]).isEqualTo(scalarSlot < 0 ? -1 : scalarSlot);
+                }
+                assertThat(slots[probes.length]).isEqualTo(123456);
+                assertThatThrownBy(() -> table.findSlots(probes, probes.length + 1, slots, candidates))
+                        .isInstanceOf(IndexOutOfBoundsException.class);
+                assertThatThrownBy(() -> table.findSlots(probes, probes.length, slots, probes))
+                        .isInstanceOf(IllegalArgumentException.class);
+                table.findSlots(probes, 0, slots, candidates);
+                assertThat(slots[probes.length]).isEqualTo(123456);
+            }
+            finally {
+                table.release();
+            }
+        }
+    }
 
     @Test
     void ownsGroupedSlotsLazyDuplicateStateGrowthAndRelease()
@@ -86,6 +135,12 @@ class TestLongJoinHashTable
                 assertThat(table.head(slot)).isEqualTo(index);
             }
             assertThat(table.findSlotForInsert(keys[32])).isEqualTo(~16);
+            int[] slots = new int[keys.length];
+            table.findSlots(keys, keys.length, slots, new long[keys.length]);
+            for (int index = 0; index < keys.length - 1; index++) {
+                assertThat(slots[index]).isEqualTo((48 + index) & 63);
+            }
+            assertThat(slots[keys.length - 1]).isEqualTo(-1);
         }
         finally {
             table.release();

@@ -166,6 +166,12 @@ public final class HashJoinSession
         return outputRoot.outputSchema();
     }
 
+    /// Immutable observation of this session's probe strategy; prepared-build siblings have separate counters.
+    public HashJoinProbeStatistics probeStatistics()
+    {
+        return join.probeStatistics();
+    }
+
     public HashJoinSession withOutputs(int... outputChannels)
     {
         checkAcceptingInput();

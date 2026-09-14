@@ -2352,6 +2352,15 @@ public class HashJoinOperator
         return bufferedInner;
     }
 
+    /// Probe-view-local counters. Reading them does not build or finalize the join.
+    public HashJoinProbeStatistics probeStatistics()
+    {
+        if (joinIndex instanceof LongJoinIndex index) {
+            return index.probeBatch.statistics();
+        }
+        return new HashJoinProbeStatistics(0, 0, 0, 0, 0, false, HashJoinProbeStatistics.Decision.NOT_OBSERVED);
+    }
+
     public HashJoinOperator withProfileName(String profileName)
     {
         this.profileName = profileName;
@@ -4594,6 +4603,7 @@ public class HashJoinOperator
         // count in 8 bits, preserving the same insertion-ordered slices as the ordinary compacted hash representation.
         private final CompressedLongRangeIndex compressedRanges;
         private final JoinMatchScratch matchScratch = new JoinMatchScratch();
+        private final LongJoinProbeBatch probeBatch;
         private final boolean ownsStorage;
 
         private LongJoinIndex(
@@ -4616,6 +4626,7 @@ public class HashJoinOperator
             this.outputPolicy = requireNonNull(outputPolicy, "outputPolicy is null");
             this.executionPolicy = requireNonNull(executionPolicy, "executionPolicy is null");
             this.arrayPool = arrayPool;
+            this.probeBatch = new LongJoinProbeBatch(executionPolicy.probeBatchPolicy(), arrayPool);
             this.buildCardinality = new LongJoinBuildCardinality();
             this.sparseMembership = new SparseLongRangeMembership(policy, arrayPool);
             this.compressedRanges = new CompressedLongRangeIndex(
@@ -4700,6 +4711,7 @@ public class HashJoinOperator
             this.outputPolicy = prepared.outputPolicy;
             this.executionPolicy = prepared.executionPolicy;
             this.arrayPool = prepared.arrayPool;
+            this.probeBatch = new LongJoinProbeBatch(executionPolicy.probeBatchPolicy(), arrayPool);
             this.hashTable = prepared.hashTable;
             this.rows = prepared.rows;
             this.buildCardinality = prepared.buildCardinality;
@@ -4726,7 +4738,7 @@ public class HashJoinOperator
         long retainedBytes()
         {
             if (!ownsStorage) {
-                return denseSequence.retainedBytes();
+                return Math.addExact(denseSequence.retainedBytes(), probeBatch.retainedBytes());
             }
             long bytes = Math.addExact(hashTable.retainedBytes(), rows.retainedBytes());
             bytes = Math.addExact(bytes, directLookup.retainedBytes());
@@ -4734,7 +4746,8 @@ public class HashJoinOperator
             bytes = Math.addExact(bytes, denseSequence.retainedBytes());
             bytes = Math.addExact(bytes, directBuild.retainedBytes());
             bytes = Math.addExact(bytes, compactedRows.retainedBytes());
-            return Math.addExact(bytes, compressedRanges.retainedBytes());
+            bytes = Math.addExact(bytes, compressedRanges.retainedBytes());
+            return Math.addExact(bytes, probeBatch.retainedBytes());
         }
 
         @Override
@@ -5141,6 +5154,25 @@ public class HashJoinOperator
             if (!finalized) {
                 finalizeForProbe(positionCount);
             }
+            boolean eligible = !directBuild.isActive() && !directLookup.isActive() && !denseSequence.referencesActive() &&
+                    hashTable.supportsBatchedProbes() && probeBatch.eligible(hashTable.capacity(), positionCount);
+            boolean batched = eligible && probeBatch.batching();
+            if (batched) {
+                Vector nulls = nullsArray == null ? null : nullsArray[0];
+                probeBatch.lookup(hashTable, rows, sparseMembership, VectorAccess.longValues(valuesArray[0]),
+                        hasNulls && nulls != null ? VectorAccess.booleanValues(nulls) : null,
+                        positions, positionCount, refs, NO_MATCH_ROW_REFERENCE);
+            }
+            else {
+                matchSingleRowsScalar(valuesArray, nullsArray, hasNulls, positions, positionCount, refs);
+            }
+            if (eligible) {
+                probeBatch.observe(refs, positionCount, NO_MATCH_ROW_REFERENCE, batched);
+            }
+        }
+
+        private void matchSingleRowsScalar(Vector[] valuesArray, Vector[] nullsArray, boolean hasNulls, int[] positions, int positionCount, long[] refs)
+        {
             Vector values = valuesArray[0];
             Vector nulls = nullsArray == null ? null : nullsArray[0];
             if (policy.denseSingleBatchProbeSpecialization() && denseSequence.referencesActive()) {
@@ -6878,11 +6910,13 @@ public class HashJoinOperator
             compactedRows.release();
             compressedRanges.release();
             denseSequence.release();
+            probeBatch.release();
         }
 
         @Override
         void releaseProbeBuffers()
         {
+            probeBatch.release();
             if (!ownsStorage) {
                 denseSequence.release();
             }
