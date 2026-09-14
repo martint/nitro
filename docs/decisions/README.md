@@ -226,3 +226,4 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | [0143](0143-release-rejected-grouped-dictionary-mappings.md) | Release rejected grouped dictionary mappings | accepted |
 | [0144](0144-skip-membership-prechecks-for-high-hit-probe-batches.md) | Skip membership prechecks for high-hit probe batches | rejected |
 | [0145](0145-batch-independent-grouped-join-build-lookups.md) | Batch independent grouped join build lookups | rejected |
+| [0146](0146-register-compact-narrow-integral-key-storage.md) | Register compact narrow integral key storage | rejected |
