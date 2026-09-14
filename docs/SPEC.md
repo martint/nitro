@@ -913,6 +913,10 @@ pass validation; a failed suite may resume at the first uncheckpointed point in 
 bounded allocator high-water state, immutable metadata, and file-cache state are part of the warmed suite condition.
 Query-owned reservations and resources must return to baseline at query close.
 
+Independent JVMs can reach different compiler states despite locally stable timings. Preserve nonstationary
+iteration histories rather than selecting a fast tail. Compiler-tier component diagnostics can qualify a
+batch-invariant loop improvement, but do not replace warmed query measurements or establish their stability.
+
 Primary metrics are latency, CPU core-seconds, allocated bytes, and peak memory. Reports include absolutes, a fixed
 subject/control ratio, ranges, CPU-seconds per second of latency, geometric-mean suite summaries, and per-query spread.
 
