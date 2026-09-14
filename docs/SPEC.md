@@ -783,6 +783,11 @@ Host `Page`/`Block` adaptation is permitted only at explicit ingress or egress w
 available. Adaptation preserves laziness, encoding, companion-stream semantics, logical length, and ownership wherever
 the host representation permits it.
 
+An egress adapter may establish the exact selected distinct dictionary-ID count before constructing a compact domain and
+apply its existing encoding policy to that count. Such proofs are scoped to the immutable batch mapping and actual
+selection, and may be shared across sibling columns. Distinct physical IDs do not prove distinct logical values.
+Unproven mappings retain the normal compaction and admission path.
+
 At a synchronous remote-output egress, the host may declare a callback-scoped, non-retaining consumer that copies
 every selected value into destination-owned storage before returning. The host integration may then expose an exact
 temporary host view over borrowed Nitro value storage for each output channel whose registered type adapter proves
