@@ -235,3 +235,4 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | [0152](0152-bound-partition-remapping-by-admitted-reuse.md) | Bound partition remapping by admitted reuse | accepted |
 | [0153](0153-share-constructed-partition-copy-pools.md) | Share constructed partition-copy pools | accepted |
 | [0154](0154-reject-unreused-ordered-egress-domains.md) | Reject unreused ordered egress domains before compaction | accepted |
+| [0155](0155-reconsider-grouped-build-batching-after-transitions.md) | Reconsider grouped build batching after transitions | rejected |
