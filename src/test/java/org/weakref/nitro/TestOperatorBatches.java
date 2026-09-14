@@ -6439,6 +6439,31 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testHashJoinBatchConstraintNarrowsLazyProbePayloadDemand()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            Operator probe = lazyNonRetainedOuterOperator(
+                    new long[] {1L, 2L, 3L},
+                    new long[] {10L, 20L, 30L});
+            try (Operator join = new HashJoinOperator(
+                    allocator,
+                    probe,
+                    0,
+                    new ConstantTableOperator(allocator, 1, List.of(row(1L), row(2L), row(3L))),
+                    0);
+                    Batch batch = join.next()) {
+                assertThat(batch.borrowMask().count()).isEqualTo(3);
+                batch.constrain(Mask.sparse(new int[] {1}, 3));
+                assertThat(longValue(batch.output(1).borrow(Stream.VALUES), 1)).isEqualTo(20L);
+                Mask demanded = ((SingleBatchOperator) probe).currentMask();
+                assertThat(demanded.count()).isOne();
+                assertThat(demanded.position(0)).isEqualTo(1);
+            }
+        }
+    }
+
+    @Test
     void testHashJoinOperatorRetainsOuterConstraintUntilClose()
     {
         try (EngineResources resources = EngineResources.createDefault();

@@ -231,3 +231,4 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | [0148](0148-hoist-dense-average-input-bounds.md) | Hoist dense average input bounds | accepted |
 | [0149](0149-admit-build-dictionaries-from-cumulative-demand.md) | Admit build dictionaries from cumulative demand | rejected |
 | [0150](0150-transfer-exclusive-native-partition-output-ownership.md) | Transfer exclusive native partition output ownership | accepted |
+| [0151](0151-propagate-hash-join-batch-constraints.md) | Propagate hash-join batch constraints to lazy payloads | accepted |

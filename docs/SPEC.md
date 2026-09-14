@@ -423,6 +423,8 @@ constraint without this output-lifetime guarantee cannot recycle potentially bor
 Consumers selecting rows from an owned source batch propagate each selection through that batch's lifecycle once;
 they do not first invoke an independent operator-level reset for the same transition. Forwarding lifecycles preserve
 this order recursively so scratch is not discarded before its outputs have been invalidated.
+The producer's batch constraint handler updates the selection used for lazy output materialization; replacing only
+the batch-visible mask is insufficient to constrain upstream payload demand.
 
 Constrained reborrow, retention across source advancement, and open-batch availability checks are distinct
 capabilities. Reborrow does not authorize polling a source while its current batch remains open. A consumer may

@@ -762,7 +762,7 @@ public class HashJoinOperator
         long afterBuildOutputs = System.nanoTime();
         return new Batch(
                 batchMask,
-                _ -> {},
+                this::constrain,
                 takenMask -> allocator.transfer(allocationContext, takenMask),
                 releasedMask -> allocator.release(allocationContext, releasedMask),
                 innerOutputMappings,
