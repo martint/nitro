@@ -775,12 +775,18 @@ the host representation permits it.
 
 At a synchronous remote-output egress, the host may declare a callback-scoped, non-retaining consumer that copies
 every selected value into destination-owned storage before returning. The host integration may then expose an exact
-temporary host view over borrowed Nitro value storage when every output channel's registered type adapter proves the
-physical representation compatible. Dense views expose only the logical range. Sparse views may carry a temporary
+temporary host view over borrowed Nitro value storage for each output channel whose registered type adapter proves
+the physical representation compatible. A callback may mix borrowed compatible channels with independently owned
+conversion of incompatible channels over the actual selection. Owning dictionary conversion retains its existing
+domain-cache, mixed-encoding and externalization policy; borrowing a sibling does not reset that policy. Retaining
+consumers receive fully owning pages. Dense views expose only the logical range. Sparse views may carry a temporary
 selection mapping over the borrowed flat base, but the destination must consume that mapping directly or complete any
 encoding-preserving serialization within the callback; neither the view, its base, nor a transitive wrapper may remain
 reachable afterward. Semantic transformations such as `CHAR` normalization and unsupported vector layouts require
-the ordinary owning adaptation path. The source batch closes only after the synchronous consumer returns.
+owning conversion of those channels, not of their compatible siblings. The source batch closes only after the
+synchronous consumer returns. Selecting the existing borrowed callback can select a different destination append
+path; performance qualification must cover its encoding consumption, not assume identical buffering behavior merely
+because host implementation code is unchanged.
 
 A sparse borrowed base exposes only the prefix through the highest selected position. The original mask-domain
 width is not a requirement that every vector retain storage for an unused suffix. Selected values must exist;

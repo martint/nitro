@@ -1,6 +1,8 @@
 # ADR-0098: Borrow remote-output storage through synchronous destination append
 
 - **Status:** accepted
+- **Amended by:** [ADR-0141](0141-mix-owned-and-borrowed-synchronous-egress.md), which replaces all-channel admission
+  with per-channel borrowed/owned conversion while preserving the non-retaining consumer contract below.
 - **Date:** 2026-09-10
 - **Spec:** §15, §17, §18
 - **Supersedes:** [ADR-0033](0033-defer-destination-owned-exchange-accumulation.md)
