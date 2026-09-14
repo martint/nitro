@@ -216,3 +216,4 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | [0133](0133-copy-primitive-vector-selections-without-boxing.md) | Copy primitive vector selections without boxing | accepted |
 | [0134](0134-constrain-selected-batches-once.md) | Constrain selected batches once | accepted |
 | [0135](0135-pack-value-interner-fingerprints-with-stable-ids.md) | Pack value interner fingerprints with stable IDs | rejected |
+| [0136](0136-cache-canonical-character-domains-at-retained-boundaries.md) | Cache canonical character domains at retained boundaries | rejected |
