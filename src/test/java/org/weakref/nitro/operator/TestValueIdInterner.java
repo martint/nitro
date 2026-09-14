@@ -108,6 +108,29 @@ class TestValueIdInterner
     }
 
     @Test
+    void preservesCollidingValuesThroughGrowthAndOverflow()
+    {
+        ValueIdInterner interner = new ValueIdInterner(1024, DEFAULT_POLICY);
+        byte[] first = bytes("collision-value-5664");
+        byte[] second = bytes("collision-value-42684");
+        int hash = OperatorVectorSupport.binaryHash(first);
+        assertThat(OperatorVectorSupport.binaryHash(second)).isEqualTo(hash);
+        assertThat(interner.intern(first, 0, first.length, hash)).isZero();
+        assertThat(interner.intern(second, 0, second.length, hash)).isEqualTo(1);
+
+        for (int index = 2; index < 1024; index++) {
+            assertThat(intern(interner, "growth-value-" + index)).isEqualTo(index);
+        }
+        assertThat(interner.intern(first, 0, first.length, hash)).isZero();
+        assertThat(interner.intern(second, 0, second.length, hash)).isEqualTo(1);
+        assertThat(intern(interner, "overflow")).isEqualTo(ValueIdInterner.TOO_MANY);
+        assertThat(interner.find(second, 0, second.length)).isEqualTo(1);
+        assertThat(interner.find(first, 0, first.length)).isZero();
+        assertThat(interner.value(0)).isEqualTo(first);
+        assertThat(interner.value(1)).isEqualTo(second);
+    }
+
+    @Test
     void distinguishesPrefixesAndDifferentLengths()
     {
         ValueIdInterner interner = new ValueIdInterner(1000, DEFAULT_POLICY);
