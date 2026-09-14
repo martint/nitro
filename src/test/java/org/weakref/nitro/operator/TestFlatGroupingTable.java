@@ -3896,6 +3896,39 @@ class TestFlatGroupingTable
     }
 
     @Test
+    void testRejectedGroupedDictionaryOutputReleasesMappings()
+    {
+        Vector[] values = {
+                DictionaryVector.wrapNested(new int[] {0, 1, 0, 1}, 4, utf8("alpha", "beta")),
+                new I64Vector(new long[] {0, 1, 2, 3})};
+        Vector[] nulls = {null, null};
+        FlatKeyLayout layout = FlatKeyLayout.tryCreate(values, true, arrayPool, codeGeneration, flatKeyTablePolicy);
+        FlatGroupingTable table = new FlatGroupingTable(layout, 4, true);
+        Allocator allocator = new Allocator(engineResources);
+        Allocator.Context context = new Allocator.Context("rejectedGroupedDictionaryOutput");
+        try {
+            table.beginBatch(values, nulls);
+            for (int position = 0; position < 4; position++) {
+                assertThat(table.assignGroup(values, nulls, position, position)).isEqualTo(position);
+            }
+            table.endBatch();
+            assertThat(layout.tryGroupedValuesAsDictionary(table, 0, 8, Mask.all(8), allocator, context)).isNull();
+            assertThat(table.groupedValueRangeAsDictionary(0, 2, 4, Mask.all(4), allocator, context)).isNull();
+            long allocatedAfterWarmup = allocator.totalBytes(context);
+            for (int iteration = 0; iteration < 10; iteration++) {
+                assertThat(layout.tryGroupedValuesAsDictionary(table, 0, 8, Mask.all(8), allocator, context)).isNull();
+                assertThat(allocator.totalBytes(context)).isEqualTo(allocatedAfterWarmup);
+                assertThat(table.groupedValueRangeAsDictionary(0, 2, 4, Mask.all(4), allocator, context)).isNull();
+                assertThat(allocator.totalBytes(context)).isEqualTo(allocatedAfterWarmup);
+            }
+        }
+        finally {
+            table.releaseBuffers();
+            allocator.release(context);
+        }
+    }
+
+    @Test
     void testNormalizedIntKeyPreservesCompleteEqualityAcrossBinaryEncodings()
     {
         Vector[] firstValues = {

@@ -521,6 +521,10 @@ Temporary domain lookup storage and the output mapping derived from it have sepa
 may return its non-escaping lookup scratch to the primitive pool after remapping, but published mapping IDs must
 remain valid for every output that shares them, independently of subsequent scratch reuse.
 
+A speculative representation owns any temporary mapping it allocates until it either publishes the result or
+rejects the attempt. Rejection returns that unpublished storage immediately; enclosing query or allocator-context
+cleanup is not a substitute for releasing each failed attempt.
+
 ## 12. Stateful and extensible operators
 
 ### 12.1 Aggregation and window functions

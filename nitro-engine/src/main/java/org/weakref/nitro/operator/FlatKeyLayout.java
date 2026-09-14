@@ -2595,6 +2595,9 @@ class FlatKeyLayout
         for (int index : mask) {
             int recordIndex = table.recordIndex(index);
             if (recordIndex < 0) {
+                if (ownedDictionaryIds != null) {
+                    allocator.release(allocationContext, ownedDictionaryIds);
+                }
                 return null;
             }
             if (table.fieldNull(recordIndex, fieldIndex)) {
@@ -2603,6 +2606,9 @@ class FlatKeyLayout
             }
             int globalId = groupedDictionaryId(table, fieldIndex, recordIndex, recordIds);
             if (globalId < 0 || globalId >= distinct) {
+                if (ownedDictionaryIds != null) {
+                    allocator.release(allocationContext, ownedDictionaryIds);
+                }
                 return null;
             }
             dictionaryIds[index] = globalId;
@@ -2650,6 +2656,9 @@ class FlatKeyLayout
         for (int outputPosition : outputMask) {
             int recordIndex = table.recordIndex(sourceStart + outputPosition);
             if (recordIndex < 0) {
+                if (ownedDictionaryIds != null) {
+                    allocator.release(allocationContext, ownedDictionaryIds);
+                }
                 return null;
             }
             if (table.fieldNull(recordIndex, fieldIndex)) {
@@ -2658,6 +2667,9 @@ class FlatKeyLayout
             }
             int globalId = groupedDictionaryId(table, fieldIndex, recordIndex, recordIds);
             if (globalId < 0 || globalId >= distinct) {
+                if (ownedDictionaryIds != null) {
+                    allocator.release(allocationContext, ownedDictionaryIds);
+                }
                 return null;
             }
             dictionaryIds[outputPosition] = globalId;
