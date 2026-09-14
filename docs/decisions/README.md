@@ -227,3 +227,4 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | [0144](0144-skip-membership-prechecks-for-high-hit-probe-batches.md) | Skip membership prechecks for high-hit probe batches | rejected |
 | [0145](0145-batch-independent-grouped-join-build-lookups.md) | Batch independent grouped join build lookups | rejected |
 | [0146](0146-register-compact-narrow-integral-key-storage.md) | Register compact narrow integral key storage | rejected |
+| [0147](0147-compact-repeated-unified-join-value-domains.md) | Compact repeated unified join value domains | rejected |
