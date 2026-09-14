@@ -503,6 +503,10 @@ lifetime rather than taking individual vector objects out of the enclosing lease
 transferred lifetime after the batch is consumed. No interval may leave live storage uncharged, and the handoff must
 not double-charge one physical allocation.
 
+Fresh independently copied partition outputs expose their existing exclusive retained lifetime to asynchronous
+consumers. Consumers require that explicit transfer capability; allocator provenance alone does not authorize
+retention or justify bypassing the ownership check.
+
 Host-backed lazy input is charged when each column materializes, not by forcing the host page to load at ingress.
 The reservation follows the complete source-batch lifetime and therefore covers a materialized vector retained by a
 blocking consumer while preserving selection-driven lazy reads for columns that are never demanded.

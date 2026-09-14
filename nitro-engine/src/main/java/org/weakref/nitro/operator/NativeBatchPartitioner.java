@@ -222,7 +222,7 @@ public final class NativeBatchPartitioner
                         (stream, vector) -> allocator.transfer(context, vector),
                         (stream, vector) -> allocator.release(context, vector));
             }
-            return new Batch(Mask.all(count), outputs);
+            return RetainedBatch.retain(allocator, new Batch(Mask.all(count), outputs), columns.length);
         }
         catch (RuntimeException | Error failure) {
             allocator.release(context);

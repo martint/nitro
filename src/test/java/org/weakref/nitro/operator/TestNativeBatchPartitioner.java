@@ -38,12 +38,52 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class TestNativeBatchPartitioner
 {
+    @Test
+    void transfersExclusivePartitionTreesWithoutCopying()
+            throws Exception
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                Allocator foreignAllocator = new Allocator(resources)) {
+            int[] ids = {0, 1, 0, 1, 0, 1};
+            I64Vector values = new I64Vector(new long[] {10, 20});
+            try (Batch source = new Batch(
+                    Mask.all(ids.length),
+                    Output.of(Streams.ofValues(DictionaryVector.wrap(ids, values))),
+                    Output.of(Streams.ofValues(DictionaryVector.wrap(ids, new I64Vector(new long[] {30, 40})))))) {
+                NativeBatchPartitioner partitioner = new NativeBatchPartitioner(allocator, 2, 1, NativeBatchPartitionPolicy.defaults());
+                Batch partition = partitioner.partition(source, new int[ids.length]).getFirst().batch();
+                try (partition) {
+                    DictionaryVector first = (DictionaryVector) partition.output(0).borrow(Stream.VALUES);
+                    DictionaryVector second = (DictionaryVector) partition.output(1).borrow(Stream.VALUES);
+                    assertThat(first.ids()).isSameAs(second.ids());
+                    assertThat(partition.tryDetachRetainedVectorsForAsyncRelease(foreignAllocator)).isEmpty();
+                    try (Allocator.AsyncVectorTreeLease lease = partition.tryDetachRetainedVectorsForAsyncRelease(allocator).orElseThrow()) {
+                        assertThat(partition.output(0).borrow(Stream.VALUES)).isSameAs(first);
+                        partition.close();
+                        Arrays.fill(ids, 1);
+                        Arrays.fill(values.values(), -1);
+                        assertThat(first.ids()).containsExactly(0, 1, 0, 1, 0, 1);
+                        assertThat(((I64Vector) first.values()).values()).startsWith(10, 20);
+                        assertThat(((I64Vector) second.values()).values()).startsWith(30, 40);
+                        FutureTask<Void> release = new FutureTask<>(lease::close, null);
+                        Thread releaser = new Thread(release);
+                        releaser.start();
+                        release.get(10, TimeUnit.SECONDS);
+                    }
+                }
+            }
+        }
+    }
+
     @Test
     void reusesTemporaryRemappingWithoutAliasingPublishedIds()
     {
