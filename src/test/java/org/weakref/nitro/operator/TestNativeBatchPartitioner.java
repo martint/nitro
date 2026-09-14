@@ -47,6 +47,72 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class TestNativeBatchPartitioner
 {
     @Test
+    void stopsRemappingWhenSelectedDomainCannotMeetReuse()
+    {
+        try (AllocationResources resources = new AllocationResources(new PrimitiveArrayPool(1 << 20, 0), new PrimitiveArrayPool(0, 0));
+                Allocator allocator = new Allocator(resources);
+                Batch source = new Batch(
+                        Mask.all(7),
+                        Output.of(Streams.ofValues(DictionaryVector.wrap(
+                                new int[] {0, 1, 2, 3, 4, 5, 6},
+                                new I64Vector(new long[] {10, 20, 30, 40, 50, 60, 70, 80})))))) {
+            int[] scratch = allocator.primitiveArrays().borrowInts(8);
+            allocator.primitiveArrays().release(scratch);
+            NativeBatchPartitioner partitioner = new NativeBatchPartitioner(allocator, 1, 1, new NativeBatchPartitionPolicy(true, 3, 8));
+            try (Batch partition = partitioner.partition(source, new int[7]).getFirst().batch()) {
+                assertThat(partition.output(0).borrow(Stream.VALUES)).isInstanceOf(I64Vector.class);
+                assertThat(values(partition)).containsExactly(10, 20, 30, 40, 50, 60, 70);
+                int[] reused = allocator.primitiveArrays().borrowInts(8);
+                try {
+                    assertThat(reused).isSameAs(scratch);
+                    assertThat(reused[0]).isZero();
+                    assertThat(reused[1]).isOne();
+                    // Two distinct entries already exhaust floor(7 / 3); the third ends the attempt.
+                    assertThat(reused[2]).isEqualTo(-1);
+                    assertThat(reused[6]).isEqualTo(-1);
+                }
+                finally {
+                    allocator.primitiveArrays().release(reused);
+                }
+            }
+        }
+    }
+
+    @Test
+    void preservesDictionaryAdmissionAtReuseAndEntryLimits()
+    {
+        for (int baseSize : new int[] {8, 64}) {
+            for (int minimumReuse : new int[] {1, 2, 3, 4, Integer.MAX_VALUE}) {
+                for (int maximumEntries : new int[] {0, 1, 2, 8}) {
+                    long[] base = new long[baseSize];
+                    base[5] = 50;
+                    base[7] = 70;
+                    NativeBatchPartitionPolicy policy = new NativeBatchPartitionPolicy(true, minimumReuse, maximumEntries);
+                    try (EngineResources resources = EngineResources.createDefault();
+                            Allocator allocator = new Allocator(resources);
+                            Batch source = new Batch(
+                                    Mask.sparse(new int[] {0, 2, 3, 4, 5, 6, 7}, 8),
+                                    Output.of(Streams.ofValues(DictionaryVector.wrap(
+                                            new int[] {5, 0, 7, 5, 7, 5, 7, 5}, new I64Vector(base)))))) {
+                        NativeBatchPartitioner partitioner = new NativeBatchPartitioner(allocator, 1, 1, policy);
+                        try (Batch partition = partitioner.partition(source, new int[7]).getFirst().batch()) {
+                            Vector output = partition.output(0).borrow(Stream.VALUES);
+                            assertThat(output instanceof DictionaryVector).isEqualTo(policy.preserveDictionary(2, 7));
+                            if (output instanceof DictionaryVector dictionary) {
+                                assertThat(dictionary.ids()).containsExactly(0, 1, 0, 1, 0, 1, 0);
+                                assertThat(((I64Vector) dictionary.values()).values()).containsExactly(50, 70);
+                            }
+                            else {
+                                assertThat(values(partition)).containsExactly(50, 70, 50, 70, 50, 70, 50);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
     void transfersExclusivePartitionTreesWithoutCopying()
             throws Exception
     {

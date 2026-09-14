@@ -263,7 +263,10 @@ public final class NativeBatchPartitioner
         if (!policy.preserveDictionaryEncoding() || policy.maximumCopiedDictionaryEntries() == 0) {
             return DictionaryRemapping.NOT_PRESERVED;
         }
-        int maximumDictionarySize = Math.min(count, policy.maximumCopiedDictionaryEntries());
+        int maximumDictionarySize = Math.min(count / policy.minimumDictionaryReuse(), policy.maximumCopiedDictionaryEntries());
+        if (maximumDictionarySize == 0) {
+            return DictionaryRemapping.NOT_PRESERVED;
+        }
         int[] dictionaryPositions = new int[maximumDictionarySize];
         int[] ids = new int[count];
         int dictionarySize = mapping.baseValues().length() <= policy.maximumCopiedDictionaryEntries()

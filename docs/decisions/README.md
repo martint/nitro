@@ -232,3 +232,4 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | [0149](0149-admit-build-dictionaries-from-cumulative-demand.md) | Admit build dictionaries from cumulative demand | rejected |
 | [0150](0150-transfer-exclusive-native-partition-output-ownership.md) | Transfer exclusive native partition output ownership | accepted |
 | [0151](0151-propagate-hash-join-batch-constraints.md) | Propagate hash-join batch constraints to lazy payloads | accepted |
+| [0152](0152-bound-partition-remapping-by-admitted-reuse.md) | Bound partition remapping by admitted reuse | accepted |
