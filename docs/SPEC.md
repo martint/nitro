@@ -137,6 +137,12 @@ row-count-sized identity-position array. Flat vectors may bulk-copy storage, enc
 runs or mappings, and the compatibility default copies individual positions without allocating range metadata.
 Representation-specific range copying preserves the ordinary destination ownership and allocator-context rules.
 
+Binary region access may prove that all positions share one backing array without reading a logical position.
+Encoded mappings may propagate that physical capability; multi-buffer implementations may leave it absent. The
+array remains borrowed for the binding lifetime: shared storage proves neither immutable contents nor ownership
+transfer. Consumers may bind one temporary host byte view for the invocation, but logical normalization remains
+provider-owned and a retaining host boundary still creates independently owned output storage (ADR-0137).
+
 Dense concatenation preserves a common encoded representation when it can compose the physical domains exactly. In
 particular, concatenating RLE segments concatenates their run counts and materializes only their physical run-value
 domains; it does not expand runs into one value per logical row. Mixed or incompatible representations retain the

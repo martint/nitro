@@ -13,6 +13,8 @@
  */
 package org.weakref.nitro.data;
 
+import java.util.Optional;
+
 import static java.util.Objects.requireNonNull;
 
 public final class VectorAccess
@@ -712,6 +714,12 @@ public final class VectorAccess
             case BinaryVector values -> new BinaryRegions()
             {
                 @Override
+                public Optional<byte[]> sharedData()
+                {
+                    return Optional.of(values.data());
+                }
+
+                @Override
                 public byte[] data(int position)
                 {
                     return values.data();
@@ -734,6 +742,12 @@ public final class VectorAccess
                 int offset = region.offset();
                 yield new BinaryRegions()
                 {
+                    @Override
+                    public Optional<byte[]> sharedData()
+                    {
+                        return values.sharedData();
+                    }
+
                     @Override
                     public byte[] data(int position)
                     {
@@ -759,6 +773,12 @@ public final class VectorAccess
                 yield new BinaryRegions()
                 {
                     @Override
+                    public Optional<byte[]> sharedData()
+                    {
+                        return dictionaryValues.sharedData();
+                    }
+
+                    @Override
                     public byte[] data(int position)
                     {
                         return dictionaryValues.data(ids[position]);
@@ -782,6 +802,12 @@ public final class VectorAccess
                 int[] hint = {0};
                 yield new BinaryRegions()
                 {
+                    @Override
+                    public Optional<byte[]> sharedData()
+                    {
+                        return runValues.sharedData();
+                    }
+
                     private int run(int position)
                     {
                         int run = values.runIndexFromHint(position, hint[0]);
@@ -838,6 +864,14 @@ public final class VectorAccess
 
     public interface BinaryRegions
     {
+        /// Returns the backing array when every position shares it, without reading any logical position.
+        /// The array remains borrowed, with the same lifetime as this binding. This proves neither immutable content
+        /// nor ownership transfer. Implementations spanning multiple arrays may leave the capability absent.
+        default Optional<byte[]> sharedData()
+        {
+            return Optional.empty();
+        }
+
         byte[] data(int position);
 
         int offset(int position);
