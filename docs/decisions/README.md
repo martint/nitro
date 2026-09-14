@@ -225,3 +225,4 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | [0142](0142-preserve-dictionaries-for-non-null-grouped-ranges.md) | Preserve dictionaries for non-null grouped ranges | rejected |
 | [0143](0143-release-rejected-grouped-dictionary-mappings.md) | Release rejected grouped dictionary mappings | accepted |
 | [0144](0144-skip-membership-prechecks-for-high-hit-probe-batches.md) | Skip membership prechecks for high-hit probe batches | rejected |
+| [0145](0145-batch-independent-grouped-join-build-lookups.md) | Batch independent grouped join build lookups | rejected |
