@@ -218,3 +218,4 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | [0135](0135-pack-value-interner-fingerprints-with-stable-ids.md) | Pack value interner fingerprints with stable IDs | rejected |
 | [0136](0136-cache-canonical-character-domains-at-retained-boundaries.md) | Cache canonical character domains at retained boundaries | rejected |
 | [0137](0137-reuse-byte-views-during-character-egress.md) | Reuse byte views during character egress | accepted |
+| [0138](0138-discover-grouping-hash-consumers-inside-islands.md) | Discover grouping-hash consumers inside islands | rejected |
