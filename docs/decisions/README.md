@@ -237,3 +237,4 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | [0154](0154-reject-unreused-ordered-egress-domains.md) | Reject unreused ordered egress domains before compaction | accepted |
 | [0155](0155-reconsider-grouped-build-batching-after-transitions.md) | Reconsider grouped build batching after transitions | rejected |
 | [0156](0156-copy-boundary-selections-in-bulk.md) | Copy boundary selections in bulk | rejected; removed after SQL qualification |
+| [0157](0157-separate-hash-generation-from-probe-fusion-admission.md) | Separate hash generation from probe-fusion admission | rejected; SQL targets did not activate the trial |
