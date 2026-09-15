@@ -713,6 +713,12 @@ This proof must not silently substitute a narrower density budget for an otherwi
 batch insertion honors its existing admission budget and observes any direct-to-hash transition within the batch
 before accessing direct storage again.
 
+The bounded-range branch of the default payload hash-capping policy admits builds from 4,000,000 expected rows,
+subject to its sampled nonnegative domain check. Other admission branches retain their distinctness and size rules.
+Exact insertion remains authoritative if later keys escape the sampled domain. This construction choice can retain
+more direct-map storage than presized hashing; qualification must include peak memory and neighboring build sizes,
+not only target-query CPU.
+
 Dynamic filtering has one logical lifecycle: build evidence becomes a published immutable constraint with exact
 semantics and bounded representation. Nitro operators and connector/source capabilities may consume it. The source may
 use row-group statistics, page indexes, dictionaries, bloom filters, or value-level filtering; the join retains exact

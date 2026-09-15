@@ -64,7 +64,7 @@ class TestHashJoinOperatorResources
         assertThat(buildPolicy.pairHashCapMaxDomainPercent()).isEqualTo(25);
         assertThat(buildPolicy.payloadHashCapAlwaysExpectedRows()).isEqualTo(40_000_000);
         assertThat(buildPolicy.payloadHashCapMaxDistinctPercent()).isEqualTo(25);
-        assertThat(buildPolicy.payloadHashCapBoundedExpectedRows()).isEqualTo(5_000_000);
+        assertThat(buildPolicy.payloadHashCapBoundedExpectedRows()).isEqualTo(4_000_000);
         assertThat(outputPolicy.buildDictionarySparseRatio()).isEqualTo(8);
         assertThat(outputPolicy.buildDictionaryMinDistinctValues()).isEqualTo(16);
         assertThat(outputPolicy.buildDictionaryMaxDistinctPercent()).isEqualTo(50);

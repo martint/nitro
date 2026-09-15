@@ -31,6 +31,36 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class TestGenericJoinIndexFactory
 {
     @Test
+    void testBoundedPayloadAdmissionAroundRowCountBoundaries()
+    {
+        try (EngineResources resources = EngineResources.createDefault()) {
+            GenericJoinIndexFactory indexes = resources.operatorResources().genericJoinIndexes();
+            HashJoinBuildPolicy buildPolicy = resources.operatorResources().hashJoin().buildPolicy();
+            int minimumRows = buildPolicy.payloadHashCapBoundedExpectedRows();
+            long maximumKey = resources.operatorResources().hashJoin().indexPolicy().maxDirectBuildKey();
+            long[] keys = sequence(maximumKey - 32, 1, 32);
+
+            assertThat(indexes.initialHashBuildAdmission(batch(keys), vectors(keys), new Vector[1], minimumRows - 1, false))
+                    .isEqualTo(new GenericJoinIndexFactory.InitialHashBuildAdmission(false, false));
+            for (int expectedRows : new int[] {minimumRows, minimumRows + 1, 4_999_999, 5_000_000, 5_000_001}) {
+                assertThat(indexes.initialHashBuildAdmission(batch(keys), vectors(keys), new Vector[1], expectedRows, false))
+                        .as("bounded unique payload build with %s expected rows", expectedRows)
+                        .isEqualTo(new GenericJoinIndexFactory.InitialHashBuildAdmission(true, true));
+                assertThat(indexes.initialHashBuildAdmission(batch(keys), vectors(keys), new Vector[1], expectedRows, true))
+                        .as("key-only build with %s expected rows", expectedRows)
+                        .isEqualTo(new GenericJoinIndexFactory.InitialHashBuildAdmission(false, false));
+            }
+
+            for (long invalidKey : new long[] {-1, Long.MIN_VALUE, maximumKey, Long.MAX_VALUE}) {
+                keys[keys.length - 1] = invalidKey;
+                assertThat(indexes.initialHashBuildAdmission(batch(keys), vectors(keys), new Vector[1], minimumRows, false))
+                        .as("unique payload sample containing %s", invalidKey)
+                        .isEqualTo(new GenericJoinIndexFactory.InitialHashBuildAdmission(false, false));
+            }
+        }
+    }
+
+    @Test
     void testCappedAdmissionRejectsOnlyProvenImpossibleKeys()
     {
         try (EngineResources resources = EngineResources.createDefault()) {
