@@ -85,7 +85,9 @@ final class DenseDirectLongDuplicateState
 
     int tail(int key, int head)
     {
-        return isAllocated() ? tails[key] : head;
+        // Keys inserted before these arrays existed still have an implicit singleton tail. A later hash
+        // conversion must receive that head, not the uninitialized sentinel, before another duplicate arrives.
+        return !isAllocated() || counts[key] == 0 ? head : tails[key];
     }
 
     int count(int key)

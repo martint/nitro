@@ -852,6 +852,44 @@ class TestHashJoinSession
         }
     }
 
+    @Test
+    void testLateHashFallbackPreservesAnEarlierSingletonTail()
+    {
+        long[] keys = new long[4_100];
+        long[] payload = new long[keys.length];
+        for (int position = 0; position < keys.length; position++) {
+            keys[position] = position & 1;
+            payload[position] = position;
+        }
+        keys[0] = 2;
+        keys[keys.length - 2] = -1;
+        keys[keys.length - 1] = 2;
+
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            allocator.beginExecution();
+            try (HashJoinBuild build = HashJoinSession.prepareBuild(
+                    resources.operatorResources(), allocator, Schema.unspecified(1), new int[] {0},
+                    pairTable(keys, payload), new int[] {0}, false, new int[] {2}).orElseThrow();
+                    HashJoinSession session = new HashJoinSession(
+                            resources.operatorResources(), allocator, Schema.unspecified(1), new int[] {0},
+                            pairTable(new long[0], new long[0]), new int[] {0}, false, build).withOutputs(2)) {
+                session.addInput(batch(2));
+                session.finish();
+                List<Long> actual = new ArrayList<>();
+                while (session.hasOutput()) {
+                    try (Batch output = session.getOutput()) {
+                        VectorAccess.LongValues values = VectorAccess.longValues(output.output(0).borrow(Stream.VALUES));
+                        for (int position : output.borrowMask()) {
+                            actual.add(values.value(position));
+                        }
+                    }
+                }
+                assertThat(actual).containsExactly(0L, 4_099L);
+            }
+        }
+    }
+
     private static void assertSessionOutput(HashJoinSession session, long probeValue)
     {
         List<Long> probeValues = new ArrayList<>();

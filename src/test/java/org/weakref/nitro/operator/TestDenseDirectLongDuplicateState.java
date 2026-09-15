@@ -30,6 +30,7 @@ class TestDenseDirectLongDuplicateState
         assertThat(state.count(1)).isEqualTo(1);
 
         state.allocate(2);
+        assertThat(state.tail(1, 7)).isEqualTo(7);
         state.initializeKey(0, 5);
         state.increment(0);
         assertThat(state.tail(0, 5)).isEqualTo(5);
@@ -41,7 +42,7 @@ class TestDenseDirectLongDuplicateState
         state.resize(2, 4);
         assertThat(state.tail(0, 5)).isEqualTo(9);
         assertThat(state.count(0)).isEqualTo(3);
-        assertThat(state.tail(3, 11)).isEqualTo(-1);
+        assertThat(state.tail(3, 11)).isEqualTo(11);
         assertThat(state.count(3)).isEqualTo(1);
 
         state.release();

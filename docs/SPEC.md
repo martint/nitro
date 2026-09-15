@@ -685,6 +685,9 @@ reports a compatibility provider as native.
 Join algorithms are separate from key semantics. Type bindings and registry functions provide exact hashing,
 comparison, and residual predicates. Physical key layouts may be generated from resolved lanes.
 
+Representation transitions preserve implicit singleton row links as well as explicitly allocated duplicate
+metadata. Allocating metadata for another key must not turn an existing singleton's head/tail into an empty link.
+
 Complete-build bounds over an exact physical key domain may reject impossible probes independently of optional
 bitmap admission. Such bounds are a necessary membership condition, not proof of an in-range match and not a
 logical ordering capability. They must never exclude keys from an incomplete build or overflow at physical endpoints.
