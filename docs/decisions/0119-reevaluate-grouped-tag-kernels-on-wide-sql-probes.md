@@ -37,7 +37,7 @@ drift check, not a reason to keep an unsafe default until it completes.
 
 Local q09 W30/M9 is neutral with overlap. The longer q21 W60/M15 parent/candidate/parent resolves the earlier
 apparent local regression: CPU6.428/6.472/6.449seconds, latency1.534/1.515/1.545seconds, overlapping ranges.
-Candidate full tests pass2160tests; the subsequent independent scalar benchmark/test raises the total to2161.
+Candidate full tests pass 2160 tests; the subsequent independent scalar benchmark/test raises the total to 2161.
 
 Remove the prototype at its introducing mutable commit; retain tests and external frozen snapshots/evidence.
 There is no new policy or opt-in. Profile samples identify investigation targets, not the benefit of a proposed

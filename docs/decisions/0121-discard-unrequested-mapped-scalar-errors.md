@@ -16,7 +16,7 @@ A preallocated-output unit test proved the extra vector unnecessary for those se
 The first SQL revision increased allocation through boxed conditional-copy traversal. Subsequent primitive-loop
 repairs removed or moved the allocation symptom but did not qualify CPU. The broadest repair passed 2,164 Nitro
 tests and local macro guards, yet remote q243 consumed 368.043 core-seconds versus 282.797 for the repeated
-literal-only control (about30% more CPU), with similar allocated bytes. The earlier copy-only revision also lost.
+literal-only control (about 30% more CPU), with similar allocated bytes. The earlier copy-only revision also lost.
 Instrumented and uninstrumented local runs did not consistently reproduce the same allocation state.
 
 ## Decision

@@ -45,9 +45,9 @@ The q23a/q23b historical premature-scan cliff makes those queries mandatory brea
 
 ## Rejection
 
-The q23a breadth check reproduces that cliff: median CPU5.156s becomes14.442s, latency1.360s becomes3.462s,
-allocation5.256GB becomes24.138GB and peak reservation0.445GB becomes1.965GB. Every measured candidate run reads
-184,382,306 physical positions versus155,479,315 before (29 million additional positions); all those ranges are
+The q23a breadth check reproduces that cliff: median CPU 5.156 s becomes 14.442 s, latency 1.360 s becomes 3.462 s,
+allocation 5.256 GB becomes 24.138 GB and peak reservation 0.445 GB becomes 1.965 GB. Every measured candidate run reads
+184,382,306 physical positions versus 155,479,315 before (29 million additional positions); all those ranges are
 separated. The candidate is rejected and both implementation and candidate-specific tests are removed. Retain the
 proposal and patch as evidence, not a production opt-out or dormant path. Remaining paired breadth checks only
 characterize the rejected proposal; they cannot override this established regression.

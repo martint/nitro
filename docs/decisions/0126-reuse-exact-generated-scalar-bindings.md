@@ -56,7 +56,7 @@ increases145.499→189.137seconds (1.2999), latency24.393→31.188seconds (1.278
 heap, topology and physical input; there is no profiler. Earlier local and profiled cache losses also remain evidence.
 
 Unchanged fork variation prevents assigning every earlier difference to caching. It does not justify retaining a
-default with this unresolved30% CPU and38GB allocation loss. Remove the cache and cache-specific tests at the
+default with this unresolved 30% CPU and 38 GB allocation loss. Remove the cache and cache-specific tests at the
 introducing mutable host change; retain this record and frozen implementations/evidence. No opt-in remains.
 Stop further cache qualification rather than spend another macro cohort on an already unqualified candidate.
 

@@ -17,7 +17,7 @@ initial hash allocation is not evidence that the direct representation can hold 
 can expand sparse direct arrays before reaching an unrepresentable key already present in its first batch.
 
 Applying the explicit/streaming density budget to all capped builds was evaluated and declined. It reduced sparse
-component duration and allocation substantially but increased warmed q09 CPU by about3% in both a combined candidate
+component duration and allocation substantially but increased warmed q09 CPU by about 3% in both a combined candidate
 and an admission-only diagnostic. It rejected valid direct maps for existing inputs, including a roughly five-million
 row partition with a first key near46million. The initial capped-build path intentionally tolerated a wider domain;
 the narrower budget was not a behavior-preserving gap fix.

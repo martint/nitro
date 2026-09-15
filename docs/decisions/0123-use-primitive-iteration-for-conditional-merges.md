@@ -7,15 +7,15 @@
 
 ## Evidence and alternatives
 
-An allocation profile localized18–19GB of excess allocation after scratch removal to Integer boxing through
+An allocation profile localized 18–19 GB of excess allocation after scratch removal to Integer boxing through
 PrimitiveIterator.OfInt.next in PlanEvaluator.copyVector. Three repairs were evaluated: explicit nextInt in the
 copy loops; direct dense/sparse copying; and that direct copy plus primitive traversal throughout PlanEvaluator
 and FrameworkManagedScalarFunction.
 
-All preserved focused semantics. The last passed2,164Nitrotests and164Corktests; its local q243 and macro CPU
+All preserved focused semantics. The last passed 2,164 Nitro tests and 164 Cork tests; its local q243 and macro CPU
 guards overlapped the literal-only controls. None qualified the remote ordered q242/q243 CPU comparison.
-q243 medians were368.862s,339.026s and368.043s respectively, versus303.766s for the initial literal-only control
-and282.797s for its repeat. The direct-copy local allocation increase also disappeared under instrumentation,
+q243 medians were 368.862 s, 339.026 s and 368.043 s respectively, versus 303.766 s for the initial literal-only control
+and 282.797 s for its repeat. The direct-copy local allocation increase also disappeared under instrumentation,
 so its later profiles cannot be claimed to locate that unprofiled increase.
 
 ## Decision

@@ -36,21 +36,21 @@ Do not accept based solely on planner tests or profile weights. Keep this experi
 
 The new test fails on the unchanged optimizer and passes with internal discovery, including input-boundary isolation,
 nested-island ownership and repeated discovery. Six focused tests pass. Exact/native q39 execution succeeds and its
-first measured run consumes123authoritative-hash batches rather thanzero. The structural omission is real, but enabling
+first measured run consumes 123 authoritative-hash batches rather than zero. The structural omission is real, but enabling
 the contract does not establish a worthwhile execution improvement.
 
-Local frozen parent/candidate/parent,15warmups/7measurements, distributedtc4/APC6/12GiB:
+Local frozen parent/candidate/parent, 15 warmups / 7 measurements, distributed tc4 / APC6 / 12 GiB:
 
-| Query | ParentA CPU,s | Candidate CPU,s | ParentC CPU,s |
+| Query | Parent A CPU, s | Candidate CPU, s | Parent C CPU, s |
 | --- | ---: | ---: | ---: |
-| ClickBenchq14 | 6.323 | 6.585 | 6.297 |
-| ClickBenchq39 | 0.731 | 0.728 | 0.728 |
-| TPC-DSq22 | 13.443 | 14.209 | 14.627 |
-| TPC-DSq67 | 13.126 | 13.020 | 13.544 |
+| ClickBench q14 | 6.323 | 6.585 | 6.297 |
+| ClickBench q39 | 0.731 | 0.728 | 0.728 |
+| TPC-DS q22 | 13.443 | 14.209 | 14.627 |
+| TPC-DS q67 | 13.126 | 13.020 | 13.544 |
 
-q39CPU ranges overlap both controls and the repeat has exactly the same median. q14's candidate median is4.1–4.6%
+q39 CPU ranges overlap both controls and the repeat has exactly the same median. q14's candidate median is 4.1–4.6%
 higher; its range separates from the first control and overlaps the repeat. q22 reverses direction between drifting
-controls; q67 overlaps the first control. q39allocation rises about4.4–4.6%in point medians, with overlapping ranges.
+controls; q67 overlaps the first control. q39 allocation rises about 4.4–4.6% in point medians, with overlapping ranges.
 These results do not qualify the proposal. The extra portable hash must be produced and transmitted; consumer hash
 avoidance alone is not evidence of net computation reuse. Keep the existing production admission unchanged.
 

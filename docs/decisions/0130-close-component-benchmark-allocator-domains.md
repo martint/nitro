@@ -7,7 +7,7 @@
 
 ## Evidence
 
-The zero-match wide-key join component ran out of its4GB heap after the bounds candidate made each invocation
+The zero-match wide-key join component ran out of its 4 GB heap after the bounds candidate made each invocation
 much faster. Its thread-scoped allocator outlived hundreds of newly constructed operators. Operator close returns
 vectors to allocator-owned context pools; it does not destroy a driver/query's entire allocation domain. The slower
 parent completed fewer invocations in the same timed iterations and did not reach this accumulation limit.
@@ -26,13 +26,13 @@ engines with the same corrected benchmark classes and retain the failed pair and
 
 ## Validation
 
-Run the full Nitro suite and the complete two-fork0/10/100%-match, dense/wide-key matrix at the same4GB heap.
+Run the full Nitro suite and the complete two-fork 0/10/100%-match, dense/wide-key matrix at the same 4 GB heap.
 Require all parameter points and no fork failures. Then repeat SQL qualification independently; component gains
 are not substitutes for query CPU, allocation and latency evidence.
 
 ## Acceptance evidence
 
-The full2172-test Nitro suite passes with zero failures/errors and394skips. Both corrected benchmark arms complete
-all six parameter points, two forks each, with the same4GB heap; neither zero-match fork fails. The complete matrix
+The full 2172-test Nitro suite passes with zero failures/errors and 394 skips. Both corrected benchmark arms complete
+all six parameter points, two forks each, with the same 4 GB heap; neither zero-match fork fails. The complete matrix
 and class digests are retained under completed-build-bounds-jmh-r2-20260913. The original incomplete pair remains
 invalid. This accepts the harness lifetime correction, not the independently proposed bounds optimization.

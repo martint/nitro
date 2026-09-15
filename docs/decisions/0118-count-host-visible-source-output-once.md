@@ -24,12 +24,12 @@ metrics are not evidence of twice the execution work; do not rewrite historical 
 
 ## Validation
 
-Both new real-driver tests fail on the parent:2 VALUES rows report4, and20,000 sequence rows report40,000.
+Both new real-driver tests fail on the parent: 2 VALUES rows report 4, and 20,000 sequence rows report 40,000.
 After removing the duplicate calls,18 focused tests pass: the new row/byte checks, terminal-boundary tests, and
 the two planner sequence integration tests. Sequence output spans three batches and both tests verify values as
 well as source-output/downstream-input counters.
 
-The broader97-test local planner class is not a clean gate: it has9 failures and40 errors on both parent and
+The broader 97-test local planner class is not a clean gate: it has 9 failures and 40 errors on both parent and
 candidate, with identical failing method identities. Most errors reject its non-native TPC-H connector fixture;
 the same tests also contain stale lowering assertions. This existing coverage debt is not repaired by adding a
 connector fallback. Retain the parent comparison and do not describe the full class as passing.

@@ -8,8 +8,8 @@
 ## Evidence and gap
 
 An RLE vector exposes repetition to the evaluator, but its scalar value can remain a runtime argument inside
-the target. A local generated-adapter probe binds the same remainder target to divisor100: dense flat duration
-0.496 versus1.861ns per logical slot and dense dictionary0.743 versus1.915ns. All six encoding/mask cases improve;
+the target. A local generated-adapter probe binds the same remainder target to divisor 100: dense flat duration
+0.496 versus 1.861 ns per logical slot and dense dictionary 0.743 versus 1.915 ns. All six encoding/mask cases improve;
 the result includes argument removal and physical-dispatch changes, not just possible JIT arithmetic lowering.
 The probe does not establish a SQL gain. Its mask/null/mapped-error equivalence tests and full Nitro suite pass.
 
@@ -42,7 +42,7 @@ Evidence is retained in `2026-09-13-scalar-literal-binding-investigation.md` and
 ## Qualification outcome
 
 Literal binding alone improved remote q242 CPU186.237→158.456s and q243384.915→303.766s. A later identical
-literal-only repeat measured151.296s and282.797s, so do not attribute between-JVM variation to another code change.
+literal-only repeat measured 151.296 s and 282.797 s, so do not attribute between-JVM variation to another code change.
 Local ordinary-query controls show overlapping CPU ranges forq15/q20/q72/Hq09/q13/q21/CBq39. Paired allocation
 measurements expose a3–4% increase; this is a cost of the chosen calling path, not an allocation-free claim.
 
