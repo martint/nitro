@@ -539,6 +539,12 @@ Aggregation and window operators drive provider-supplied functions. Function sta
 semantics, ordering, and final materialization belong to the registered implementation or type capabilities, not to
 operator conditionals.
 
+A provider may align independently owned value and weight dictionaries by proving exact equality of their complete
+row-to-domain mappings. Equal cardinality or sampled equality is insufficient. The proof does not transfer ownership
+or establish null-stream alignment. The provider must separately validate weights, nulls, selection, multiplicity
+and its approximation contract before replacing logical-row updates with domain updates; incompatible inputs retain
+the authoritative logical-row path (ADR-0162).
+
 State is allocator-owned and may use fixed-width, segmented, recursive, dictionary-domain, or generated layouts.
 Function-specific aggregation-state vector types belong with function implementations, not in the core vector
 vocabulary.

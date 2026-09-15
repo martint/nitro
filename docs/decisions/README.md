@@ -241,3 +241,4 @@ This map is an audit aid, not a substitute for each record's precise `Spec` fiel
 | [0158](0158-lower-bounded-payload-build-admission-floor.md) | Lower the bounded payload build admission floor | accepted; CPU/peak-memory tradeoff |
 | [0159](0159-stabilize-physical-null-accessor-receivers.md) | Stabilize physical null-accessor receivers | rejected; removed after remote SQL regression |
 | [0160](0160-compact-provisional-direct-build-domains.md) | Compact provisional direct build domains | rejected; repeated remote q21 regression |
+| [0162](0162-prove-independent-aggregate-weight-mappings.md) | Prove independent aggregate weight mappings | accepted; guard-query variability remains explicit |
